@@ -1,0 +1,14 @@
+{
+  "_comment": "Edit 'active_region' to switch which region the tool uses. Add more regions under 'regions' using the same shape. 'postcode_areas' are the letter prefixes of the DELIVERY postcode (e.g. DN3 1RA -> DN).",
+  "active_region": "region_2",
+  "regions": {
+    "region_2": {
+      "label": "Region 2 (Northern)",
+      "match_by": "postcode_area",
+      "postcode_areas": [
+        "B", "CB", "CO", "CV", "DE", "DN", "DY", "HR", "IP", "LE", "LL", "LN",
+        "NG", "NN", "NR", "PE", "S", "ST", "SY", "TF", "WR", "WS", "WV"
+      ]
+    }
+  }
+}

@@ -1,0 +1,129 @@
+"""
+Tracker store for the Region 2 emailer.
+
+Logs every order the tool emails (order numbers, who, product code, which Synergy
+upload it came from, when), and a refresh that checks Outlook to fill in whether a
+reply has come back and whether the Send-out brief is ready.
+
+    python tracker.py             # print the current tracker
+    python tracker.py refresh     # update reply / send-off status from Outlook
+"""
+import os, json
+from datetime import datetime
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PATH = os.path.join(HERE, "tracker.json")
+DHL_SMTP = "delali.opoku@dhl.com"
+
+
+def _now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def load():
+    try:
+        with open(PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"records": []}
+
+
+def save(d):
+    with open(PATH, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2)
+
+
+def _key(orders, date):
+    return "-".join(orders) + "|" + str(date)
+
+
+def log(orders, to, name, product_codes, materials, site, postcode, delivery_date, source, status="drafted"):
+    """Record an email. If the same order+date was already emailed, count it as a re-send (chase)."""
+    d = load()
+    k = _key(orders, delivery_date)
+    for r in d["records"]:
+        if r["id"] == k:
+            r["chases"] = r.get("chases", 0) + 1
+            r["last_emailed_at"] = _now()
+            r["status"] = status
+            save(d)
+            return
+    d["records"].append({
+        "id": k, "orders": orders, "to": to, "name": name,
+        "product_codes": product_codes, "materials": materials, "site": site, "postcode": postcode,
+        "delivery_date": delivery_date, "source": source,
+        "emailed_at": _now(), "last_emailed_at": _now(), "status": status,
+        "chases": 0, "reply_at": None, "sendoff_ready": False,
+    })
+    save(d)
+
+
+# ---------- refresh from Outlook ----------
+def _dhl(ns):
+    for i in range(1, ns.Folders.Count + 1):
+        if ns.Folders.Item(i).Name.lower() == DHL_SMTP:
+            return ns.Folders.Item(i)
+
+
+def _sub(f, name):
+    if f is None:
+        return None
+    for i in range(1, f.Folders.Count + 1):
+        c = f.Folders.Item(i)
+        if c.Name.strip().lower() == name.strip().lower():
+            return c
+
+
+def _subjects(folder, limit=250):
+    out = []
+    if folder is None:
+        return out
+    items = folder.Items
+    try:
+        items.Sort("[ReceivedTime]", True)
+    except Exception:
+        try:
+            items.Sort("[LastModificationTime]", True)
+        except Exception:
+            pass
+    n = 0
+    for it in items:
+        n += 1
+        if n > limit:
+            break
+        try:
+            out.append(str(it.Subject or ""))
+        except Exception:
+            pass
+    return out
+
+
+def refresh():
+    import win32com.client
+    ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    dhl = _dhl(ns)
+    inbox = _sub(dhl, "Inbox")
+    region2 = _sub(_sub(inbox, "Regions"), "Region 2")
+    sendout = _sub(region2, "Send out") or _sub(region2, "Send Out")
+    inbox_subjects = _subjects(inbox)
+    sendout_subjects = _subjects(sendout)
+    d = load()
+    for r in d["records"]:
+        orders = r["orders"]
+        if not r.get("reply_at"):
+            for s in inbox_subjects:
+                if any(o in s for o in orders):
+                    r["reply_at"] = _now()
+                    break
+        r["sendoff_ready"] = any(any(o in s for o in orders) for s in sendout_subjects)
+    save(d)
+    return d
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "refresh":
+        data = refresh()
+        print(f"Refreshed {len(data['records'])} record(s).")
+    else:
+        print(json.dumps(load(), indent=2)[:2500])
