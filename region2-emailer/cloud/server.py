@@ -25,6 +25,8 @@ _queue = []
 _status = {"state": "idle", "detail": "Waiting for a command.", "at": "", "output": "", "email": None}
 _tracker = {"records": []}
 _agent_seen = 0.0
+_files = {}          # name -> {"data": b64, "size": int, "at": str}
+_MAX_FILES = 12
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -170,6 +172,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
 
   <div class="card">
+    <h2>Files from home PC</h2>
+    <div class="tk-wrap" id="files"><span class="hint">Files created by DTS / form jobs appear here to download.</span></div>
+  </div>
+
+  <div class="card">
     <h2>Tracker <button class="btn rf" onclick="refreshTracker()">Refresh from Outlook</button></h2>
     <div class="tk-wrap" id="tracker"><span class="hint">Loading…</span></div>
   </div>
@@ -266,8 +273,36 @@ async function loadTracker(){
       '<table class="tk"><thead><tr><th>Order(s)</th><th>To</th><th>Materials</th><th>Synergy upload</th><th>Emailed</th><th>Reply</th><th>Send-off</th></tr></thead><tbody>'+rows+'</tbody></table>';
   }catch(e){}
 }
+async function loadFiles(){
+  try{
+    const d = await (await api('/api/files')).json();
+    const fs = d.files || [];
+    if(!fs.length){ document.getElementById('files').innerHTML='<span class="hint">Files created by DTS / form jobs appear here to download.</span>'; return; }
+    const rows = fs.map(f => '<tr>'
+      + '<td>'+f.name+'</td>'
+      + '<td>'+(f.size>1048576 ? (f.size/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(f.size/1024))+' KB')+'</td>'
+      + '<td>'+f.at+'</td>'
+      + '<td><button class="btn" style="padding:.3rem .8rem;font-size:.78rem;" onclick="dl(\\''+encodeURIComponent(f.name)+'\\')">Download</button></td>'
+      + '</tr>').join('');
+    document.getElementById('files').innerHTML =
+      '<table class="tk"><thead><tr><th>File</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }catch(e){}
+}
+async function dl(encName){
+  try{
+    const d = await (await api('/api/file?name='+encName)).json();
+    const bin = atob(d.data);
+    const arr = new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([arr]));
+    const a = document.createElement('a'); a.href=url; a.download=d.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){}
+}
 setInterval(poll,1500); poll();
 setInterval(loadTracker,6000); loadTracker();
+setInterval(loadFiles,6000); loadFiles();
 </script></body></html>"""
 
 
@@ -320,8 +355,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             with _lock:
                 self._json(200, _tracker)
+        elif self.path == "/api/files":
+            if not (self._is_dash() or self._is_agent()):
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                lst = [{"name": n, "size": f["size"], "at": f["at"]}
+                       for n, f in reversed(list(_files.items()))]
+            self._json(200, {"files": lst})
+        elif self.path.startswith("/api/file?name="):
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            from urllib.parse import unquote
+            name = unquote(self.path.split("name=", 1)[1])
+            with _lock:
+                f = _files.get(name)
+            if not f:
+                return self._json(404, {"error": "gone"})
+            self._json(200, {"name": name, "data": f["data"]})
         elif self.path == "/healthz":
-            self._json(200, {"ok": True})
+            self._json(200, {"ok": True, "files": True})
         else:
             self._json(404, {"error": "not found"})
 
@@ -355,6 +407,18 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if isinstance(data, dict) and "records" in data:
                     _tracker = data
+            self._json(200, {"ok": True})
+        elif self.path == "/api/files":
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            name = str(data.get("name", ""))[:120]
+            if name and data.get("data"):
+                with _lock:
+                    _files.pop(name, None)
+                    _files[name] = {"data": data["data"], "size": int(data.get("size", 0)),
+                                    "at": datetime.now().strftime("%d/%m %H:%M")}
+                    while len(_files) > _MAX_FILES:
+                        _files.pop(next(iter(_files)))
             self._json(200, {"ok": True})
         else:
             self._json(404, {"error": "not found"})
