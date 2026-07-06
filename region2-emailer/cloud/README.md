@@ -52,4 +52,13 @@ browser only). All five cards work exactly like the home dashboard.
 - Rotate keys by changing the env vars and redeploying (update cloud.json too).
 - `/healthz` is an unauthenticated health check for the host's monitoring.
 - If the dashboard shows "home PC: offline", the home PC is asleep, offline,
-  or the supervisor isn't running.
+  or the supervisor isn't running. The header shows when it was last seen.
+- Commands queued while the home PC is offline are NOT sent silently later:
+  once a command is older than 10 minutes (`QUEUE_TTL` env var, seconds) AND
+  the home PC has been away at least that long, it is dropped — including at
+  the moment a long-offline PC reconnects, before it can run stale commands.
+  The status card shows a red "NOT sent/run" notice that stays until you
+  dismiss it (an online-but-busy PC keeps its backlog; nothing is dropped
+  while the agent is checking in).
+- The send panel has a Cc field; it is passed to the agent as `email.cc`
+  (agent-side support: see `../HOMEPC_CHANGES.md`).

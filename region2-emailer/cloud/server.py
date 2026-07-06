@@ -27,6 +27,50 @@ _tracker = {"records": []}
 _agent_seen = 0.0
 _files = {}          # name -> {"data": b64, "size": int, "at": str}
 _MAX_FILES = 12
+try:
+    _QUEUE_TTL = int(os.environ.get("QUEUE_TTL", "600"))   # seconds an unclaimed command stays queued
+except ValueError:
+    _QUEUE_TTL = 600
+
+
+_dropped = []        # expired-unrun commands, kept until dismissed from the dashboard
+_MAX_DROPPED = 8
+
+
+def _agent_online():
+    return (time.time() - _agent_seen) < 15
+
+
+def _ttl_text():
+    return f"{_QUEUE_TTL // 60} min" if _QUEUE_TTL >= 60 else f"{_QUEUE_TTL} s"
+
+
+def _sweep_queue_locked(agent_seen=None):
+    """Drop commands nobody picked up, and record it durably (call holding _lock).
+
+    A command expires only when BOTH it is older than the TTL and the agent has
+    been away for at least the TTL — an online-but-busy home PC keeps its
+    backlog. /api/next passes the pre-request agent_seen, because merely
+    authenticating that request already refreshed _agent_seen and would
+    otherwise let a reconnecting agent revive arbitrarily stale commands.
+    """
+    now = time.time()
+    seen = _agent_seen if agent_seen is None else agent_seen
+    if now - seen <= _QUEUE_TTL:
+        return
+    dropped = [c for c in _queue if now - c.get("queued_at", now) > _QUEUE_TTL]
+    if dropped:
+        _queue[:] = [c for c in _queue if c not in dropped]
+        at = datetime.now().strftime("%H:%M:%S")
+        for c in dropped:
+            _dropped.append({"action": str(c.get("action", "?"))[:40],
+                             "order": str(c.get("order", ""))[:40], "at": at})
+        del _dropped[:-_MAX_DROPPED]
+        acts = ", ".join(c.get("action", "?") for c in dropped)
+        _status.update(state="error",
+                       detail=f"Expired unrun — the home PC did not pick this up within "
+                              f"{_ttl_text()}: {acts}. Nothing was sent; re-run it if still needed.",
+                       at=at, output="", email=None)
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -127,6 +171,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         <input id="eto" placeholder="To" style="flex:1;">
       </div>
       <div class="controls" style="margin-bottom:.6rem;">
+        <input id="ecc" placeholder="Cc (optional)" style="flex:1;">
+      </div>
+      <div class="controls" style="margin-bottom:.6rem;">
         <input id="esub" placeholder="Subject" style="flex:1;">
       </div>
       <textarea id="emsg" rows="14" spellcheck="false"
@@ -135,7 +182,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
                padding:.65rem .8rem; resize:vertical;"></textarea>
       <div class="controls" style="margin-top:.6rem;">
         <button class="btn go" onclick="sendEdited()">Send email</button>
-        <span class="hint">edit anything above first — signature &amp; QR are added automatically</span>
+        <span class="hint">edit anything above first — signature &amp; QR are added automatically. Cc only works once the home PC has the HOMEPC_CHANGES.md update.</span>
       </div>
     </div>
   </div>
@@ -168,6 +215,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       <span class="detail" id="detail">Waiting for a command.</span>
       <span class="time" id="time"></span>
     </div>
+    <div id="dropped" hidden style="margin-top:.8rem;"></div>
     <pre class="output" id="output" hidden></pre>
   </div>
 
@@ -185,6 +233,17 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--accent)'};
 let currentOrder='';
 let lastPreviewAt='';
+let agentOnline=false;
+let queueTtl=600;
+function ttlText(){ return queueTtl>=60 ? Math.floor(queueTtl/60)+' minutes' : queueTtl+' seconds'; }
+function esc(t){ return String(t).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function clearDropped(){ try{ await api('/api/dropped_clear',{method:'POST'}); poll(); }catch(e){} }
+function ago(s){
+  if(s<60) return s+'s ago';
+  if(s<3600) return Math.floor(s/60)+' min ago';
+  if(s<86400) return Math.floor(s/3600)+' h '+Math.floor((s%3600)/60)+' min ago';
+  return Math.floor(s/86400)+' day'+(s<172800?'':'s')+' ago';
+}
 function key(){ return localStorage.getItem('r2key')||''; }
 function showLogin(){ document.getElementById('login').style.display='flex'; }
 function saveKey(){
@@ -217,10 +276,14 @@ function processForm(){
   post({action:'form', order:(document.getElementById('frm').value.trim()||'latest')});
 }
 function sendEdited(){
-  if(!confirm('Send this email (with any edits you made)?')) return;
+  const q = agentOnline
+    ? 'Send this email (with any edits you made)?'
+    : 'The home PC is OFFLINE — nothing can send right now.\\n\\nQueue it anyway? It sends if the home PC reconnects within '+ttlText()+', otherwise it is discarded and you will see an error here.';
+  if(!confirm(q)) return;
   hideEdit();
   post({action:'order_send_edited', order:currentOrder, email:{
     to:document.getElementById('eto').value.trim(),
+    cc:document.getElementById('ecc').value.trim(),
     subject:document.getElementById('esub').value.trim(),
     message:document.getElementById('emsg').value
   }});
@@ -231,18 +294,34 @@ async function poll(){
     const c=COLORS[s.state]||'var(--muted)';
     document.getElementById('dot').style.background=c;
     const st=document.getElementById('state'); st.textContent=(s.state||'idle').replace('_',' '); st.style.color=c;
-    document.getElementById('detail').textContent=s.detail||'';
+    agentOnline = !!s.agent_online;
+    if(s.queue_ttl) queueTtl = s.queue_ttl;
+    let det = s.detail||'';
+    if(s.queued>0 && !agentOnline) det += ' ('+s.queued+' waiting for home PC)';
+    document.getElementById('detail').textContent=det;
     document.getElementById('time').textContent=s.at||'';
     const ad=document.getElementById('agentdot');
-    ad.style.background = s.agent_online ? 'var(--go)' : 'var(--red)';
-    document.getElementById('agenttext').textContent = 'home PC: ' + (s.agent_online ? 'online' : 'offline');
+    ad.style.background = agentOnline ? 'var(--go)' : 'var(--red)';
+    let at = 'home PC: ' + (agentOnline ? 'online' : 'offline');
+    if(!agentOnline) at += (s.agent_seen_ago==null)
+      ? ' — not seen since the app last restarted'
+      : ' — last seen '+ago(s.agent_seen_ago);
+    document.getElementById('agenttext').textContent = at;
     const o=document.getElementById('output');
     if(s.output){ o.textContent=s.output; o.hidden=false; } else { o.hidden=true; }
+    const dr=document.getElementById('dropped');
+    if(s.dropped && s.dropped.length){
+      dr.innerHTML = s.dropped.map(d=>'<div style="color:var(--red); font-size:.85rem;">&#9888; NOT sent/run: '
+          +esc(d.action)+(d.order?' ('+esc(d.order)+')':'')+' — expired '+esc(d.at)+' before the home PC picked it up</div>').join('')
+        +'<button class="btn" style="margin-top:.5rem; padding:.3rem .8rem; font-size:.78rem;" onclick="clearDropped()">Dismiss</button>';
+      dr.hidden=false;
+    } else { dr.hidden=true; }
     const ep=document.getElementById('editpanel');
     if(s.state==='preview_ready' && s.email && s.email.length){
       if(s.at!==lastPreviewAt){
         lastPreviewAt=s.at;
         document.getElementById('eto').value=s.email[0].to||'';
+        document.getElementById('ecc').value=s.email[0].cc||'';
         document.getElementById('esub').value=s.email[0].subject||'';
         document.getElementById('emsg').value=s.email[0].message||'';
       }
@@ -325,10 +404,13 @@ class Handler(BaseHTTPRequestHandler):
         return DASH_KEY and self._key() == DASH_KEY
 
     def _is_agent(self):
-        return AGENT_KEY and self._key() == AGENT_KEY
+        global _agent_seen
+        if AGENT_KEY and self._key() == AGENT_KEY:
+            _agent_seen = time.time()
+            return True
+        return False
 
     def do_GET(self):
-        global _agent_seen
         if self.path == "/" or self.path.startswith("/?"):
             body = PAGE.encode()
             self.send_response(200)
@@ -340,15 +422,23 @@ class Handler(BaseHTTPRequestHandler):
             if not (self._is_dash() or self._is_agent()):
                 return self._json(401, {"error": "auth"})
             with _lock:
+                _sweep_queue_locked()
                 out = dict(_status)
-                out["agent_online"] = (time.time() - _agent_seen) < 15
+                out["agent_online"] = _agent_online()
+                out["agent_seen_ago"] = int(time.time() - _agent_seen) if _agent_seen else None
+                out["queued"] = len(_queue)
+                out["queue_ttl"] = _QUEUE_TTL
+                out["dropped"] = list(_dropped)
             self._json(200, out)
         elif self.path == "/api/next":
+            seen_before = _agent_seen
             if not self._is_agent():
                 return self._json(401, {"error": "auth"})
             with _lock:
-                _agent_seen = time.time()
+                _sweep_queue_locked(agent_seen=seen_before)
                 cmd = _queue.pop(0) if _queue else None
+            if cmd:
+                cmd.pop("queued_at", None)
             self._json(200, cmd or {})
         elif self.path == "/api/tracker":
             if not (self._is_dash() or self._is_agent()):
@@ -389,8 +479,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
-                               "email": data.get("email")})
-                _status.update(state="queued", detail=f"{data.get('action')} queued",
+                               "email": data.get("email"), "queued_at": time.time()})
+                det = f"{data.get('action')} queued"
+                if not _agent_online():
+                    det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
+                _status.update(state="queued", detail=det,
                                at=datetime.now().strftime("%H:%M:%S"), output="", email=None)
             self._json(200, {"ok": True})
         elif self.path == "/api/status":
@@ -400,6 +493,12 @@ class Handler(BaseHTTPRequestHandler):
                 _status.update(state=data.get("state", "idle"), detail=data.get("detail", ""),
                                at=datetime.now().strftime("%H:%M:%S"), output=data.get("output", ""),
                                email=data.get("email"))
+            self._json(200, {"ok": True})
+        elif self.path == "/api/dropped_clear":
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                _dropped.clear()
             self._json(200, {"ok": True})
         elif self.path == "/api/tracker":
             if not self._is_agent():
