@@ -206,9 +206,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       </div>
     </div>
     <div class="cmd">
-      <div class="lbl">Send one order</div>
+      <div class="lbl">Send order(s)</div>
       <div class="col">
-        <input id="ord" placeholder="Order no." autocomplete="off" onkeydown="if(event.key==='Enter')findOrder()">
+        <input id="ord" placeholder="Order no(s). — space-separate to group" autocomplete="off" onkeydown="if(event.key==='Enter')findOrder()">
         <button class="btn" onclick="findOrder()">Find &amp; preview</button>
       </div>
     </div>
@@ -229,7 +229,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
 
   <div class="card" id="editpanel" style="display:none;">
-    <div class="lbl" style="margin-bottom:.8rem;">Review &amp; send — one order</div>
+    <div class="lbl" style="margin-bottom:.8rem;">Review &amp; send</div>
     <div class="col" style="gap:.6rem;">
       <input id="eto" placeholder="To">
       <input id="ecc" placeholder="Cc (optional)">
@@ -237,7 +237,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       <textarea id="emsg" rows="14" spellcheck="false" style="line-height:1.55; font-size:.85rem; resize:vertical;"></textarea>
       <div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;">
         <button class="btn go" onclick="sendEdited()">Send email</button>
-        <span class="hint">edit anything above first — signature &amp; QR are added automatically. Cc needs the HOMEPC_CHANGES.md update on the home PC.</span>
+        <span class="hint">edit anything above first — signature &amp; QR are added automatically. Cc and multi-order grouping need the HOMEPC_CHANGES.md update on the home PC.</span>
       </div>
     </div>
   </div>
@@ -305,7 +305,9 @@ async function post(body){
 function hideEdit(){ document.getElementById('editpanel').style.display='none'; }
 function cmd(a){ hideEdit(); post({action:a}); }
 function findOrder(){
-  const o=document.getElementById('ord').value.trim(); if(!o) return;
+  // several order numbers (any of space , ; / + &) become one grouped email
+  const o=document.getElementById('ord').value.trim().split(/[\\s,;\\/+&]+/).filter(Boolean).join(' ');
+  if(!o) return;
   currentOrder=o; hideEdit(); lastPreviewAt='';
   post({action:'order_preview',order:o});
 }

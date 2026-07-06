@@ -91,6 +91,34 @@ Notes:
   and is much simpler.
 - Same trick applies to the DTS-PDF and form lookups if they loop over items.
 
+## 2b. Group several orders into ONE email (order search)
+
+The daily batch build already groups same-recipient orders into one email
+(tracker records carry `orders` as a list), but the order-search path builds
+an email for exactly the one number typed — so e.g. 7114852 and 7114854 send
+separately even though they'd group in the daily build.
+
+The dashboard's "Send order(s)" box now sends space-separated order numbers
+in `cmd["order"]` (e.g. `"7114852 7114854"`). In the agent's `order_preview`
+/ `order_send_edited` handler:
+
+```python
+orders = [o for o in re.split(r"[\s,;/+&]+", str(cmd.get("order", ""))) if o]
+```
+
+- Look up every order (fast search from section 2 — one Restrict per order,
+  or a single combined DASL filter OR-ing the numbers).
+- Build ONE email covering all of them, reusing the same grouping/formatting
+  the batch build uses for multi-order records.
+- If the orders resolve to DIFFERENT recipients, post an error status and
+  send nothing — don't guess.
+- Nice-to-have: when a single searched order belongs to a same-recipient
+  group in today's extract, pull in its siblings automatically (matching
+  what the batch build would have produced) and show them in the preview.
+
+Until this is applied, a multi-order search will behave however the current
+agent treats an unknown order string — most likely "not found".
+
 ## 3. Never fail silently on send
 
 Wrap the actual send and report the result to the cloud status, so the
