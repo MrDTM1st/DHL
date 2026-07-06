@@ -13,6 +13,7 @@ import sys, os, re, zipfile
 from collections import OrderedDict
 import win32com.client
 import build_drafts as bd
+import order_index
 import tracker
 
 
@@ -99,29 +100,68 @@ def pick_product(r, C):
     return a, b
 
 
-def build_for_order(path, order, source=""):
-    rows, C = bd.load_rows(path)
-    target = order.split("-")[0]
-    mine = [r for r in rows if r[C["order"]] and bd.base_order(r[C["order"]]) == target]
+def _gkey(r, C):
+    return (bd.email_of(r[C["dcon"]]), bd.clean(r[C["dpc"]]), bd.fdate(r[C["date"]]))
+
+
+def resolve_orders(ns, order_string):
+    """Look up every order number typed (space/comma/;/ / /+/& separated) and
+    return their rows plus same-recipient siblings from each order's extract.
+
+    Returns (collected, tokens, not_found) where collected is a list of
+    (row, C, source_filename) - rows may come from several files/layouts."""
+    tokens = [t for t in re.split(r"[\s,;/+&]+", str(order_string).strip()) if t]
+    collected, not_found = [], []
+    tmp = os.path.join(bd.HERE, "_search.xlsx")
+    for tok in tokens:
+        path, fn = order_index.lookup(ns, tok, tmp)
+        if not path:
+            path, fn = find_extract(ns, tok)
+        if not path:
+            not_found.append(tok)
+            continue
+        rows, C = bd.load_rows(path)          # load now: tmp is reused next token
+        target = tok.split("-")[0]
+        base_rows = [r for r in rows if r[C["order"]] and bd.base_order(r[C["order"]]) == target]
+        if not base_rows:
+            not_found.append(tok)
+            continue
+        keys = {_gkey(r, C) for r in base_rows}   # same contact+site+date -> one email
+        for r in rows:
+            if r[C["order"]] and _gkey(r, C) in keys:
+                collected.append((r, C, fn))
+    return collected, tokens, not_found
+
+
+def build_from_collected(collected):
+    """Group collected rows by contact+site+date (like the daily batch) and
+    build one email per group. De-duplicates rows that appear in more than one
+    file so a repeated order can't double a quantity."""
     groups = OrderedDict()
-    for r in mine:
-        key = (bd.email_of(r[C["dcon"]]), bd.clean(r[C["dpc"]]), bd.fdate(r[C["date"]]))
-        groups.setdefault(key, []).append(r)
+    seen = set()
+    for r, C, fn in collected:
+        dedup = (str(r[C["order"]]), bd.clean(r[C["prod"]]), str(r[C["qty"]]),
+                 bd.fdate(r[C["date"]]), bd.clean(r[C["dpc"]]))
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        groups.setdefault(_gkey(r, C), []).append((r, C, fn))
     emails = []
-    for (em, dpc, dd), rs in groups.items():
-        r0 = rs[0]
-        orders = sorted(set(bd.base_order(r[C["order"]]) for r in rs))
-        subject = f"{' / '.join(orders)} {bd.clean(r0[C['daddr']])} {dpc}"
-        picked = [pick_product(r, C) for r in rs]
-        items = [(r[C["qty"]], p[0]) for r, p in zip(rs, picked)]
-        nm = bd.firstname(r0[C['dcon']])
+    for (em, dpc, dd), bundle in groups.items():
+        r0, C0, _ = bundle[0]
+        orders = sorted(set(bd.base_order(r[C["order"]]) for r, C, _ in bundle))
+        subject = f"{' / '.join(orders)} {bd.clean(r0[C0['daddr']])} {dpc}"
+        picked = [pick_product(r, C) for r, C, _ in bundle]
+        items = [(r[C["qty"]], p[0]) for (r, C, _), p in zip(bundle, picked)]
+        nm = bd.firstname(r0[C0['dcon']])
         text, html, message = bd._bodies(nm, items, dd)
         pcodes = sorted({p[1] for p in picked if p[1]})
+        source = " + ".join(sorted({fn for _, _, fn in bundle if fn}))
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, area=bd.area(dpc),
                            orders=orders, product_codes=pcodes,
                            materials=bd.product_summary(items),
-                           site=bd.clean(r0[C['daddr']]), postcode=dpc, source=source))
+                           site=bd.clean(r0[C0['daddr']]), postcode=dpc, source=source))
     return emails
 
 
@@ -220,21 +260,23 @@ def main():
         n = send_pending(ns)
         print(f"Sent {n} email(s) from your DHL account (edited version).")
         return
-    import order_index
-    path, fn = order_index.lookup(ns, order, os.path.join(bd.HERE, "_search.xlsx"))
-    if path:
-        print(f"Found instantly via index: {fn}\n")
-    else:
-        print(f"Not in index - deep-searching your Outlook for {order}...")
-        path, fn = find_extract(ns, order)
-        if not path:
-            print("Not found anywhere in the mailbox. (Check the order reference.)")
-            return
-        print(f"Found in: {fn}\n")
-    emails = build_for_order(path, order, source=fn)
-    if not emails:
-        print("Extract matched but no rows for that exact order number.")
+
+    collected, tokens, not_found = resolve_orders(ns, order)
+    if not collected:
+        print(f"Not found anywhere in the mailbox: {' '.join(tokens)}. (Check the order reference.)")
         return
+    emails = build_from_collected(collected)
+
+    # Grouping guard: several typed orders that resolve to DIFFERENT recipients
+    # must not be forced into one send - refuse and let them go separately.
+    if len(emails) > 1:
+        who = "; ".join(f"{e['to']} ({' / '.join(e['orders'])})" for e in emails)
+        print("ERROR: those orders go to DIFFERENT recipients, so they can't be "
+              f"one email — nothing prepared. Send them separately:\n  {who}")
+        return
+    if not_found:
+        print(f"(note: not found and skipped: {' '.join(not_found)})")
+
     for e in emails:
         print("=" * 70)
         print(f"To:      {e['to']}\nSubject: {e['subject']}   [area {e['area']}]")

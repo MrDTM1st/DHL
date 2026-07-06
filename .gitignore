@@ -11,6 +11,7 @@ region2-emailer/samples*/
 region2-emailer/recent/
 *.xlsx
 *.xlsm
+*.xls
 *.pdf
 *.accdb
 *.csv
