@@ -18,6 +18,10 @@ region2-emailer/recent/
 # --- secrets: NEVER goes to GitHub ---
 region2-emailer/cloud.json
 
+# --- local index/state ---
+region2-emailer/order_index.json
+region2-emailer/supervisor.log
+
 # --- local machine stuff ---
 .claude/
 __pycache__/
