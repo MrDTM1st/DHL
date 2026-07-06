@@ -1,0 +1,25 @@
+# --- work data: NEVER goes to GitHub ---
+outbox/
+region2-emailer/tracker.json
+region2-emailer/config.json
+region2-emailer/_*.json
+region2-emailer/_*.xlsx
+region2-emailer/_*.pdf
+region2-emailer/*.log
+region2-emailer/latest.xlsx
+region2-emailer/samples*/
+region2-emailer/recent/
+*.xlsx
+*.xlsm
+*.pdf
+*.accdb
+*.csv
+
+# --- secrets: NEVER goes to GitHub ---
+region2-emailer/cloud.json
+
+# --- local machine stuff ---
+.claude/
+__pycache__/
+*.pyc
+region2-emailer/qr.png
