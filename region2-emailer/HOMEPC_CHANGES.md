@@ -147,3 +147,23 @@ git push origin main
 
 `.gitignore` already excludes work data and `cloud.json` (secrets) — double
 check `git status` output before committing anyway.
+
+## Phase 2 - reply side (BUILT: phase2.py)
+
+Implemented on the home PC (`phase2.py`, wired into `agent.py`):
+
+- **Reply detection + OOO**: scans the DHL inbox for replies to sent orders;
+  a genuine reply sets `reply_at`, an auto-reply/out-of-office sets `ooo_at`
+  (flagged amber "Out of office" on the dashboard) instead.
+- **Send-off briefs**: on a real reply, drafts the send-off brief into
+  `Region 2 > Send Out`, pre-filled from the extract (order/collection/
+  delivery/collection-date/materials), with delivery date + offloading read
+  from the reply's answers and the full reply quoted; anything unread is
+  marked `[CHECK]`.
+- **Chasers**: `chase [send]` - 2 business days (weekends + England/Wales bank
+  holidays skipped), up to 3 chases, once per business day per order.
+- **Agent**: auto-runs `phase2.py check` every 20 min (safe - drafts only).
+  Chasers are OPT-IN: create an empty file `auto_chase.enabled` next to the
+  scripts to let the agent auto-send them every 3h; otherwise use the
+  dashboard's "Run chasers" button. Heartbeat thread keeps "home PC online"
+  fresh even during long commands.

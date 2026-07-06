@@ -153,7 +153,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
 
   <div class="card">
-    <h2>Tracker <button class="btn rf" onclick="refreshTracker()">Refresh from Outlook</button></h2>
+    <h2>Tracker <button class="btn rf" onclick="refreshTracker()">Check replies</button><button class="btn rf" onclick="runChasers()">Run chasers</button></h2>
     <div class="tk-wrap" id="tracker"><span class="hint">Loading…</span></div>
   </div>
 </div>
@@ -214,8 +214,12 @@ async function poll(){
 }
 function refreshTracker(){
   post({action:'tracker_refresh'});
-  document.getElementById('tracker').innerHTML='<span class="hint">Refreshing from Outlook…</span>';
-  setTimeout(loadTracker, 5000);
+  document.getElementById('tracker').innerHTML='<span class="hint">Checking replies & drafting send-off briefs…</span>';
+  setTimeout(loadTracker, 6000);
+}
+function runChasers(){
+  if(!confirm('Send follow-up chasers to every order 2+ business days overdue a reply?')) return;
+  post({action:'run_chasers'});
 }
 async function loadTracker(){
   try{
@@ -228,7 +232,7 @@ async function loadTracker(){
       + '<td>'+(r.materials||'')+'</td>'
       + '<td>'+(r.source||'')+'</td>'
       + '<td>'+(r.emailed_at||'')+(r.chases?'<span class="chip">+'+r.chases+'</span>':'')+'</td>'
-      + '<td>'+(r.reply_at?'<span class="ok">yes</span>':'<span class="no">—</span>')+'</td>'
+      + '<td>'+(r.ooo_at?'<span class="chip">OOO</span>':(r.reply_at?'<span class="ok">yes</span>':'<span class="no">—</span>'))+'</td>'
       + '<td>'+(r.sendoff_ready?'<span class="ok">ready</span>':'<span class="no">—</span>')+'</td>'
       + '</tr>').join('');
     document.getElementById('tracker').innerHTML =
@@ -274,6 +278,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 data = {"records": []}
             self._json(200, data)
+        elif self.path == "/api/heartbeat":
+            self._json(200, {"ok": True})
         else:
             self._json(404, {"error": "not found"})
 

@@ -8,23 +8,38 @@ the control plane - nothing connects in to this PC.
     python agent.py                 # points at the local control plane
     python agent.py https://your-hosted-url   # points at the deployed one
 """
-import sys, time, json, subprocess, os
+import sys, time, json, subprocess, os, threading
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8787"
 KEY = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("R2_AGENT_KEY", "")
 POLL_SECONDS = 2
+HEARTBEAT_SECONDS = 5
 
 
-def _req(path, data=None):
+def _req(path, data=None, timeout=15):
     url = BASE + path
     body = json.dumps(data).encode() if data is not None else None
     req = urllib.request.Request(url, data=body,
                                  headers={"Content-Type": "application/json", "X-Auth": KEY},
                                  method="POST" if data is not None else "GET")
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
+
+
+def heartbeat():
+    """Keep the cloud's 'home PC online' fresh even while the main loop is
+    blocked running a long command (a deep search can take minutes). Any
+    agent-authenticated request refreshes the server's last-seen clock, so a
+    steady background ping means the pill never flickers offline while we're
+    alive - it only goes offline if this whole process actually stops."""
+    while True:
+        try:
+            _req("/api/heartbeat", timeout=8)
+        except Exception:
+            pass
+        time.sleep(HEARTBEAT_SECONDS)
 
 
 def push_tracker():
@@ -87,10 +102,13 @@ def tail(out, n=8):
 
 def main():
     print(f"Agent polling {BASE} every {POLL_SECONDS}s. Ctrl+C to stop.")
+    threading.Thread(target=heartbeat, daemon=True).start()
     report("idle", "Agent connected.")
     push_tracker()
     last_push = time.time()
     last_index = time.time()
+    last_check = 0            # reply check runs soon after start, then every 20 min
+    last_chase = time.time()  # auto-chase (opt-in) only after the first interval
     while True:
         try:
             cmd = _req("/api/next")
@@ -153,9 +171,13 @@ def main():
                 push_new_files(before)
                 report("done", "Form processed - upload CSV below and in the outbox.", tail(out, 10))
             elif action == "tracker_refresh":
-                report("running", "Refreshing tracker from Outlook…")
-                out = run(["tracker.py", "refresh"])
-                report("done", "Tracker refreshed.", tail(out))
+                report("running", "Checking replies & building send-off drafts…")
+                out = run(["phase2.py", "check"])
+                report("done", "Replies checked - tracker updated, briefs drafted.", tail(out, 6))
+            elif action == "run_chasers":
+                report("running", "Running chasers (2-business-day follow-ups)…")
+                out = run(["phase2.py", "chase", "send"])
+                report("done", "Chasers run.", tail(out, 10))
         except Exception as e:
             report("error", str(e))
         if action or time.time() - last_push > 60:
@@ -168,6 +190,22 @@ def main():
             except Exception:
                 pass
             last_index = time.time()
+        if time.time() - last_check > 1200:     # Phase 2: replies + OOO + send-off drafts, every 20 min
+            try:                                 # background so it never blocks command handling
+                subprocess.Popen([sys.executable, "phase2.py", "check"],
+                                 cwd=HERE, creationflags=0x08000000)
+            except Exception:
+                pass
+            last_check = time.time()
+        # Auto-chasers are OPT-IN: only run when auto_chase.enabled exists.
+        if (os.path.exists(os.path.join(HERE, "auto_chase.enabled"))
+                and time.time() - last_chase > 10800):     # every 3h
+            try:
+                subprocess.Popen([sys.executable, "phase2.py", "chase", "send"],
+                                 cwd=HERE, creationflags=0x08000000)
+            except Exception:
+                pass
+            last_chase = time.time()
         time.sleep(POLL_SECONDS)
 
 

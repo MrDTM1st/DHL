@@ -38,7 +38,9 @@ _MAX_DROPPED = 8
 
 
 def _agent_online():
-    return (time.time() - _agent_seen) < 15
+    # 30s tolerates the odd missed heartbeat / a redeploy blip; the agent
+    # pings every 5s via /api/heartbeat, so this stays green whenever it lives.
+    return (time.time() - _agent_seen) < 30
 
 
 def _ttl_text():
@@ -256,7 +258,10 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <div class="card">
     <div class="tkhd">
       <div class="lbl">Tracker — <span id="tkcount">…</span></div>
-      <button class="btn mini" onclick="refreshTracker()">Refresh from Outlook</button>
+      <div style="display:flex; gap:.4rem;">
+        <button class="btn mini" onclick="runChasers()">Run chasers</button>
+        <button class="btn mini" onclick="refreshTracker()">Check replies</button>
+      </div>
     </div>
     <div class="tkrows" id="tracker"><span class="hint">Loading…</span></div>
     <div class="files" id="files"><span>FILES:</span><span style="color:var(--faint)">loading…</span></div>
@@ -373,8 +378,12 @@ async function poll(){
 }
 function refreshTracker(){
   post({action:'tracker_refresh'});
-  document.getElementById('tracker').innerHTML='<span class="hint">Refreshing from Outlook…</span>';
-  setTimeout(loadTracker, 5000);
+  document.getElementById('tracker').innerHTML='<span class="hint">Checking replies & drafting send-off briefs…</span>';
+  setTimeout(loadTracker, 6000);
+}
+function runChasers(){
+  if(!confirm('Send follow-up chasers to every order that is 2+ business days overdue a reply?')) return;
+  post({action:'run_chasers'});
 }
 function stage(cls,label){ return '<div class="stage '+cls+'"><span class="cdot"></span><span class="slbl">'+label+'</span></div>'; }
 function pline(on){ return '<div class="pline'+(on?' on':'')+'"></div>'; }
@@ -390,10 +399,11 @@ async function loadTracker(){
       const emailed = !!r.emailed_at;
       const chased  = (r.chases||0) > 0;
       const reply   = !!r.reply_at;
+      const ooo     = !!r.ooo_at;
       const sendoff = !!r.sendoff_ready;
       const s1 = stage('done','Drafted');
       const s2 = chased ? stage('chased','Chased ×'+r.chases) : stage(emailed?'done':'pending','Emailed');
-      const s3 = stage(reply?'done':'pending','Reply');
+      const s3 = ooo ? stage('chased','Out of office') : stage(reply?'done':'pending','Reply');
       const s4 = stage(sendoff?'done':'pending','Send-off');
       const pipe = '<div class="pipe">'+s1+pline(emailed||chased)+s2+pline(reply)+s3+pline(sendoff)+s4+'</div>';
       const mat = r.materials ? ' <span class="mat">· '+esc(r.materials)+'</span>' : '';
@@ -518,6 +528,11 @@ class Handler(BaseHTTPRequestHandler):
             if not f:
                 return self._json(404, {"error": "gone"})
             self._json(200, {"name": name, "data": f["data"]})
+        elif self.path == "/api/heartbeat":
+            # agent liveness ping - _is_agent() refreshes the last-seen clock
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            self._json(200, {"ok": True})
         elif self.path == "/healthz":
             self._json(200, {"ok": True, "files": True})
         else:
