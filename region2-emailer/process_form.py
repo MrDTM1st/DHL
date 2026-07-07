@@ -106,12 +106,16 @@ def fmt_dt(v):
         return str(v)
 
 
+ADHOC_ACCOUNT = "NRADHOC"   # ad hocs always file under this (form's Account column is often left on "Please select")
+
+
 def to_transform_row(d):
     r = dict(d)
     r["collection time"] = fmt_dt(d.get("collection_time"))
     r["collection time end"] = fmt_dt(d.get("collection_time_end"))
     r["delivery time"] = fmt_dt(d.get("delivery_time"))
     r["delivery time end"] = fmt_dt(d.get("delivery_time_end"))
+    r["Account"] = ADHOC_ACCOUNT   # force the account regardless of the form's dropdown
     return r
 
 
@@ -137,7 +141,7 @@ def main():
     out = nr_csv.write_csv(records, outbox.path(name))
     for d in rows:
         print(f"Order {d.get('Customer Order No')} | {d.get('Site Name - Collection')} "
-              f"-> {d.get('Delivery Point')} | qty {d.get('Product Qty')} | acct {d.get('Account')}")
+              f"-> {d.get('Delivery Point')} | qty {d.get('Product Qty')} | acct {ADHOC_ACCOUNT} (forced)")
     print(f"CSV : {out}")
 
 
