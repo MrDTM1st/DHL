@@ -77,7 +77,9 @@ def read_rhpc_rows(path):
         xl.DisplayAlerts = False
         wb = xl.Workbooks.Open(os.path.abspath(path), ReadOnly=True, UpdateLinks=0)
         try:
-            sh = wb.Worksheets("RHPC Admin - DHL USE ONLY")
+            names = [s.Name for s in wb.Worksheets]
+            target = next((n for n in names if n.strip().lower().startswith("rhpc admin")), None)
+            sh = wb.Worksheets(target)
             rows = sh.Range(sh.Cells(1, 1), sh.Cells(4, 60)).Value
         finally:
             wb.Close(False)
@@ -86,7 +88,8 @@ def read_rhpc_rows(path):
         import openpyxl, warnings
         warnings.filterwarnings("ignore")
         wbo = openpyxl.load_workbook(path, data_only=True)
-        sho = wbo["RHPC Admin - DHL USE ONLY"]
+        target = next((n for n in wbo.sheetnames if n.strip().lower().startswith("rhpc admin")), None)
+        sho = wbo[target]
         rows = [[c.value for c in r] for r in sho.iter_rows(min_row=1, max_row=4, max_col=60)]
     headers = [str(h).strip() if h is not None else "" for h in rows[0]]
     out = []
@@ -106,7 +109,15 @@ def fmt_dt(v):
         return str(v)
 
 
-ADHOC_ACCOUNT = "NRADHOC"   # ad hocs always file under this (form's Account column is often left on "Please select")
+ADHOC_ACCOUNT = "NRADHOC"   # default when the form leaves the account unset
+UNSET_ACCOUNTS = {"", "please select", "select", "none"}
+
+
+def account_for(d):
+    """Keep a preset account; only default to NRADHOC when the form left it
+    on 'Please select' / blank."""
+    acct = str(d.get("Account") or "").strip()
+    return acct if acct.lower() not in UNSET_ACCOUNTS else ADHOC_ACCOUNT
 
 
 def to_transform_row(d):
@@ -115,7 +126,7 @@ def to_transform_row(d):
     r["collection time end"] = fmt_dt(d.get("collection_time_end"))
     r["delivery time"] = fmt_dt(d.get("delivery_time"))
     r["delivery time end"] = fmt_dt(d.get("delivery_time_end"))
-    r["Account"] = ADHOC_ACCOUNT   # force the account regardless of the form's dropdown
+    r["Account"] = account_for(d)   # preset account wins; else NRADHOC
     return r
 
 
@@ -140,8 +151,10 @@ def main():
     name = "NR_heavy_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     out = nr_csv.write_csv(records, outbox.path(name))
     for d in rows:
+        preset = str(d.get('Account') or '').strip().lower() not in UNSET_ACCOUNTS
         print(f"Order {d.get('Customer Order No')} | {d.get('Site Name - Collection')} "
-              f"-> {d.get('Delivery Point')} | qty {d.get('Product Qty')} | acct {ADHOC_ACCOUNT} (forced)")
+              f"-> {d.get('Delivery Point')} | qty {d.get('Product Qty')} | "
+              f"acct {account_for(d)}{' (preset)' if preset else ' (defaulted)'}")
     print(f"CSV : {out}")
 
 
