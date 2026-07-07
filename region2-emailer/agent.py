@@ -169,7 +169,10 @@ def main():
                 before = snap_outbox()
                 out = run(["process_form.py", order])
                 push_new_files(before)
-                report("done", "Form processed - upload CSV below and in the outbox.", tail(out, 10))
+                if "Nothing written" in out or "INCOMPLETE ORDER" in out or "NOT FOUND" in out:
+                    report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
+                else:
+                    report("done", "Form processed - upload CSV below and in the outbox.", tail(out, 10))
             elif action == "tracker_refresh":
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])

@@ -113,6 +113,13 @@ ADHOC_ACCOUNT = "NRADHOC"   # default when the form leaves the account unset
 UNSET_ACCOUNTS = {"", "please select", "select", "none"}
 
 
+def _ref_incomplete(ref):
+    """True if the order number is missing/truncated - blank, ends with a
+    separator ('FS-'), or has no digits at all."""
+    r = str(ref or "").strip()
+    return (not r) or r[-1] in "-/ " or not any(c.isdigit() for c in r)
+
+
 def account_for(d):
     """Keep a preset account; only default to NRADHOC when the form left it
     on 'Please select' / blank."""
@@ -147,6 +154,20 @@ def main():
     if not rows:
         print("No data in the form's RHPC Admin row - is it actually filled in?")
         return
+
+    # Guard: a truncated order number (e.g. 'FS-' when the Collection Ref was
+    # left blank) would be rejected by the upload. Refuse rather than produce a
+    # dead file, and say exactly what to fix.
+    good, bad = [], []
+    for d in rows:
+        (bad if _ref_incomplete(d.get("Customer Order No")) else good).append(d)
+    for d in bad:
+        print(f"!! INCOMPLETE ORDER NUMBER {str(d.get('Customer Order No')).strip()!r} - the form's "
+              f"order-number field (e.g. Collection Ref) is blank. Fill it in and re-run; nothing written for this one.")
+    if not good:
+        print("Nothing written - no usable order number on the form.")
+        return
+    rows = good
     records = nr_csv.transform([to_transform_row(d) for d in rows])
     name = "NR_heavy_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     out = nr_csv.write_csv(records, outbox.path(name))
