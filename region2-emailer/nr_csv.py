@@ -114,10 +114,18 @@ def transform(rows):
     return [r for _, _, r in out]
 
 
+def _csv_safe(v):
+    """Final guarantee before the field is written: no commas (they'd shift
+    every following column and the upload rejects the row) and no embedded
+    line breaks/tabs (same effect). Idempotent - already-clean fields pass
+    through unchanged."""
+    return re.sub(r"\s+", " ", str("" if v is None else v).replace(",", " ")).strip()
+
+
 def write_csv(records, out_path):
     with open(out_path, "w", encoding="utf-8", newline="") as f:
         for r in records:
-            f.write(",".join(r) + "\n")
+            f.write(",".join(_csv_safe(x) for x in r) + "\n")
     return out_path
 
 
