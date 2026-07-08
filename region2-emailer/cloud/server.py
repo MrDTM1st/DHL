@@ -24,6 +24,7 @@ _lock = threading.Lock()
 _queue = []
 _status = {"state": "idle", "detail": "Waiting for a command.", "at": "", "output": "", "email": None}
 _tracker = {"records": []}
+_waitlist = {"entries": []}
 _agent_seen = 0.0
 _files = {}          # name -> {"data": b64, "size": int, "at": str}
 _MAX_FILES = 12
@@ -203,8 +204,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="cmd">
       <div class="lbl">Today's extract</div>
       <div class="col">
-        <button class="btn" onclick="cmd('preview')">Preview drafts</button>
-        <button class="btn primary" onclick="cmd('commit')">Build &amp; save</button>
+        <button class="btn primary" onclick="previewBatch()">Preview &amp; send</button>
+        <button class="btn" onclick="cmd('commit')">Save as drafts</button>
       </div>
     </div>
     <div class="cmd">
@@ -244,6 +245,18 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     </div>
   </div>
 
+  <div class="card" id="batchpanel" style="display:none;">
+    <div class="tkhd">
+      <div class="lbl">Today's batch — <span id="bcount">…</span> <span class="hint" style="font-weight:400">· tick the ones to send, then Send</span></div>
+      <div style="display:flex; gap:.4rem;">
+        <button class="btn mini" onclick="batchAll(true)">All</button>
+        <button class="btn mini" onclick="batchAll(false)">None</button>
+        <button class="btn go" onclick="sendBatch()">Send selected</button>
+      </div>
+    </div>
+    <div id="batchrows"></div>
+  </div>
+
   <div class="card statuscard">
     <div class="statushd">
       <span class="sdot" id="dot"></span>
@@ -266,10 +279,20 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="tkrows" id="tracker"><span class="hint">Loading…</span></div>
     <div class="files" id="files"><span>FILES:</span><span style="color:var(--faint)">loading…</span></div>
   </div>
+
+  <div class="card">
+    <div class="tkhd">
+      <div class="lbl">Wait list — <span id="wlcount">…</span> <span class="hint" style="font-weight:400">· held until ~14 days before delivery, then auto-sent</span></div>
+      <div style="display:flex; gap:.4rem;">
+        <button class="btn mini" onclick="releaseWaitlist()">Release due now</button>
+      </div>
+    </div>
+    <div class="tkrows" id="waitlist"><span class="hint">Loading…</span></div>
+  </div>
 </div>
 
 <script>
-const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--red)'};
+const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--red)',batch_ready:'var(--amber)'};
 let currentOrder='';
 let lastPreviewAt='';
 let agentOnline=false;
@@ -295,7 +318,7 @@ function showLogin(){ document.getElementById('login').style.display='flex'; }
 function saveKey(){
   localStorage.setItem('r2key', document.getElementById('keyin').value.trim());
   document.getElementById('login').style.display='none';
-  poll(); loadTracker(); loadFiles();
+  poll(); loadTracker(); loadWaitlist(); loadFiles();
 }
 async function api(path, opts){
   opts=opts||{}; opts.headers=Object.assign({}, opts.headers||{}, {'X-Auth':key()});
@@ -308,7 +331,36 @@ async function post(body){
   setTimeout(poll,250);
 }
 function hideEdit(){ document.getElementById('editpanel').style.display='none'; }
-function cmd(a){ hideEdit(); post({action:a}); }
+function hideBatch(){ const b=document.getElementById('batchpanel'); if(b) b.style.display='none'; }
+function cmd(a){ hideEdit(); hideBatch(); post({action:a}); }
+let batchCache=[];
+function previewBatch(){ hideEdit(); hideBatch(); lastPreviewAt=''; post({action:'extract_preview'}); }
+function batchAll(on){ document.querySelectorAll('.bchk').forEach(c=>c.checked=on); }
+function toggleB(i){ const el=document.getElementById('bbody'+i); if(el) el.hidden=!el.hidden; }
+function renderBatch(list){
+  batchCache=list||[];
+  document.getElementById('bcount').textContent = (list.length===1?'1 email':list.length+' emails');
+  document.getElementById('batchrows').innerHTML = list.map((e,i)=>
+    '<div style="padding:.5rem 0; border-bottom:1px solid var(--line); display:flex; gap:.55rem; align-items:center; flex-wrap:wrap;">'
+    + '<input type="checkbox" class="bchk" data-i="'+i+'" checked style="width:16px; height:16px;">'
+    + '<span class="ord">'+esc((e.orders||[]).join(" / "))+'</span>'
+    + '<span class="sub" style="flex:1; min-width:140px;">'+esc(e.to||'(no recipient)')+' · '+esc(e.date||'')+(e.materials?' · '+esc(e.materials):'')+'</span>'
+    + '<button class="btn mini" onclick="toggleB('+i+')">view</button>'
+    + '<pre id="bbody'+i+'" hidden style="flex-basis:100%; white-space:pre-wrap; background:rgba(0,0,0,.045); padding:.6rem; margin:.35rem 0 0; font-size:.8rem; line-height:1.5; border-radius:6px;">'
+      +esc('Subject: '+(e.subject||'')+'\\n\\n'+(e.message||''))+'</pre>'
+    + '</div>').join('');
+  document.getElementById('batchpanel').style.display='block';
+}
+function sendBatch(){
+  const sel=[...document.querySelectorAll('.bchk')].filter(c=>c.checked).map(c=>c.dataset.i);
+  if(!sel.length){ alert('Nothing ticked — select at least one email.'); return; }
+  const q = agentOnline
+    ? 'Send '+sel.length+' email'+(sel.length>1?'s':'')+' now from your DHL account?'
+    : 'The home PC is OFFLINE — nothing can send right now.\\n\\nQueue it anyway? It sends if the home PC reconnects within '+ttlText()+', otherwise it is discarded.';
+  if(!confirm(q)) return;
+  hideBatch();
+  post({action:'extract_send', sel: sel.join(',')});
+}
 function findOrder(){
   // several order numbers (any of space , ; / + &) become one grouped email
   const o=document.getElementById('ord').value.trim().split(/[\\s,;\\/+&]+/).filter(Boolean).join(' ');
@@ -374,6 +426,11 @@ async function poll(){
       }
       ep.style.display='block';
     } else if(s.state!=='preview_ready'){ ep.style.display='none'; }
+    const bp=document.getElementById('batchpanel');
+    if(s.state==='batch_ready' && s.email && s.email.length){
+      if(s.at!==lastPreviewAt){ lastPreviewAt=s.at; renderBatch(s.email); }
+      bp.style.display='block';
+    } else if(s.state!=='batch_ready'){ if(bp) bp.style.display='none'; }
   }catch(e){}
 }
 function refreshTracker(){
@@ -417,6 +474,45 @@ async function loadTracker(){
     }).join('');
   }catch(e){}
 }
+function releaseWaitlist(){
+  if(!confirm('Send now any wait-listed order already within its 14-day window? (Already-emailed and past-date ones are skipped automatically.)')) return;
+  post({action:'waitlist_release'});
+}
+function wlDays(dd){
+  const m=String(dd).match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/); if(!m) return null;
+  const today=new Date(); today.setHours(0,0,0,0);
+  const dt=new Date(+m[3],+m[2]-1,+m[1]);
+  return Math.round((dt-today)/86400000);
+}
+async function loadWaitlist(){
+  try{
+    const d = await (await api('/api/waitlist')).json();
+    const show = (d.entries||[]).filter(e=>e.status==='waiting'||e.status==='missed');
+    const host=document.getElementById('waitlist');
+    const isOver = e => e.status==='missed' || (wlDays(e.date)!==null && wlDays(e.date)<0);
+    const over = show.filter(isOver).length;
+    document.getElementById('wlcount').textContent =
+      (show.length===1?'1 held':show.length+' held') + (over? ' · '+over+' NEED ATTENTION':'');
+    if(!show.length){ host.innerHTML='<span class="hint">Nothing waiting — far-ahead orders appear here and auto-send ~14 days before delivery.</span>'; return; }
+    show.sort((a,b)=>((wlDays(a.date)??1e9)-(wlDays(b.date)??1e9)));
+    host.innerHTML = show.map(e=>{
+      const n=wlDays(e.date);
+      const overdue = isOver(e);
+      const due = !overdue && n!==null && n>=0 && n<=14;
+      const col = overdue?'var(--red)':(due?'var(--amber)':'var(--line)');
+      const tagcol = overdue?'var(--red)':(due?'var(--amber)':'var(--muted)');
+      const tag = e.status==='missed' ? 'MISSED — action needed'
+                : (n!==null && n<0) ? ('OVERDUE '+Math.abs(n)+'d — action needed')
+                : (due?('DUE in '+n+'d'):(n+'d away'));
+      return '<div class="tkrow" style="border-left:3px solid '+col+'; padding-left:.6rem;">'
+        + '<div class="tkmeta"><div class="ord">'+esc((e.orders||[]).join(' / '))+'</div>'
+        + '<div class="sub">'+esc(e.site||'')+' '+esc(e.postcode||'')+' · '+esc(e.to||'')+'</div></div>'
+        + '<div class="tktime" style="color:'+tagcol+'; text-align:right">deliver '+esc(e.date)
+        + '<br><b>'+tag+'</b></div>'
+        + '</div>';
+    }).join('');
+  }catch(e){}
+}
 async function loadFiles(){
   try{
     const d = await (await api('/api/files')).json();
@@ -447,6 +543,7 @@ function tick(){ document.getElementById('clock').textContent = new Date().toTim
 setInterval(tick,1000); tick();
 setInterval(poll,1500); poll();
 setInterval(loadTracker,6000); loadTracker();
+setInterval(loadWaitlist,6000); loadWaitlist();
 setInterval(loadFiles,6000); loadFiles();
 </script></body></html>"""
 
@@ -511,6 +608,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             with _lock:
                 self._json(200, _tracker)
+        elif self.path == "/api/waitlist":
+            if not (self._is_dash() or self._is_agent()):
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                self._json(200, _waitlist)
         elif self.path == "/api/files":
             if not (self._is_dash() or self._is_agent()):
                 return self._json(401, {"error": "auth"})
@@ -539,7 +641,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        global _tracker
+        global _tracker, _waitlist
         length = int(self.headers.get("Content-Length", 0))
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
@@ -550,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
-                               "email": data.get("email"), "queued_at": time.time()})
+                               "email": data.get("email"), "sel": data.get("sel"), "queued_at": time.time()})
                 det = f"{data.get('action')} queued"
                 if not _agent_online():
                     det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
@@ -577,6 +679,13 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if isinstance(data, dict) and "records" in data:
                     _tracker = data
+            self._json(200, {"ok": True})
+        elif self.path == "/api/waitlist":
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                if isinstance(data, dict) and "entries" in data:
+                    _waitlist = data
             self._json(200, {"ok": True})
         elif self.path == "/api/files":
             if not self._is_agent():

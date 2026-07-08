@@ -14,6 +14,7 @@ Usage:
 import sys, os, json, re, html as _html
 from collections import defaultdict, OrderedDict
 import tracker
+import waitlist
 
 DHL_SMTP = "delali.opoku@dhl.com"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +22,23 @@ CFG = json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))
 REGION = CFG["regions"][CFG["active_region"]]
 AREAS = set(REGION["postcode_areas"])
 SOURCE_PREFIX = CFG["email_source"]["only_file"].lower()
+BS_MARKERS = [m.lower() for m in CFG["email_source"].get("also_batches", [])]
+
+
+def is_wanted_extract(filename, subject=""):
+    """True if this attachment is a file the emailer should read: the normal
+    Haulier Extract, OR a BS batch file (British Steel) identified by name or by
+    the email subject. BS batches carry the same columns as the extract and hold
+    real Region 2 orders, so they're processed identically. Master files and the
+    other batch processes (Inframat/Rail Plan/S&C) are still ignored."""
+    low = (filename or "").lower()
+    if low.startswith(SOURCE_PREFIX) and not low.startswith("master"):
+        return True
+    if low.endswith((".xlsx", ".xlsm")):
+        subj = (subject or "").lower()
+        if any(m in low or m in subj for m in BS_MARKERS):
+            return True
+    return False
 
 QUESTIONS = """    Date and time of delivery?
     Who will be the contact for delivery?
@@ -132,6 +150,19 @@ def fdate(d):
     except Exception:
         return str(d or "")
 
+
+def _is_future(dd):
+    """True if a 'dd/mm/yyyy' delivery date is today or later. Guards against
+    emailing a contact to arrange a delivery whose date has already passed
+    (which happens when an old batch is swept up). Fails OPEN - an unparseable
+    or blank date returns True - so a genuine order is never silently dropped."""
+    from datetime import datetime, date
+    try:
+        d = datetime.strptime(str(dd).strip()[:10], "%d/%m/%Y").date()
+        return d >= date.today()
+    except Exception:
+        return True
+
 def is_supplier_rail(order):
     return str(order or "")[:1].isalpha()   # order number starts with a letter
 
@@ -196,17 +227,141 @@ def find_inbox_extracts(ns, limit=300):
         if n > limit:
             break
         try:
+            subj = str(getattr(it, "Subject", "") or "")
             for j in range(1, it.Attachments.Count + 1):
                 att = it.Attachments.Item(j)
                 fn = str(att.FileName)
-                low = fn.lower()
-                if low.startswith(SOURCE_PREFIX) and not low.startswith("master") and fn not in seen:
+                if is_wanted_extract(fn, subj) and fn not in seen:
                     seen.add(fn)
                     path = os.path.join(HERE, f"_inbox_extract_{len(found)}.xlsx")
                     att.SaveAsFile(path)
                     found.append((path, fn))
         except Exception:
             pass
+    return found
+
+
+def find_synergy_upload_bs(ns, days=3, exclude=()):
+    """Safety net for BS batches. BS batch files get filed into
+    Inbox > ADHOC > Synergy Upload - sometimes before the daily run reads the
+    Inbox root - so a root-only scan can miss them. Pick up any BS file received
+    in the last `days` days from that folder. Tracker de-dup downstream stops an
+    already-drafted batch being drafted twice, and `exclude` skips files already
+    found in the Inbox root so nothing is loaded from two places."""
+    from datetime import datetime, timedelta
+    dhl = dhl_store(ns)
+    inbox = sub(dhl, "Inbox")
+    adhoc = sub(inbox, "ADHOC") if inbox else None
+    folder = sub(adhoc, "Synergy Upload") if adhoc else None
+    if folder is None:
+        return []
+    cutoff = datetime.now() - timedelta(days=days)
+    items = folder.Items
+    try:
+        items.Sort("[ReceivedTime]", True)
+    except Exception:
+        pass
+    found, seen, n = [], set(), 0
+    for it in items:
+        n += 1
+        if n > 400:
+            break
+        try:
+            rt = it.ReceivedTime
+            if rt is not None and datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute) < cutoff:
+                break   # newest-first: once past the window, everything after is older
+        except Exception:
+            pass
+        try:
+            subj = str(getattr(it, "Subject", "") or "").lower()
+            for j in range(1, it.Attachments.Count + 1):
+                att = it.Attachments.Item(j)
+                fn = str(att.FileName)
+                low = fn.lower()
+                # BS batches only here; normal extracts are handled from the root.
+                is_bs = low.endswith((".xlsx", ".xlsm")) and any(m in low or m in subj for m in BS_MARKERS)
+                if is_bs and fn not in seen and fn not in exclude:
+                    seen.add(fn)
+                    path = os.path.join(HERE, f"_syn_bs_{len(found)}.xlsx")
+                    att.SaveAsFile(path)
+                    found.append((path, fn))
+        except Exception:
+            pass
+    return found
+
+
+def _already_done_orders():
+    """Base order numbers already drafted/emailed, from the tracker. Lets the
+    daily run skip a batch it has already handled, so re-running commit - or the
+    Synergy Upload safety net overlapping the Inbox root - never produces a
+    duplicate draft. Fails open (empty set) so it can only ever suppress a true
+    duplicate, never hide a genuinely new order."""
+    try:
+        d = tracker.load()
+    except Exception:
+        return set()
+    done = set()
+    for r in d.get("records", []):
+        for o in r.get("orders", []):
+            done.add(str(o).strip())
+    return done
+
+
+PENDING_BATCH = os.path.join(HERE, "_pending_batch.json")
+
+
+def save_pending_batch(emails):
+    """Write today's to-send emails to a review file so the dashboard can show
+    the whole batch before anything sends (mirrors send_order's _pending_email).
+    Nothing is sent or drafted here."""
+    slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date",
+                                   "orders", "product_codes", "materials", "site",
+                                   "postcode", "source")} for e in emails]
+    with open(PENDING_BATCH, "w", encoding="utf-8") as f:
+        json.dump(slim, f, indent=1, default=str)
+    return slim
+
+
+def find_already_emailed(ns, order_numbers, limit=500):
+    """For each order number, look in the DHL Sent Items and Drafts for a mail
+    that already references it (subject or body). This catches emails you sent
+    BY HAND, which the tracker never sees - so the tool never asks you to email
+    someone you've already contacted. Returns {order: {"where","when","to"}}."""
+    targets = {str(o).strip() for o in order_numbers if str(o).strip()}
+    if not targets:
+        return {}
+    dhl = dhl_store(ns)
+    found = {}
+    for label, folder in (("Sent Items", sub(dhl, "Sent Items")), ("Drafts", sub(dhl, "Drafts"))):
+        if folder is None:
+            continue
+        items = folder.Items
+        try:
+            items.Sort("[SentOn]" if label == "Sent Items" else "[LastModificationTime]", True)
+        except Exception:
+            pass
+        n = 0
+        for it in items:
+            n += 1
+            if n > limit:
+                break
+            try:
+                blob = str(it.Subject or "") + " " + str(getattr(it, "Body", "") or "")[:6000]
+                for o in (targets - found.keys()):
+                    if o in blob:
+                        try:
+                            when = (it.SentOn if label == "Sent Items"
+                                    else it.LastModificationTime).strftime("%d/%m/%Y %H:%M")
+                        except Exception:
+                            when = "?"
+                        found[o] = {"where": label, "when": when,
+                                    "to": str(getattr(it, "To", "") or "")[:40]}
+            except Exception:
+                pass
+            if len(found) == len(targets):
+                break
+        if len(found) == len(targets):
+            break
     return found
 
 # ---------- core ----------
@@ -272,10 +427,10 @@ def build_emails_multi(files):
         pcodes = sorted({clean(r[C['prod_code']]) for r, C, _ in bundle
                          if C['prod_code'] is not None and r[C['prod_code']]})
         sources = " + ".join(sorted({s for _, _, s in bundle if s}))
-        emails.append(dict(to=em, name=nm, subject=subject, body=text, html=html,
-                           items=len(items), date=dd, orders=orders, product_codes=pcodes,
-                           materials=product_summary(items), site=clean(r0[C0['daddr']]),
-                           postcode=dpc, source=sources))
+        emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
+                           message=message, items=len(items), date=dd, orders=orders,
+                           product_codes=pcodes, materials=product_summary(items),
+                           site=clean(r0[C0['daddr']]), postcode=dpc, source=sources))
     return emails, skipped_rails, len(skipped_region)
 
 def create_drafts(ns, emails):
@@ -322,14 +477,18 @@ def main():
     if path is None:
         ns = get_ns()
         extracts = find_inbox_extracts(ns)
-        if not extracts:
-            print("No Haulier Extracts in the Inbox."); return
-        print(f"Found {len(extracts)} Haulier Extract(s) in the Inbox:")
-        for _, fn in extracts:
+        root_names = {fn for _, fn in extracts}
+        bs_extras = find_synergy_upload_bs(ns, days=30, exclude=root_names)
+        all_files = extracts + bs_extras
+        if not all_files:
+            print("No Haulier Extracts in the Inbox or recent BS batches in Synergy Upload."); return
+        print(f"Found {len(extracts)} extract(s) in the Inbox"
+              + (f" + {len(bs_extras)} recent BS batch(es) in Synergy Upload" if bs_extras else "") + ":")
+        for _, fn in all_files:
             print(f"  - {fn}")
         print()
         files = []
-        for p, fn in extracts:
+        for p, fn in all_files:
             rows, C = load_rows(p)
             files.append((rows, C, fn))
     else:
@@ -339,10 +498,72 @@ def main():
 
     total_rows = sum(len(rows) for rows, _, _ in files)
     emails, rails, region = build_emails_multi(files)
+    skipped_done, skipped_sent, skipped_past, waitlisted = [], [], [], []
+    if path is None:   # daily run: a file passed by hand is always shown in full
+        done = _already_done_orders()
+        all_orders = {str(o).strip() for e in emails for o in e["orders"]}
+        already = find_already_emailed(ns, all_orders)
+        lead = waitlist.LEAD_DAYS
+        kept = []
+        for e in emails:
+            ords = [str(o).strip() for o in e["orders"]]
+            seen = {o: already[o] for o in ords if o in already}
+            n = waitlist.days_until(e["date"])
+            if ords and all(o in done for o in ords):
+                skipped_done.append(e)
+            elif ords and all(o in already for o in ords):
+                e["_seen"] = seen
+                skipped_sent.append(e)
+            elif not _is_future(e["date"]):
+                skipped_past.append(e)
+            elif n is not None and n > lead:
+                # too far ahead to email yet - hold on the wait list, auto-sent later
+                waitlisted.append(e)
+            else:
+                if seen:                 # some (not all) orders already emailed - keep but warn
+                    e["_seen"] = seen
+                kept.append(e)
+        emails = kept
+        if mode in ("commit", "waitscan"):
+            added = sum(1 for e in waitlisted if waitlist.add(e))
+            if added:
+                print(f"(wait list: {added} far-ahead order(s) held, will auto-send ~{lead} days before delivery)")
     print(f"Rows: {total_rows} | Region 2 emails: {len(emails)} | "
-          f"supplier-rails skipped: {rails} | out-of-region groups skipped: {region}\n")
+          f"supplier-rails skipped: {rails} | out-of-region groups skipped: {region}"
+          + (f" | wait-listed (too far ahead): {len(waitlisted)}" if waitlisted else "")
+          + (f" | already-emailed skipped: {len(skipped_sent)}" if skipped_sent else "")
+          + (f" | already-done skipped: {len(skipped_done)}" if skipped_done else "")
+          + (f" | past-date skipped: {len(skipped_past)}" if skipped_past else "") + "\n")
+    if waitlisted:
+        print(f"Region 2 orders WAIT-LISTED - too far ahead, will auto-send ~{waitlist.LEAD_DAYS} days before delivery:")
+        for e in waitlisted:
+            n = waitlist.days_until(e["date"])
+            print(f"   ~ {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | deliver {e['date']} "
+                  f"(in {n}d) -> sends ~{n - waitlist.LEAD_DAYS}d from now")
+        print()
+    if skipped_sent:
+        print("Region 2 orders NOT emailed - you've ALREADY contacted them (found in Sent/Drafts):")
+        for e in skipped_sent:
+            ev = next(iter(e["_seen"].values()))
+            print(f"   > {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | "
+                  f"already {ev['where']} {ev['when']} to {ev['to']}")
+        print()
+    if skipped_past:
+        print("Region 2 orders NOT emailed - delivery date already passed (check none still need action):")
+        for e in skipped_past:
+            print(f"   x {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | {e['date']}")
+        print()
+    if skipped_done:
+        print("Region 2 orders skipped - already drafted/sent by the tool before:")
+        for e in skipped_done:
+            print(f"   = {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | {e['date']}")
+        print()
     for e in emails:
-        print(f"  TO {e['to'] or '(none)':36} | {e['subject']} | {e['items']} item(s) {e['date']}")
+        warn = ""
+        if e.get("_seen"):
+            ev = next(iter(e["_seen"].values()))
+            warn = f"   <!! one of these orders was already emailed {ev['where']} {ev['when']}"
+        print(f"  TO {e['to'] or '(none)':36} | {e['subject']} | {e['items']} item(s) {e['date']}{warn}")
 
     if mode == "commit":
         if ns is None:
@@ -350,6 +571,11 @@ def main():
         print("\nCreating drafts in DHL Drafts...")
         n = create_drafts(ns, emails)
         print(f"Done - {n} draft(s) created. Nothing sent.")
+    elif mode == "waitscan":
+        print("\nWait-list scan done - far-ahead orders captured. No drafts, nothing sent.")
+    elif mode == "batch":
+        save_pending_batch(emails)
+        print(f"\nBatch ready - {len(emails)} email(s) prepared for review. Nothing sent yet.")
     else:
         print("\n(preview only - no drafts created. Run with 'commit' to create them.)")
 

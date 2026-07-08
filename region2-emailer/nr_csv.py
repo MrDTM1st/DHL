@@ -107,9 +107,12 @@ def transform(rows):
         rec(12, ordno, {0: "ORD_LINES",
                         2: "CHRG_PALLET" if acct == "NRNONHEAVY" else "HEAVY",
                         3: o.get("Product Qty"), 4: o.get("Serial Number")})
-        # ITEMS (SEQ 13): col1=Product/Description, col2=qty
-        rec(13, ordno, {0: "ITEMS", 1: o.get("Product / Description"),
-                        2: o.get("Product Qty")})
+        # ITEMS (SEQ 13): col1=Product/Description, col2=qty.
+        # If the form states a product, follow it - fall back to the service
+        # code, never leave the ITEMS product blank for the upload to default.
+        prod = str(o.get("Product / Description") or "").strip() \
+            or str(o.get("Product / Service Code") or "").strip()
+        rec(13, ordno, {0: "ITEMS", 1: prod, 2: o.get("Product Qty")})
     out.sort(key=lambda t: (t[0], t[1]))
     return [r for _, _, r in out]
 
@@ -158,7 +161,11 @@ def dts_row(pdf_path):
         "D Telephone No": g(deliv, "telephone no"),
         "delivery time": t(deliv, "start time window"),
         "delivery time end": t(deliv, "end time window", True),
-        "Product / Description": "SUPPLIER_COL", "Product Qty": d["pallets"],
+        # A DTS carries no product line, so it falls back to the SUPPLIER_COL
+        # placeholder (the NR database shows this as its default item). But if
+        # the parser ever finds a stated product, follow that instead.
+        "Product / Description": (str(d.get("product") or "").strip() or "SUPPLIER_COL"),
+        "Product Qty": d["pallets"],
         "Serial Number": "", "Raised by": d.get("raiser_email", ""),
         "Account": "NRADHOC_NH", "Cost Centre": None, "Vehicle Type": "",
         "Delivery Instructions": "Del Notes " + " ".join(d["del_notes"]),

@@ -21,6 +21,8 @@ region2-emailer/cloud.json
 
 # --- local index/state ---
 region2-emailer/order_index.json
+region2-emailer/waitlist.json
+region2-emailer/auto_chase.enabled
 region2-emailer/supervisor.log
 
 # --- local machine stuff ---

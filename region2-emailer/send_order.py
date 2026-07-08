@@ -188,6 +188,22 @@ def send_pending(ns):
     return send_emails(ns, emails)
 
 
+def send_batch_pending(ns, sel="all"):
+    """Send today's extract batch from _pending_batch.json. `sel` is 'all' or a
+    comma-separated list of row indices (the ones ticked on the dashboard), so
+    the user can drop any before sending. Each email's HTML is rebuilt from its
+    message text, exactly like a single reviewed send."""
+    import json
+    emails = json.load(open(bd.PENDING_BATCH, encoding="utf-8"))
+    if sel and str(sel) != "all":
+        idx = {int(x) for x in str(sel).split(",") if x.strip().isdigit()}
+        emails = [e for i, e in enumerate(emails) if i in idx]
+    for e in emails:
+        e["html"] = bd.html_from_message(e.get("message", ""))
+        e["body"] = e.get("message", "") + "\n\n\n" + bd.SIGNATURE
+    return send_emails(ns, emails)
+
+
 def dhl_account(ns):
     accts = ns.Accounts
     for i in range(1, accts.Count + 1):
@@ -259,6 +275,11 @@ def main():
     if order == "sendjson":
         n = send_pending(ns)
         print(f"Sent {n} email(s) from your DHL account (edited version).")
+        return
+    if order == "sendbatch":
+        sel = sys.argv[2] if len(sys.argv) > 2 else "all"
+        n = send_batch_pending(ns, sel)
+        print(f"Sent {n} email(s) from your DHL account (batch).")
         return
 
     collected, tokens, not_found = resolve_orders(ns, order)

@@ -50,6 +50,14 @@ def push_tracker():
         pass
 
 
+def push_waitlist():
+    try:
+        with open(os.path.join(HERE, "waitlist.json"), encoding="utf-8") as f:
+            _req("/api/waitlist", json.load(f))
+    except Exception:
+        pass
+
+
 def outbox_dir():
     return os.path.join(os.path.expanduser("~"), "Documents", "DHL", "outbox")
 
@@ -105,10 +113,13 @@ def main():
     threading.Thread(target=heartbeat, daemon=True).start()
     report("idle", "Agent connected.")
     push_tracker()
+    push_waitlist()
     last_push = time.time()
     last_index = time.time()
     last_check = 0            # reply check runs soon after start, then every 20 min
     last_chase = time.time()  # auto-chase (opt-in) only after the first interval
+    last_waitscan = 0         # capture far-ahead orders onto the wait list (soon, then every 12h)
+    last_release = 0          # auto-send due wait-list emails (soon after start, then every 3h)
     while True:
         try:
             cmd = _req("/api/next")
@@ -122,6 +133,33 @@ def main():
                 report("running", f"Running {action}…")
                 out = run(["build_drafts.py", action])
                 report("done", f"{action} finished.", tail(out))
+            elif action == "extract_preview":
+                report("running", "Building today's extract batch…")
+                out = run(["build_drafts.py", "batch"])
+                batch = None
+                try:
+                    pend = os.path.join(HERE, "_pending_batch.json")
+                    if os.path.exists(pend):
+                        batch = json.load(open(pend, encoding="utf-8"))
+                except Exception:
+                    batch = None
+                if batch:
+                    report("batch_ready",
+                           f"Batch ready — {len(batch)} email(s) to review, then send.",
+                           tail(out, 30), email=batch)
+                else:
+                    report("done", "Nothing to send — no Region 2 emails in today's extract.",
+                           tail(out, 30))
+            elif action == "extract_send":
+                sel = (cmd.get("sel") or "all").strip() or "all"
+                report("running", "Sending today's extract batch…")
+                out = run(["send_order.py", "sendbatch", sel])
+                push_tracker()
+                try:
+                    os.remove(os.path.join(HERE, "_pending_batch.json"))
+                except Exception:
+                    pass
+                report("done", "Batch sent from your DHL account.", tail(out, 12))
             elif action == "order_preview" and order:
                 report("running", f"Finding order {order}…")
                 out = run(["send_order.py", order])
@@ -181,11 +219,39 @@ def main():
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])
                 report("done", "Chasers run.", tail(out, 10))
+            elif action == "waitlist_release":
+                report("running", "Releasing any due wait-list emails…")
+                out = run(["waitlist_release.py", "send"])
+                push_waitlist()
+                low = out.lower()
+                state = "error" if ("missed" in low or "failed" in low) else "done"
+                report(state, "Wait-list release run.", tail(out, 14))
+            elif action == "waitlist_scan":
+                report("running", "Scanning for far-ahead orders to hold…")
+                out = run(["build_drafts.py", "waitscan"])
+                push_waitlist()
+                report("done", "Wait-list scan done.", tail(out, 10))
         except Exception as e:
             report("error", str(e))
         if action or time.time() - last_push > 60:
             push_tracker()
+            push_waitlist()
             last_push = time.time()
+        if time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
+            try:
+                subprocess.Popen([sys.executable, "build_drafts.py", "waitscan"],
+                                 cwd=HERE, creationflags=0x08000000)
+            except Exception:
+                pass
+            last_waitscan = time.time()
+        if time.time() - last_release > 10800:    # every 3h: auto-SEND any wait-list order now within its window
+            out = run(["waitlist_release.py", "send"])
+            push_waitlist()
+            low = out.lower()
+            if any(k in low for k in ("sent:", "missed", "failed")):
+                report("error" if ("missed" in low or "failed" in low) else "done",
+                       "Wait-list auto-send ran.", tail(out, 14))
+            last_release = time.time()
         if time.time() - last_index > 900:      # keep the order index fresh
             try:
                 subprocess.Popen([sys.executable, os.path.join(HERE, "order_index.py")],

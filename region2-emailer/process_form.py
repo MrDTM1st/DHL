@@ -9,7 +9,7 @@ replicated database logic to build the NR upload CSV in the outbox.
     python process_form.py <reference or filename fragment>   # searches email
     python process_form.py latest                             # newest form in email
 """
-import sys, os
+import sys, os, re
 from datetime import datetime
 import nr_csv, outbox
 
@@ -113,11 +113,22 @@ ADHOC_ACCOUNT = "NRADHOC"   # default when the form leaves the account unset
 UNSET_ACCOUNTS = {"", "please select", "select", "none"}
 
 
-def _ref_incomplete(ref):
-    """True if the order number is missing/truncated - blank, ends with a
-    separator ('FS-'), or has no digits at all."""
+def _norm_order(ref):
+    """Normalise an order number for the upload: spaces are not allowed, so a
+    reference like 'FS-PLC CARDS' becomes 'FS-PLC-CARDS'. Collapses runs of
+    whitespace/hyphens to a single hyphen and trims the ends."""
     r = str(ref or "").strip()
-    return (not r) or r[-1] in "-/ " or not any(c.isdigit() for c in r)
+    r = re.sub(r"\s+", "-", r)
+    r = re.sub(r"-{2,}", "-", r).strip("-")
+    return r
+
+
+def _ref_incomplete(ref):
+    """True only if the order number is missing or truncated - blank, or ending
+    on a separator (e.g. a blank Collection Ref leaves a bare 'FS-'). A valid
+    letters-only reference such as 'FS-PLC-CARDS' is NOT incomplete."""
+    r = str(ref or "").strip()
+    return (not r) or r[-1] in "-/ " or r.upper() in ("FS", "FS-")
 
 
 def account_for(d):
@@ -154,6 +165,13 @@ def main():
     if not rows:
         print("No data in the form's RHPC Admin row - is it actually filled in?")
         return
+
+    # Order numbers can't contain spaces in the upload - hyphenate them (e.g.
+    # 'FS-PLC CARDS' -> 'FS-PLC-CARDS') on both the order and shipment refs.
+    for d in rows:
+        d["Customer Order No"] = _norm_order(d.get("Customer Order No"))
+        if str(d.get("Shipment No") or "").strip():
+            d["Shipment No"] = _norm_order(d.get("Shipment No"))
 
     # Guard: a truncated order number (e.g. 'FS-' when the Collection Ref was
     # left blank) would be rejected by the upload. Refuse rather than produce a
