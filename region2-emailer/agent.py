@@ -231,6 +231,11 @@ def main():
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])
                 report("done", "Replies checked - tracker updated, briefs drafted.", tail(out, 6))
+            elif action == "booked_call" and order:
+                report("running", "Marking booked via call…")
+                out = run(["tracker.py", "book", order])
+                push_tracker()
+                report("done", "Booked via call - removed from the tracker.", tail(out, 4))
             elif action == "run_chasers":
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])

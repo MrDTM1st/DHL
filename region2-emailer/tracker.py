@@ -58,6 +58,20 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
     save(d)
 
 
+def book(record_id):
+    """Booked over the phone: the order is handled even though no email reply
+    will ever arrive, so drop it from the tracker. Matched by record id.
+    Returns how many records were removed (0 if the id wasn't found)."""
+    rid = str(record_id).strip()
+    d = load()
+    before = len(d["records"])
+    d["records"] = [r for r in d["records"] if r.get("id") != rid]
+    n = before - len(d["records"])
+    if n:
+        save(d)
+    return n
+
+
 def drop_completed(d):
     """Remove orders that have cleared every pipeline stage. An order is complete
     once its send-off brief is ready (the terminal stage) - at that point it has
@@ -136,5 +150,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "refresh":
         data = refresh()
         print(f"Refreshed {len(data['records'])} record(s).")
+    elif len(sys.argv) > 2 and sys.argv[1] == "book":
+        n = book(sys.argv[2])
+        print(f"Booked via call - removed {n} record(s).")
     else:
         print(json.dumps(load(), indent=2)[:2500])

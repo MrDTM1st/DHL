@@ -467,12 +467,23 @@ async function loadTracker(){
       const t = fmtDt(r.emailed_at);
       return '<div class="tkrow">'
         + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+'</div>'
-        + '<div class="sub">'+esc(r.to||'')+'</div></div>'
+        + '<div class="sub">'+esc(r.to||'')+'</div>'
+        + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\''+encodeURIComponent(r.id||'')+'\')">Booked via call</button>'
+        + '</div>'
         + pipe
         + '<div class="tktime'+(chased?' amber':'')+'">'+esc(t)+'</div>'
         + '</div>';
     }).join('');
   }catch(e){}
+}
+function bookedCall(encId){
+  const id = decodeURIComponent(encId);
+  if(!id) return;
+  const ord = id.split('|')[0];
+  if(!confirm('Mark '+ord+' as booked over the phone and remove it from the tracker?')) return;
+  post({action:'booked_call', order:id});
+  document.getElementById('tracker').style.opacity='.6';
+  setTimeout(loadTracker, 2500);
 }
 function releaseWaitlist(){
   if(!confirm('Send now any wait-listed order already within its 14-day window? (Already-emailed and past-date ones are skipped automatically.)')) return;
