@@ -161,10 +161,10 @@ def dts_row(pdf_path):
         "D Telephone No": g(deliv, "telephone no"),
         "delivery time": t(deliv, "start time window"),
         "delivery time end": t(deliv, "end time window", True),
-        # A DTS carries no product line, so it falls back to the SUPPLIER_COL
-        # placeholder (the NR database shows this as its default item). But if
-        # the parser ever finds a stated product, follow that instead.
-        "Product / Description": (str(d.get("product") or "").strip() or "SUPPLIER_COL"),
+        # DTS rule: the product is ALWAYS the SUPPLIER_COL placeholder, the
+        # quantity is the pallet count, and the weight (Kgs) goes on the Haulage
+        # Request Form - the NR upload itself has no weight column.
+        "Product / Description": "SUPPLIER_COL",
         "Product Qty": d["pallets"],
         "Serial Number": "", "Raised by": d.get("raiser_email", ""),
         "Account": "NRADHOC_NH", "Cost Centre": None, "Vehicle Type": "",

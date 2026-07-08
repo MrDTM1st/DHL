@@ -58,6 +58,16 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
     save(d)
 
 
+def drop_completed(d):
+    """Remove orders that have cleared every pipeline stage. An order is complete
+    once its send-off brief is ready (the terminal stage) - at that point it has
+    been drafted, emailed, replied to and sent off, so it no longer needs
+    tracking. Mutates `d` in place; returns how many were removed."""
+    before = len(d["records"])
+    d["records"] = [r for r in d["records"] if not r.get("sendoff_ready")]
+    return before - len(d["records"])
+
+
 # ---------- refresh from Outlook ----------
 def _dhl(ns):
     for i in range(1, ns.Folders.Count + 1):
@@ -116,6 +126,7 @@ def refresh():
                     r["reply_at"] = _now()
                     break
         r["sendoff_ready"] = any(any(o in s for o in orders) for s in sendout_subjects)
+    drop_completed(d)   # an order that reached send-off is done - stop tracking it
     save(d)
     return d
 

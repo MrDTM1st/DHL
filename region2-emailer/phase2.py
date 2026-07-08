@@ -276,8 +276,10 @@ def check(ns=None):
                     briefs += 1
             except Exception as e:
                 r["sendoff_note"] = str(e)[:140]
+    removed = tracker.drop_completed(d)   # completed orders leave the tracker
     tracker.save(d)
-    print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, {briefs} send-off draft(s) created.")
+    print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
+          f"{briefs} send-off draft(s) created, {removed} completed order(s) removed.")
     return replies, ooo, briefs
 
 

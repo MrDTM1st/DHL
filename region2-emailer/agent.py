@@ -8,7 +8,7 @@ the control plane - nothing connects in to this PC.
     python agent.py                 # points at the local control plane
     python agent.py https://your-hosted-url   # points at the deployed one
 """
-import sys, time, json, subprocess, os, threading
+import sys, time, json, subprocess, os, threading, socket
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -108,7 +108,23 @@ def tail(out, n=8):
     return "\n".join(out.strip().splitlines()[-n:])
 
 
+def single_instance():
+    """Refuse to run a second agent for the same target. If the supervisor is
+    restarted while an old agent is still alive, the fresh copy would otherwise
+    double-poll and double-send. Local and cloud agents use different ports so
+    both legitimately run. Returns the held socket (keep the reference alive)."""
+    port = 8789 if BASE.lower().startswith("https") else 8788
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", port))
+    except OSError:
+        print("Another agent for this target is already running - exiting.")
+        sys.exit(0)
+    return s
+
+
 def main():
+    _lock = single_instance()   # noqa: F841 - held for process lifetime
     print(f"Agent polling {BASE} every {POLL_SECONDS}s. Ctrl+C to stop.")
     threading.Thread(target=heartbeat, daemon=True).start()
     report("idle", "Agent connected.")

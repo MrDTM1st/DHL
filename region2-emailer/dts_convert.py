@@ -60,6 +60,9 @@ def parse_block(block):
 def parse_pdf(path):
     with pdfplumber.open(path) as pdf:
         text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        tables = []
+        for p in pdf.pages:
+            tables.extend(p.extract_tables() or [])
     ref = ""
     fn = os.path.basename(path)
     m = re.search(r"([A-Z]{2}\d{5,}-\d+)", fn) or re.search(r"([A-Z]{2}\d{5,}-\d+)", text)
@@ -80,8 +83,28 @@ def parse_pdf(path):
     deliv = parse_block(text[di:]) if di >= 0 else {}
     m = re.search(r"Raised By:\s*(.+?)\s*Date:", text)
     raiser = m.group(1).strip() if m else ""
-    return dict(ref=ref, pallets=pallets, del_notes=del_notes, coll=coll, deliv=deliv,
-                raiser_email=raiser_email, raiser=raiser)
+    weight_kg = _weight_from_tables(tables)
+    return dict(ref=ref, pallets=pallets, weight_kg=weight_kg, del_notes=del_notes,
+                coll=coll, deliv=deliv, raiser_email=raiser_email, raiser=raiser)
+
+
+def _weight_from_tables(tables):
+    """Sum the 'Weight in Kgs' column of the DTS line-items table (the PDF puts
+    the shipment total in that column, e.g. 3061). Returns 0 if not found."""
+    for tbl in tables:
+        for hi, row in enumerate(tbl):
+            cells = [str(c or "").strip().lower() for c in row]
+            widx = next((i for i, c in enumerate(cells) if "weight in kg" in c), None)
+            if widx is None:
+                continue
+            total = 0.0
+            for row2 in tbl[hi + 1:]:
+                if widx < len(row2):
+                    m = re.search(r"(\d+(?:\.\d+)?)", str(row2[widx] or ""))
+                    if m:
+                        total += float(m.group(1))
+            return int(total) if float(total).is_integer() else round(total, 1)
+    return 0
 
 
 def _xl_time(v):
@@ -158,8 +181,30 @@ def parse_xls(path):
         ref = m.group(1) if m else ""
     m = re.match(r"\s*(\d+)", pallets_raw)
     pallets = int(m.group(1)) if m else (sum(line_qtys) or 1)
-    return dict(ref=ref, pallets=pallets, del_notes=del_notes, coll=coll, deliv=deliv,
-                raiser_email=raiser_email, raiser=raiser)
+    weight_kg = _weight_from_sheet(sh)
+    return dict(ref=ref, pallets=pallets, weight_kg=weight_kg, del_notes=del_notes,
+                coll=coll, deliv=deliv, raiser_email=raiser_email, raiser=raiser)
+
+
+def _weight_from_sheet(sh):
+    """Sum the 'Weight in Kgs' column across the DTS line-item rows (e.g. '119KG'
+    -> 119). Returns 0 if the column isn't present."""
+    wcol = hdr = None
+    for r in range(sh.nrows):
+        for c in range(sh.ncols):
+            if "weight in kg" in str(sh.cell_value(r, c)).strip().lower():
+                wcol, hdr = c, r
+                break
+        if wcol is not None:
+            break
+    if wcol is None:
+        return 0
+    total = 0.0
+    for r in range(hdr + 1, sh.nrows):
+        m = re.search(r"(\d+(?:\.\d+)?)", str(sh.cell_value(r, wcol)))
+        if m:
+            total += float(m.group(1))
+    return int(total) if float(total).is_integer() else round(total, 1)
 
 
 def parse_dts(path):

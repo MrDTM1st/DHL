@@ -72,7 +72,9 @@ def fill(pdf_path, template):
     put("K24", "N")            # no offload kit for DTS (no HIAB)
     put("G28", "N"); put("O28", "N"); put("G29", "N")
     put("G31", "Pallets (Larger than van)")
-    put("G33", data["pallets"])
+    put("G33", data["pallets"])                       # Quantity = number of pallets
+    if data.get("weight_kg"):
+        put("G34", f"{data['weight_kg']} kg")         # Approximate Weight = Weight in Kgs
     notes = "Del Notes: " + " ".join(data["del_notes"])
     put("G35", notes)
 
