@@ -187,6 +187,27 @@ def main():
                 except Exception:
                     pass
                 report("done", "Batch sent from your DHL account.", tail(out, 12))
+            elif action == "rail_plan":
+                mode = (cmd.get("mode") or "preview").lower()
+                report("running", f"Rail plan — {mode}…")
+                up = None
+                try:
+                    up = _req("/api/pull_upload")
+                except Exception:
+                    up = None
+                if not up or not up.get("data"):
+                    report("error", "No rail-plan CSV received — pick the file and try again.")
+                else:
+                    import base64
+                    raw = os.path.join(HERE, "_rail_raw.csv")
+                    with open(raw, "wb") as f:
+                        f.write(base64.b64decode(up["data"]))
+                    before = snap_outbox()
+                    args = ["rail_plan.py", "send", raw] + (["go"] if mode == "send" else [])
+                    out = run(args)
+                    push_new_files(before)
+                    verb = "sent" if mode == "send" else "previewed (nothing sent)"
+                    report("done", f"Rail plan {verb} — plans are in Files below.", tail(out, 34))
             elif action == "order_preview" and order:
                 report("running", f"Finding order {order}…")
                 out = run(["send_order.py", order])

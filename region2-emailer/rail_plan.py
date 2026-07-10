@@ -272,10 +272,9 @@ def recipients_for(m):
 
 
 def sendoff(path, send=False):
-    """Build the plans then draft/send one email per plan to its recipients."""
-    out = os.path.join(HERE, "_rp_send")
-    os.makedirs(out, exist_ok=True)
-    wc, made, mism = build(path, out_dir=out)
+    """Build the plans then draft/send one email per plan to its recipients.
+    Plans are written to the outbox so they're downloadable from the dashboard."""
+    wc, made, mism = build(path)
     wcs = wc.strftime("%d.%m") if wc else "TBC"
     outlook = acct = ns = None
     if send:

@@ -25,6 +25,7 @@ _queue = []
 _status = {"state": "idle", "detail": "Waiting for a command.", "at": "", "output": "", "email": None}
 _tracker = {"records": []}
 _waitlist = {"entries": []}
+_upload = None       # one pending browser->agent file upload {name, data(b64), at}
 _agent_seen = 0.0
 _files = {}          # name -> {"data": b64, "size": int, "at": str}
 _MAX_FILES = 12
@@ -229,6 +230,20 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         <button class="btn primary" onclick="processForm()">Build CSV</button>
       </div>
     </div>
+    <div class="cmd">
+      <div class="lbl">Rail plan</div>
+      <div class="col">
+        <input type="file" id="rpfile" accept=".csv" style="font-size:.74rem;">
+        <select id="rpweek" style="font:inherit; font-size:.8rem; padding:.4rem;">
+          <option value="next">Next week — new plan</option>
+          <option value="current">Current week — update</option>
+        </select>
+        <div style="display:flex; gap:.4rem;">
+          <button class="btn" onclick="railPlan('preview')">Preview</button>
+          <button class="btn primary" onclick="railPlan('send')">Build &amp; send</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="card" id="editpanel" style="display:none;">
@@ -374,6 +389,17 @@ function processDts(){
 }
 function processForm(){
   post({action:'form', order:(document.getElementById('frm').value.trim()||'latest')});
+}
+async function railPlan(mode){
+  const f=document.getElementById('rpfile').files[0];
+  const week=document.getElementById('rpweek').value;
+  if(!f){ alert('Pick the CTMS rail-plan CSV first.'); return; }
+  if(mode==='send' && !confirm('Build and SEND the rail plan to all suppliers, hauliers and your DHL colleagues?')) return;
+  try{
+    const data=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(f); });
+    await api('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name,data})});
+    post({action:'rail_plan', mode, week});
+  }catch(e){ alert('Upload failed: '+e); }
 }
 function sendEdited(){
   const q = agentOnline
@@ -641,6 +667,15 @@ class Handler(BaseHTTPRequestHandler):
             if not f:
                 return self._json(404, {"error": "gone"})
             self._json(200, {"name": name, "data": f["data"]})
+        elif self.path == "/api/pull_upload":
+            # agent collects a file the browser uploaded (rail-plan CSV etc.)
+            global _upload
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                up = _upload
+                _upload = None
+            self._json(200, up or {})
         elif self.path == "/api/heartbeat":
             # agent liveness ping - _is_agent() refreshes the last-seen clock
             if not self._is_agent():
@@ -652,7 +687,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        global _tracker, _waitlist
+        global _tracker, _waitlist, _upload
         length = int(self.headers.get("Content-Length", 0))
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
@@ -663,7 +698,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
-                               "email": data.get("email"), "sel": data.get("sel"), "queued_at": time.time()})
+                               "email": data.get("email"), "sel": data.get("sel"),
+                               "mode": data.get("mode"), "week": data.get("week"), "queued_at": time.time()})
                 det = f"{data.get('action')} queued"
                 if not _agent_online():
                     det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
@@ -697,6 +733,16 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if isinstance(data, dict) and "entries" in data:
                     _waitlist = data
+            self._json(200, {"ok": True})
+        elif self.path == "/api/upload":
+            # browser uploads a file for the agent to process (rail-plan CSV etc.)
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            name = str(data.get("name", ""))[:150]
+            if name and data.get("data"):
+                with _lock:
+                    _upload = {"name": name, "data": data["data"],
+                               "at": datetime.now().strftime("%H:%M:%S")}
             self._json(200, {"ok": True})
         elif self.path == "/api/files":
             if not self._is_agent():
