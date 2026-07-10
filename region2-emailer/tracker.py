@@ -37,22 +37,33 @@ def _key(orders, date):
     return "-".join(orders) + "|" + str(date)
 
 
-def log(orders, to, name, product_codes, materials, site, postcode, delivery_date, source, status="drafted"):
-    """Record an email. If the same order+date was already emailed, count it as a re-send (chase)."""
+def log(orders, to, name, product_codes, materials, site, postcode, delivery_date, source,
+        status="drafted", emailed_at=None, only_if_new=False, kind="delivery", orig_entryid=None):
+    """Record an email. If the same order+date is already tracked it counts as a
+    re-send (chase) - UNLESS only_if_new, when the existing record is left
+    untouched (used when enrolling emails you sent by hand, so they don't get a
+    phantom chase bump). emailed_at overrides the send timestamp so a by-hand
+    email is chased from when YOU actually sent it, not now. kind is 'delivery'
+    (chased by rebuilding from the extract) or 'collection' (chased in-thread);
+    orig_entryid points at the exact Sent item so a collection chase can reply on
+    the same thread."""
     d = load()
     k = _key(orders, delivery_date)
     for r in d["records"]:
         if r["id"] == k:
+            if only_if_new:
+                return
             r["chases"] = r.get("chases", 0) + 1
             r["last_emailed_at"] = _now()
             r["status"] = status
             save(d)
             return
+    when = emailed_at or _now()
     d["records"].append({
         "id": k, "orders": orders, "to": to, "name": name,
         "product_codes": product_codes, "materials": materials, "site": site, "postcode": postcode,
-        "delivery_date": delivery_date, "source": source,
-        "emailed_at": _now(), "last_emailed_at": _now(), "status": status,
+        "delivery_date": delivery_date, "source": source, "kind": kind, "orig_entryid": orig_entryid,
+        "emailed_at": when, "last_emailed_at": when, "status": status,
         "chases": 0, "reply_at": None, "sendoff_ready": False,
     })
     save(d)

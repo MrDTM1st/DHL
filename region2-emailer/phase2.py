@@ -252,8 +252,76 @@ def build_brief(ns, record, reply_item):
 
 
 # ---------- main passes ----------
+def _collection_terms():
+    """Recipient markers for the collect-first suppliers, from config."""
+    terms = set()
+    for s in bd.CFG.get("special_collection_suppliers", {}).values():
+        for k in s.get("match", []):
+            terms.add(str(k).lower())
+        for k in s.get("to", []) + s.get("cc", []):
+            terms.add(str(k).lower())
+    return terms
+
+
+def enrol_collection(ns):
+    """Auto-track the supplier collection-request emails you've sent (subject
+    'Collection <order> ...' TO Anderton / BCM / Trough Tec) so they get chased if
+    the supplier doesn't come back with the collection details. Gated on a
+    special-collection supplier recipient AND a 7-digit order number, so ordinary
+    mail never lands on the tracker. Added once (only_if_new); chased in-thread.
+    Returns how many were newly enrolled."""
+    dhl = _dhl(ns)
+    sent = _sub(dhl, "Sent Items")
+    terms = _collection_terms()
+    if sent is None or not terms:
+        return 0
+    items = sent.Items
+    try:
+        items.Sort("[SentOn]", True)
+    except Exception:
+        pass
+    existing = {r["id"] for r in tracker.load().get("records", [])}
+    added = n = 0
+    for it in items:
+        n += 1
+        if n > 400:
+            break
+        try:
+            core = re.sub(r"^\s*(re|fw|fwd)\s*:\s*", "",
+                          str(getattr(it, "Subject", "") or "").strip(), flags=re.I)
+            if not core.lower().startswith("collection "):
+                continue
+            who = (str(getattr(it, "To", "") or "") + " " + str(getattr(it, "CC", "") or "")).lower()
+            if not any(t in who for t in terms):
+                continue                       # only the collect-first suppliers
+            m = re.search(r"(?<!\d)(\d{7})(?!\d)", core)
+            if not m:
+                continue                       # need a real order number to track/chase
+            order = m.group(1)
+            rid = tracker._key([order], "")
+            if rid in existing:
+                continue
+            when = None
+            try:
+                s = it.SentOn
+                when = datetime(s.year, s.month, s.day, s.hour, s.minute).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                pass
+            tracker.log(orders=[order], to=str(getattr(it, "To", "") or ""), name="",
+                        product_codes=[], materials="collection details", site="", postcode="",
+                        delivery_date="", source="collection", status="sent",
+                        emailed_at=when, only_if_new=True, kind="collection",
+                        orig_entryid=str(getattr(it, "EntryID", "") or ""))
+            existing.add(rid)
+            added += 1
+        except Exception:
+            continue
+    return added
+
+
 def check(ns=None):
     ns = ns or bd.get_ns()
+    enrol_collection(ns)          # track supplier collection emails before scanning for replies
     d = tracker.load()
     replies = ooo = briefs = 0
     for r in d["records"]:
@@ -270,6 +338,8 @@ def check(ns=None):
         else:
             r["reply_at"] = tracker._now()
             replies += 1
+            if r.get("kind") == "collection":
+                continue   # supplier replied with collection details - no delivery send-off brief
             try:
                 if build_brief(ns, r, item):
                     r["sendoff_ready"] = True
@@ -297,7 +367,39 @@ def _due_for_chase(r):
     return True
 
 
+def _chase_in_thread(ns, record):
+    """Follow up on the exact email you sent, kept on the same thread. Used for
+    supplier collection requests - there is no extract to rebuild from, so we
+    reply to the original Sent item (quoting it) asking for the details."""
+    eid = record.get("orig_entryid")
+    if not eid:
+        return False
+    try:
+        item = ns.GetItemFromID(eid)
+    except Exception:
+        return False
+    if item is None:
+        return False
+    try:
+        reply = item.Reply()
+        note = ("Hi,\n\nJust following up on the below - could I please get the "
+                "collection details when you have a moment?\n\n")
+        try:
+            reply.Body = note + reply.Body
+        except Exception:
+            pass
+        acct = send_order.dhl_account(ns)
+        if acct is not None:
+            send_order.bind_account(reply, acct)
+        reply.Send()
+        return True
+    except Exception:
+        return False
+
+
 def _send_chase(ns, record):
+    if record.get("kind") == "collection":
+        return _chase_in_thread(ns, record)
     collected, tokens, nf = send_order.resolve_orders(ns, " ".join(record["orders"]))
     if not collected:
         return False
@@ -333,6 +435,8 @@ def run_chasers(ns=None, send=False):
         for r in d2["records"]:
             if r["id"] in chased_ids:
                 r["last_chased_at"] = date.today().isoformat()
+                if r.get("kind") == "collection":
+                    r["chases"] = r.get("chases", 0) + 1   # in-thread chase skips tracker.log's bump
         tracker.save(d2)
     verb = "sent" if send else "due"
     print(f"chasers: {len(chased_ids) if send else len(due)} {verb}.")

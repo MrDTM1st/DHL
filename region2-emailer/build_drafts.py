@@ -377,6 +377,44 @@ def _looks_booked(subject, body):
     return is_reply and has_phrase
 
 
+def _to_tracker_dt(when):
+    """Convert a 'dd/mm/YYYY HH:MM' Sent-item time to the tracker's
+    'YYYY-mm-dd HH:MM' so business-day chasing counts from the real send date."""
+    from datetime import datetime as _dt
+    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return _dt.strptime(str(when).strip(), fmt).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    return None
+
+
+def enrol_by_hand(skipped_sent):
+    """Put the orders you emailed the delivery contact YOURSELF (found in Sent
+    Items, not via the tool) onto the tracker so they get chased like the rest.
+    Idempotent, dated from your actual send time. Drafts-only matches are ignored
+    - nothing was sent, so there's no one to chase. Returns how many were newly
+    enrolled."""
+    existing = {r["id"] for r in tracker.load().get("records", [])}
+    n = 0
+    for e in skipped_sent:
+        ev = next((v for v in e.get("_seen", {}).values() if v.get("where") == "Sent Items"), None)
+        if not ev:
+            continue
+        rid = tracker._key(e["orders"], e["date"])
+        if rid in existing:
+            continue
+        tracker.log(orders=e["orders"], to=e.get("to", ""), name=e.get("name", ""),
+                    product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                    site=e.get("site", ""), postcode=e.get("postcode", ""),
+                    delivery_date=e["date"], source="by hand", status="sent",
+                    emailed_at=_to_tracker_dt(ev.get("when")), only_if_new=True,
+                    kind="delivery", orig_entryid=ev.get("entryid"))
+        existing.add(rid)
+        n += 1
+    return n
+
+
 def find_already_emailed(ns, order_numbers, limit=500):
     """For each order number, look in the DHL Sent Items and Drafts for a mail
     that already references it (subject or body). This catches emails you sent
@@ -416,7 +454,8 @@ def find_already_emailed(ns, order_numbers, limit=500):
                             when = "?"
                         found[o] = {"where": label, "when": when,
                                     "to": str(getattr(it, "To", "") or "")[:40],
-                                    "booked": booked}
+                                    "booked": booked,
+                                    "entryid": str(getattr(it, "EntryID", "") or "")}
             except Exception:
                 pass
             if len(found) == len(targets):
@@ -593,6 +632,9 @@ def main():
                     e["_seen"] = seen
                 kept.append(e)
         emails = kept
+        enrolled = enrol_by_hand(skipped_sent)   # track by-hand emails so they get chased too
+        if enrolled:
+            print(f"(tracker: enrolled {enrolled} order(s) you emailed by hand, so they get chased)")
         if mode in ("commit", "waitscan"):
             added = sum(1 for e in waitlisted if waitlist.add(e))
             if added:
