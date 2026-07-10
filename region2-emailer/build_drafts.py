@@ -322,11 +322,46 @@ def save_pending_batch(emails):
     return slim
 
 
+# A reply you send in the order's own thread to say it's booked in. You always
+# reply in-thread, so the order number is already in the subject and the order
+# is suppressed anyway - these markers only decide whether we LABEL the skip
+# "booked in" (your reply) vs "already contacted" (the tool's first outreach).
+_REPLY_PREFIXES = ("re:", "re ", "fw:", "fwd:", "fw ", "aw:", "sv:")
+_BOOKED_PHRASES = ("booked", "in the diary", "slot", "all sorted", "sorted for",
+                   "arranged", "confirmed", "all set", "on the plan")
+_QUOTE_MARKERS = ("-----original message-----", "\nfrom:", "\r\nfrom:", "\nsent:",
+                  "________", " wrote:", "on behalf of")
+
+
+def _reply_top(body):
+    """Just the text you typed, above the quoted original - so a booking phrase
+    in the quoted thread (e.g. the tool's own 'can this be booked in?') never
+    counts as your confirmation."""
+    low = str(body or "").lower()
+    cut = len(low)
+    for m in _QUOTE_MARKERS:
+        i = low.find(m)
+        if 0 <= i < cut:
+            cut = i
+    return low[:cut]
+
+
+def _looks_booked(subject, body):
+    """True when this Sent item is your in-thread reply (RE:/FW:) - optionally
+    with a booking phrase in your own text. Reserved for Sent Items only."""
+    subj = str(subject or "").strip().lower()
+    is_reply = any(subj.startswith(p) for p in _REPLY_PREFIXES)
+    has_phrase = any(p in _reply_top(body) for p in _BOOKED_PHRASES)
+    return is_reply and has_phrase
+
+
 def find_already_emailed(ns, order_numbers, limit=500):
     """For each order number, look in the DHL Sent Items and Drafts for a mail
     that already references it (subject or body). This catches emails you sent
     BY HAND, which the tracker never sees - so the tool never asks you to email
-    someone you've already contacted. Returns {order: {"where","when","to"}}."""
+    someone you've already contacted. A Sent match that is your in-thread reply
+    is flagged booked=True (you've booked it in). Returns
+    {order: {"where","when","to","booked"}}."""
     targets = {str(o).strip() for o in order_numbers if str(o).strip()}
     if not targets:
         return {}
@@ -346,7 +381,10 @@ def find_already_emailed(ns, order_numbers, limit=500):
             if n > limit:
                 break
             try:
-                blob = str(it.Subject or "") + " " + str(getattr(it, "Body", "") or "")[:6000]
+                subj = str(it.Subject or "")
+                body = str(getattr(it, "Body", "") or "")
+                blob = subj + " " + body[:6000]
+                booked = (label == "Sent Items") and _looks_booked(subj, body)
                 for o in (targets - found.keys()):
                     if o in blob:
                         try:
@@ -355,7 +393,8 @@ def find_already_emailed(ns, order_numbers, limit=500):
                         except Exception:
                             when = "?"
                         found[o] = {"where": label, "when": when,
-                                    "to": str(getattr(it, "To", "") or "")[:40]}
+                                    "to": str(getattr(it, "To", "") or "")[:40],
+                                    "booked": booked}
             except Exception:
                 pass
             if len(found) == len(targets):
@@ -498,7 +537,7 @@ def main():
 
     total_rows = sum(len(rows) for rows, _, _ in files)
     emails, rails, region = build_emails_multi(files)
-    skipped_done, skipped_sent, skipped_past, waitlisted = [], [], [], []
+    skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []
     if path is None:   # daily run: a file passed by hand is always shown in full
         done = _already_done_orders()
         all_orders = {str(o).strip() for e in emails for o in e["orders"]}
@@ -513,7 +552,10 @@ def main():
                 skipped_done.append(e)
             elif ords and all(o in already for o in ords):
                 e["_seen"] = seen
-                skipped_sent.append(e)
+                if any(v.get("booked") for v in seen.values()):
+                    skipped_booked.append(e)   # your in-thread reply = booked in
+                else:
+                    skipped_sent.append(e)
             elif not _is_future(e["date"]):
                 skipped_past.append(e)
             elif n is not None and n > lead:
@@ -531,6 +573,7 @@ def main():
     print(f"Rows: {total_rows} | Region 2 emails: {len(emails)} | "
           f"supplier-rails skipped: {rails} | out-of-region groups skipped: {region}"
           + (f" | wait-listed (too far ahead): {len(waitlisted)}" if waitlisted else "")
+          + (f" | booked-in skipped: {len(skipped_booked)}" if skipped_booked else "")
           + (f" | already-emailed skipped: {len(skipped_sent)}" if skipped_sent else "")
           + (f" | already-done skipped: {len(skipped_done)}" if skipped_done else "")
           + (f" | past-date skipped: {len(skipped_past)}" if skipped_past else "") + "\n")
@@ -540,6 +583,14 @@ def main():
             n = waitlist.days_until(e["date"])
             print(f"   ~ {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | deliver {e['date']} "
                   f"(in {n}d) -> sends ~{n - waitlist.LEAD_DAYS}d from now")
+        print()
+    if skipped_booked:
+        print("Region 2 orders NOT emailed - you REPLIED in the thread (booked in):")
+        for e in skipped_booked:
+            ev = next((v for v in e["_seen"].values() if v.get("booked")),
+                      next(iter(e["_seen"].values())))
+            print(f"   * {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | "
+                  f"you replied {ev['when']} to {ev['to']} - booked in")
         print()
     if skipped_sent:
         print("Region 2 orders NOT emailed - you've ALREADY contacted them (found in Sent/Drafts):")

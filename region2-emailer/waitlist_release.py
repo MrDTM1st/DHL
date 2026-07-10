@@ -65,9 +65,14 @@ def release(send=False):
             report["skipped"].append(label + "  (already done by tool)")
             continue
         if ords and all(o in already for o in ords):
-            ev = next(iter({o: already[o] for o in ords if o in already}.values()))
-            waitlist.mark(e["id"], "sent", note=f"you emailed manually {ev['where']} {ev['when']}")
-            report["skipped"].append(label + f"  (you emailed it {ev['where']} {ev['when']})")
+            seen = {o: already[o] for o in ords if o in already}
+            ev = next((v for v in seen.values() if v.get("booked")), next(iter(seen.values())))
+            if ev.get("booked"):   # your in-thread reply - booked in
+                waitlist.mark(e["id"], "sent", note=f"you replied (booked in) {ev['when']}")
+                report["skipped"].append(label + f"  (you replied {ev['when']} - booked in)")
+            else:
+                waitlist.mark(e["id"], "sent", note=f"you emailed manually {ev['where']} {ev['when']}")
+                report["skipped"].append(label + f"  (you emailed it {ev['where']} {ev['when']})")
             continue
         if not bd._is_future(e["date"]):
             waitlist.mark(e["id"], "missed", note="delivery date passed before release")
