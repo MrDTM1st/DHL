@@ -104,12 +104,16 @@ def map_orders(path):
         v = str(g(r, key)).strip()
         return v if v else "N"
 
+    def nsite(s):   # tolerate trailing '-' / whitespace / case (extract vs store)
+        return str(s).strip().rstrip("-").strip().lower()
+    norm = {nsite(k): v for k, v in SITES.items()}
+
     mapped, unmatched = [], {}
     for r in rows[1:]:
         if not str(g(r, "order")).strip():
             continue
         site = str(g(r, "site")).strip()
-        sd = SITES.get(site)
+        sd = SITES.get(site) or norm.get(nsite(site))
         if sd is None and site:
             unmatched[site] = unmatched.get(site, 0) + 1
         sd = sd or {}
