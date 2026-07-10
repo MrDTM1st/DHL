@@ -168,6 +168,16 @@ def _is_future(dd):
 def is_supplier_rail(order):
     return str(order or "")[:1].isalpha()   # order number starts with a letter
 
+def is_stoneblower(*descs):
+    """Stoneblower orders are off limits - booked in, never emailed (same rule as
+    supplier rails). Detected by 'STONEBLOWER' in the product code/description;
+    letters-only compare so 'stone blower' / 'stone-blower' spacing all match."""
+    for d in descs:
+        s = "".join(ch for ch in str(d or "").lower() if ch.isalpha())
+        if "stoneblow" in s:
+            return True
+    return False
+
 def product_type(desc):
     d = (desc or "").upper()
     for key, label in (("SLEEPER", "sleepers"), ("BALLAST", "ballast"), ("RAIL", "rails"),
@@ -447,6 +457,7 @@ def build_emails_multi(files):
     contact+site+date as usual."""
     groups = OrderedDict()
     skipped_rails = 0
+    skipped_stoneblower = 0
     skipped_region = set()
     seen_rows = set()
     for rows, C, source in files:
@@ -461,6 +472,10 @@ def build_emails_multi(files):
             seen_rows.add(dup)
             if is_supplier_rail(order):
                 skipped_rails += 1
+                continue
+            pcode = r[C["prod_code"]] if C.get("prod_code") is not None else ""
+            if is_stoneblower(r[C["prod"]], pcode):
+                skipped_stoneblower += 1
                 continue
             key = (email_of(r[C["dcon"]]), clean(r[C["dpc"]]), fdate(r[C["date"]]))
             groups.setdefault(key, []).append((r, C, source))
@@ -482,7 +497,7 @@ def build_emails_multi(files):
                            message=message, items=len(items), date=dd, orders=orders,
                            product_codes=pcodes, materials=product_summary(items),
                            site=clean(r0[C0['daddr']]), postcode=dpc, source=sources))
-    return emails, skipped_rails, len(skipped_region)
+    return emails, skipped_rails, skipped_stoneblower, len(skipped_region)
 
 def create_drafts(ns, emails):
     import win32com.client
@@ -548,7 +563,7 @@ def main():
         files = [(rows, C, os.path.basename(path))]
 
     total_rows = sum(len(rows) for rows, _, _ in files)
-    emails, rails, region = build_emails_multi(files)
+    emails, rails, stoneblowers, region = build_emails_multi(files)
     skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []
     if path is None:   # daily run: a file passed by hand is always shown in full
         done = _already_done_orders()
@@ -583,7 +598,8 @@ def main():
             if added:
                 print(f"(wait list: {added} far-ahead order(s) held, will auto-send ~{lead} days before delivery)")
     print(f"Rows: {total_rows} | Region 2 emails: {len(emails)} | "
-          f"supplier-rails skipped: {rails} | out-of-region groups skipped: {region}"
+          f"supplier-rails skipped: {rails} | stoneblowers skipped: {stoneblowers} | "
+          f"out-of-region groups skipped: {region}"
           + (f" | wait-listed (too far ahead): {len(waitlisted)}" if waitlisted else "")
           + (f" | booked-in skipped: {len(skipped_booked)}" if skipped_booked else "")
           + (f" | already-emailed skipped: {len(skipped_sent)}" if skipped_sent else "")
