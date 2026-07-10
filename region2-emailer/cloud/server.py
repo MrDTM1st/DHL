@@ -244,6 +244,19 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         </div>
       </div>
     </div>
+    <div class="cmd">
+      <div class="lbl">Order upload</div>
+      <div class="col">
+        <input type="file" id="oufile" accept=".xlsx,.xls" style="font-size:.74rem;">
+        <button class="btn primary" onclick="orderUpload()">Map &amp; build CSV</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="sitespanel" style="display:none;">
+    <div class="lbl" style="margin-bottom:.6rem;">Unknown collection sites — add details, then re-process</div>
+    <div id="siterows"></div>
+    <div style="margin-top:.7rem;"><button class="btn go" onclick="saveSites()">Save &amp; re-process</button></div>
   </div>
 
   <div class="card" id="editpanel" style="display:none;">
@@ -307,7 +320,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </div>
 
 <script>
-const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--red)',batch_ready:'var(--amber)'};
+const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--red)',batch_ready:'var(--amber)',sites_needed:'var(--red)'};
 let currentOrder='';
 let lastPreviewAt='';
 let agentOnline=false;
@@ -401,6 +414,39 @@ async function railPlan(mode){
     post({action:'rail_plan', mode, week});
   }catch(e){ alert('Upload failed: '+e); }
 }
+async function orderUpload(){
+  const f=document.getElementById('oufile').files[0];
+  if(!f){ alert('Pick the Synergy extract (.xlsx) first.'); return; }
+  try{
+    const data=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(f); });
+    await api('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name,data})});
+    lastPreviewAt=''; post({action:'order_upload'});
+  }catch(e){ alert('Upload failed: '+e); }
+}
+function siteField(site,key,ph){ return '<input data-site="'+encodeURIComponent(site)+'" data-k="'+key+'" placeholder="'+ph+'" style="font:inherit; font-size:.75rem; padding:.35rem;">'; }
+function renderSites(list){
+  document.getElementById('siterows').innerHTML=list.map(u=>{
+    const s=(u&&u.site)||u; const n=(u&&u.count)||0;
+    return '<div style="border:1px solid var(--border); border-radius:8px; padding:.6rem; margin-bottom:.5rem;">'
+      +'<div class="ord" style="margin-bottom:.4rem;">'+esc(s)+(n?' <span class="sub">('+n+' order'+(n>1?'s':'')+')</span>':'')+'</div>'
+      +'<div style="display:grid; grid-template-columns:1fr 1fr; gap:.4rem;">'
+      +siteField(s,'contact','Contact name')+siteField(s,'postcode','Postcode')
+      +siteField(s,'telephone','Telephone')+siteField(s,'email','Email')
+      +siteField(s,'start_hours','Start hrs 07:00:00')+siteField(s,'close_hours','Close hrs 17:00:00')
+      +'</div><div style="margin-top:.4rem;">'+siteField(s,'notes','Notes (optional)')+'</div></div>';
+  }).join('');
+  document.getElementById('sitespanel').style.display='block';
+}
+function saveSites(){
+  const sites={};
+  document.querySelectorAll('#siterows input').forEach(inp=>{
+    const s=decodeURIComponent(inp.dataset.site);
+    (sites[s]=sites[s]||{})[inp.dataset.k]=inp.value.trim();
+  });
+  if(!Object.keys(sites).length) return;
+  document.getElementById('sitespanel').style.display='none';
+  lastPreviewAt=''; post({action:'add_sites', sites});
+}
 function sendEdited(){
   const q = agentOnline
     ? 'Send this email (with any edits you made)?'
@@ -457,6 +503,11 @@ async function poll(){
       if(s.at!==lastPreviewAt){ lastPreviewAt=s.at; renderBatch(s.email); }
       bp.style.display='block';
     } else if(s.state!=='batch_ready'){ if(bp) bp.style.display='none'; }
+    const sp=document.getElementById('sitespanel');
+    if(s.state==='sites_needed' && s.email && s.email.length){
+      if(s.at!==lastPreviewAt){ lastPreviewAt=s.at; renderSites(s.email); }
+      sp.style.display='block';
+    } else if(s.state!=='sites_needed'){ if(sp) sp.style.display='none'; }
   }catch(e){}
 }
 function refreshTracker(){
@@ -699,7 +750,8 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
                                "email": data.get("email"), "sel": data.get("sel"),
-                               "mode": data.get("mode"), "week": data.get("week"), "queued_at": time.time()})
+                               "mode": data.get("mode"), "week": data.get("week"),
+                               "sites": data.get("sites"), "queued_at": time.time()})
                 det = f"{data.get('action')} queued"
                 if not _agent_online():
                     det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"

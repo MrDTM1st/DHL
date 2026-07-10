@@ -208,6 +208,53 @@ def main():
                     push_new_files(before)
                     verb = "sent" if mode == "send" else "previewed (nothing sent)"
                     report("done", f"Rail plan {verb} — plans are in Files below.", tail(out, 34))
+            elif action == "order_upload":
+                report("running", "Processing order upload…")
+                up = None
+                try:
+                    up = _req("/api/pull_upload")
+                except Exception:
+                    up = None
+                if not up or not up.get("data"):
+                    report("error", "No file received — pick the Synergy extract and try again.")
+                else:
+                    import base64
+                    raw = os.path.join(HERE, "_synergy_raw.xlsx")
+                    with open(raw, "wb") as f:
+                        f.write(base64.b64decode(up["data"]))
+                    before = snap_outbox()
+                    out = run(["synergy_map.py", raw])
+                    push_new_files(before)
+                    try:
+                        unmatched = json.load(open(os.path.join(HERE, "_synergy_unmatched.json"), encoding="utf-8"))
+                    except Exception:
+                        unmatched = []
+                    if unmatched:
+                        report("sites_needed", f"{len(unmatched)} unknown collection site(s) — add their details to finish.",
+                               tail(out, 20), email=unmatched)
+                    else:
+                        report("done", "Order upload processed — NR upload CSV is in Files.", tail(out, 20))
+            elif action == "add_sites":
+                report("running", "Learning new sites & re-processing…")
+                sites = cmd.get("sites") or {}
+                try:
+                    json.dump(sites, open(os.path.join(HERE, "_synergy_newsites.json"), "w", encoding="utf-8"))
+                except Exception:
+                    pass
+                run(["synergy_map.py", "addsites"])
+                raw = os.path.join(HERE, "_synergy_raw.xlsx")
+                before = snap_outbox()
+                out = run(["synergy_map.py", raw]) if os.path.exists(raw) else ""
+                push_new_files(before)
+                try:
+                    unmatched = json.load(open(os.path.join(HERE, "_synergy_unmatched.json"), encoding="utf-8"))
+                except Exception:
+                    unmatched = []
+                if unmatched:
+                    report("sites_needed", f"Still {len(unmatched)} unknown site(s) — add the rest.",
+                           tail(out, 20), email=unmatched)
+                else:
+                    report("done", f"Learned {len(sites)} site(s) — order upload re-processed, CSV in Files.", tail(out, 20))
             elif action == "order_preview" and order:
                 report("running", f"Finding order {order}…")
                 out = run(["send_order.py", order])
