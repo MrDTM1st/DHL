@@ -545,7 +545,7 @@ async function loadTracker(){
       return '<div class="tkrow">'
         + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+'</div>'
         + '<div class="sub">'+esc(r.to||'')+'</div>'
-        + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\''+encodeURIComponent(r.id||'')+'\')">Booked via call</button>'
+        + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\\''+encodeURIComponent(r.id||'')+'\\')">Booked via call</button>'
         + '</div>'
         + pipe
         + '<div class="tktime'+(chased?' amber':'')+'">'+esc(t)+'</div>'
