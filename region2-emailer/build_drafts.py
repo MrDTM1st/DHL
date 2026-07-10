@@ -32,7 +32,9 @@ def is_wanted_extract(filename, subject=""):
     real Region 2 orders, so they're processed identically. Master files and the
     other batch processes (Inframat/Rail Plan/S&C) are still ignored."""
     low = (filename or "").lower()
-    if low.startswith(SOURCE_PREFIX) and not low.startswith("master"):
+    if low.startswith("master"):
+        return False   # a processed Master output (even "Master - ... BS"), never a source
+    if low.startswith(SOURCE_PREFIX):
         return True
     if low.endswith((".xlsx", ".xlsm")):
         subj = (subject or "").lower()
@@ -241,13 +243,16 @@ def find_inbox_extracts(ns, limit=300):
     return found
 
 
-def find_synergy_upload_bs(ns, days=3, exclude=()):
-    """Safety net for BS batches. BS batch files get filed into
-    Inbox > ADHOC > Synergy Upload - sometimes before the daily run reads the
-    Inbox root - so a root-only scan can miss them. Pick up any BS file received
-    in the last `days` days from that folder. Tracker de-dup downstream stops an
-    already-drafted batch being drafted twice, and `exclude` skips files already
-    found in the Inbox root so nothing is loaded from two places."""
+def find_synergy_upload(ns, days=3, bs_days=30, exclude=()):
+    """Safety net for the Synergy Upload folder (Inbox > ADHOC > Synergy Upload).
+    Both the normal Haulier Extract AND BS batch files sometimes get filed there
+    before the daily run reads the Inbox root - Delali may drop today's emails in
+    himself - so a root-only scan can miss them. That folder is ALSO the long-term
+    archive (dozens of old extracts), so we only take RECENT files: a normal
+    extract within `days` days (catch what you just filed), and a BS batch within
+    the wider `bs_days` window (BS is sporadic and must never be missed). The
+    tracker de-dup downstream stops an already-drafted batch being drafted twice,
+    and `exclude` skips files already found in the Inbox root."""
     from datetime import datetime, timedelta
     dhl = dhl_store(ns)
     inbox = sub(dhl, "Inbox")
@@ -255,7 +260,8 @@ def find_synergy_upload_bs(ns, days=3, exclude=()):
     folder = sub(adhoc, "Synergy Upload") if adhoc else None
     if folder is None:
         return []
-    cutoff = datetime.now() - timedelta(days=days)
+    now = datetime.now()
+    hard_cutoff = now - timedelta(days=max(days, bs_days))
     items = folder.Items
     try:
         items.Sort("[ReceivedTime]", True)
@@ -266,25 +272,31 @@ def find_synergy_upload_bs(ns, days=3, exclude=()):
         n += 1
         if n > 400:
             break
+        age_days = None
         try:
             rt = it.ReceivedTime
-            if rt is not None and datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute) < cutoff:
-                break   # newest-first: once past the window, everything after is older
+            if rt is not None:
+                rtn = datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute)
+                if rtn < hard_cutoff:
+                    break   # newest-first: past the widest window -> all older
+                age_days = (now - rtn).days
         except Exception:
             pass
         try:
-            subj = str(getattr(it, "Subject", "") or "").lower()
+            subj = str(getattr(it, "Subject", "") or "")
             for j in range(1, it.Attachments.Count + 1):
                 att = it.Attachments.Item(j)
                 fn = str(att.FileName)
+                if not is_wanted_extract(fn, subj) or fn in seen or fn in exclude:
+                    continue
                 low = fn.lower()
-                # BS batches only here; normal extracts are handled from the root.
-                is_bs = low.endswith((".xlsx", ".xlsm")) and any(m in low or m in subj for m in BS_MARKERS)
-                if is_bs and fn not in seen and fn not in exclude:
-                    seen.add(fn)
-                    path = os.path.join(HERE, f"_syn_bs_{len(found)}.xlsx")
-                    att.SaveAsFile(path)
-                    found.append((path, fn))
+                is_bs = any(m in low or m in subj.lower() for m in BS_MARKERS)
+                if age_days is not None and age_days > (bs_days if is_bs else days):
+                    continue   # too old for its type (BS gets the wider window)
+                seen.add(fn)
+                path = os.path.join(HERE, f"_syn_up_{len(found)}.xlsx")
+                att.SaveAsFile(path)
+                found.append((path, fn))
         except Exception:
             pass
     return found
@@ -517,12 +529,12 @@ def main():
         ns = get_ns()
         extracts = find_inbox_extracts(ns)
         root_names = {fn for _, fn in extracts}
-        bs_extras = find_synergy_upload_bs(ns, days=30, exclude=root_names)
-        all_files = extracts + bs_extras
+        syn_extras = find_synergy_upload(ns, days=3, bs_days=30, exclude=root_names)
+        all_files = extracts + syn_extras
         if not all_files:
-            print("No Haulier Extracts in the Inbox or recent BS batches in Synergy Upload."); return
+            print("No Haulier Extracts / BS batches in the Inbox or the Synergy Upload folder."); return
         print(f"Found {len(extracts)} extract(s) in the Inbox"
-              + (f" + {len(bs_extras)} recent BS batch(es) in Synergy Upload" if bs_extras else "") + ":")
+              + (f" + {len(syn_extras)} more in the Synergy Upload folder" if syn_extras else "") + ":")
         for _, fn in all_files:
             print(f"  - {fn}")
         print()
