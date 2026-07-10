@@ -588,10 +588,33 @@ def create_drafts(ns, emails):
         made += 1
     return made
 
+def week_window(which, today=None):
+    """(Monday, Sunday) dates for an upcoming week. 'next' = the coming Mon-Sun,
+    'after' = the week after that. Week-commencing, same convention as the rail
+    plan's 'wc DD.MM'."""
+    from datetime import date as _date, timedelta as _td
+    today = today or _date.today()
+    this_mon = today - _td(days=today.weekday())
+    start = this_mon + _td(days=14 if which == "after" else 7)
+    return start, start + _td(days=6)
+
+
 # ---------- entry ----------
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "preview"
-    path = sys.argv[2] if len(sys.argv) > 2 else None
+    arg2 = sys.argv[2] if len(sys.argv) > 2 else None
+    # `week next` / `week after` -> a targeted batch for an upcoming week (arg2 is
+    # the week, not a file). Every other mode treats arg2 as an optional path.
+    week = path = None
+    week_commit = False
+    if mode == "week":
+        week = (arg2 or "next").strip().lower()
+        week = week if week in ("next", "after") else "next"
+        # `week next commit` -> create Drafts (local dashboard); otherwise a
+        # reviewable pending batch (cloud dashboard preview & send).
+        week_commit = len(sys.argv) > 3 and sys.argv[3].strip().lower() == "commit"
+    else:
+        path = arg2
     ns = None
     if path is None:
         ns = get_ns()
@@ -618,6 +641,8 @@ def main():
     total_rows = sum(len(rows) for rows, _, _ in files)
     emails, rails, stoneblowers, region = build_emails_multi(files)
     skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []
+    other_week = []
+    target = week_window(week) if week else None
     if path is None:   # daily run: a file passed by hand is always shown in full
         done = _already_done_orders()
         all_orders = {str(o).strip() for e in emails for o in e["orders"]}
@@ -638,6 +663,16 @@ def main():
                     skipped_sent.append(e)
             elif not _is_future(e["date"]):
                 skipped_past.append(e)
+            elif target is not None:
+                # week mode: send everything DELIVERING in the chosen week (pull it
+                # forward past the 14-day hold); park anything outside that week.
+                dd = waitlist.parse_date(e["date"])
+                if dd is not None and target[0] <= dd <= target[1]:
+                    if seen:
+                        e["_seen"] = seen
+                    kept.append(e)
+                else:
+                    other_week.append(e)
             elif n is not None and n > lead:
                 # too far ahead to email yet - hold on the wait list, auto-sent later
                 waitlisted.append(e)
@@ -653,6 +688,12 @@ def main():
             added = sum(1 for e in waitlisted if waitlist.add(e))
             if added:
                 print(f"(wait list: {added} far-ahead order(s) held, will auto-send ~{lead} days before delivery)")
+    if target is not None:
+        lbl = "week after" if week == "after" else "next week"
+        print(f"Sending for week commencing {target[0].strftime('%d.%m.%Y')} "
+              f"to {target[1].strftime('%d.%m.%Y')} ({lbl})"
+              + (f" | {len(other_week)} order(s) outside this week left for later" if other_week else "")
+              + "\n")
     print(f"Rows: {total_rows} | Region 2 emails: {len(emails)} | "
           f"supplier-rails skipped: {rails} | stoneblowers skipped: {stoneblowers} | "
           f"out-of-region groups skipped: {region}"
@@ -709,7 +750,13 @@ def main():
         print(f"Done - {n} draft(s) created. Nothing sent.")
     elif mode == "waitscan":
         print("\nWait-list scan done - far-ahead orders captured. No drafts, nothing sent.")
-    elif mode == "batch":
+    elif mode == "week" and week_commit:
+        if ns is None:
+            ns = get_ns()
+        print("\nCreating drafts in DHL Drafts...")
+        n = create_drafts(ns, emails)
+        print(f"Done - {n} draft(s) created for the chosen week. Nothing sent.")
+    elif mode in ("batch", "week"):
         save_pending_batch(emails)
         print(f"\nBatch ready - {len(emails)} email(s) prepared for review. Nothing sent yet.")
     else:

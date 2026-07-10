@@ -206,6 +206,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       <div class="lbl">Today's extract</div>
       <div class="col">
         <button class="btn primary" onclick="previewBatch()">Preview &amp; send</button>
+        <button class="btn" onclick="previewBatch('next')">Next week's deliveries</button>
+        <button class="btn" onclick="previewBatch('after')">Week after</button>
         <button class="btn" onclick="cmd('commit')">Save as drafts</button>
       </div>
     </div>
@@ -362,7 +364,7 @@ function hideEdit(){ document.getElementById('editpanel').style.display='none'; 
 function hideBatch(){ const b=document.getElementById('batchpanel'); if(b) b.style.display='none'; }
 function cmd(a){ hideEdit(); hideBatch(); post({action:a}); }
 let batchCache=[];
-function previewBatch(){ hideEdit(); hideBatch(); lastPreviewAt=''; post({action:'extract_preview'}); }
+function previewBatch(week){ hideEdit(); hideBatch(); lastPreviewAt=''; post({action:'extract_preview', week: week||''}); }
 function batchAll(on){ document.querySelectorAll('.bchk').forEach(c=>c.checked=on); }
 function toggleB(i){ const el=document.getElementById('bbody'+i); if(el) el.hidden=!el.hidden; }
 function renderBatch(list){

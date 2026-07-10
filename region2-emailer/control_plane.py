@@ -91,6 +91,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="controls">
       <button class="btn" onclick="cmd('preview')">Build today's drafts (preview)</button>
       <button class="btn primary" onclick="cmd('commit')">Build &amp; save drafts</button>
+      <button class="btn" onclick="weekDrafts('next')">Next week &rarr; drafts</button>
+      <button class="btn" onclick="weekDrafts('after')">Week after &rarr; drafts</button>
     </div>
   </div>
 
@@ -180,6 +182,7 @@ async function post(body){
 }
 function hideEdit(){ document.getElementById('editpanel').style.display='none'; }
 function cmd(a){ hideEdit(); post({action:a}); }
+function weekDrafts(w){ hideEdit(); post({action:'week_drafts', week:w}); }
 function findOrder(){
   const o=document.getElementById('ord').value.trim(); if(!o) return;
   currentOrder=o; hideEdit(); lastPreviewAt='';
@@ -347,7 +350,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/command":
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
-                               "email": data.get("email"), "sites": data.get("sites")})
+                               "email": data.get("email"), "sites": data.get("sites"),
+                               "week": data.get("week"), "mode": data.get("mode")})
                 _status.update(state="queued", detail=f"{data.get('action')} queued",
                               at=datetime.now().strftime("%H:%M:%S"), output="")
             self._json(200, {"ok": True})

@@ -161,8 +161,14 @@ def main():
                 out = run(["build_drafts.py", action])
                 report("done", f"{action} finished.", tail(out))
             elif action == "extract_preview":
-                report("running", "Building today's extract batch…")
-                out = run(["build_drafts.py", "batch"])
+                wk = (cmd.get("week") or "").strip().lower()
+                if wk in ("next", "after"):
+                    label = "week after" if wk == "after" else "next week"
+                    report("running", f"Building the {label} batch…")
+                    out = run(["build_drafts.py", "week", wk])
+                else:
+                    report("running", "Building today's extract batch…")
+                    out = run(["build_drafts.py", "batch"])
                 batch = None
                 try:
                     pend = os.path.join(HERE, "_pending_batch.json")
@@ -177,6 +183,13 @@ def main():
                 else:
                     report("done", "Nothing to send — no Region 2 emails in today's extract.",
                            tail(out, 30))
+            elif action == "week_drafts":
+                wk = (cmd.get("week") or "next").strip().lower()
+                wk = wk if wk in ("next", "after") else "next"
+                label = "week after" if wk == "after" else "next week"
+                report("running", f"Building {label} drafts…")
+                out = run(["build_drafts.py", "week", wk, "commit"])
+                report("done", f"{label} drafts created in your DHL Drafts folder.", tail(out, 20))
             elif action == "extract_send":
                 sel = (cmd.get("sel") or "all").strip() or "all"
                 report("running", "Sending today's extract batch…")
