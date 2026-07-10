@@ -34,11 +34,22 @@ def heartbeat():
     agent-authenticated request refreshes the server's last-seen clock, so a
     steady background ping means the pill never flickers offline while we're
     alive - it only goes offline if this whole process actually stops."""
+    tag = "cloud" if BASE.lower().startswith("https") else "local"
+    hbfile = os.path.join(HERE, f"_heartbeat_{tag}.txt")
     while True:
         try:
             _req("/api/heartbeat", timeout=8)
-        except Exception:
-            pass
+            try:
+                with open(hbfile, "w") as f:
+                    f.write(f"{time.strftime('%H:%M:%S')} ok {BASE}\n")
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                with open(hbfile, "w") as f:
+                    f.write(f"{time.strftime('%H:%M:%S')} FAIL {type(e).__name__}: {e}\n")
+            except Exception:
+                pass
         time.sleep(HEARTBEAT_SECONDS)
 
 
