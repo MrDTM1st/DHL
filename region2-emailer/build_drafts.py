@@ -351,6 +351,9 @@ def save_pending_batch(emails):
 _REPLY_PREFIXES = ("re:", "re ", "fw:", "fwd:", "fw ", "aw:", "sv:")
 _BOOKED_PHRASES = ("booked", "in the diary", "slot", "all sorted", "sorted for",
                    "arranged", "confirmed", "all set", "on the plan")
+# A MAN reference (e.g. MAN-01563625) means you've arranged it with a haulier -
+# that's a booking on its own, even if you never type the word "booked".
+_MAN_RE = re.compile(r"\bMAN[-\s]?\d{5,}", re.I)
 _QUOTE_MARKERS = ("-----original message-----", "\nfrom:", "\r\nfrom:", "\nsent:",
                   "________", " wrote:", "on behalf of")
 
@@ -368,13 +371,23 @@ def _reply_top(body):
     return low[:cut]
 
 
+def _booked_ref(body):
+    """The MAN booking reference in your reply (e.g. MAN-01563625), if any -
+    surfaced on the 'booked in' line so you can see which ref was recognised."""
+    m = _MAN_RE.search(_reply_top(body))
+    return m.group(0).upper().replace(" ", "-") if m else ""
+
+
 def _looks_booked(subject, body):
-    """True when this Sent item is your in-thread reply (RE:/FW:) - optionally
-    with a booking phrase in your own text. Reserved for Sent Items only."""
+    """True when this Sent item is your in-thread reply (RE:/FW:) that either has
+    a booking phrase OR a MAN reference (arranged with a haulier) in your own
+    text. Reserved for Sent Items only."""
     subj = str(subject or "").strip().lower()
     is_reply = any(subj.startswith(p) for p in _REPLY_PREFIXES)
-    has_phrase = any(p in _reply_top(body) for p in _BOOKED_PHRASES)
-    return is_reply and has_phrase
+    top = _reply_top(body)
+    has_phrase = any(p in top for p in _BOOKED_PHRASES)
+    has_man = bool(_MAN_RE.search(top))
+    return is_reply and (has_phrase or has_man)
 
 
 def _to_tracker_dt(when):
@@ -445,6 +458,7 @@ def find_already_emailed(ns, order_numbers, limit=500):
                 body = str(getattr(it, "Body", "") or "")
                 blob = subj + " " + body[:6000]
                 booked = (label == "Sent Items") and _looks_booked(subj, body)
+                ref = _booked_ref(body) if booked else ""
                 for o in (targets - found.keys()):
                     if o in blob:
                         try:
@@ -454,7 +468,7 @@ def find_already_emailed(ns, order_numbers, limit=500):
                             when = "?"
                         found[o] = {"where": label, "when": when,
                                     "to": str(getattr(it, "To", "") or "")[:40],
-                                    "booked": booked,
+                                    "booked": booked, "ref": ref,
                                     "entryid": str(getattr(it, "EntryID", "") or "")}
             except Exception:
                 pass
@@ -659,8 +673,9 @@ def main():
         for e in skipped_booked:
             ev = next((v for v in e["_seen"].values() if v.get("booked")),
                       next(iter(e["_seen"].values())))
+            refstr = f" ({ev['ref']})" if ev.get("ref") else ""
             print(f"   * {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | "
-                  f"you replied {ev['when']} to {ev['to']} - booked in")
+                  f"you replied {ev['when']} to {ev['to']} - booked in{refstr}")
         print()
     if skipped_sent:
         print("Region 2 orders NOT emailed - you've ALREADY contacted them (found in Sent/Drafts):")

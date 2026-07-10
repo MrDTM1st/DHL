@@ -68,8 +68,9 @@ def release(send=False):
             seen = {o: already[o] for o in ords if o in already}
             ev = next((v for v in seen.values() if v.get("booked")), next(iter(seen.values())))
             if ev.get("booked"):   # your in-thread reply - booked in
-                waitlist.mark(e["id"], "sent", note=f"you replied (booked in) {ev['when']}")
-                report["skipped"].append(label + f"  (you replied {ev['when']} - booked in)")
+                refstr = f" {ev['ref']}" if ev.get("ref") else ""
+                waitlist.mark(e["id"], "sent", note=f"you replied (booked in{refstr}) {ev['when']}")
+                report["skipped"].append(label + f"  (you replied {ev['when']} - booked in{refstr})")
             else:
                 waitlist.mark(e["id"], "sent", note=f"you emailed manually {ev['where']} {ev['when']}")
                 report["skipped"].append(label + f"  (you emailed it {ev['where']} {ev['when']})")
