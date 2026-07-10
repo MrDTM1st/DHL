@@ -18,6 +18,7 @@ HOST, PORT = "127.0.0.1", 8787
 _lock = threading.Lock()
 _queue = []
 _status = {"state": "idle", "detail": "Waiting for a command.", "at": "", "output": ""}
+_upload = None
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -142,6 +143,19 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
 
   <div class="card">
+    <h2>Order upload</h2>
+    <div class="controls">
+      <input type="file" id="oufile" accept=".xlsx,.xls">
+      <button class="btn primary" onclick="orderUpload()">Map &amp; build CSV</button>
+    </div>
+    <div class="hint" style="margin-top:.6rem;">Maps a Synergy extract and builds the NR upload CSV in the outbox. Any unknown collection site pops up below to add + remember.</div>
+    <div id="sitespanel" style="display:none; margin-top:.9rem;">
+      <div id="siterows"></div>
+      <div class="controls" style="margin-top:.6rem;"><button class="btn go" onclick="saveSites()">Save &amp; re-process</button></div>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Status</h2>
     <div class="statusline">
       <span class="dot" id="dot"></span>
@@ -158,7 +172,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   </div>
 </div>
 <script>
-const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--accent)'};
+const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--accent)',sites_needed:'var(--red)'};
 let currentOrder='';
 async function post(body){
   await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -177,6 +191,36 @@ function processDts(){
 }
 function processForm(){
   post({action:'form', order:(document.getElementById('frm').value.trim()||'latest')});
+}
+function esc(t){ return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function orderUpload(){
+  const f=document.getElementById('oufile').files[0];
+  if(!f){ alert('Pick the Synergy extract (.xlsx) first.'); return; }
+  try{
+    const data=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(f); });
+    await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name,data})});
+    lastPreviewAt=''; post({action:'order_upload'});
+  }catch(e){ alert('Upload failed: '+e); }
+}
+function siteField(site,key,ph){ return '<input data-site="'+encodeURIComponent(site)+'" data-k="'+key+'" placeholder="'+ph+'" style="flex:1; min-width:130px;">'; }
+function renderSites(list){
+  document.getElementById('siterows').innerHTML=list.map(u=>{
+    const s=(u&&u.site)||u; const n=(u&&u.count)||0;
+    return '<div style="border:1px solid var(--border); border-radius:10px; padding:.6rem; margin-bottom:.5rem;">'
+      +'<div style="font-weight:600; margin-bottom:.4rem;">'+esc(s)+(n?' ('+n+' order'+(n>1?'s':'')+')':'')+'</div>'
+      +'<div class="controls" style="flex-wrap:wrap; gap:.4rem;">'
+      +siteField(s,'contact','Contact')+siteField(s,'postcode','Postcode')+siteField(s,'telephone','Telephone')
+      +siteField(s,'email','Email')+siteField(s,'start_hours','Start 07:00:00')+siteField(s,'close_hours','Close 17:00:00')
+      +siteField(s,'notes','Notes (optional)')+'</div></div>';
+  }).join('');
+  document.getElementById('sitespanel').style.display='block';
+}
+function saveSites(){
+  const sites={};
+  document.querySelectorAll('#siterows input').forEach(inp=>{ const s=decodeURIComponent(inp.dataset.site); (sites[s]=sites[s]||{})[inp.dataset.k]=inp.value.trim(); });
+  if(!Object.keys(sites).length) return;
+  document.getElementById('sitespanel').style.display='none';
+  lastPreviewAt=''; post({action:'add_sites', sites});
 }
 let lastPreviewAt='';
 function sendEdited(){
@@ -210,6 +254,11 @@ async function poll(){
       }
       ep.style.display='block';
     } else if(s.state!=='preview_ready'){ ep.style.display='none'; }
+    const sp=document.getElementById('sitespanel');
+    if(s.state==='sites_needed' && s.email && s.email.length){
+      if(s.at!==lastPreviewAt){ lastPreviewAt=s.at; renderSites(s.email); }
+      sp.style.display='block';
+    } else if(s.state!=='sites_needed'){ if(sp) sp.style.display='none'; }
   }catch(e){}
 }
 function refreshTracker(){
@@ -280,6 +329,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, data)
         elif self.path == "/api/heartbeat":
             self._json(200, {"ok": True})
+        elif self.path == "/api/pull_upload":
+            global _upload
+            with _lock:
+                up = _upload
+                _upload = None
+            self._json(200, up or {})
         else:
             self._json(404, {"error": "not found"})
 
@@ -292,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/command":
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
-                               "email": data.get("email")})
+                               "email": data.get("email"), "sites": data.get("sites")})
                 _status.update(state="queued", detail=f"{data.get('action')} queued",
                               at=datetime.now().strftime("%H:%M:%S"), output="")
             self._json(200, {"ok": True})
@@ -301,6 +356,13 @@ class Handler(BaseHTTPRequestHandler):
                 _status.update(state=data.get("state", "idle"), detail=data.get("detail", ""),
                               at=datetime.now().strftime("%H:%M:%S"), output=data.get("output", ""),
                               email=data.get("email"))
+            self._json(200, {"ok": True})
+        elif self.path == "/api/upload":
+            global _upload
+            name = str(data.get("name", ""))[:150]
+            if name and data.get("data"):
+                with _lock:
+                    _upload = {"name": name, "data": data["data"]}
             self._json(200, {"ok": True})
         else:
             self._json(404, {"error": "not found"})
