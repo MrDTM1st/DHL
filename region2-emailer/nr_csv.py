@@ -84,7 +84,7 @@ def transform(rows):
             24: o.get("D Telephone No") or str(o.get("D Contact Name") or "")[-12:],
             25: o.get("delivery time"), 26: o.get("delivery time end"),
             27: o.get("Delivery Instructions"),
-            28: "NRHEAVY" if acct == "HEAVY" else acct,
+            28: "NRHEAVY" if acct.upper() == "HEAVY" else acct,
             29: "", 30: o.get("Vehicle Type"),
             31: str(o.get("Est Cost") if o.get("Est Cost") is not None else 0),
             32: o.get("Notes for Delivery Location Comments"),

@@ -135,9 +135,7 @@ def map_orders(path):
         except Exception:
             pass
 
-        ship = str(g(r, "ship")).strip()
-        if not ship:
-            ship = str(g(r, "instr"))[20:36].strip()   # MID(Delivery Instructions, 21, 16)
+        ship = str(g(r, "ship")).strip()   # leave blank if the extract has none (no junk derivation)
         serial = g(r, "serial")
         serial = "" if str(serial).strip() in ("0", "") else serial
         raised, email = str(g(r, "raised")).strip(), sd.get("email", "")
