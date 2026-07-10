@@ -24,8 +24,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STORE = json.load(open(os.path.join(HERE, "_synergy_sites.json"), encoding="utf-8"))
 SITES = STORE.get("sites", {})
 OVERRIDES = STORE.get("postcode_overrides", {})
-# template quirk: delivery time = collection time + ~1h (formula =M3+0.04236). FLAGGED.
-DELIVERY_OFFSET = timedelta(minutes=61)
 
 
 def _hours(s):
@@ -87,7 +85,8 @@ def map_orders(path):
              dcn=gi("d contact name"), da1=gi("d address1", "d address 1"),
              da2=gi("d address 2"), da3=gi("d address 3"), dpc=gi("d postcode"),
              dphone=gi("ship to contact phone", "d telephone no"),
-             ddate=gi("delivery date"), psc=gi("product / service code"),
+             ddate=gi("delivery date"), dtime=gi("delivery_time"),
+             dtimee=gi("delivery_time_end"), psc=gi("product / service code"),
              pd=gi("product / description"), qty=gi("product qty"),
              serial=gi("serial number"), instr=gi("shipping instructions", "delivery instructions"),
              raised=gi("raised by"), approver=gi("approver"), account=gi("account"),
@@ -126,14 +125,12 @@ def map_orders(path):
                 ct = (cdate + sh).strftime("%d/%m/%Y %H:%M")
             if eh is not None:
                 cte = (cdate + eh).strftime("%d/%m/%Y %H:%M")
-        dt = dte = ""
-        try:
-            if ct:
-                dt = (datetime.strptime(ct, "%d/%m/%Y %H:%M") + DELIVERY_OFFSET).strftime("%d/%m/%Y %H:%M")
-            if cte:
-                dte = (datetime.strptime(cte, "%d/%m/%Y %H:%M") + DELIVERY_OFFSET).strftime("%d/%m/%Y %H:%M")
-        except Exception:
-            pass
+        # delivery times come straight from the extract (not derived)
+        def dfmt(v):
+            if isinstance(v, datetime):
+                return v.strftime("%d/%m/%Y %H:%M")
+            return str(v or "").strip()
+        dt, dte = dfmt(g(r, "dtime")), dfmt(g(r, "dtimee"))
 
         ship = str(g(r, "ship")).strip()   # leave blank if the extract has none (no junk derivation)
         serial = g(r, "serial")
