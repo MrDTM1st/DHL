@@ -37,6 +37,7 @@ except ValueError:
 
 _dropped = []        # expired-unrun commands, kept until dismissed from the dashboard
 _MAX_DROPPED = 8
+_panel = {}          # agent-pushed persistent panel state: site decisions, handover, team
 
 
 def _agent_online():
@@ -257,6 +258,40 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
         <button class="btn primary" onclick="orderUpload()">Map &amp; build CSV</button>
       </div>
     </div>
+    <div class="cmd">
+      <div class="lbl">Holiday cover</div>
+      <div class="col">
+        <button class="btn" id="holbtn" onclick="toggleHoliday()">Set up handover</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="matchpanel" style="display:none;">
+    <div class="lbl" style="margin-bottom:.8rem;">Delivery site decisions — no exact Synergy match, pick where each should go</div>
+    <div class="col" id="matchrows" style="gap:.6rem;"></div>
+  </div>
+
+  <div class="card" id="holiday" style="display:none;">
+    <div class="lbl" style="margin-bottom:.8rem;">Holiday / send-off handover</div>
+    <div id="holform" class="col" style="gap:.6rem;">
+      <div style="display:flex; gap:.6rem; flex-wrap:wrap;">
+        <input id="hdays" type="number" min="1" max="60" value="5" style="width:110px;" title="Days away">
+        <input id="hcover" list="teamlist" placeholder="Covering team member (name or email)" style="flex:1; min-width:220px;">
+        <datalist id="teamlist"></datalist>
+      </div>
+      <textarea id="hnotes" rows="3" placeholder="Notes / instructions for whoever covers (optional)"></textarea>
+      <label class="hint" style="display:flex; align-items:center; gap:.45rem; cursor:pointer;">
+        <input id="hfwd" type="checkbox" checked style="width:auto;"> auto-forward incoming replies while away
+      </label>
+      <div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;">
+        <button class="btn go" onclick="startHandover()">Start handover</button>
+        <span class="hint">sends the outstanding-work batch email to your cover now, then forwards replies until your return date</span>
+      </div>
+    </div>
+    <div id="holactive" style="display:none;">
+      <div class="sdetail" id="holinfo" style="margin-bottom:.6rem;"></div>
+      <button class="btn" onclick="stopHandover()">End handover now</button>
+    </div>
   </div>
 
   <div class="card" id="sitespanel" style="display:none;">
@@ -454,6 +489,60 @@ function saveSites(){
   document.getElementById('sitespanel').style.display='none';
   lastPreviewAt=''; post({action:'add_sites', sites});
 }
+let panelCache={};
+let panelJson='';
+let holidayOpen=false;
+function toggleHoliday(){ holidayOpen=!holidayOpen; renderPanel(); }
+function renderPanel(){
+  const p=panelCache||{};
+  const decs=p.decisions||[];
+  const mp=document.getElementById('matchpanel');
+  if(decs.length){
+    document.getElementById('matchrows').innerHTML=decs.map((d,i)=>{
+      const opts=(d.options||[]).concat((p.sites||[]).filter(s=>!(d.options||[]).includes(s)));
+      return '<div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;">'
+        +'<span style="min-width:220px;"><span class="ord">'+esc(d.raw)+'</span>'
+        +(d.context?' <span class="sub">'+esc(d.context)+'</span>':'')+'</span>'
+        +'<select id="dsel'+i+'" style="flex:1; min-width:220px;">'
+        +opts.map(o=>'<option>'+esc(o)+'</option>').join('')
+        +'</select>'
+        +'<button class="btn mini go" onclick="saveDecision('+i+')">Save</button></div>';
+    }).join('');
+    mp.style.display='block';
+  } else { mp.style.display='none'; }
+  const h=p.handover||{};
+  const active=!!h.active;
+  document.getElementById('holform').style.display = active?'none':'flex';
+  document.getElementById('holactive').style.display = active?'block':'none';
+  if(active){
+    document.getElementById('holinfo').textContent =
+      'Handover active — '+(h.cover_name||h.cover_email||'?')+' covers until '+(h.end||'?')
+      +(h.forward?' · replies auto-forward':' · no forwarding');
+  }
+  document.getElementById('holbtn').textContent = active ? 'Handover: ON' : (holidayOpen?'Hide handover':'Set up handover');
+  document.getElementById('holiday').style.display = (active||holidayOpen) ? 'block' : 'none';
+  document.getElementById('teamlist').innerHTML =
+    (p.team||[]).map(m=>'<option value="'+esc(m.email||'')+'">'+esc(m.name||'')+'</option>').join('');
+}
+function saveDecision(i){
+  const d=(panelCache.decisions||[])[i]; if(!d) return;
+  const site=document.getElementById('dsel'+i).value; if(!site) return;
+  post({action:'site_decision', data:{raw:d.raw, site:site}});
+}
+function startHandover(){
+  const cover=document.getElementById('hcover').value.trim();
+  if(!cover){ alert('Who is covering? Pick a team member.'); return; }
+  const days=parseInt(document.getElementById('hdays').value,10)||5;
+  if(!confirm('Start handover: '+cover+' covers for '+days+' day(s)?\\n\\nThis sends them the outstanding-work email now.')) return;
+  holidayOpen=false;
+  post({action:'handover_start', data:{days:days, cover:cover,
+    notes:document.getElementById('hnotes').value,
+    forward:document.getElementById('hfwd').checked}});
+}
+function stopHandover(){
+  if(!confirm('End the handover now and stop forwarding?')) return;
+  post({action:'handover_stop', data:{}});
+}
 function sendEdited(){
   const q = agentOnline
     ? 'Send this email (with any edits you made)?'
@@ -515,6 +604,8 @@ async function poll(){
       if(s.at!==lastPreviewAt){ lastPreviewAt=s.at; renderSites(s.email); }
       sp.style.display='block';
     } else if(s.state!=='sites_needed'){ if(sp) sp.style.display='none'; }
+    const pj=JSON.stringify(s.panel||{});
+    if(pj!==panelJson){ panelJson=pj; panelCache=s.panel||{}; renderPanel(); }
   }catch(e){}
 }
 function refreshTracker(){
@@ -687,6 +778,7 @@ class Handler(BaseHTTPRequestHandler):
                 out["queued"] = len(_queue)
                 out["queue_ttl"] = _QUEUE_TTL
                 out["dropped"] = list(_dropped)
+                out["panel"] = _panel
             self._json(200, out)
         elif self.path == "/api/next":
             seen_before = _agent_seen
@@ -758,7 +850,8 @@ class Handler(BaseHTTPRequestHandler):
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
                                "email": data.get("email"), "sel": data.get("sel"),
                                "mode": data.get("mode"), "week": data.get("week"),
-                               "sites": data.get("sites"), "queued_at": time.time()})
+                               "sites": data.get("sites"), "data": data.get("data"),
+                               "queued_at": time.time()})
                 det = f"{data.get('action')} queued"
                 if not _agent_online():
                     det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
@@ -792,6 +885,15 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if isinstance(data, dict) and "entries" in data:
                     _waitlist = data
+            self._json(200, {"ok": True})
+        elif self.path == "/api/panel":
+            # agent replaces the persistent panel state (decisions/handover/team)
+            global _panel
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            if isinstance(data, dict) and length < 400_000:
+                with _lock:
+                    _panel = data
             self._json(200, {"ok": True})
         elif self.path == "/api/upload":
             # browser uploads a file for the agent to process (rail-plan CSV etc.)
