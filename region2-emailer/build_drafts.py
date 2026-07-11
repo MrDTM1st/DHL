@@ -223,6 +223,39 @@ def product_summary(items):
         agg[t] = agg.get(t, 0) + _qty(qty)
     return ", ".join(f"{q}x {t}" for t, q in agg.items())
 
+
+# ---------- consolidation (share-a-vehicle) suggestions ----------
+def _outward(pc):
+    pc = str(pc or "").strip().upper()
+    i = pc.find(" ")
+    return (pc[:i] if i > 0 else pc).strip()   # "DN16 1BP" -> "DN16"
+
+
+def _pc_area(ow):
+    m = re.match(r"[A-Z]+", ow or "")
+    return m.group(0) if m else ow            # "DN16" -> "DN"
+
+
+def consolidation_candidates(groups):
+    """Two jobs delivering on the SAME DAY to the same postcode district (or a
+    neighbouring district in the same area) are a chance to share one vehicle.
+    Returns [(date, area, [group,...])] - 2+ DISTINCT delivery sites in the same
+    area on the same future day, soonest first. Advisory only: the planner still
+    checks the truck has space and the route works."""
+    buckets = OrderedDict()   # (date, area) -> {site_key: group}
+    for e in groups:
+        if not _is_future(e.get("date")):
+            continue
+        ow = _outward(e.get("postcode"))
+        if not ow:
+            continue
+        site_key = (str(e.get("site", "")).strip().lower(), ow)
+        buckets.setdefault((e["date"], _pc_area(ow)), OrderedDict()).setdefault(site_key, e)
+    out = [(date, area, list(sites.values()))
+           for (date, area), sites in buckets.items() if len(sites) >= 2]
+    out.sort(key=lambda t: (waitlist.days_until(t[0]) if waitlist.days_until(t[0]) is not None else 10**9))
+    return out
+
 # ---------- outlook ----------
 def get_ns():
     import win32com.client
@@ -662,6 +695,7 @@ def main():
 
     total_rows = sum(len(rows) for rows, _, _ in files)
     emails, rails, stoneblowers, region = build_emails_multi(files)
+    cons = consolidation_candidates(emails)   # same-day, same/near area -> share a vehicle?
     skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []
     other_week = []
     target = week_window(week) if week else None
@@ -724,6 +758,15 @@ def main():
           + (f" | already-emailed skipped: {len(skipped_sent)}" if skipped_sent else "")
           + (f" | already-done skipped: {len(skipped_done)}" if skipped_done else "")
           + (f" | past-date skipped: {len(skipped_past)}" if skipped_past else "") + "\n")
+    if cons:
+        print("CONSOLIDATION - same-day deliveries near each other (could share a vehicle - check space/route):")
+        for date, area, gs in cons:
+            outs = {_outward(g["postcode"]) for g in gs}
+            tag = "same district" if len(outs) == 1 else f"nearby districts in {area} - check the hop"
+            print(f"   * {date} | {area} area ({tag}):")
+            for g in gs:
+                print(f"        {' / '.join(g['orders'])}  ->  {clean(g.get('site', ''))} {g['postcode']} [{_outward(g['postcode'])}]")
+        print()
     if waitlisted:
         print(f"Region 2 orders WAIT-LISTED - too far ahead, will auto-send ~{waitlist.LEAD_DAYS} days before delivery:")
         for e in waitlisted:
