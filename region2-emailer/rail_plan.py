@@ -293,7 +293,8 @@ def sendoff(path, send=False):
         if send:
             import build_drafts as bd, send_order as so
             mail = outlook.CreateItem(0)
-            mail.To = "; ".join(to)
+            to_str, _cc, _rm = bd.clean_to_cc("; ".join(to))
+            mail.To = to_str
             mail.Subject = subj
             message = (f"Hi all,\n\nPlease find attached the rail plan for week commencing "
                        f"{wc.strftime('%d/%m/%Y')}"

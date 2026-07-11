@@ -17,6 +17,23 @@ KEY = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("R2_AGENT_KEY", "")
 POLL_SECONDS = 2
 HEARTBEAT_SECONDS = 5
 
+sys.path.insert(0, HERE)   # local modules importable no matter the cwd
+from modules import site_matching, profiles, handover   # pure-python, no COM
+CONFIG_DIR = os.path.join(HERE, "config")
+HANDOVER_PATH = os.path.join(HERE, "_handover.json")
+
+
+def site_store():
+    """Fresh store each call so we never race the upload subprocess's writes."""
+    return site_matching.SiteStore(os.path.join(HERE, "_sites.json"))
+
+
+def team_config():
+    try:
+        return profiles.load_team(os.path.join(CONFIG_DIR, "team.json"))
+    except Exception:
+        return {"members": [], "me": ""}
+
 
 def _req(path, data=None, timeout=15):
     url = BASE + path
@@ -109,6 +126,23 @@ def report(state, detail, output="", email=None):
         pass
 
 
+def push_panel():
+    """Persistent dashboard panel: site decisions, known sites, handover, team.
+    Separate from /api/status so job chatter never wipes it. Safe to call often."""
+    try:
+        ss = site_store()
+        team = team_config()
+        _req("/api/panel", {
+            "decisions": ss.pending(),
+            "sites": ss.sites(),
+            "handover": handover.panel_state(handover.load(HANDOVER_PATH)),
+            "team": [{"name": m.get("name", ""), "email": m.get("email", "")}
+                     for m in team.get("members", [])],
+        })
+    except Exception:
+        pass
+
+
 def run(args):
     proc = subprocess.run([sys.executable] + args, cwd=HERE,
                           capture_output=True, text=True, timeout=600)
@@ -141,7 +175,9 @@ def main():
     report("idle", "Agent connected.")
     push_tracker()
     push_waitlist()
+    push_panel()
     last_push = time.time()
+    last_panel = time.time()
     last_index = time.time()
     last_check = 0            # reply check runs soon after start, then every 20 min
     last_chase = time.time()  # auto-chase (opt-in) only after the first interval
@@ -247,6 +283,7 @@ def main():
                                tail(out, 20), email=unmatched)
                     else:
                         report("done", "Order upload processed — NR upload CSV is in Files.", tail(out, 20))
+                    push_panel()   # surface any delivery-site decisions the mapping raised
             elif action == "add_sites":
                 report("running", "Learning new sites & re-processing…")
                 sites = cmd.get("sites") or {}
@@ -344,12 +381,32 @@ def main():
                 out = run(["build_drafts.py", "waitscan"])
                 push_waitlist()
                 report("done", "Wait-list scan done.", tail(out, 10))
+            elif action == "site_decision":
+                d = cmd.get("data") or {}
+                site_store().resolve(d.get("raw", ""), d.get("site", ""))
+                push_panel()
+                report("done", f"Site saved: {d.get('raw')} -> {d.get('site')} (remembered).")
+            elif action == "handover_start":
+                d = cmd.get("data") or {}
+                report("running", "Setting up handover…")
+                out = run(["handover_cli.py", "start", str(d.get("days", 5)),
+                           str(d.get("cover", "")), "1" if d.get("forward", True) else "0",
+                           str(d.get("notes", ""))])
+                push_panel()
+                report("done" if "SENT handover" in out else "error", tail(out, 5))
+            elif action == "handover_stop":
+                handover.end(HANDOVER_PATH)
+                push_panel()
+                report("done", "Handover ended — you're back in charge.")
         except Exception as e:
             report("error", str(e))
         if action or time.time() - last_push > 60:
             push_tracker()
             push_waitlist()
             last_push = time.time()
+        if action or time.time() - last_panel > 30:
+            push_panel()   # keep decisions / handover / team fresh on the dashboard
+            last_panel = time.time()
         if time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
             try:
                 subprocess.Popen([sys.executable, "build_drafts.py", "waitscan"],

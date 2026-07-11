@@ -107,7 +107,9 @@ def map_orders(path):
         return str(s).strip().rstrip("-").strip().lower()
     norm = {nsite(k): v for k, v in SITES.items()}
 
-    mapped, unmatched = [], {}
+    from modules import site_matching
+    deliv_store = site_matching.SiteStore(os.path.join(HERE, "_sites.json"))
+    mapped, unmatched, held = [], {}, {}
     for r in rows[1:]:
         if not str(g(r, "order")).strip():
             continue
@@ -116,6 +118,23 @@ def map_orders(path):
         if sd is None and site:
             unmatched[site] = unmatched.get(site, 0) + 1
         sd = sd or {}
+
+        # Delivery-site matching + self-learning (SEPARATE store from the
+        # collection-site pop-up above). A brand-new delivery site is learned
+        # silently; a name that is a near-miss to one already known is held for a
+        # dashboard decision (likely a misspelling), so it never guesses wrong.
+        draw = str(g(r, "dpoint")).strip()
+        dcanon = draw
+        if draw:
+            msite, res = deliv_store.match(draw)
+            if msite:
+                dcanon = msite                       # exact / learned / confident fuzzy
+            elif res:                                # similar to a known site -> ask
+                deliv_store.request_decision(draw, context=f"order {str(g(r, 'order')).strip()}")
+                held[draw] = held.get(draw, 0) + 1
+                continue                             # hold row; resolve then re-run
+            else:
+                deliv_store.add_sites([draw])        # first time seen -> learn it
 
         cdate = _as_dt(g(r, "cdate"))
         ct = cte = ""
@@ -144,7 +163,7 @@ def map_orders(path):
             "Address 1": g(r, "a1"), "Address 2": g(r, "a2"), "Address 3": g(r, "a3"),
             "Postcode": OVERRIDES.get(site, g(r, "pc")), "Telephone No": sd.get("telephone", ""),
             "collection time": ct, "collection time end": cte,
-            "Delivery Point": g(r, "dpoint"), "D Contact Name": g(r, "dcn"),
+            "Delivery Point": dcanon, "D Contact Name": g(r, "dcn"),
             "D Address 1": g(r, "da1"), "D Address 2": g(r, "da2"), "D Address 3": g(r, "da3"),
             "D Postcode": g(r, "dpc"), "D Telephone No": g(r, "dphone"),
             "delivery time": dt, "delivery time end": dte,
@@ -159,7 +178,7 @@ def map_orders(path):
             "Notes for Collection Location Comments": sd.get("notes", ""),
             "Notes for Delivery Location Comments": g(r, "ndel"), "Est Cost": None,
         })
-    return mapped, unmatched
+    return mapped, unmatched, held
 
 
 UNMATCHED_FILE = os.path.join(HERE, "_synergy_unmatched.json")
@@ -180,7 +199,7 @@ def main():
         return
     if not args or not os.path.exists(args[0]):
         print("Usage: python synergy_map.py <raw extract .xlsx>  |  synergy_map.py addsites"); return
-    mapped, unmatched = map_orders(args[0])
+    mapped, unmatched, held = map_orders(args[0])
     # record the misses for the dashboard site pop-up
     with open(UNMATCHED_FILE, "w", encoding="utf-8") as f:
         json.dump([{"site": s, "count": n} for s, n in sorted(unmatched.items(), key=lambda x: -x[1])],
@@ -189,6 +208,10 @@ def main():
     name = "NR_upload_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     out = nr_csv.write_csv(records, outbox.path(name))
     print(f"Mapped {len(mapped)} order line(s).")
+    if held:
+        n = sum(held.values())
+        print(f"  ~~ {n} row(s) HELD - delivery site needs a decision on the dashboard "
+              f"(then re-run): {', '.join(sorted(held))}")
     if unmatched:
         print(f"  !! {len(unmatched)} collection site(s) NOT in the store - add these:")
         for s, n in sorted(unmatched.items(), key=lambda x: -x[1]):

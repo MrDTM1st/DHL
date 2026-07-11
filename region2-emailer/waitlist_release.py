@@ -20,10 +20,13 @@ import tracker, waitlist
 
 
 def _send_one(outlook, acct, e):
+    to, cc, removed = bd.clean_to_cc(e.get("to", ""), e.get("cc", ""))
+    if not to:
+        return False, "no recipient after removing your own address"
     m = outlook.CreateItem(0)
-    m.To = e["to"]
-    if e.get("cc"):
-        m.CC = e["cc"]
+    m.To = to
+    if cc:
+        m.CC = cc
     m.Subject = e["subject"]
     bd._attach_qr(m)
     m.HTMLBody = e.get("html") or e.get("body") or ""

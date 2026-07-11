@@ -238,13 +238,16 @@ def send_emails(ns, emails):
         return 0
     sent = 0
     for e in emails:
-        if not e["to"]:
+        to, cc, removed = bd.clean_to_cc(e.get("to", ""), e.get("cc", ""))
+        if removed:
+            print(f"   (removed your own address from recipients: {', '.join(removed)})")
+        if not to:
             print(f"   ! no recipient, skipped: {e['subject']}")
             continue
         m = outlook.CreateItem(0)
-        m.To = e["to"]
-        if e.get("cc"):
-            m.CC = e["cc"]
+        m.To = to
+        if cc:
+            m.CC = cc
         m.Subject = e["subject"]
         bd._attach_qr(m)
         m.HTMLBody = e.get("html") or e["body"]
@@ -252,7 +255,7 @@ def send_emails(ns, emails):
             print(f"   ! could not bind DHL account - NOT sending: {e['subject']}")
             continue
         m.Send()
-        tracker.log(orders=e.get("orders", []), to=e["to"], name=e.get("name", ""),
+        tracker.log(orders=e.get("orders", []), to=to, name=e.get("name", ""),
                     product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
                     site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
                     source=e.get("source", ""), status="sent")

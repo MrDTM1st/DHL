@@ -24,6 +24,28 @@ AREAS = set(REGION["postcode_areas"])
 SOURCE_PREFIX = CFG["email_source"]["only_file"].lower()
 BS_MARKERS = [m.lower() for m in CFG["email_source"].get("also_batches", [])]
 
+# ---- never-email-yourself (team profiles) ----
+_TEAM_CFG = None
+def team_config():
+    global _TEAM_CFG
+    if _TEAM_CFG is None:
+        try:
+            from modules import profiles
+            _TEAM_CFG = profiles.load_team(os.path.join(HERE, "config", "team.json"))
+        except Exception:
+            _TEAM_CFG = {}
+    return _TEAM_CFG
+
+def clean_to_cc(to, cc=""):
+    """Strip your own DHL address (and duplicates) from To/Cc before any send, so
+    the tool can never email you by mistake. Returns (to, cc, removed)."""
+    try:
+        from modules import profiles
+        me = team_config().get("me") or DHL_SMTP
+        return profiles.clean_recipients(to, cc, me=me)
+    except Exception:
+        return to or "", cc or "", []
+
 
 def is_wanted_extract(filename, subject=""):
     """True if this attachment is a file the emailer should read: the normal

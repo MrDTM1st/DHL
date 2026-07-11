@@ -71,6 +71,7 @@ def main():
         return
     log("supervisor started")
     cp = agent = cloud_agent = None
+    last_tick = 0.0
     while True:
         try:
             if not port_up():
@@ -86,6 +87,11 @@ def main():
             if cc and not alive(cloud_agent):
                 cloud_agent = spawn("agent.py", [cc["url"], cc["agent_key"]], "cloud_agent.log")
                 log(f"started cloud agent -> {cc['url']}")
+            if time.time() - last_tick > 60:   # self-update emails + handover forwarding (COM)
+                subprocess.Popen([sys.executable, os.path.join(HERE, "home_tick.py")],
+                                 cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 creationflags=CREATE_NO_WINDOW)
+                last_tick = time.time()
         except Exception as e:
             log(f"error: {e}")
         time.sleep(20)
