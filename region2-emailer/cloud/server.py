@@ -281,8 +281,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div id="holform" class="col" style="gap:.6rem;">
       <div style="display:flex; gap:.6rem; flex-wrap:wrap;">
         <input id="hdays" type="number" min="1" max="60" value="5" style="width:110px;" title="Days away">
-        <input id="hcover" list="teamlist" placeholder="Covering team member (name or email)" style="flex:1; min-width:220px;">
-        <datalist id="teamlist"></datalist>
+        <select id="hcover" style="flex:1; min-width:220px;"><option value="">Covering team member…</option></select>
       </div>
       <textarea id="hnotes" rows="3" placeholder="Notes / instructions for whoever covers (optional)"></textarea>
       <label class="hint" style="display:flex; align-items:center; gap:.45rem; cursor:pointer;">
@@ -526,8 +525,13 @@ function renderPanel(){
   }
   document.getElementById('holbtn').textContent = active ? 'Handover: ON' : (holidayOpen?'Hide handover':'Set up handover');
   document.getElementById('holiday').style.display = (active||holidayOpen) ? 'block' : 'none';
-  document.getElementById('teamlist').innerHTML =
-    (p.team||[]).map(m=>'<option value="'+esc(m.email||'')+'">'+esc(m.name||'')+'</option>').join('');
+  const hc=document.getElementById('hcover');
+  if(hc){
+    const cur=hc.value;   // keep the current pick across the 30s panel refresh
+    hc.innerHTML='<option value="">Covering team member…</option>'
+      +(p.team||[]).map(m=>'<option value="'+esc(m.name||'')+'">'+esc(m.name||'')+'</option>').join('');
+    if(cur) hc.value=cur;
+  }
 }
 function saveDecision(i){
   const d=(panelCache.decisions||[])[i]; if(!d) return;
