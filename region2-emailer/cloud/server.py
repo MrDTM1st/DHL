@@ -210,10 +210,15 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="cmd">
       <div class="lbl">Today's extract</div>
       <div class="col">
-        <button class="btn primary" onclick="previewBatch()">Preview &amp; send</button>
-        <button class="btn" onclick="previewBatch('next')">Next week's deliveries</button>
-        <button class="btn" onclick="previewBatch('after')">Week after</button>
+        <button class="btn primary" onclick="previewBatch()">Scan, preview &amp; send</button>
         <button class="btn" onclick="cmd('commit')">Save as drafts</button>
+      </div>
+    </div>
+    <div class="cmd">
+      <div class="lbl">Upcoming weeks</div>
+      <div class="col">
+        <button class="btn" onclick="previewBatch('next')">Next week</button>
+        <button class="btn" onclick="previewBatch('after')">Week after</button>
       </div>
     </div>
     <div class="cmd">
