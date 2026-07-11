@@ -62,3 +62,7 @@ browser only). All five cards work exactly like the home dashboard.
   while the agent is checking in).
 - The send panel has a Cc field; it is passed to the agent as `email.cc`
   (agent-side support: see `../HOMEPC_CHANGES.md`).
+- `POST /api/panel` (agent key) holds persistent panel state — delivery-site
+  decisions, holiday-handover status, team list — returned to the dashboard
+  inside `GET /api/status` as `panel`. Dashboard commands from those cards
+  carry a `data` dict through the queue (see `../INTEGRATE_ON_HOMEPC.md`).

@@ -22,6 +22,7 @@ region2-emailer/recent/
 
 # --- secrets: NEVER goes to GitHub ---
 region2-emailer/cloud.json
+region2-emailer/config/team.json
 
 # --- local index/state ---
 region2-emailer/order_index.json

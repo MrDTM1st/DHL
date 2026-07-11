@@ -1,0 +1,12 @@
+{
+  "me": "your.name@dhl.com",
+  "internal_domains": ["dhl.com"],
+  "members": [
+    {"name": "Your Name", "email": "your.name@dhl.com", "role": "planner"},
+    {"name": "Team Mate", "email": "team.mate@dhl.com", "role": "planner"}
+  ],
+  "update_email": {
+    "subject_prefix": "R2 UPDATE",
+    "allowed_senders": []
+  }
+}

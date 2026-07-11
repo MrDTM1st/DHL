@@ -167,3 +167,10 @@ Implemented on the home PC (`phase2.py`, wired into `agent.py`):
   scripts to let the agent auto-send them every 3h; otherwise use the
   dashboard's "Run chasers" button. Heartbeat thread keeps "home PC online"
   fresh even during long commands.
+
+## Phase 3 - team features (modules SHIPPED, wiring needed)
+
+Site matching + self-learning, user profiles / never-email-yourself, the
+self-updating Outlook watcher, and holiday handover are now in this repo as
+complete tested modules (`modules/`, tests in `tests/test_modules.py`).
+Follow `INTEGRATE_ON_HOMEPC.md` to wire them into agent.py/supervisor.py.
