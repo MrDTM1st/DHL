@@ -246,6 +246,10 @@ def consolidation_candidates(groups):
     for e in groups:
         if not _is_future(e.get("date")):
             continue
+        # supplier rails are booked separately (never a shared road vehicle) -
+        # exclude the whole job from BOTH ends of any suggested pairing.
+        if any(is_supplier_rail(o) for o in e.get("orders", [])):
+            continue
         ow = _outward(e.get("postcode"))
         if not ow:
             continue
