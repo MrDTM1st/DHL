@@ -250,6 +250,12 @@ def consolidation_candidates(groups):
         # exclude the whole job from BOTH ends of any suggested pairing.
         if any(is_supplier_rail(o) for o in e.get("orders", [])):
             continue
+        # a FULL ballast load has no spare capacity, so no point consolidating.
+        # Trucks: small=10 bags, large=20 - so any ballast qty that's a multiple
+        # of 10 (10/20/30/40...) fills whole trucks exactly. Non-multiples leave a
+        # part-truck with room, so they stay eligible.
+        if e.get("only_ballast") and e.get("ballast", 0) > 0 and e.get("ballast", 0) % 10 == 0:
+            continue
         ow = _outward(e.get("postcode"))
         if not ow:
             continue
@@ -600,6 +606,8 @@ def build_emails_multi(files):
         orders = sorted(set(base_order(r[C["order"]]) for r, C, _ in bundle))
         subject = f"{' / '.join(orders)} {clean(r0[C0['daddr']])} {dpc}"
         items = [(r[C["qty"]], clean(r[C["prod"]])) for r, C, _ in bundle]
+        ptypes = {product_type(d) for _, d in items}
+        ballast_bags = sum(_qty(q) for q, d in items if product_type(d) == "ballast")
         nm = firstname(r0[C0['dcon']])
         text, html, message = _bodies(nm, items, dd)
         pcodes = sorted({clean(r[C['prod_code']]) for r, C, _ in bundle
@@ -608,6 +616,7 @@ def build_emails_multi(files):
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, orders=orders,
                            product_codes=pcodes, materials=product_summary(items),
+                           ballast=ballast_bags, only_ballast=(ptypes == {"ballast"}),
                            site=clean(r0[C0['daddr']]), postcode=dpc, source=sources))
     return emails, skipped_rails, skipped_stoneblower, len(skipped_region)
 
