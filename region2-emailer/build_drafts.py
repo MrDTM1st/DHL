@@ -543,6 +543,84 @@ def find_already_emailed(ns, order_numbers, limit=500):
             break
     return found
 
+
+def _pc_norm(pc):
+    return re.sub(r"\s+", "", str(pc or "")).upper()   # "NG9 2EY" -> "NG92EY"
+
+
+def find_emailed_deliveries(ns, groups, limit=500):
+    """Delivery-level dedup: has a delivery already been emailed for this
+    contact + postcode + date, under ANY order number? Catches a NEW order that
+    joins a delivery slot already arranged under a different (maybe now aged-out)
+    order. Matched on recipient + postcode + delivery date - all three, so it
+    never suppresses a genuinely different delivery. Returns
+    {(to, pc_norm, date): {"where","when","to","booked","ref"}}."""
+    want = {}
+    for e in groups:
+        to = (e.get("to") or "").strip().lower()
+        pc = _pc_norm(e.get("postcode"))
+        date = str(e.get("date") or "").strip()
+        if to and pc and date:
+            want[(to, pc, date)] = e
+    if not want:
+        return {}
+    dhl = dhl_store(ns)
+    hit = {}
+    for label, folder in (("Sent Items", sub(dhl, "Sent Items")), ("Drafts", sub(dhl, "Drafts"))):
+        if folder is None:
+            continue
+        items = folder.Items
+        try:
+            items.Sort("[SentOn]" if label == "Sent Items" else "[LastModificationTime]", True)
+        except Exception:
+            pass
+        n = 0
+        for it in items:
+            n += 1
+            if n > limit:
+                break
+            try:
+                subj = str(it.Subject or "")
+                body = str(getattr(it, "Body", "") or "")
+                blob = subj + " " + body[:6000]
+                blobn = re.sub(r"\s+", "", blob).upper()
+                low = blob.lower()
+                # cheap first: which wanted deliveries have this postcode + date?
+                cands = [(k, e) for k, e in want.items()
+                         if k not in hit and k[1] in blobn and (k[2] in blob or k[2][:5] in blob)]
+                if not cands:
+                    continue
+                rcpts = set()
+                try:
+                    for j in range(1, it.Recipients.Count + 1):
+                        try:
+                            a = str(it.Recipients.Item(j).Address or "")
+                            if "@" in a:
+                                rcpts.add(a.lower())
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                for k, e in cands:
+                    if not (k[0] in rcpts or k[0] in low):
+                        continue          # not sent to this delivery contact
+                    try:
+                        when = (it.SentOn if label == "Sent Items"
+                                else it.LastModificationTime).strftime("%d/%m/%Y %H:%M")
+                    except Exception:
+                        when = "?"
+                    booked = (label == "Sent Items") and _looks_booked(subj, body)
+                    hit[k] = {"where": label, "when": when,
+                              "to": str(getattr(it, "To", "") or "")[:40],
+                              "booked": booked, "ref": _booked_ref(body) if booked else ""}
+            except Exception:
+                pass
+            if len(hit) == len(want):
+                break
+        if len(hit) == len(want):
+            break
+    return hit
+
 # ---------- core ----------
 def load_rows(path):
     import openpyxl
@@ -716,15 +794,25 @@ def main():
         done = _already_done_orders()
         all_orders = {str(o).strip() for e in emails for o in e["orders"]}
         already = find_already_emailed(ns, all_orders)
+        deliv_hit = find_emailed_deliveries(ns, emails)   # delivery-level dedup (any order#)
         lead = waitlist.LEAD_DAYS
         kept = []
         for e in emails:
             ords = [str(o).strip() for o in e["orders"]]
             seen = {o: already[o] for o in ords if o in already}
+            dkey = ((e.get("to") or "").strip().lower(), _pc_norm(e.get("postcode")),
+                    str(e.get("date") or "").strip())
+            if not seen and dkey in deliv_hit:
+                seen = {"_delivery": deliv_hit[dkey]}   # same delivery emailed under a different order#
             n = waitlist.days_until(e["date"])
             if ords and all(o in done for o in ords):
                 skipped_done.append(e)
-            elif ords and all(o in already for o in ords):
+            elif seen:
+                # a group is ONE email to one contact for one delivery (same
+                # contact+site+date). If ANY of its orders was already emailed - OR
+                # the delivery itself was already emailed under a different order
+                # number - it's arranged, so skip it. A new order joining that slot
+                # must not re-trigger the email.
                 e["_seen"] = seen
                 if any(v.get("booked") for v in seen.values()):
                     skipped_booked.append(e)   # your in-thread reply = booked in
@@ -737,8 +825,6 @@ def main():
                 # forward past the 14-day hold); park anything outside that week.
                 dd = waitlist.parse_date(e["date"])
                 if dd is not None and target[0] <= dd <= target[1]:
-                    if seen:
-                        e["_seen"] = seen
                     kept.append(e)
                 else:
                     other_week.append(e)
@@ -746,8 +832,6 @@ def main():
                 # too far ahead to email yet - hold on the wait list, auto-sent later
                 waitlisted.append(e)
             else:
-                if seen:                 # some (not all) orders already emailed - keep but warn
-                    e["_seen"] = seen
                 kept.append(e)
         emails = kept
         enrolled = enrol_by_hand(skipped_sent)   # track by-hand emails so they get chased too
