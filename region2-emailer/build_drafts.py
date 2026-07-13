@@ -520,6 +520,8 @@ def find_already_emailed(ns, order_numbers, limit=500):
                 break
             try:
                 subj = str(it.Subject or "")
+                if re.sub(r"^\s*(re|fw|fwd)\s*:\s*", "", subj, flags=re.I).lower().startswith("collection "):
+                    continue   # a collection request to a supplier is NOT a delivery email
                 body = str(getattr(it, "Body", "") or "")
                 blob = subj + " " + body[:6000]
                 booked = (label == "Sent Items") and _looks_booked(subj, body)
@@ -621,6 +623,45 @@ def find_emailed_deliveries(ns, groups, limit=500):
             break
     return hit
 
+
+def find_collection_sent(ns, orders, limit=500):
+    """Orders that already have a collection request sent/drafted (subject starts
+    'Collection', contains the order number) - so a collection email to the
+    supplier isn't sent twice, independently of the delivery email."""
+    targets = {str(o).strip() for o in orders if str(o).strip()}
+    if not targets:
+        return set()
+    dhl = dhl_store(ns)
+    hit = set()
+    for label, folder in (("Sent Items", sub(dhl, "Sent Items")), ("Drafts", sub(dhl, "Drafts"))):
+        if folder is None:
+            continue
+        items = folder.Items
+        try:
+            items.Sort("[SentOn]" if label == "Sent Items" else "[LastModificationTime]", True)
+        except Exception:
+            pass
+        n = 0
+        for it in items:
+            n += 1
+            if n > limit:
+                break
+            try:
+                subj = str(it.Subject or "")
+                if not re.sub(r"^\s*(re|fw|fwd)\s*:\s*", "", subj, flags=re.I).lower().startswith("collection "):
+                    continue
+                blob = subj + " " + str(getattr(it, "Body", "") or "")[:3000]
+                for o in (targets - hit):
+                    if o in blob:
+                        hit.add(o)
+            except Exception:
+                pass
+            if len(hit) == len(targets):
+                break
+        if len(hit) == len(targets):
+            break
+    return hit
+
 # ---------- core ----------
 def load_rows(path):
     import openpyxl
@@ -638,12 +679,45 @@ def load_rows(path):
         prod=ci("product / service code"), prod_code=ci("product / description"),
         qty=ci("product qty"), date=ci("delivery date"),
         daddr=ci("d address1", "d address 1"),
+        csite=ci("site name - collection"),
     )
     return rows[1:], C
 
 def build_emails(rows, C, source=""):
     """Single-file convenience wrapper around build_emails_multi."""
     return build_emails_multi([(rows, C, source)])
+
+
+_SPECIAL_SUPPLIERS = CFG.get("special_collection_suppliers", {})
+
+
+def special_supplier(name):
+    """If a collection site is a collect-first supplier (Anderton/BCM/Trough Tec)
+    return (supplier_name, {to, cc}); else (None, None)."""
+    n = str(name or "").lower()
+    for sup, cfg in _SPECIAL_SUPPLIERS.items():
+        if any(str(m).lower() in n for m in cfg.get("match", [])):
+            return sup, cfg
+    return None, None
+
+
+def _collection_body(lines):
+    """Collection-request body for a supplier: the details we need to book
+    transport, then the order/product lines (one per line)."""
+    asks = CFG.get("collection_query", {}).get("asks",
+             ["pallet size", "weight", "height", "double-stacked", "collection time slot"])
+    out = ["Hi,", "",
+           "Please could you help us arrange collection of the below? For each item we need:", ""]
+    for a in asks:
+        a = str(a)
+        if "double" in a.lower():
+            a = "whether it's double-stacked (so we can send a curtain-slider)"
+        out.append("    - " + a)
+    out += ["", "Items:"]
+    for o, pc in lines:
+        out.append(f"    {o}" + (f"  -  {pc}" if pc else ""))
+    out += ["", "Once we have those we'll get transport booked in. Many thanks."]
+    return "\n".join(out)
 
 
 def build_emails_multi(files):
@@ -676,6 +750,7 @@ def build_emails_multi(files):
             key = (email_of(r[C["dcon"]]), clean(r[C["dpc"]]), fdate(r[C["date"]]))
             groups.setdefault(key, []).append((r, C, source))
     emails = []
+    collection_emails = []
     for (em, dpc, dd), bundle in groups.items():
         if area(dpc) not in AREAS:
             skipped_region.add((dpc, dd))
@@ -696,7 +771,35 @@ def build_emails_multi(files):
                            product_codes=pcodes, materials=product_summary(items),
                            ballast=ballast_bags, only_ballast=(ptypes == {"ballast"}),
                            site=clean(r0[C0['daddr']]), postcode=dpc, source=sources))
-    return emails, skipped_rails, skipped_stoneblower, len(skipped_region)
+        # collect-first: a SEPARATE collection request to Anderton/BCM/Trough Tec,
+        # sent alongside the delivery email (both go out together).
+        sup = supcfg = None
+        csite_name = ""
+        for r, C, _ in bundle:
+            cs = str(r[C["csite"]] or "").strip() if C.get("csite") is not None else ""
+            if cs:
+                s, cfg = special_supplier(cs)
+                if s:
+                    sup, supcfg, csite_name = s, cfg, cs
+                    break
+        if sup:
+            clines, seenl = [], set()
+            for r, C, _ in bundle:
+                o = base_order(r[C["order"]])
+                cpc = clean(r[C["prod_code"]]) if C.get("prod_code") is not None else ""
+                if (o, cpc) not in seenl:
+                    seenl.add((o, cpc))
+                    clines.append((o, cpc))
+            cmsg = _collection_body(clines)
+            codes = sorted({pc for _, pc in clines if pc})
+            csubj = "Collection " + " / ".join(orders) + ((" " + " ".join(codes)) if codes else "")
+            collection_emails.append(dict(
+                to="; ".join(supcfg.get("to", [])), cc="; ".join(supcfg.get("cc", [])),
+                name=sup, subject=csubj[:150], body=cmsg, html=html_from_message(cmsg),
+                message=cmsg, items=len(clines), date=dd, orders=orders,
+                product_codes=codes, materials="collection details", site=csite_name,
+                postcode=dpc, source=sources, kind="collection", supplier=sup))
+    return emails, collection_emails, skipped_rails, skipped_stoneblower, len(skipped_region)
 
 def create_drafts(ns, emails):
     import win32com.client
@@ -785,8 +888,9 @@ def main():
         files = [(rows, C, os.path.basename(path))]
 
     total_rows = sum(len(rows) for rows, _, _ in files)
-    emails, rails, stoneblowers, region = build_emails_multi(files)
+    emails, collection_emails, rails, stoneblowers, region = build_emails_multi(files)
     cons = consolidation_candidates(emails)   # same-day, same/near area -> share a vehicle?
+    coll_kept = list(collection_emails)       # default (passed-file): send them all
     skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []
     other_week = []
     target = week_window(week) if week else None
@@ -834,6 +938,13 @@ def main():
             else:
                 kept.append(e)
         emails = kept
+        # collection requests to Anderton/BCM/Trough Tec - sent ALONGSIDE the
+        # delivery email; deduped separately (a Collection email already sent, or
+        # the delivery date already passed).
+        coll_sent = (find_collection_sent(ns, {o for e in collection_emails for o in e["orders"]})
+                     if collection_emails else set())
+        coll_kept = [e for e in collection_emails
+                     if _is_future(e["date"]) and not (e["orders"] and all(o in coll_sent for o in e["orders"]))]
         enrolled = enrol_by_hand(skipped_sent)   # track by-hand emails so they get chased too
         if enrolled:
             print(f"(tracker: enrolled {enrolled} order(s) you emailed by hand, so they get chased)")
@@ -850,6 +961,7 @@ def main():
     print(f"Rows: {total_rows} | Region 2 emails: {len(emails)} | "
           f"supplier-rails skipped: {rails} | stoneblowers skipped: {stoneblowers} | "
           f"out-of-region groups skipped: {region}"
+          + (f" | collection requests: {len(coll_kept)}" if coll_kept else "")
           + (f" | wait-listed (too far ahead): {len(waitlisted)}" if waitlisted else "")
           + (f" | booked-in skipped: {len(skipped_booked)}" if skipped_booked else "")
           + (f" | already-emailed skipped: {len(skipped_sent)}" if skipped_sent else "")
@@ -897,6 +1009,12 @@ def main():
         for e in skipped_done:
             print(f"   = {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | {e['date']}")
         print()
+    if coll_kept:
+        print("COLLECTION requests to suppliers (Anderton/BCM/Trough Tec) - sent ALONGSIDE the delivery email:")
+        for e in coll_kept:
+            print(f"   + TO {e['to']} | {e['subject']}")
+        print()
+    emails = emails + coll_kept   # collection requests ride in the same batch/send
     for e in emails:
         warn = ""
         if e.get("_seen"):
