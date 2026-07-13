@@ -680,6 +680,7 @@ def load_rows(path):
         qty=ci("product qty"), date=ci("delivery date"),
         daddr=ci("d address1", "d address 1"),
         csite=ci("site name - collection"),
+        instr=ci("shipping instructions", "delivery instructions"),
     )
     return rows[1:], C
 
@@ -701,9 +702,19 @@ def special_supplier(name):
     return None, None
 
 
+_HS_RE = re.compile(r"BPA Release Number:\s*(HS\d+(?:-\d+)*)", re.I)
+
+
+def _hs_number(instr):
+    """The release/HS number Anderton uses to locate goods, from the Shipping
+    Instructions column ('BPA Release Number: HS6365227-12-1')."""
+    m = _HS_RE.search(str(instr or ""))
+    return m.group(1) if m else ""
+
+
 def _collection_body(lines):
     """Collection-request body for a supplier: the details we need to book
-    transport, then the order/product lines (one per line)."""
+    transport, then each order line with its product code + release/HS number."""
     asks = CFG.get("collection_query", {}).get("asks",
              ["pallet size", "weight", "height", "double-stacked", "collection time slot"])
     out = ["Hi,", "",
@@ -713,9 +724,14 @@ def _collection_body(lines):
         if "double" in a.lower():
             a = "whether it's double-stacked (so we can send a curtain-slider)"
         out.append("    - " + a)
-    out += ["", "Items:"]
-    for o, pc in lines:
-        out.append(f"    {o}" + (f"  -  {pc}" if pc else ""))
+    out += ["", "Items (with the release / HS number so you can locate each):"]
+    for o, pc, hs in lines:
+        parts = [str(o)]
+        if pc:
+            parts.append(pc)
+        if hs:
+            parts.append(hs)
+        out.append("    " + "  -  ".join(parts))
     out += ["", "Once we have those we'll get transport booked in. Many thanks."]
     return "\n".join(out)
 
@@ -787,12 +803,14 @@ def build_emails_multi(files):
             for r, C, _ in bundle:
                 o = base_order(r[C["order"]])
                 cpc = clean(r[C["prod_code"]]) if C.get("prod_code") is not None else ""
-                if (o, cpc) not in seenl:
-                    seenl.add((o, cpc))
-                    clines.append((o, cpc))
+                hs = _hs_number(r[C["instr"]]) if C.get("instr") is not None else ""
+                if (o, cpc, hs) not in seenl:
+                    seenl.add((o, cpc, hs))
+                    clines.append((o, cpc, hs))
             cmsg = _collection_body(clines)
-            codes = sorted({pc for _, pc in clines if pc})
-            csubj = "Collection " + " / ".join(orders) + ((" " + " ".join(codes)) if codes else "")
+            codes = sorted({pc for _, pc, _ in clines if pc})
+            town = csite_name.split(" - ")[-1].strip().title() if " - " in csite_name else ""
+            csubj = f"Collection {' / '.join(orders)} - {sup}" + (f" ({town})" if town else "")
             collection_emails.append(dict(
                 to="; ".join(supcfg.get("to", [])), cc="; ".join(supcfg.get("cc", [])),
                 name=sup, subject=csubj[:150], body=cmsg, html=html_from_message(cmsg),
