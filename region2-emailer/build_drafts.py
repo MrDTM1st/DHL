@@ -802,20 +802,23 @@ def build_emails_multi(files):
             clines, seenl = [], set()
             for r, C, _ in bundle:
                 o = base_order(r[C["order"]])
-                cpc = clean(r[C["prod_code"]]) if C.get("prod_code") is not None else ""
+                # the readable product DESCRIPTION (Product / Service Code column,
+                # e.g. "LID FOR C/1/23TTRW") - NOT the numeric identifier in the
+                # Product / Description column, which means nothing to the supplier.
+                desc = clean(r[C["prod"]]) if C.get("prod") is not None else ""
                 hs = _hs_number(r[C["instr"]]) if C.get("instr") is not None else ""
-                if (o, cpc, hs) not in seenl:
-                    seenl.add((o, cpc, hs))
-                    clines.append((o, cpc, hs))
+                if (o, desc, hs) not in seenl:
+                    seenl.add((o, desc, hs))
+                    clines.append((o, desc, hs))
             cmsg = _collection_body(clines)
-            codes = sorted({pc for _, pc, _ in clines if pc})
             town = csite_name.split(" - ")[-1].strip().title() if " - " in csite_name else ""
             csubj = f"Collection {' / '.join(orders)} - {sup}" + (f" ({town})" if town else "")
             collection_emails.append(dict(
                 to="; ".join(supcfg.get("to", [])), cc="; ".join(supcfg.get("cc", [])),
                 name=sup, subject=csubj[:150], body=cmsg, html=html_from_message(cmsg),
                 message=cmsg, items=len(clines), date=dd, orders=orders,
-                product_codes=codes, materials="collection details", site=csite_name,
+                product_codes=sorted({d for _, d, _ in clines if d}),
+                materials="collection details", site=csite_name,
                 postcode=dpc, source=sources, kind="collection", supplier=sup))
     return emails, collection_emails, skipped_rails, skipped_stoneblower, len(skipped_region)
 
