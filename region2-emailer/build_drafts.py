@@ -424,10 +424,12 @@ def save_pending_batch(emails):
 # is suppressed anyway - these markers only decide whether we LABEL the skip
 # "booked in" (your reply) vs "already contacted" (the tool's first outreach).
 _REPLY_PREFIXES = ("re:", "re ", "fw:", "fwd:", "fw ", "aw:", "sv:")
-_BOOKED_PHRASES = ("booked", "in the diary", "slot", "all sorted", "sorted for",
-                   "arranged", "confirmed", "all set", "on the plan")
+# The exact wording you use to book an order in, e.g.
+# "This order has been arranged with Lawsons." Only this phrase counts as a
+# booking - not the looser words (booked/sorted/confirmed) we used before.
+_BOOKED_PHRASES = ("this order has been arranged with",)
 # A MAN reference (e.g. MAN-01563625) means you've arranged it with a haulier -
-# that's a booking on its own, even if you never type the word "booked".
+# that's a booking on its own, even if you never type the phrase above.
 _MAN_RE = re.compile(r"\bMAN[-\s]?\d{5,}", re.I)
 _QUOTE_MARKERS = ("-----original message-----", "\nfrom:", "\r\nfrom:", "\nsent:",
                   "________", " wrote:", "on behalf of")
