@@ -238,7 +238,9 @@ def main():
                 report("done", "Batch sent from your DHL account.", tail(out, 12))
             elif action == "rail_plan":
                 mode = (cmd.get("mode") or "preview").lower()
-                report("running", f"Rail plan — {mode}…")
+                week = (cmd.get("week") or "next").strip().lower()
+                report("running", f"Rail plan — {mode}"
+                       + (" (current-week update)" if week == "current" else "") + "…")
                 up = None
                 try:
                     up = _req("/api/pull_upload")
@@ -252,11 +254,14 @@ def main():
                     with open(raw, "wb") as f:
                         f.write(base64.b64decode(up["data"]))
                     before = snap_outbox()
-                    args = ["rail_plan.py", "send", raw] + (["go"] if mode == "send" else [])
+                    args = (["rail_plan.py", "send", raw]
+                            + (["go"] if mode == "send" else [])
+                            + (["--update"] if week == "current" else []))
                     out = run(args)
                     push_new_files(before)
                     verb = "sent" if mode == "send" else "previewed (nothing sent)"
-                    report("done", f"Rail plan {verb} — plans are in Files below.", tail(out, 34))
+                    extra = " New manifests are highlighted green." if week == "current" else ""
+                    report("done", f"Rail plan {verb} — plans are in Files below.{extra}", tail(out, 34))
             elif action == "order_upload":
                 report("running", "Processing order upload…")
                 up = None

@@ -145,7 +145,108 @@ def load_raw(path):
     return hdr, rows[1:]
 
 
-def build(path, out_dir=None):
+def _refs_from_plan_xlsx(path):
+    """Every Order Reference in a finished rail-plan .xlsx - skips the header,
+    the black day-separator rows and blanks (they have no Order Reference)."""
+    import openpyxl
+    refs = set()
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception:
+        return refs
+    for ws in wb.worksheets:
+        rows = ws.iter_rows(values_only=True)
+        try:
+            hdr = next(rows)
+        except StopIteration:
+            continue
+        col = next((i for i, h in enumerate(hdr or [])
+                    if str(h or "").strip().lower() == "order reference"), None)
+        if col is None:
+            continue
+        for row in rows:
+            v = row[col] if col < len(row) else None
+            if v is not None and str(v).strip():
+                refs.add(str(v).strip())
+    try:
+        wb.close()
+    except Exception:
+        pass
+    return refs
+
+
+def previous_order_refs(wc):
+    """Order References from the most recent rail-plan email in Outlook for this
+    week-commencing - i.e. the latest version a colleague (or you) circulated.
+    Returns a set, or None if no prior plan is found (so we don't green a whole
+    fresh plan). Only used on a current-week UPDATE."""
+    if wc is None:
+        return None
+    import tempfile, shutil
+    wcs = wc.strftime("%d.%m")
+    want = f"rail plan wc {wcs}"
+    try:
+        import build_drafts as bd
+        ns = bd.get_ns()
+        dhl = bd.dhl_store(ns)
+        folders = [f for f in (bd.sub(dhl, "Inbox"), bd.sub(dhl, "Sent Items")) if f]
+    except Exception:
+        return None
+    tmpdir = tempfile.mkdtemp(prefix="railprev_")
+    best = None   # (when, [saved xlsx paths]) - the most recent matching email
+    try:
+        for fol in folders:
+            try:
+                items = fol.Items
+                items.Sort("[ReceivedTime]", True)
+            except Exception:
+                continue
+            n = 0
+            for it in items:
+                n += 1
+                if n > 60:
+                    break
+                try:
+                    subj = str(getattr(it, "Subject", "") or "").lower()
+                    atts = it.Attachments
+                    names = [str(atts.Item(j).FileName or "") for j in range(1, atts.Count + 1)]
+                    if want not in subj and not any(want in nm.lower() for nm in names):
+                        continue
+                    rt = None
+                    for attr in ("ReceivedTime", "SentOn", "LastModificationTime"):
+                        v = getattr(it, attr, None)
+                        if v is not None and 1990 < getattr(v, "year", 0) < 2100:
+                            rt = v
+                            break
+                    when = datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute) if rt else datetime.min
+                    if best and when <= best[0]:
+                        continue
+                    paths = []
+                    for j in range(1, atts.Count + 1):
+                        att = atts.Item(j)
+                        nm = str(att.FileName or "")
+                        if nm.lower().endswith((".xlsx", ".xlsm")):
+                            p = os.path.join(tmpdir, f"{n}_{nm}")
+                            att.SaveAsFile(p)
+                            paths.append(p)
+                    if paths:
+                        best = (when, paths)
+                except Exception:
+                    continue
+        if not best:
+            return None
+        refs = set()
+        for p in best[1]:
+            refs |= _refs_from_plan_xlsx(p)
+        return refs or None
+    finally:
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def build(path, out_dir=None, update=False):
     hdr, data = load_raw(path)
     idx = {h.lower(): i for i, h in enumerate(hdr)}
     fl_i, fpc_i, dd_i, sch_i = idx["from location"], idx["from post code"], idx["delivery date"], idx["schedule"]
@@ -197,6 +298,10 @@ def build(path, out_dir=None):
         if sch and (dd is None or dd != sch):
             mism.append((r[idx["order reference"]], r[sch_i], r[dd_i]))
 
+    # UPDATE (current-week) mode: pull the previous plan a colleague circulated
+    # for this week from Outlook, so we can highlight the NEW manifests green.
+    prev_refs = previous_order_refs(wc) if update else None
+
     DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
     def write_plan(rows, suffix):
@@ -220,6 +325,12 @@ def build(path, out_dir=None):
                 cell.font = FONT_DAY
             for r, sch in by_day[k]:
                 ws.append(shape(r, sch))
+                # new manifest since the previous plan -> highlight the row green
+                if update and prev_refs:
+                    ref = str(r[ordref_i]).strip() if ordref_i < len(r) else ""
+                    if ref and ref not in prev_refs:
+                        for cell in ws[ws.max_row]:
+                            cell.fill = FILL_NEW
         # centre every cell, and size each column to its content
         for row in ws.iter_rows():
             for c in row:
@@ -246,6 +357,15 @@ def build(path, out_dir=None):
         made.append({"path": p, "name": f, "count": c, "chain": pn, "suffix": sfx, "carriers": carr})
 
     print(f"Week commencing: {wc}  |  kept {len(kept)} rows, dropped {len(dropped)} manual/non-supplier")
+    if update:
+        wcs = wc.strftime("%d.%m") if wc else "TBC"
+        if prev_refs is None:
+            print(f"  UPDATE: no previous rail plan found in Outlook for wc {wcs} - nothing highlighted green.")
+        else:
+            cur = {str(r[ordref_i]).strip() for r, _, _, _ in kept if ordref_i < len(r) and str(r[ordref_i]).strip()}
+            newr = sorted(cur - prev_refs)
+            print(f"  UPDATE: {len(newr)} new manifest(s) highlighted green"
+                  + ((": " + ", ".join(newr)) if newr else " (none new)."))
     if dropped:
         print("  EXCLUDED (adhoc / manual / not a rail supplier):")
         for o, reason in dropped:
@@ -271,10 +391,11 @@ def recipients_for(m):
     return list(dict.fromkeys(x for x in to if x)), unmatched
 
 
-def sendoff(path, send=False):
+def sendoff(path, send=False, update=False):
     """Build the plans then draft/send one email per plan to its recipients.
-    Plans are written to the outbox so they're downloadable from the dashboard."""
-    wc, made, mism = build(path)
+    Plans are written to the outbox so they're downloadable from the dashboard.
+    update=True (current-week) greens the new manifests vs the previous plan."""
+    wc, made, mism = build(path, update=update)
     wcs = wc.strftime("%d.%m") if wc else "TBC"
     outlook = acct = ns = None
     if send:
@@ -316,11 +437,14 @@ def sendoff(path, send=False):
 
 if __name__ == "__main__":
     a = sys.argv[1:]
+    update = "--update" in a                      # current-week update: green the new manifests
+    a = [x for x in a if x != "--update"]
     if a and a[0] == "send":
         if len(a) < 2 or not os.path.exists(a[1]):
-            print("Usage: python rail_plan.py send <raw csv> [go]"); sys.exit(1)
-        sendoff(a[1], send=(len(a) > 2 and a[2].lower() == "go"))
+            print("Usage: python rail_plan.py send <raw csv> [go] [--update]"); sys.exit(1)
+        sendoff(a[1], send=(len(a) > 2 and a[2].lower() == "go"), update=update)
     elif a and os.path.exists(a[0]):
-        build(a[0])
+        build(a[0], update=update)
     else:
-        print("Usage: python rail_plan.py <raw csv>   |   python rail_plan.py send <raw csv> [go]")
+        print("Usage: python rail_plan.py <raw csv> [--update]   |   "
+              "python rail_plan.py send <raw csv> [go] [--update]")
