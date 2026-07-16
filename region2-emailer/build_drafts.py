@@ -200,6 +200,16 @@ def is_stoneblower(*descs):
             return True
     return False
 
+
+def is_loose_ballast(*descs):
+    """Loose (tipped/bulk) ballast - needs a tipper, so Delali wants it flagged +
+    prioritised. Description reads 'BALLAST ... - Loose' (vs '1 tonne bags' etc.)."""
+    for d in descs:
+        dl = str(d or "").lower()
+        if "ballast" in dl and "loose" in dl:
+            return True
+    return False
+
 def product_type(desc):
     d = (desc or "").upper()
     for key, label in (("SLEEPER", "sleepers"), ("BALLAST", "ballast"), ("RAIL", "rails"),
@@ -403,7 +413,7 @@ def save_pending_batch(emails):
     Nothing is sent or drafted here."""
     slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date",
                                    "orders", "product_codes", "materials", "site",
-                                   "postcode", "source")} for e in emails]
+                                   "postcode", "source", "loose_ballast")} for e in emails]
     with open(PENDING_BATCH, "w", encoding="utf-8") as f:
         json.dump(slim, f, indent=1, default=str)
     return slim
@@ -786,6 +796,7 @@ def build_emails_multi(files):
                            message=message, items=len(items), date=dd, orders=orders,
                            product_codes=pcodes, materials=product_summary(items),
                            ballast=ballast_bags, only_ballast=(ptypes == {"ballast"}),
+                           loose_ballast=any(is_loose_ballast(d) for _, d in items),
                            site=clean(r0[C0['daddr']]), postcode=dpc, source=sources))
         # collect-first: a SEPARATE collection request to Anderton/BCM/Trough Tec,
         # sent alongside the delivery email (both go out together).

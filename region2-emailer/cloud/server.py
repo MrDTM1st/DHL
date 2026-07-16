@@ -166,6 +166,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .tktime b{ font-family:'Geist',-apple-system,system-ui,sans-serif; font-weight:600; font-size:12.5px; }
   @media (max-width:760px){ .tktime{ width:auto; text-align:left; } }
   .tktime.amber, .tktime.amber b{ color:var(--amberink); }
+  .brow.urgent, .tkrow.urgent{ background:#fdeef0; border-left:3px solid var(--red); padding-left:9px; }
+  .pri{ display:inline-block; font-size:9.5px; font-weight:700; letter-spacing:.04em; color:#fff;
+        background:var(--red); border-radius:6px; padding:2px 7px; margin-left:3px; white-space:nowrap; }
 
   .files{ display:flex; align-items:center; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid var(--line);
           font-family:'Geist Mono',ui-monospace,"SF Mono",Menlo,monospace; font-size:11.5px; color:var(--faint); flex-wrap:wrap; }
@@ -411,13 +414,23 @@ let batchCache=[];
 function previewBatch(week){ hideEdit(); hideBatch(); lastPreviewAt=''; post({action:'extract_preview', week: week||''}); }
 function batchAll(on){ document.querySelectorAll('.bchk').forEach(c=>c.checked=on); }
 function toggleB(i){ const el=document.getElementById('bbody'+i); if(el) el.hidden=!el.hidden; }
+function days3(dd){ const n=wlDays(dd); return n!==null && n>=0 && n<=3; }
+function isUrgent(e){ return days3(e.date||e.delivery_date) || !!e.loose_ballast; }
+function urgScore(e){ return (days3(e.date||e.delivery_date)?2:0)+(e.loose_ballast?1:0); }
+function priBadges(e){
+  return (e.loose_ballast?'<span class="pri">LOOSE BALLAST</span>':'')
+       + (days3(e.date||e.delivery_date)?'<span class="pri">&le;3 DAYS</span>':'');
+}
 function renderBatch(list){
   batchCache=list||[];
   document.getElementById('bcount').textContent = (list.length===1?'1 email':list.length+' emails');
-  document.getElementById('batchrows').innerHTML = list.map((e,i)=>
-    '<div style="padding:.5rem 0; border-bottom:1px solid var(--line); display:flex; gap:.55rem; align-items:center; flex-wrap:wrap;">'
+  const rows=(list||[]).map((e,i)=>({e,i}));
+  rows.sort((a,b)=>urgScore(b.e)-urgScore(a.e));   // priority (loose ballast / <=3 days) first
+  document.getElementById('batchrows').innerHTML = rows.map(({e,i})=>
+    '<div class="brow'+(isUrgent(e)?' urgent':'')+'" style="padding:.5rem; border-bottom:1px solid var(--line); display:flex; gap:.55rem; align-items:center; flex-wrap:wrap;">'
     + '<input type="checkbox" class="bchk" data-i="'+i+'" checked style="width:16px; height:16px;">'
     + '<span class="ord">'+esc((e.orders||[]).join(" / "))+'</span>'
+    + priBadges(e)
     + '<span class="sub" style="flex:1; min-width:140px;">'+esc(e.to||'(no recipient)')+' · '+esc(e.date||'')+(e.materials?' · '+esc(e.materials):'')+'</span>'
     + '<button class="btn mini" onclick="toggleB('+i+')">view</button>'
     + '<pre id="bbody'+i+'" hidden style="flex-basis:100%; white-space:pre-wrap; background:rgba(0,0,0,.045); padding:.6rem; margin:.35rem 0 0; font-size:.8rem; line-height:1.5; border-radius:6px;">'
@@ -635,7 +648,8 @@ async function loadTracker(){
       recs.length===1 ? '1 open order group' : recs.length+' open order groups';
     const host = document.getElementById('tracker');
     if(!recs.length){ host.innerHTML='<span class="hint">Nothing tracked yet — sent orders will appear here.</span>'; return; }
-    host.innerHTML = recs.map(r=>{
+    const sorted = recs.slice().sort((a,b)=>urgScore(b)-urgScore(a));   // <=3-day deliveries first
+    host.innerHTML = sorted.map(r=>{
       const emailed = !!r.emailed_at;
       const chased  = (r.chases||0) > 0;
       const reply   = !!r.reply_at;
@@ -647,10 +661,11 @@ async function loadTracker(){
       const pipe = '<div class="pipe">'+seg('done')+seg(b2)+seg(b3)+seg(b4)+'</div>';
       const status = sendoff?'Sent off':(ooo?'Out of office':(chased?('Chased ×'+r.chases):(reply?'Replied':'Awaiting reply')));
       const amber = (ooo||chased);
+      const u = days3(r.delivery_date);
       const mat = r.materials ? ' <span class="mat">· '+esc(r.materials)+'</span>' : '';
       const t = fmtDt(r.emailed_at);
-      return '<div class="tkrow">'
-        + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+'</div>'
+      return '<div class="tkrow'+(u?' urgent':'')+'">'
+        + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+(u?' <span class="pri">&le;3 DAYS</span>':'')+'</div>'
         + '<div class="sub">'+esc(r.to||'')+'</div>'
         + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\\''+encodeURIComponent(r.id||'')+'\\')">Booked via call</button>'
         + '</div>'

@@ -153,7 +153,10 @@ def main():
                 batch = []
             names = ", ".join(new_extracts[:2])
             if batch:
-                report("batch_ready", f"New extract arrived ({names}) - batch built, "
+                loose = [e for e in batch if e.get("loose_ballast")]
+                pri = ("PRIORITY - LOOSE BALLAST: "
+                       + "; ".join(" / ".join(e.get("orders", [])) for e in loose[:3]) + ". ") if loose else ""
+                report("batch_ready", pri + f"New extract arrived ({names}) - batch built, "
                        f"{len(batch)} email(s) to review, then send.", "", batch)
             else:
                 report("done", f"New extract arrived ({names}) - nothing new to email.")
