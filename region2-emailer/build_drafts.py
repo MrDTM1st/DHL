@@ -456,15 +456,12 @@ def _booked_ref(body):
 
 
 def _looks_booked(subject, body):
-    """True when this Sent item is your in-thread reply (RE:/FW:) that either has
-    a booking phrase OR a MAN reference (arranged with a haulier) in your own
-    text. Reserved for Sent Items only."""
-    subj = str(subject or "").strip().lower()
-    is_reply = any(subj.startswith(p) for p in _REPLY_PREFIXES)
+    """True when a Sent item is your booking confirmation: your typed text (above
+    any quoted original) has the booking phrase OR a MAN reference. You send these
+    as a FRESH email with the order number in the subject just as often as an
+    in-thread reply, so we do NOT require a RE:/FW: subject. Sent Items only."""
     top = _reply_top(body)
-    has_phrase = any(p in top for p in _BOOKED_PHRASES)
-    has_man = bool(_MAN_RE.search(top))
-    return is_reply and (has_phrase or has_man)
+    return any(p in top for p in _BOOKED_PHRASES) or bool(_MAN_RE.search(top))
 
 
 def _to_tracker_dt(when):
@@ -538,22 +535,30 @@ def find_already_emailed(ns, order_numbers, limit=500):
                 blob = subj + " " + body[:6000]
                 booked = (label == "Sent Items") and _looks_booked(subj, body)
                 ref = _booked_ref(body) if booked else ""
-                for o in (targets - found.keys()):
-                    if o in blob:
-                        try:
-                            when = (it.SentOn if label == "Sent Items"
-                                    else it.LastModificationTime).strftime("%d/%m/%Y %H:%M")
-                        except Exception:
-                            when = "?"
-                        found[o] = {"where": label, "when": when,
-                                    "to": str(getattr(it, "To", "") or "")[:40],
-                                    "booked": booked, "ref": ref,
-                                    "entryid": str(getattr(it, "EntryID", "") or "")}
+                eid = str(getattr(it, "EntryID", "") or "")
+                try:
+                    when = (it.SentOn if label == "Sent Items"
+                            else it.LastModificationTime).strftime("%d/%m/%Y %H:%M")
+                except Exception:
+                    when = "?"
+                to = str(getattr(it, "To", "") or "")[:40]
+                for o in targets:
+                    if o not in blob:
+                        continue
+                    if o not in found:
+                        found[o] = {"where": label, "when": when, "to": to,
+                                    "booked": booked, "ref": ref, "entryid": eid}
+                    elif booked and not found[o].get("booked"):
+                        # an EARLIER email booked this order in - upgrade the record so
+                        # a later chase/forward (scanned first, newest) can't mask it
+                        found[o].update(booked=True, ref=ref, entryid=eid,
+                                        where=label, when=when)
             except Exception:
                 pass
-            if len(found) == len(targets):
+            # stop early only once every order is found AND known booked
+            if len(found) == len(targets) and all(v.get("booked") for v in found.values()):
                 break
-        if len(found) == len(targets):
+        if len(found) == len(targets) and all(v.get("booked") for v in found.values()):
             break
     return found
 

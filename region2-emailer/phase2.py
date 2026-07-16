@@ -346,11 +346,13 @@ def check(ns=None):
                     briefs += 1
             except Exception as e:
                 r["sendoff_note"] = str(e)[:140]
-    # remove orders YOU'VE booked yourself - a "booked in" reply (incl. a MAN
-    # ref) in your Sent Items - so they stop being tracked and never get chased.
-    # This is the "if you see me say an order's booked, drop it" rule.
+    # remove orders YOU'VE booked yourself - your "this order has been arranged
+    # with ..." email (incl. a MAN ref) in Sent Items - so they stop being tracked
+    # and never get chased. This is the "if you say an order's booked, drop it"
+    # rule. Scan deep (1500): tracked orders can be weeks old, so their booking
+    # email sits well down the Sent Items list.
     all_orders = {o for r in d["records"] for o in r.get("orders", [])}
-    booked = bd.find_already_emailed(ns, all_orders) if all_orders else {}
+    booked = bd.find_already_emailed(ns, all_orders, limit=1500) if all_orders else {}
     before = len(d["records"])
     d["records"] = [r for r in d["records"]
                     if not (r.get("orders") and any(booked.get(o, {}).get("booked") for o in r["orders"]))]
