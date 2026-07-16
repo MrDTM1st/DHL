@@ -284,11 +284,12 @@ async function loadTracker(){
       + '<td>'+(r.materials||'')+'</td>'
       + '<td>'+(r.source||'')+'</td>'
       + '<td>'+(r.emailed_at||'')+(r.chases?'<span class="chip">+'+r.chases+'</span>':'')+'</td>'
+      + '<td>'+(r.delivery_date||'—')+'</td>'
       + '<td>'+(r.ooo_at?'<span class="chip">OOO</span>':(r.reply_at?'<span class="ok">yes</span>':'<span class="no">—</span>'))+'</td>'
       + '<td>'+(r.sendoff_ready?'<span class="ok">ready</span>':'<span class="no">—</span>')+'</td>'
       + '</tr>').join('');
     document.getElementById('tracker').innerHTML =
-      '<table class="tk"><thead><tr><th>Order(s)</th><th>To</th><th>Materials</th><th>Synergy upload</th><th>Emailed</th><th>Reply</th><th>Send-off</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      '<table class="tk"><thead><tr><th>Order(s)</th><th>To</th><th>Materials</th><th>Synergy upload</th><th>Emailed</th><th>Delivery</th><th>Reply</th><th>Send-off</th></tr></thead><tbody>'+rows+'</tbody></table>';
   }catch(e){}
 }
 setInterval(poll,1500); poll();

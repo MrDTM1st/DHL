@@ -157,7 +157,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .tkmeta .ord{ font-weight:600; font-size:13.5px; }
   .tkmeta .ord .mat{ color:var(--muted); font-weight:450; }
   .tkmeta .sub{ color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
-  .pipe{ flex:1; display:flex; align-items:center; gap:5px; min-width:0; }
+  .pipewrap{ flex:1; display:flex; flex-direction:column; gap:5px; min-width:0; }
+  .pipe{ width:100%; display:flex; align-items:center; gap:5px; min-width:0; }
+  .pipecap{ font-family:'Geist Mono',ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted); text-align:center; letter-spacing:.02em; }
   .seg{ flex:1; height:5px; border-radius:99px; background:var(--seg); min-width:12px; }
   .seg.done{ background:var(--go); }
   .seg.chased{ background:var(--amber); }
@@ -388,6 +390,11 @@ function fmtDt(s){
   if(!s) return '';
   const m = String(s).match(/(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}:\\d{2})/);
   return m ? m[3]+'/'+m[2]+' '+m[4] : String(s);
+}
+function fmtDate(s){
+  if(!s) return '';
+  const m = String(s).match(/(\\d{4})-(\\d{2})-(\\d{2})/);
+  return m ? m[3]+'/'+m[2] : String(s);
 }
 function fsize(n){ return n>1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB'; }
 function key(){ return localStorage.getItem('r2key')||''; }
@@ -663,14 +670,15 @@ async function loadTracker(){
       const amber = (ooo||chased);
       const u = days3(r.delivery_date);
       const mat = r.materials ? ' <span class="mat">· '+esc(r.materials)+'</span>' : '';
-      const t = fmtDt(r.emailed_at);
+      const emailedCap = r.emailed_at ? '1st emailed '+esc(fmtDate(r.emailed_at)) : '';
+      const due = r.delivery_date ? 'Due '+esc(r.delivery_date) : '';
       return '<div class="tkrow'+(u?' urgent':'')+'">'
         + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+(u?' <span class="pri">&le;3 DAYS</span>':'')+'</div>'
         + '<div class="sub">'+esc(r.to||'')+'</div>'
         + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\\''+encodeURIComponent(r.id||'')+'\\')">Booked via call</button>'
         + '</div>'
-        + pipe
-        + '<div class="tktime'+(amber?' amber':'')+'"><b>'+esc(status)+'</b><br>'+esc(t)+'</div>'
+        + '<div class="pipewrap">'+pipe+'<div class="pipecap">'+emailedCap+'</div></div>'
+        + '<div class="tktime'+(amber?' amber':'')+'"><b>'+esc(status)+'</b><br>'+due+'</div>'
         + '</div>';
     }).join('');
   }catch(e){}
