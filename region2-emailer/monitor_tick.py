@@ -83,7 +83,8 @@ def _folders(ns):
     inbox = bd.sub(dhl, "Inbox")
     adhoc = bd.sub(inbox, "ADHOC") if inbox else None
     syn = bd.sub(adhoc, "Synergy Upload") if adhoc else None
-    return inbox, syn
+    sent = bd.sub(dhl, "Sent Items")
+    return inbox, syn, sent
 
 
 def _scan(folder, limit):
@@ -93,7 +94,10 @@ def _scan(folder, limit):
     try:
         items.Sort("[ReceivedTime]", True)
     except Exception:
-        pass
+        try:
+            items.Sort("[SentOn]", True)
+        except Exception:
+            pass
     n = 0
     for it in items:
         n += 1
@@ -101,7 +105,14 @@ def _scan(folder, limit):
             break
         try:
             atts = [str(it.Attachments.Item(j).FileName) for j in range(1, it.Attachments.Count + 1)]
-            rt = it.ReceivedTime
+            rt = None
+            for attr in ("ReceivedTime", "SentOn", "LastModificationTime"):   # inbox vs sent
+                v = getattr(it, attr, None)
+                if v is not None and 1990 < getattr(v, "year", 0) < 2100:
+                    rt = v
+                    break
+            if rt is None:
+                continue
             riso = datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute).isoformat()
             yield (str(it.EntryID), str(it.Subject or ""), riso, atts)
         except Exception:
@@ -114,17 +125,18 @@ def main():
         ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     except Exception:
         return
-    inbox, syn = _folders(ns)
+    inbox, syn, sent = _folders(ns)
     state = _load()
     seed = state is None
     if seed:
-        state = {"ext_ids": [], "adhoc_ids": [], "inbox_hwm": "", "last_phase2": 0}
+        state = {"ext_ids": [], "adhoc_ids": [], "inbox_hwm": "", "sent_hwm": "", "last_phase2": 0}
     ext_ids = set(state.get("ext_ids", []))
     adhoc_ids = set(state.get("adhoc_ids", []))
-    hwm = state.get("inbox_hwm", "")
+    inbox_hwm = state.get("inbox_hwm", "")
+    sent_hwm = state.get("sent_hwm", "")
 
     new_extracts, new_adhocs, new_mail = [], [], False
-    new_hwm = hwm
+    new_inbox_hwm, new_sent_hwm = inbox_hwm, sent_hwm
     for folder in (inbox, syn):
         for eid, subj, riso, atts in _scan(folder, 80):
             for fn in atts:
@@ -139,9 +151,16 @@ def main():
                     adhoc_ids.add(eid)
                     new_adhocs.append(fn)
     for eid, subj, riso, atts in _scan(inbox, 40):
-        if riso > new_hwm:
-            new_hwm = riso
-        if hwm and riso > hwm:
+        if riso > new_inbox_hwm:
+            new_inbox_hwm = riso
+        if inbox_hwm and riso > inbox_hwm:
+            new_mail = True
+    # ALSO watch Sent Items: when YOU send a "booked in" message, phase2 check's
+    # booked-sweep runs live and drops that order from the tracker (never chased).
+    for eid, subj, riso, atts in _scan(sent, 40):
+        if riso > new_sent_hwm:
+            new_sent_hwm = riso
+        if sent_hwm and riso > sent_hwm:
             new_mail = True
 
     if not seed:
@@ -171,7 +190,8 @@ def main():
 
     state["ext_ids"] = list(ext_ids)[-500:]
     state["adhoc_ids"] = list(adhoc_ids)[-500:]
-    state["inbox_hwm"] = new_hwm
+    state["inbox_hwm"] = new_inbox_hwm
+    state["sent_hwm"] = new_sent_hwm
     _save(state)
 
 

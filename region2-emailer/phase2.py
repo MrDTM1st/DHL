@@ -346,10 +346,20 @@ def check(ns=None):
                     briefs += 1
             except Exception as e:
                 r["sendoff_note"] = str(e)[:140]
+    # remove orders YOU'VE booked yourself - a "booked in" reply (incl. a MAN
+    # ref) in your Sent Items - so they stop being tracked and never get chased.
+    # This is the "if you see me say an order's booked, drop it" rule.
+    all_orders = {o for r in d["records"] for o in r.get("orders", [])}
+    booked = bd.find_already_emailed(ns, all_orders) if all_orders else {}
+    before = len(d["records"])
+    d["records"] = [r for r in d["records"]
+                    if not (r.get("orders") and any(booked.get(o, {}).get("booked") for o in r["orders"]))]
+    booked_removed = before - len(d["records"])
     removed = tracker.drop_completed(d)   # completed orders leave the tracker
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
-          f"{briefs} send-off draft(s) created, {removed} completed order(s) removed.")
+          f"{briefs} send-off draft(s) created, {booked_removed} booked-by-you removed, "
+          f"{removed} completed order(s) removed.")
     return replies, ooo, briefs
 
 
