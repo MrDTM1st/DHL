@@ -197,6 +197,27 @@ def firstname(s):
             return local.capitalize()
     return ""
 
+_NUMERIC_CODE = re.compile(r"^[\d/\-.\s]+$")   # e.g. 0057/063740/0035 - internal ref, no words
+
+def _has_words(v):
+    """True if the value reads as words a recipient can understand (has letters
+    and isn't just a slash-separated number like 0057/063740/0035)."""
+    s = clean(v)
+    return bool(re.search(r"[A-Za-z]", s)) and not _NUMERIC_CODE.match(s)
+
+def readable_product(prod, prod_code):
+    """The product wording a recipient can actually place (e.g. 'RAIL SHORT,
+    56E1, 260 GRADE, 18.288M, UNDRILLED'), never the internal numeric ref. The
+    Synergy extract keeps the words in Product/Service Code; BS batch files keep
+    them in Product/Description - so pick whichever of the two reads as words
+    rather than trusting a fixed column."""
+    a, b = clean(prod), clean(prod_code)
+    if _has_words(a) and not _has_words(b):
+        return a
+    if _has_words(b) and not _has_words(a):
+        return b
+    return a or b   # both or neither look like words - keep the primary column
+
 def base_order(o):
     return str(o).split("-")[0]
 
@@ -823,7 +844,10 @@ def build_emails_multi(files):
         r0, C0, _ = bundle[0]
         orders = sorted(set(base_order(r[C["order"]]) for r, C, _ in bundle))
         subject = f"{' / '.join(orders)} {clean(r0[C0['daddr']])} {dpc}"
-        items = [(r[C["qty"]], clean(r[C["prod"]])) for r, C, _ in bundle]
+        items = [(r[C["qty"]], readable_product(
+                    r[C["prod"]],
+                    r[C["prod_code"]] if C.get("prod_code") is not None else ""))
+                 for r, C, _ in bundle]
         ptypes = {product_type(d) for _, d in items}
         ballast_bags = sum(_qty(q) for q, d in items if product_type(d) == "ballast")
         nm = firstname(r0[C0['dcon']])
@@ -852,10 +876,12 @@ def build_emails_multi(files):
             clines, seenl = [], set()
             for r, C, _ in bundle:
                 o = base_order(r[C["order"]])
-                # the readable product DESCRIPTION (Product / Service Code column,
-                # e.g. "LID FOR C/1/23TTRW") - NOT the numeric identifier in the
-                # Product / Description column, which means nothing to the supplier.
-                desc = clean(r[C["prod"]]) if C.get("prod") is not None else ""
+                # the readable product DESCRIPTION (e.g. "LID FOR C/1/23TTRW") -
+                # NOT the numeric identifier, which means nothing to the supplier.
+                # readable_product picks the words column whichever file it's from.
+                desc = readable_product(
+                    r[C["prod"]] if C.get("prod") is not None else "",
+                    r[C["prod_code"]] if C.get("prod_code") is not None else "")
                 hs = _hs_number(r[C["instr"]]) if C.get("instr") is not None else ""
                 if (o, desc, hs) not in seenl:
                     seenl.add((o, desc, hs))
