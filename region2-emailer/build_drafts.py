@@ -122,11 +122,13 @@ def _bodies(name, items, dd):
         line_h = (f"I've got the following available on {dd}:<br><br>"
                   + "".join(f"&nbsp;&nbsp;&nbsp;&nbsp;{q}x {_html.escape(pr)}<br>" for q, pr in items)
                   + f"<br>{ask}")
-    message = f"Hi {name},\n\n{line_t}\n\n{QUESTIONS}"
+    greet = f"Hi {name}," if name else "Hi,"
+    greet_h = f"Hi {_html.escape(name)}," if name else "Hi,"
+    message = f"{greet}\n\n{line_t}\n\n{QUESTIONS}"
     text = f"{message}\n\n\n{SIGNATURE}"
     q_html = _html.escape(QUESTIONS).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
     html = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
-            f"Hi {_html.escape(name)},<br><br>{line_h}<br><br>{q_html}<br><br>{SIGNATURE_HTML}</div>")
+            f"{greet_h}<br><br>{line_h}<br><br>{q_html}<br><br>{SIGNATURE_HTML}</div>")
     return text, html, message
 
 
@@ -161,9 +163,39 @@ def email_of(s):
     m = re.search(r"[\w.\-+]+@[\w.\-]+", str(s or ""))
     return m.group(0) if m else None
 
+# leading words that are never a real first name - free-text notes ("This order
+# ..."), stop-words, or generic mailboxes. When the contact field starts with one
+# of these we greet from the email address instead ("Hi Anthony," not "Hi This,").
+_NON_NAMES = {
+    "this", "that", "these", "the", "to", "dear", "hi", "hello", "team", "and",
+    "for", "with", "tbc", "na", "none", "nil", "site", "contact", "delivery",
+    "order", "email", "info", "admin", "enquiries", "sales", "transport",
+    "depot", "office", "logistics", "planner", "yard",
+}
+
+def _plausible_name(tok):
+    """A token that could actually be someone's first name: letters only (no @,
+    digits or punctuation), at least two chars, not a stop-word/mailbox word."""
+    t = str(tok or "").strip().lower()
+    return t.isalpha() and len(t) >= 2 and t not in _NON_NAMES
+
 def firstname(s):
-    nm = re.split(r"\s+email:", str(s or ""))[0].strip()
-    return nm.split()[0].capitalize() if nm else ""
+    """First name for the greeting. Prefer a real name from the contact field;
+    if its leading word isn't a plausible name (free-text like 'This order...',
+    a stop-word, an address/number, or a single letter) fall back to the email
+    local part (anthony.clay -> Anthony). Empty when nothing usable, so the
+    greeting falls back to a plain 'Hi,'."""
+    field = str(s or "")
+    nm = re.split(r"\s+email:", field)[0].strip()
+    parts = nm.split()
+    if parts and _plausible_name(parts[0]):
+        return parts[0].capitalize()
+    em = email_of(field)
+    if em:
+        local = re.split(r"[._\-+]", em.split("@")[0])[0]
+        if _plausible_name(local):
+            return local.capitalize()
+    return ""
 
 def base_order(o):
     return str(o).split("-")[0]

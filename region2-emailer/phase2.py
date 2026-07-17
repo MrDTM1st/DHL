@@ -420,7 +420,8 @@ def _send_chase(ns, record):
         return False
     e = emails[0]
     original = e["message"].split("\n\n", 1)[-1]
-    e["message"] = f"Hi {e['name']},\n\nCan I please get a reply to the below?\n\n{original}"
+    greet = f"Hi {e['name']}," if e.get("name") else "Hi,"
+    e["message"] = f"{greet}\n\nCan I please get a reply to the below?\n\n{original}"
     e["html"] = bd.html_from_message(e["message"])
     e["cc"] = ""
     return send_order.send_emails(ns, [e]) > 0   # send_emails -> tracker.log bumps chases
