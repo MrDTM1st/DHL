@@ -5,9 +5,10 @@ For every order the tool has emailed (tracker status 'sent'):
   * find the customer's reply in the DHL inbox
   * if it's an out-of-office / auto-reply -> FLAG it (your cue to chase someone
     else), do NOT count it as a real reply
-  * if it's a genuine reply -> mark replied AND draft the send-off brief into
-    Region 2 > Send Out, pre-filled from the extract with the reply quoted and
-    the from-their-reply fields marked [CHECK] so nothing is ever guessed.
+  * if it's a genuine reply -> parse the delivery details out of it
+    (delivery_details) onto the tracker record, AND draft the send-off brief
+    into Region 2 > Send Out - a haulier-ready email with the answers in bold
+    and the signature attached.
 
 Plus 2-business-day chasers (weekends + England/Wales bank holidays skipped).
 Sending chasers is opt-in: preview by default; only sends when told to.
@@ -17,9 +18,11 @@ Sending chasers is opt-in: preview by default; only sends when told to.
     python phase2.py chase send     # actually send the chasers
 """
 import os, re, sys
+import html as _html
 from datetime import datetime, date, timedelta
 import win32com.client
 import build_drafts as bd
+import delivery_details as dd
 import order_index
 import send_order
 import tracker
@@ -193,6 +196,64 @@ def _answer(body, *fragments):
     return None
 
 
+def product_type_of(record):
+    """rails / ballast / sleepers - drives the Moffett lean and the PTS chase."""
+    blob = " ".join([record.get("materials", "")] + list(record.get("product_codes") or []))
+    return bd.product_type(blob)
+
+
+_OFFLOAD_WORDS = {"HIAB": "HIAB", "MOFFETT": "Moffett", "SITE/NONE": "Site offloads - none needed",
+                  "BOTH": "HIAB or Moffett"}
+
+
+def brief_lines(record, det, coll="", deliv="", cdate="", mats=""):
+    """The haulier brief as (label, value) pairs, built from the PARSED reply.
+    A field we don't have is simply left out - no [CHECK] placeholders."""
+    date_v = (det.get("date") or {}).get("value") or ""
+    lo = (det.get("time") or {}).get("earliest") or ""
+    hi = (det.get("time") or {}).get("latest") or ""
+    when = " ".join(x for x in (date_v, f"{lo} - {hi}" if lo and hi else lo) if x).strip()
+
+    acc = []
+    a = (det.get("artic_access") or {}).get("value")
+    veh = (det.get("vehicle") or {}).get("value")
+    if a == "yes":
+        acc.append("artics can access")
+    elif a == "no":
+        acc.append("no artics" + (f" - {veh} required" if veh else " - smaller vehicle required"))
+    if (det.get("rear_steer") or {}).get("value") == "yes":
+        acc.append("rear steer required")
+
+    c = det.get("contact") or {}
+    contact = " ".join(x for x in (c.get("name"), c.get("phone")) if x)
+    pts = (det.get("pts") or {}).get("value")
+    return [
+        ("Order", " / ".join(record.get("orders", []))),
+        ("Collection", coll),
+        ("Delivery", deliv),
+        ("Collection date/time", cdate),
+        ("Delivery date/time", when),
+        ("Materials", mats or record.get("materials", "")),
+        ("Vehicle", veh or "(leave with me)"),
+        ("Offloading", _OFFLOAD_WORDS.get((det.get("offloading") or {}).get("value"), "")),
+        ("Site access", ", ".join(acc)),
+        ("Site contact", contact),
+        ("What3Words", (det.get("what3words") or {}).get("value") or ""),
+        ("PTS", {"yes": "Yes - required", "no": "Not required"}.get(pts, "")),
+        ("Notes", (det.get("notes") or {}).get("value") or ""),
+    ]
+
+
+def brief_html(lines):
+    """Haulier-ready: the answers in bold so they're easy to scan, then the
+    signature. Blank fields are dropped rather than printed empty."""
+    body = "".join(f"{_html.escape(k)}: <b>{_html.escape(str(v))}</b><br>"
+                   for k, v in lines if str(v).strip())
+    return ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
+            "Hi,<br><br>Would you be able to cover the job below;<br><br>"
+            f"{body}<br>{bd.SIGNATURE_HTML}</div>")
+
+
 def build_brief(ns, record, reply_item):
     order = record["orders"][0]
     tmp = os.path.join(bd.HERE, "_brief.xlsx")
@@ -220,27 +281,14 @@ def build_brief(ns, record, reply_item):
         reply_body = str(reply_item.Body or "")
     except Exception:
         reply_body = ""
-    d_ans = _answer(reply_body, "date and time of delivery", "delivery date")
-    o_ans = _answer(reply_body, "own offloading", "hiab or moffet", "offloading")
-    deliv_dt = d_ans if d_ans else "[CHECK - from their reply below]"
-    offload = o_ans if o_ans else "[CHECK - from their reply below]"
-
-    brief = (
-        f"Order: {' / '.join(record['orders'])}\n"
-        f"Collection: {coll}\n"
-        f"Delivery: {deliv}\n"
-        f"Collection date/time: {cdate}\n"
-        f"Delivery date/time: {deliv_dt}\n"
-        f"Materials: {mats}\n"
-        f"Vehicle: (leave with me)\n"
-        f"Offloading: {offload}\n"
-        f"\n--- their reply {'-' * 40}\n{reply_body[:3000]}\n"
-    )
+    det = record.get("details") or dd.parse_reply(reply_body, product_type=product_type_of(record))
+    lines = brief_lines(record, det, coll, deliv, cdate, mats)
 
     outlook = win32com.client.Dispatch("Outlook.Application")
     m = outlook.CreateItem(0)
     m.Subject = "SEND OUT: " + " / ".join(record["orders"]) + " " + record.get("site", "")
-    m.Body = brief
+    bd._attach_qr(m)                      # inline QR used by the signature
+    m.HTMLBody = brief_html(lines)        # answers in bold + your signature
     acct = send_order.dhl_account(ns)
     if acct is not None:
         send_order.bind_account(m, acct)
@@ -338,6 +386,14 @@ def check(ns=None):
         else:
             r["reply_at"] = tracker._now()
             replies += 1
+            # parse their answers into the structured fields CTMS needs, so the
+            # brief is pre-filled and the chaser can ask for ONLY what's missing
+            try:
+                pt = product_type_of(r)
+                r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt)
+                r["missing"] = dd.missing(r["details"], pt)
+            except Exception as e:
+                r["details_note"] = str(e)[:140]
             if r.get("kind") == "collection":
                 continue   # supplier replied with collection details - no delivery send-off brief
             try:
@@ -368,7 +424,11 @@ def check(ns=None):
 def _due_for_chase(r):
     if r.get("status") != "sent":
         return False
-    if r.get("reply_at") or r.get("ooo_at"):
+    if r.get("ooo_at"):
+        return False
+    # a reply only closes it if it actually answered everything - a PARTIAL
+    # reply still gets chased, but only for the fields it left blank
+    if r.get("reply_at") and not r.get("missing"):
         return False
     if r.get("chases", 0) >= MAX_CHASES:
         return False
@@ -421,7 +481,14 @@ def _send_chase(ns, record):
     e = emails[0]
     original = e["message"].split("\n\n", 1)[-1]
     greet = f"Hi {e['name']}," if e.get("name") else "Hi,"
-    e["message"] = f"{greet}\n\nCan I please get a reply to the below?\n\n{original}"
+    # if they replied but left gaps, ask for EXACTLY those - not "any update?"
+    miss = record.get("missing") or []
+    if miss and record.get("reply_at"):
+        need = miss[0] if len(miss) == 1 else ", ".join(miss[:-1]) + " and " + miss[-1]
+        ask = f"Thanks for coming back to me - I just need the {need} and I can get this booked."
+    else:
+        ask = "Can I please get a reply to the below?"
+    e["message"] = f"{greet}\n\n{ask}\n\n{original}"
     e["html"] = bd.html_from_message(e["message"])
     e["cc"] = ""
     return send_order.send_emails(ns, [e]) > 0   # send_emails -> tracker.log bumps chases
@@ -457,8 +524,40 @@ def run_chasers(ns=None, send=False):
     return out
 
 
+def learn_detail(rec_id, field, value):
+    """Confirm/correct one parsed field. The wording that produced it is
+    remembered, so the same phrasing is never guessed again."""
+    d = tracker.load()
+    for r in d["records"]:
+        if r.get("id") != rec_id:
+            continue
+        det = r.get("details") or {}
+        cell = det.get(field)
+        if not isinstance(cell, dict):
+            return f"no parsed '{field}' on {rec_id}"
+        raw = cell.get("raw") or ""
+        if raw:
+            dd.learn(field, raw, value)          # phrase -> value, permanently
+        if field == "contact":
+            cell["name"] = value
+        elif field == "time":
+            cell["earliest"] = value
+        else:
+            cell["value"] = value
+        cell["confidence"] = dd.HIGH
+        r["missing"] = dd.missing(det, product_type_of(r))
+        tracker.save(d)
+        return f"learned {field}={value!r} for {rec_id} (from {raw[:40]!r})"
+    return f"record {rec_id} not found"
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
+    if cmd == "learn":                     # no Outlook needed - pure tracker edit
+        if len(sys.argv) < 5:
+            print("usage: phase2.py learn <record id> <field> <value>"); return
+        print(learn_detail(sys.argv[2], sys.argv[3], " ".join(sys.argv[4:])))
+        return
     ns = bd.get_ns()
     if cmd == "check":
         check(ns)
@@ -468,7 +567,7 @@ def main():
         check(ns)
         run_chasers(ns, send=False)
     else:
-        print("usage: phase2.py check | chase [send] | all")
+        print("usage: phase2.py check | chase [send] | all | learn <id> <field> <value>")
 
 
 if __name__ == "__main__":

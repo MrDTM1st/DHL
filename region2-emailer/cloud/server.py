@@ -147,8 +147,15 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .tkhd{ display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:14px; flex-wrap:wrap; }
   .tkhd .lbl{ margin-bottom:0; font-size:15px; text-transform:none; letter-spacing:-.01em; color:var(--text); font-weight:650; }
   .tkrows{ display:flex; flex-direction:column; gap:0; }
-  .tkrow{ border-bottom:1px solid var(--line); padding:13px 2px; display:flex; align-items:center; gap:20px; }
-  .tkrow:last-child{ border-bottom:none; }
+  .tkitem{ border-bottom:1px solid var(--line); }
+  .tkitem:last-child{ border-bottom:none; }
+  .tkrow{ padding:13px 2px 6px 2px; display:flex; align-items:center; gap:20px; }
+  .tkdet{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 2px 12px 2px; }
+  .dchip{ font-size:11px; padding:3px 8px; border-radius:99px; background:var(--seg); color:var(--muted); }
+  .dchip b{ color:var(--ink); font-weight:600; }
+  .dchip.amber{ background:#fff4e5; color:var(--amberink); }
+  .dchip a{ text-decoration:none; margin-left:5px; font-weight:700; }
+  .dmiss{ font-size:11px; color:var(--red); font-weight:600; }
   @media (max-width:760px){ .tkrow{ flex-direction:column; align-items:stretch; gap:.8rem; } }
   .tkmeta{ width:270px; flex:none; }
   @media (max-width:760px){ .tkmeta{ width:auto; } }
@@ -647,6 +654,42 @@ function runChasers(){
   post({action:'run_chasers'});
 }
 function seg(state){ return '<span class="seg '+state+'"></span>'; }
+// parsed delivery details - amber ones carry a one-click confirm that teaches it
+const DFIELDS=[['date','Date'],['time','Time'],['offloading','Offload'],['artic_access','Artic'],
+               ['rear_steer','Rear steer'],['vehicle','Vehicle'],['pts','PTS'],
+               ['what3words','W3W'],['contact','Contact']];
+function detVal(k,v){
+  if(!v) return '';
+  if(k==='time') return v.earliest ? (v.latest ? v.earliest+'-'+v.latest : v.earliest) : '';
+  if(k==='contact') return [v.name,v.phone].filter(Boolean).join(' ');
+  return v.value||'';
+}
+function detChips(r){
+  const d=r.details; let out='';
+  if(d){
+    out = DFIELDS.map(function(p){
+      const k=p[0], v=d[k], val=detVal(k,v);
+      if(!val) return '';
+      const amb = v && v.confidence==='amber';
+      const id=encodeURIComponent(r.id||''), ev=encodeURIComponent(val);
+      let s='<span class="dchip'+(amb?' amber':'')+'">'+esc(p[1])+': <b>'+esc(val)+'</b>';
+      if(amb){
+        s+=' <a href="#" title="Correct" onclick="confirmDetail(\\''+id+'\\',\\''+k+'\\',\\''+ev+'\\',1);return false">&#10003;</a>';
+        s+='<a href="#" title="Fix" onclick="confirmDetail(\\''+id+'\\',\\''+k+'\\',\\''+ev+'\\',0);return false">&#9998;</a>';
+      }
+      return s+'</span>';
+    }).join('');
+  }
+  const miss=r.missing||[];
+  if(miss.length) out+='<span class="dmiss">still needed: '+esc(miss.join(', '))+'</span>';
+  return out ? '<div class="tkdet">'+out+'</div>' : '';
+}
+function confirmDetail(encId, field, encVal, asIs){
+  let v=decodeURIComponent(encVal);
+  if(!asIs){ const nv=prompt('Correct value for '+field+':', v); if(nv===null||!nv.trim()) return; v=nv.trim(); }
+  post({action:'learn_detail', id:decodeURIComponent(encId), field:field, value:v});
+  setTimeout(loadTracker, 1800);
+}
 async function loadTracker(){
   try{
     const d = await (await api('/api/tracker')).json();
@@ -672,14 +715,14 @@ async function loadTracker(){
       const mat = r.materials ? ' <span class="mat">· '+esc(r.materials)+'</span>' : '';
       const emailedCap = r.emailed_at ? '1st emailed '+esc(fmtDate(r.emailed_at)) : '';
       const due = r.delivery_date ? 'Due '+esc(r.delivery_date) : '';
-      return '<div class="tkrow'+(u?' urgent':'')+'">'
+      return '<div class="tkitem"><div class="tkrow'+(u?' urgent':'')+'">'
         + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+(u?' <span class="pri">&le;3 DAYS</span>':'')+'</div>'
         + '<div class="sub">'+esc(r.to||'')+'</div>'
         + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\\''+encodeURIComponent(r.id||'')+'\\')">Booked via call</button>'
         + '</div>'
         + '<div class="pipewrap">'+pipe+'<div class="pipecap">'+emailedCap+'</div></div>'
         + '<div class="tktime'+(amber?' amber':'')+'"><b>'+esc(status)+'</b><br>'+due+'</div>'
-        + '</div>';
+        + '</div>' + detChips(r) + '</div>';
     }).join('');
   }catch(e){}
 }

@@ -236,6 +236,15 @@ def main():
                 except Exception:
                     pass
                 report("done", "Batch sent from your DHL account.", tail(out, 12))
+            elif action == "learn_detail":
+                # one-click confirm/correct of a parsed delivery detail - the
+                # wording is remembered so it's never guessed again
+                rid = str(cmd.get("id") or "")
+                fld = str(cmd.get("field") or "")
+                val = str(cmd.get("value") or "")
+                out = run(["phase2.py", "learn", rid, fld, val])
+                push_tracker()
+                report("done", f"Noted — {fld} = {val}. I'll remember that wording.", tail(out, 6))
             elif action == "rail_plan":
                 mode = (cmd.get("mode") or "preview").lower()
                 week = (cmd.get("week") or "next").strip().lower()

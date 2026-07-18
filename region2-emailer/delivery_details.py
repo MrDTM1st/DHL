@@ -338,13 +338,25 @@ def parse_w3w(text):
 
 
 _PHONE = re.compile(r"(?:\+44|0)\s*\d[\d\s]{8,14}")
+# leading words that aren't part of a name: "contact delivery will be darren..."
+_FILLER = re.compile(
+    r"^\W*(?:the|a|our|site|delivery|for|on|is|are|will\s+be|contacts?|person|name|"
+    r"alternative|alt|please|to|of)\b\W*", re.I)
+
+
+def _strip_filler(s):
+    prev = None
+    while s and s != prev:
+        prev = s
+        s = _FILLER.sub("", s).strip()
+    return s
 
 
 def parse_contact(text):
     s = _clean(text)
     ph = _PHONE.search(s)
     phone = re.sub(r"\s+", "", ph.group(0)) if ph else None
-    name = _clean(s[:ph.start()] if ph else s).strip(" -,:")
+    name = _strip_filler(_clean(s[:ph.start()] if ph else s).strip(" -,:"))
     return (name or None), phone, (HIGH if (name and phone) else AMBER)
 
 
@@ -369,6 +381,49 @@ _PROMPT_STRIP = [r"^\([^)]*\)\s*", r"^hiab\s*(?:/|or)\s*moff\w*\s*\??\s*",
                  r"^\(?can an? art?ic[^?]*\?\s*"]   # moff\w* covers moffett/moffatt/moffit
 
 
+_QUOTE_MARKERS = ("-----original message-----", "\nfrom:", "\nsent:", "________",
+                  " wrote:", "on behalf of")
+
+
+def _top(body):
+    """Just the text they typed, above any quoted original."""
+    s = str(body or "")
+    low, cut = s.lower(), len(s)
+    for mk in _QUOTE_MARKERS:
+        i = low.find(mk)
+        if 0 <= i < cut:
+            cut = i
+    return s[:cut]
+
+
+def _prose(body):
+    """Plenty of people ignore the template and just write it out ("hiab will be
+    required / arctics can access site / no pts required"). Find each field in
+    the prose so those replies aren't a total miss."""
+    t = _top(body)
+    out = {}
+    for line in re.split(r"[\n;]", t):
+        l = line.strip()
+        low = l.lower()
+        if not low:
+            continue
+        if "offload" in low or "hiab" in low or "moff" in low:
+            out.setdefault("offload", l)
+        if re.search(r"ar[c]?tic", low):
+            out.setdefault("artic", l)
+        if "rear steer" in low:
+            out.setdefault("rear", l)
+        if re.search(r"\bpts\b", low):
+            out.setdefault("pts", l)
+        if "what3words" in low or "w3w" in low or "///" in low:
+            out.setdefault("w3w", l)
+        if _PHONE.search(l):
+            key = "altcontact" if re.search(r"alternat|\balt\b|second|backup", low) else "contact"
+            out.setdefault(key, l)
+    out.setdefault("datetime", t)     # dates/times hunted across the whole reply
+    return out
+
+
 def extract_fields(body):
     """Pull the labelled values out of either template format."""
     out = {}
@@ -387,7 +442,10 @@ def extract_fields(body):
 def parse_reply(body, product_type=None, consolidatable=None):
     """Free-text reply -> the structured details CTMS needs, each with a
     confidence. AMBER fields are the ones to put in front of Delali."""
-    f = extract_fields(body)
+    labelled = extract_fields(body)
+    prose = _prose(body)
+    f = {k: (labelled.get(k) or prose.get(k) or "")            # template wins, prose fills gaps
+         for k in set(labelled) | set(prose)}
     whole = str(body or "")
     d = {}
 
@@ -410,7 +468,9 @@ def parse_reply(body, product_type=None, consolidatable=None):
         a, r, veh, aconf = parse_access(f["access"])
     else:
         a = _yesno(f.get("artic", "")) if f.get("artic") else None
-        r = _yesno(f.get("rear", "")) if f.get("rear") else None
+        rtxt = f.get("rear", "")
+        # "rear steer required" has no yes/no in it - naming it at all means needed
+        r = (_yesno(rtxt) or ("yes" if "rear steer" in rtxt.lower() else None)) if rtxt else None
         veh = None
         mv = re.search(r"\b(rigid|18\s*t|7\.5\s*t)", f.get("artic", ""), re.I)
         if mv:
