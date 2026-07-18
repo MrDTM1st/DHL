@@ -181,6 +181,7 @@ def main():
     last_index = time.time()
     last_check = 0            # reply check runs soon after start, then every 20 min
     last_chase = time.time()  # auto-chase (opt-in) only after the first interval
+    last_recover = 0.0        # daily untracked-order recovery (runs on first tick)
     last_waitscan = 0         # capture far-ahead orders onto the wait list (soon, then every 12h)
     last_release = 0          # auto-send due wait-list emails (soon after start, then every 3h)
     while True:
@@ -451,7 +452,11 @@ def main():
                 pass
             last_check = time.time()
         # Auto-chasers are OPT-IN: only run when auto_chase.enabled exists.
-        if (os.path.exists(os.path.join(HERE, "auto_chase.enabled"))
+        # ONLY the local agent chases. Both agents used to fire this, so every
+        # contact got the same chaser twice a second apart (phase2 also holds a
+        # lock now, but don't even start the second one).
+        if (BASE.startswith("http://127.0.0.1")
+                and os.path.exists(os.path.join(HERE, "auto_chase.enabled"))
                 and time.time() - last_chase > 10800):     # every 3h
             try:
                 subprocess.Popen([sys.executable, "phase2.py", "chase", "send"],
@@ -459,6 +464,21 @@ def main():
             except Exception:
                 pass
             last_chase = time.time()
+        # Daily safety net: re-enrol anything emailed but missing from the
+        # tracker (wait-list sends, orders emailed by hand). Slow, so it runs
+        # detached on the local agent only and never blocks a check.
+        # OPT-IN via auto_recover.enabled until it's proven on real data - it
+        # writes to the tracker, and a bad enrolment means chasing the wrong
+        # person. Run `phase2.py recover` by hand to try it first.
+        if (BASE.startswith("http://127.0.0.1")
+                and os.path.exists(os.path.join(HERE, "auto_recover.enabled"))
+                and time.time() - last_recover > 86400):
+            try:
+                subprocess.Popen([sys.executable, "phase2.py", "recover"],
+                                 cwd=HERE, creationflags=0x08000000)
+            except Exception:
+                pass
+            last_recover = time.time()
         time.sleep(POLL_SECONDS)
 
 

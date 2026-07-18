@@ -196,6 +196,141 @@ def _answer(body, *fragments):
     return None
 
 
+def repair_materials():
+    """Records built from a BS extract before the column fix stored the NUMERIC
+    code as their materials ("6x 0057/063740/0009") instead of the wording. The
+    readable description is already sitting in product_codes, so swap it in."""
+    d = tracker.load()
+    fixed = 0
+    for r in d["records"]:
+        mats = str(r.get("materials") or "")
+        m = re.match(r"^\s*(\d+)\s*x\s*(.+)$", mats)
+        if not m or bd._has_words(m.group(2)):
+            continue                       # already readable - leave it alone
+        words = next((c for c in (r.get("product_codes") or []) if bd._has_words(c)), None)
+        if not words:
+            continue
+        r["materials"] = f"{m.group(1)}x {bd.clean(words)}"
+        fixed += 1
+    if fixed:
+        tracker.save(d)
+    return fixed
+
+
+_ORDER_RE = re.compile(r"\b([5-7]\d{6})\b")
+# phrases that mark a genuine delivery-arrangement email TO THE CONTACT
+_OUTREACH_MARKERS = (
+    "i can get the delivery arranged for you",
+    "could you provide me with some details",
+    "date and time of delivery?",
+    "who will be the contact for",
+)
+# ...and phrases that mark a haulier request, which must never be enrolled
+_HAULIER_MARKERS = ("would you be able to cover", "are you able to cover")
+
+
+def enrol_untracked(ns, limit=600):
+    """SAFETY NET: any order we've emailed the contact about that ISN'T on the
+    tracker gets put back on it.
+
+    An order can fall off for several reasons - the wait-list release skips
+    enrolment when it finds the order already in Sent Items, an order emailed by
+    hand is only enrolled if it happens to be in the CURRENT extract, and a
+    record can simply go missing. When that happens the reply is never parsed
+    and nothing is ever chased, which breaks the rule that an order is never
+    forgotten. This sweeps Sent Items and re-enrols anything missing.
+
+    Skips supplier rails, collection requests, haulier/colleague emails, orders
+    already booked, and anything whose delivery date has passed.
+
+    Rebuilding an order from its extract is SLOW, so this runs at most once a
+    day and resolves a handful at a time - check() must stay quick."""
+    stamp = os.path.join(bd.HERE, "_last_recover.txt")
+    try:
+        if datetime.fromisoformat(open(stamp, encoding="utf-8").read().strip()) > \
+                datetime.now() - timedelta(hours=20):
+            return 0
+    except Exception:
+        pass
+    d = tracker.load()
+    tracked = {o for r in d["records"] for o in r.get("orders", [])}
+    dhl = bd.dhl_store(ns)
+    folder = bd.sub(dhl, "Sent Items")
+    if folder is None:
+        return 0
+    items = folder.Items
+    try:
+        items.Sort("[SentOn]", True)
+    except Exception:
+        pass
+    seen, n = {}, 0
+    for it in items:
+        n += 1
+        if n > limit:
+            break
+        try:
+            subj = str(it.Subject or "")
+            bare = re.sub(r"^\s*(re|fw|fwd)\s*:\s*", "", subj, flags=re.I)
+            if bare.lower().startswith("collection "):
+                continue                      # supplier collection request, not a delivery
+            body = str(getattr(it, "Body", "") or "")[:4000].lower()
+            # it must be a DELIVERY-ARRANGEMENT email to the contact. You also
+            # email hauliers and colleagues about the same order - enrolling
+            # those would chase the wrong people entirely.
+            if not any(m in body for m in _OUTREACH_MARKERS):
+                continue
+            if any(m in body for m in _HAULIER_MARKERS):
+                continue                      # "would you be able to cover the job below"
+            to = str(getattr(it, "To", "") or "")
+            if "@dhl.com" in to.lower() or "dhl supply chain" in to.lower():
+                continue                      # a colleague, never a delivery contact
+            for o in _ORDER_RE.findall(bare):     # only orders named in the SUBJECT
+                if o in tracked or o in seen or bd.is_supplier_rail(o):
+                    continue
+                try:
+                    seen[o] = (it.SentOn.strftime("%d/%m/%Y %H:%M"),
+                               str(getattr(it, "EntryID", "") or ""))
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    if not seen:
+        return 0
+    try:
+        open(stamp, "w", encoding="utf-8").write(datetime.now().isoformat())
+    except Exception:
+        pass
+    booked = bd.find_already_emailed(ns, set(seen), limit=1500)
+    live = sorted(o for o in seen if not booked.get(o, {}).get("booked"))[:8]
+    if not live:
+        return 0
+    # Rebuild each order from its extract - the same path a chase uses. If it
+    # can't be resolved we don't know the date/site/contact, so we don't enrol
+    # it (a record we can't chase is worse than no record).
+    try:
+        collected, _tokens, _nf = send_order.resolve_orders(ns, " ".join(sorted(live)))
+        emails = send_order.build_from_collected(collected) if collected else []
+    except Exception:
+        return 0
+    added = 0
+    for e in emails:
+        ords = [str(o) for o in e.get("orders", [])]
+        if not ords or any(o in tracked for o in ords):
+            continue
+        if not bd._is_future(e.get("date", "")):
+            continue                          # delivery date already gone
+        when, eid = next((seen[o] for o in ords if o in seen), (None, None))
+        tracker.log(orders=ords, to=e.get("to", ""), name=e.get("name", ""),
+                    product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                    site=e.get("site", ""), postcode=e.get("postcode", ""),
+                    delivery_date=e.get("date", ""), source="sent (recovered)", status="sent",
+                    emailed_at=bd._to_tracker_dt(when) if when else None,
+                    only_if_new=True, kind="delivery", orig_entryid=eid)
+        tracked.update(ords)
+        added += 1
+    return added
+
+
 def product_type_of(record):
     """rails / ballast / sleepers - drives the Moffett lean and the PTS chase."""
     blob = " ".join([record.get("materials", "")] + list(record.get("product_codes") or []))
@@ -370,6 +505,7 @@ def enrol_collection(ns):
 def check(ns=None):
     ns = ns or bd.get_ns()
     enrol_collection(ns)          # track supplier collection emails before scanning for replies
+    repaired = repair_materials()     # BS-file rows that stored the numeric code (fast, no COM)
     d = tracker.load()
     replies = ooo = briefs = 0
     for r in d["records"]:
@@ -417,7 +553,7 @@ def check(ns=None):
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
           f"{briefs} send-off draft(s) created, {booked_removed} booked-by-you removed, "
-          f"{removed} completed order(s) removed.")
+          f"{removed} completed order(s) removed, {repaired} product wording(s) repaired.")
     return replies, ooo, briefs
 
 
@@ -494,7 +630,44 @@ def _send_chase(ns, record):
     return send_order.send_emails(ns, [e]) > 0   # send_emails -> tracker.log bumps chases
 
 
+_LOCK_SOCK = None
+
+
+def _chase_lock():
+    """Only ONE chase run at a time. Both agents (local + cloud) fire
+    `phase2.py chase send`, and without this they raced and every contact got
+    the same chaser twice, a second apart."""
+    global _LOCK_SOCK
+    import socket
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 8790))
+    except OSError:
+        return False
+    _LOCK_SOCK = s          # held for the life of the process
+    return True
+
+
+def _claim(rid):
+    """Mark this record chased TODAY *before* sending, so a concurrent or
+    immediately-following run skips it. Claiming first means a failed send
+    costs us a day's delay - far better than emailing someone twice."""
+    d = tracker.load()
+    today = date.today().isoformat()
+    for r in d["records"]:
+        if r.get("id") == rid:
+            if r.get("last_chased_at") == today:
+                return False                 # already claimed by another run
+            r["last_chased_at"] = today
+            tracker.save(d)
+            return True
+    return False
+
+
 def run_chasers(ns=None, send=False):
+    if send and not _chase_lock():
+        print("chasers: another chase run is already in progress - skipping.")
+        return []
     ns = ns or bd.get_ns()
     d = tracker.load()
     due = [r for r in d["records"] if _due_for_chase(r)]
@@ -506,6 +679,9 @@ def run_chasers(ns=None, send=False):
             out.append(f"  DUE  {' / '.join(r['orders'])} -> {r['to']} "
                        f"(bday {bd_n}, would be chase #{r.get('chases', 0) + 1})")
             continue
+        if not _claim(r["id"]):
+            out.append(f"  SKIP {' / '.join(r['orders'])} -> already chased today")
+            continue
         ok = _send_chase(ns, r)
         out.append(f"  {'SENT' if ok else 'FAIL'} {' / '.join(r['orders'])} -> {r['to']}")
         if ok:
@@ -513,10 +689,8 @@ def run_chasers(ns=None, send=False):
     if send and chased_ids:
         d2 = tracker.load()
         for r in d2["records"]:
-            if r["id"] in chased_ids:
-                r["last_chased_at"] = date.today().isoformat()
-                if r.get("kind") == "collection":
-                    r["chases"] = r.get("chases", 0) + 1   # in-thread chase skips tracker.log's bump
+            if r["id"] in chased_ids and r.get("kind") == "collection":
+                r["chases"] = r.get("chases", 0) + 1   # in-thread chase skips tracker.log's bump
         tracker.save(d2)
     verb = "sent" if send else "due"
     print(f"chasers: {len(chased_ids) if send else len(due)} {verb}.")
@@ -559,7 +733,11 @@ def main():
         print(learn_detail(sys.argv[2], sys.argv[3], " ".join(sys.argv[4:])))
         return
     ns = bd.get_ns()
-    if cmd == "check":
+    if cmd == "recover":
+        # slow (rebuilds each order from its extract) - runs on its own daily
+        # cadence, never inside check()
+        print(f"recovered {enrol_untracked(ns)} untracked order(s).")
+    elif cmd == "check":
         check(ns)
     elif cmd == "chase":
         run_chasers(ns, send=(len(sys.argv) > 2 and sys.argv[2] == "send"))
