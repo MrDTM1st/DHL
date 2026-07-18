@@ -40,7 +40,28 @@ def _send_one(outlook, acct, e):
     return True, "sent"
 
 
+_LOCK_SOCK = None
+
+
+def _release_lock():
+    """Only ONE sending release at a time. The 3h timer (local agent) and a
+    dashboard-clicked release (either agent) used to overlap and the same
+    wait-list email went out twice (5033651 -> Darren, 17/07 09:19 x2)."""
+    global _LOCK_SOCK
+    import socket
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 8791))
+    except OSError:
+        return False
+    _LOCK_SOCK = s
+    return True
+
+
 def release(send=False):
+    if send and not _release_lock():
+        print("release: another wait-list release is already running - skipping.")
+        return {"sent": [], "skipped": [], "missed": [], "failed": []}
     ns = bd.get_ns()
     due = waitlist.due()
     over = waitlist.overdue()

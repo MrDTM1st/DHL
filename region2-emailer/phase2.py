@@ -301,18 +301,52 @@ def enrol_untracked(ns, limit=600):
     except Exception:
         pass
     booked = bd.find_already_emailed(ns, set(seen), limit=1500)
-    live = sorted(o for o in seen if not booked.get(o, {}).get("booked"))[:8]
+    live = sorted(o for o in seen if not booked.get(o, {}).get("booked"))
     if not live:
         return 0
-    # Rebuild each order from its extract - the same path a chase uses. If it
-    # can't be resolved we don't know the date/site/contact, so we don't enrol
-    # it (a record we can't chase is worse than no record).
+    # A wait-list entry already carries everything the tracker needs (the tool
+    # built it from the extract when the order was captured) - enrol those
+    # DIRECTLY. Requiring an extract rebuild here lost 5033651: its source was
+    # a Master/BS file that had aged out of the extract-search window.
+    added = 0
+    rebuild = []
+    wl = {}
     try:
-        collected, _tokens, _nf = send_order.resolve_orders(ns, " ".join(sorted(live)))
+        import json as _json
+        wl = {str(w.get("id", "")).split("|")[0]: w
+              for w in _json.load(open(os.path.join(bd.HERE, "waitlist.json"),
+                                       encoding="utf-8")).get("entries", [])
+              if w.get("status") == "sent"}
+    except Exception:
+        pass
+    for o in live:
+        w = wl.get(o)
+        if not w:
+            rebuild.append(o)
+            continue
+        if not bd._is_future(w.get("date", "")):
+            continue                          # delivery date already gone
+        when, eid = seen[o]
+        tracker.log(orders=[o], to=w.get("to", ""), name=w.get("name", ""),
+                    product_codes=w.get("product_codes", []), materials=w.get("materials", ""),
+                    site=w.get("site", ""), postcode=w.get("postcode", ""),
+                    delivery_date=w.get("date", ""), source="wait-list (recovered)",
+                    status="sent", emailed_at=bd._to_tracker_dt(when),
+                    only_if_new=True, kind="delivery", orig_entryid=eid)
+        tracked.add(o)
+        added += 1
+    # Anything left (emailed by hand, no wait-list entry) needs rebuilding from
+    # its extract - the same path a chase uses. Slow, so capped per run. If it
+    # can't be resolved we don't enrol it: a record whose date/site/contact we
+    # don't know can't be chased properly anyway.
+    rebuild = rebuild[:8]
+    if not rebuild:
+        return added
+    try:
+        collected, _tokens, _nf = send_order.resolve_orders(ns, " ".join(rebuild))
         emails = send_order.build_from_collected(collected) if collected else []
     except Exception:
-        return 0
-    added = 0
+        return added
     for e in emails:
         ords = [str(o) for o in e.get("orders", [])]
         if not ords or any(o in tracked for o in ords):
@@ -577,8 +611,9 @@ def _due_for_chase(r):
 
 def _chase_in_thread(ns, record):
     """Follow up on the exact email you sent, kept on the same thread. Used for
-    supplier collection requests - there is no extract to rebuild from, so we
-    reply to the original Sent item (quoting it) asking for the details."""
+    supplier collection requests, and as the fallback for a recovered delivery
+    order whose extract has aged out - we reply to the original Sent item
+    (quoting it) asking for the details."""
     eid = record.get("orig_entryid")
     if not eid:
         return False
@@ -590,8 +625,10 @@ def _chase_in_thread(ns, record):
         return False
     try:
         reply = item.Reply()
+        what = ("collection details" if record.get("kind") == "collection"
+                else "delivery details")
         note = ("Hi,\n\nJust following up on the below - could I please get the "
-                "collection details when you have a moment?\n\n")
+                f"{what} when you have a moment?\n\n")
         try:
             reply.Body = note + reply.Body
         except Exception:
@@ -610,10 +647,11 @@ def _send_chase(ns, record):
         return _chase_in_thread(ns, record)
     collected, tokens, nf = send_order.resolve_orders(ns, " ".join(record["orders"]))
     if not collected:
-        return False
+        # recovered order whose extract has aged out - chase on the original thread
+        return _chase_in_thread(ns, record)
     emails = send_order.build_from_collected(collected)
     if not emails:
-        return False
+        return _chase_in_thread(ns, record)
     e = emails[0]
     original = e["message"].split("\n\n", 1)[-1]
     greet = f"Hi {e['name']}," if e.get("name") else "Hi,"

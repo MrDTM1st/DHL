@@ -14,6 +14,11 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8787"
 KEY = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("R2_AGENT_KEY", "")
+# Two agents run side by side (local CP + cloud CP) on the SAME PC/Outlook.
+# Timed jobs that SEND or WRITE must run on only one of them - the local one -
+# or everything fires twice (Darren got the same wait-list email twice, Paul
+# got every chaser twice). Command handling and data pushes stay on both.
+IS_LOCAL = BASE.startswith("http://127.0.0.1")
 POLL_SECONDS = 2
 HEARTBEAT_SECONDS = 5
 
@@ -422,14 +427,14 @@ def main():
         if action or time.time() - last_panel > 30:
             push_panel()   # keep decisions / handover / team fresh on the dashboard
             last_panel = time.time()
-        if time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
+        if IS_LOCAL and time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
             try:
                 subprocess.Popen([sys.executable, "build_drafts.py", "waitscan"],
                                  cwd=HERE, creationflags=0x08000000)
             except Exception:
                 pass
             last_waitscan = time.time()
-        if time.time() - last_release > 10800:    # every 3h: auto-SEND any wait-list order now within its window
+        if IS_LOCAL and time.time() - last_release > 10800:   # every 3h: auto-SEND any wait-list order now within its window
             out = run(["waitlist_release.py", "send"])
             push_waitlist()
             low = out.lower()
@@ -437,14 +442,14 @@ def main():
                 report("error" if ("missed" in low or "failed" in low) else "done",
                        "Wait-list auto-send ran.", tail(out, 14))
             last_release = time.time()
-        if time.time() - last_index > 900:      # keep the order index fresh
+        if IS_LOCAL and time.time() - last_index > 900:      # keep the order index fresh
             try:
                 subprocess.Popen([sys.executable, os.path.join(HERE, "order_index.py")],
                                  cwd=HERE, creationflags=0x08000000)
             except Exception:
                 pass
             last_index = time.time()
-        if time.time() - last_check > 1200:     # Phase 2: replies + OOO + send-off drafts, every 20 min
+        if IS_LOCAL and time.time() - last_check > 1200:     # Phase 2: replies + OOO + send-off drafts, every 20 min
             try:                                 # background so it never blocks command handling
                 subprocess.Popen([sys.executable, "phase2.py", "check"],
                                  cwd=HERE, creationflags=0x08000000)
@@ -452,10 +457,9 @@ def main():
                 pass
             last_check = time.time()
         # Auto-chasers are OPT-IN: only run when auto_chase.enabled exists.
-        # ONLY the local agent chases. Both agents used to fire this, so every
-        # contact got the same chaser twice a second apart (phase2 also holds a
-        # lock now, but don't even start the second one).
-        if (BASE.startswith("http://127.0.0.1")
+        # ONLY the local agent chases (phase2 also holds a lock, but don't even
+        # start the second one).
+        if (IS_LOCAL
                 and os.path.exists(os.path.join(HERE, "auto_chase.enabled"))
                 and time.time() - last_chase > 10800):     # every 3h
             try:
@@ -470,7 +474,7 @@ def main():
         # OPT-IN via auto_recover.enabled until it's proven on real data - it
         # writes to the tracker, and a bad enrolment means chasing the wrong
         # person. Run `phase2.py recover` by hand to try it first.
-        if (BASE.startswith("http://127.0.0.1")
+        if (IS_LOCAL
                 and os.path.exists(os.path.join(HERE, "auto_recover.enabled"))
                 and time.time() - last_recover > 86400):
             try:
