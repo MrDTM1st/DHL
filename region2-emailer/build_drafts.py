@@ -658,8 +658,11 @@ def find_emailed_deliveries(ns, groups, limit=500):
                 blobn = re.sub(r"\s+", "", blob).upper()
                 low = blob.lower()
                 # cheap first: which wanted deliveries have this postcode + date?
+                # a slot already hit can still be UPGRADED to booked by an older
+                # email - otherwise a newer chase masks the booking beneath it
                 cands = [(k, e) for k, e in want.items()
-                         if k not in hit and k[1] in blobn and (k[2] in blob or k[2][:5] in blob)]
+                         if not (k in hit and hit[k].get("booked"))
+                         and k[1] in blobn and (k[2] in blob or k[2][:5] in blob)]
                 if not cands:
                     continue
                 rcpts = set()
@@ -682,14 +685,19 @@ def find_emailed_deliveries(ns, groups, limit=500):
                     except Exception:
                         when = "?"
                     booked = (label == "Sent Items") and _looks_booked(subj, body)
-                    hit[k] = {"where": label, "when": when,
-                              "to": str(getattr(it, "To", "") or "")[:40],
-                              "booked": booked, "ref": _booked_ref(body) if booked else ""}
+                    if k not in hit:
+                        hit[k] = {"where": label, "when": when,
+                                  "to": str(getattr(it, "To", "") or "")[:40],
+                                  "booked": booked, "ref": _booked_ref(body) if booked else ""}
+                    elif booked and not hit[k].get("booked"):
+                        hit[k].update(booked=True, ref=_booked_ref(body),
+                                      where=label, when=when)
             except Exception:
                 pass
-            if len(hit) == len(want):
+            # stop early only once every slot is found AND known booked
+            if len(hit) == len(want) and all(v.get("booked") for v in hit.values()):
                 break
-        if len(hit) == len(want):
+        if len(hit) == len(want) and all(v.get("booked") for v in hit.values()):
             break
     return hit
 

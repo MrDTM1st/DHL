@@ -582,6 +582,23 @@ def check(ns=None):
     before = len(d["records"])
     d["records"] = [r for r in d["records"]
                     if not (r.get("orders") and any(booked.get(o, {}).get("booked") for o in r["orders"]))]
+    # CONSOLIDATION-AWARE: two orders often share one vehicle (same contact +
+    # postcode + date) but the booked-in reply sits in ONE order's thread.
+    # 6055235+6055299 were booked together (MAN in the 6055235 thread) and
+    # 6055299 kept being chased. So a record is also dropped when its delivery
+    # SLOT has a booked email, whichever order number that email names.
+    slot_groups = [{"to": r.get("to"), "postcode": r.get("postcode"),
+                    "date": r.get("delivery_date")}
+                   for r in d["records"]
+                   if r.get("to") and r.get("postcode") and r.get("delivery_date")]
+    slots = bd.find_emailed_deliveries(ns, slot_groups, limit=1500) if slot_groups else {}
+
+    def _slot_booked(r):
+        k = (str(r.get("to") or "").strip().lower(),
+             bd._pc_norm(r.get("postcode")), str(r.get("delivery_date") or "").strip())
+        v = slots.get(k)
+        return bool(v and v.get("booked"))
+    d["records"] = [r for r in d["records"] if not _slot_booked(r)]
     booked_removed = before - len(d["records"])
     removed = tracker.drop_completed(d)   # completed orders leave the tracker
     tracker.save(d)
