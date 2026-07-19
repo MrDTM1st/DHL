@@ -1119,6 +1119,23 @@ def main():
         for e in coll_kept:
             print(f"   + TO {e['to']} | {e['subject']}")
         print()
+    # evidence log: every skip here is a duplicate/wrong email that did NOT go
+    try:
+        import metrics as _metrics
+        for kind, lst in (("dedup_skip", skipped_sent), ("dedup_skip", skipped_booked),
+                          ("dedup_skip", skipped_done)):
+            if lst:
+                _metrics.log(kind, n=len(lst),
+                             orders=[o for e in lst for o in e.get("orders", [])][:20])
+        if skipped_past:
+            _metrics.log("region_skip", n=len(skipped_past), what="past-date")
+        if rails or stoneblowers:
+            _metrics.log("offlimits_skip", n=rails + stoneblowers)
+        if region:
+            _metrics.log("region_skip", n=region, what="out-of-region")
+    except Exception:
+        pass
+
     emails = emails + coll_kept   # collection requests ride in the same batch/send
     for e in emails:
         warn = ""

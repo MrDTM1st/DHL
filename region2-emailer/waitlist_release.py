@@ -15,6 +15,7 @@ waiting is marked MISSED and reported loudly so it can never be silently dropped
 """
 import sys
 import build_drafts as bd
+import metrics
 import send_order as so
 import tracker, waitlist
 
@@ -37,6 +38,7 @@ def _send_one(outlook, acct, e):
                 product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
                 site=e.get("site", ""), postcode=e.get("postcode", ""),
                 delivery_date=e["date"], source=e.get("source", ""), status="sent")
+    metrics.log("waitlist_released", orders=e.get("orders", []), to=e["to"])
     return True, "sent"
 
 

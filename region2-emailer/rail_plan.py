@@ -377,6 +377,13 @@ def build(path, out_dir=None, update=False):
     print("  FILES:")
     for m in made:
         print(f"     {m['count']:3} rows  {(m['chain'] or 'MASTER'):16}  {m['name']}")
+    try:
+        import metrics
+        metrics.log("rail_plan_built", files=len(made), rows=len(kept), update=update)
+        if mism:
+            metrics.log("date_corrected", n=len(mism))   # CTMS mis-planned dates fixed
+    except Exception:
+        pass
     return wc, made, mism
 
 

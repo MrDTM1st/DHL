@@ -13,6 +13,7 @@ import sys, os, re, zipfile
 from collections import OrderedDict
 import win32com.client
 import build_drafts as bd
+import metrics
 import order_index
 import tracker
 
@@ -259,6 +260,8 @@ def send_emails(ns, emails):
                     product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
                     site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
                     source=e.get("source", ""), status="sent")
+        # a chase passes _metric="chase_sent" so it isn't counted as fresh outreach
+        metrics.log(e.get("_metric") or "email_sent", orders=e.get("orders", []), to=to)
         sent += 1
     if sent:
         try:

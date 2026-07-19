@@ -23,6 +23,7 @@ from datetime import datetime, date, timedelta
 import win32com.client
 import build_drafts as bd
 import delivery_details as dd
+import metrics
 import order_index
 import send_order
 import tracker
@@ -214,6 +215,7 @@ def repair_materials():
         fixed += 1
     if fixed:
         tracker.save(d)
+        metrics.log("materials_repaired", n=fixed)
     return fixed
 
 
@@ -333,6 +335,7 @@ def enrol_untracked(ns, limit=600):
                     delivery_date=w.get("date", ""), source="wait-list (recovered)",
                     status="sent", emailed_at=bd._to_tracker_dt(when),
                     only_if_new=True, kind="delivery", orig_entryid=eid)
+        metrics.log("order_recovered", orders=[o], via="wait-list")
         tracked.add(o)
         added += 1
     # Anything left (emailed by hand, no wait-list entry) needs rebuilding from
@@ -360,6 +363,7 @@ def enrol_untracked(ns, limit=600):
                     delivery_date=e.get("date", ""), source="sent (recovered)", status="sent",
                     emailed_at=bd._to_tracker_dt(when) if when else None,
                     only_if_new=True, kind="delivery", orig_entryid=eid)
+        metrics.log("order_recovered", orders=ords, via="extract")
         tracked.update(ords)
         added += 1
     return added
@@ -562,6 +566,8 @@ def check(ns=None):
                 pt = product_type_of(r)
                 r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt)
                 r["missing"] = dd.missing(r["details"], pt)
+                metrics.log("reply_parsed", orders=r.get("orders", []),
+                            missing=len(r["missing"]))
             except Exception as e:
                 r["details_note"] = str(e)[:140]
             if r.get("kind") == "collection":
@@ -570,6 +576,7 @@ def check(ns=None):
                 if build_brief(ns, r, item):
                     r["sendoff_ready"] = True
                     briefs += 1
+                    metrics.log("brief_drafted", orders=r.get("orders", []))
             except Exception as e:
                 r["sendoff_note"] = str(e)[:140]
     # remove orders YOU'VE booked yourself - your "this order has been arranged
@@ -600,6 +607,9 @@ def check(ns=None):
         return bool(v and v.get("booked"))
     d["records"] = [r for r in d["records"] if not _slot_booked(r)]
     booked_removed = before - len(d["records"])
+    if booked_removed:
+        # each one is a contact who will NOT be chased about a booked order
+        metrics.log("booked_removed", n=booked_removed)
     removed = tracker.drop_completed(d)   # completed orders leave the tracker
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
@@ -654,6 +664,8 @@ def _chase_in_thread(ns, record):
         if acct is not None:
             send_order.bind_account(reply, acct)
         reply.Send()
+        metrics.log("chase_sent", orders=record.get("orders", []),
+                    to=record.get("to", ""), in_thread=True)
         return True
     except Exception:
         return False
@@ -682,6 +694,7 @@ def _send_chase(ns, record):
     e["message"] = f"{greet}\n\n{ask}\n\n{original}"
     e["html"] = bd.html_from_message(e["message"])
     e["cc"] = ""
+    e["_metric"] = "chase_sent"                  # count as a chase, not fresh outreach
     return send_order.send_emails(ns, [e]) > 0   # send_emails -> tracker.log bumps chases
 
 
