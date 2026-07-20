@@ -36,3 +36,4 @@ region2-emailer/supervisor.log
 __pycache__/
 *.pyc
 region2-emailer/qr.png
+region2-emailer/synergy_template.xlsx

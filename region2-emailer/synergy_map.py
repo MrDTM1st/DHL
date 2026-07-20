@@ -185,28 +185,104 @@ UNMATCHED_FILE = os.path.join(HERE, "_synergy_unmatched.json")
 NEWSITES_FILE = os.path.join(HERE, "_synergy_newsites.json")
 
 
-def write_upload_sheet(mapped, path):
-    """The filled-in Synergy Upload Excel sheet - the intermediate working
-    record the manual process keeps BEFORE the NR CSV is produced. Columns in
-    the mapped order, header styled, columns sized."""
+TEMPLATE = os.path.join(HERE, "synergy_template.xlsx")
+
+
+def _hkey(h):
+    """Header comparison key: case/space/underscore-insensitive, so the raw
+    extract's 'collection_time' matches the template's 'collection time'."""
+    return "".join(ch for ch in str(h or "").lower() if ch.isalnum())
+
+
+def fill_template(mapped, raw_path, out_path, held_sites=None):
+    """Fill a COPY of the real Synergy Template File (the sheet the manual
+    process 'goes through first to be formatted'):
+      * raw extract rows pasted into 'Data Here' from row 4 (headers on row 3),
+        aligned BY COLUMN NAME in case the extract's column order drifts;
+      * our corrected mapped VALUES written over 'Master Template with Mapping'
+        from row 3 - the template's own formulas reproduce old bugs (junk
+        Shipment No, raw Heavy account), so the computed mapping wins;
+      * Supplier Details + Vehicle Type sheets ride along untouched.
+    Falls back to a plain one-sheet dump if the template file is missing."""
+    if not os.path.exists(TEMPLATE):
+        return _plain_sheet(mapped, out_path)
+    import shutil, warnings
+    warnings.filterwarnings("ignore")
+    shutil.copy(TEMPLATE, out_path)
+    wb = openpyxl.load_workbook(out_path)
+    dh, mt = wb["Data Here"], wb["Master Template with Mapping"]
+
+    # --- Data Here: raw rows from row 4, aligned to the row-3 header names.
+    # Rows with no order number and rows HELD for a site decision are skipped,
+    # so Data Here stays 1:1 with the Master rows - the template's leftover
+    # formula columns (Collection Date etc.) read their own row and must not
+    # slip against our values.
+    held_sites = {str(s).strip() for s in (held_sites or set())}
+    raw = openpyxl.load_workbook(raw_path, data_only=True).active
+    rrows = list(raw.iter_rows(values_only=True))
+    rhdr = [_hkey(h) for h in rrows[0]]
+    try:
+        oi = rhdr.index(_hkey("Customer Order No"))
+    except ValueError:
+        oi = None
+    try:
+        di = rhdr.index(_hkey("Delivery Point"))
+    except ValueError:
+        di = None
+    dcol = {}
+    for c in range(1, dh.max_column + 1):
+        k = _hkey(dh.cell(3, c).value)
+        if k:
+            dcol[k] = c
+    out_r = 4
+    for r in rrows[1:]:
+        order = r[oi] if (oi is not None and oi < len(r)) else None
+        if oi is not None and (order is None or not str(order).strip()):
+            continue                      # same skip rule as map_orders
+        if di is not None and di < len(r) and str(r[di] or "").strip() in held_sites:
+            continue
+        for i, v in enumerate(r):
+            if i < len(rhdr) and rhdr[i] in dcol:
+                dh.cell(out_r, dcol[rhdr[i]], v)
+        out_r += 1
+
+    # --- Master: our computed values over the formula rows (row 3 down)
+    mcol = {}
+    for c in range(1, mt.max_column + 1):
+        k = _hkey(mt.cell(1, c).value)
+        if k:
+            mcol[k] = c
+    for i, row in enumerate(mapped):
+        r = 3 + i
+        for key, val in row.items():
+            c = mcol.get(_hkey(key))
+            if c:
+                mt.cell(r, c, val if val != "" else None)
+    # clear leftover formula rows beyond our data so the sheet doesn't show
+    # #N/A noise from formulas pointing at empty Data Here rows
+    for r in range(3 + len(mapped), mt.max_row + 1):
+        for c in range(1, mt.max_column + 1):
+            if mt.cell(r, c).value is not None:
+                mt.cell(r, c).value = None
+    wb.save(out_path)
+    return out_path
+
+
+def _plain_sheet(mapped, path):
+    """Fallback when the template file isn't present: a clean one-sheet dump."""
     from openpyxl.styles import Font, PatternFill
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Synergy Upload"
-    if not mapped:
-        wb.save(path)
-        return path
-    cols = list(mapped[0].keys())
-    ws.append(cols)
-    for c in ws[1]:
-        c.font = Font(bold=True)
-        c.fill = PatternFill("solid", fgColor="FFFF00")
-    for row in mapped:
-        ws.append([row.get(c) for c in cols])
-    for col in ws.columns:
-        mx = max((len(str(c.value)) for c in col if c.value is not None), default=8)
-        ws.column_dimensions[col[0].column_letter].width = min(max(mx + 2, 9), 42)
-    ws.freeze_panes = "A2"
+    if mapped:
+        cols = list(mapped[0].keys())
+        ws.append(cols)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+            c.fill = PatternFill("solid", fgColor="FFFF00")
+        for row in mapped:
+            ws.append([row.get(c) for c in cols])
+        ws.freeze_panes = "A2"
     wb.save(path)
     return path
 
@@ -231,9 +307,10 @@ def main():
         json.dump([{"site": s, "count": n} for s, n in sorted(unmatched.items(), key=lambda x: -x[1])],
                   f, indent=1)
     stamp = datetime.now().strftime("%d%m%Y%H%M%S")
-    # the filled-in Synergy Upload SHEET first (the working record the process
-    # expects), THEN the NR upload CSV derived from it
-    sheet = write_upload_sheet(mapped, outbox.path(f"Synergy Upload {stamp}.xlsx"))
+    # the filled-in Synergy Template first (raw paste in Data Here + mapped
+    # values in Master - the working record), THEN the NR upload CSV
+    sheet = fill_template(mapped, args[0], outbox.path(f"Synergy Upload {stamp}.xlsx"),
+                          held_sites=set(held))
     records = nr_csv.transform(mapped)
     out = nr_csv.write_csv(records, outbox.path(f"NR_upload_{stamp}.csv"))
     print(f"Mapped {len(mapped)} order line(s).")
