@@ -678,7 +678,11 @@ function seg(state){ return '<span class="seg '+state+'"></span>'; }
 // sheet with locations is provided). Geocoding via postcodes.io, cached.
 let MAP=null, MLAYER=null, _mapSig='';
 const GEO=JSON.parse(localStorage.getItem('r2geo')||'{}');
-const DEPOTS=[['British Steel — Scunthorpe','DN16 1BP'],['Inframat / VAS — Askern','DN6 0AA'],['Arcelor Mittal — Marchwood','SO40 4UT']];
+// depots carry fixed coords - industrial postcodes are sometimes terminated
+// and fail geocoding, and these three must always be on the map
+const DEPOTS=[['British Steel — Scunthorpe','DN16 1BP',53.579,-0.617],
+              ['Inframat / VAS — Askern','DN6 0AA',53.616,-1.155],
+              ['Arcelor Mittal — Marchwood','SO40 4UT',50.895,-1.442]];
 function pcNorm(p){ return String(p||'').toUpperCase().replace(/\\s+/g,' ').trim(); }
 function mapInit(){
   if(MAP || typeof L==='undefined' || !document.getElementById('map')) return;
@@ -708,7 +712,7 @@ async function renderMap(){
     label:(r.orders||[]).join(' / ')+' — '+(r.site||'')+(r.delivery_date?(' · due '+r.delivery_date):'')}); });
   _mapBatch.forEach(e=>{ if(e.postcode) pts.push({pc:e.postcode, kind:'batch',
     label:(e.orders||[]).join(' / ')+' — '+((e.worksite||e.site)||'')+(e.date?(' · '+e.date):'')}); });
-  DEPOTS.forEach(d=>pts.push({pc:d[1], kind:'depot', label:d[0]}));
+  DEPOTS.forEach(d=>pts.push({pc:d[1], kind:'depot', label:d[0], la:d[2], lo:d[3]}));
   const sig=JSON.stringify(pts.map(p=>[p.pc,p.kind]));
   if(sig===_mapSig) return;              // nothing changed - don't churn markers
   await geocode(pts.map(p=>p.pc));
@@ -717,7 +721,7 @@ async function renderMap(){
   const st={tracker:'#d40511', batch:'#d99e00', depot:'#1b1c1e', haulier:'#1da35e'};
   let shown=0;
   pts.forEach(p=>{
-    const g=GEO[pcNorm(p.pc)];
+    const g=(p.la!==undefined) ? {la:p.la, lo:p.lo} : GEO[pcNorm(p.pc)];
     if(!g) return;
     shown++;
     L.circleMarker([g.la,g.lo],{radius:p.kind==='depot'?9:7, color:st[p.kind],
