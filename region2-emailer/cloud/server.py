@@ -744,7 +744,7 @@ function mapInit(){
   L.tileLayer(TILES,{maxZoom:19, subdomains:'abcd', attribution:TILEATTR}).addTo(MAP);
   MLAYER=L.layerGroup().addTo(MAP);
 }
-function outcodeOf(p){ const m=String(p||'').toUpperCase().replace(/\s+/g,'').match(/^([A-Z]{1,2}\d[A-Z\d]?)/); return m?m[1]:''; }
+function outcodeOf(p){ const m=String(p||'').toUpperCase().replace(/\\s+/g,'').match(/^([A-Z]{1,2}\\d[A-Z\\d]?)/); return m?m[1]:''; }
 async function geocode(pcs){
   const want=[...new Set(pcs.map(pcNorm).filter(Boolean))];
   const need=want.filter(p=>GEO[p]===undefined);
