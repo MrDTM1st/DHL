@@ -80,6 +80,8 @@ def _sweep_queue_locked(agent_seen=None):
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DHL Haulage Desk</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   *{ box-sizing:border-box; }
   :root{
@@ -156,6 +158,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .dchip.amber{ background:#fff4e5; color:var(--amberink); }
   .dchip a{ text-decoration:none; margin-left:5px; font-weight:700; }
   .dmiss{ font-size:11px; color:var(--red); font-weight:600; }
+  #map{ height:400px; border-radius:12px; background:var(--seg); z-index:0; }
+  .leaflet-container{ font:inherit; }
+  .maplegend{ font-size:11.5px; color:var(--muted); margin-top:8px; }
+  .maplegend b{ font-weight:600; }
+  .dotl{ display:inline-block; width:9px; height:9px; border-radius:99px; margin:0 3px 0 10px; vertical-align:baseline; }
   @media (max-width:760px){ .tkrow{ flex-direction:column; align-items:stretch; gap:.8rem; } }
   .tkmeta{ width:270px; flex:none; }
   @media (max-width:760px){ .tkmeta{ width:auto; } }
@@ -375,6 +382,18 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     </div>
     <div class="tkrows" id="waitlist"><span class="hint">Loading…</span></div>
   </div>
+
+  <div class="card">
+    <div class="tkhd">
+      <div class="lbl">Map — deliveries &amp; collections</div>
+      <div class="hint" id="maphint" style="font-weight:400"></div>
+    </div>
+    <div id="map"></div>
+    <div class="maplegend"><b>Legend:</b><span class="dotl" style="background:#d40511"></span>tracked delivery
+      <span class="dotl" style="background:#d99e00"></span>today's batch
+      <span class="dotl" style="background:#1b1c1e"></span>collection depot
+      <span class="dotl" style="background:#1da35e"></span>haulier (when the contact sheet is loaded)</div>
+  </div>
 </div>
 
 <script>
@@ -437,6 +456,7 @@ function priBadges(e){
 }
 function renderBatch(list){
   batchCache=list||[];
+  _mapBatch=list||[]; renderMap();
   document.getElementById('bcount').textContent = (list.length===1?'1 email':list.length+' emails');
   const rows=(list||[]).map((e,i)=>({e,i}));
   rows.sort((a,b)=>urgScore(b.e)-urgScore(a.e));   // priority (loose ballast / <=3 days) first
@@ -654,6 +674,58 @@ function runChasers(){
   post({action:'run_chasers'});
 }
 function seg(state){ return '<span class="seg '+state+'"></span>'; }
+// ---- map: deliveries + collection depots (hauliers layer once the contact
+// sheet with locations is provided). Geocoding via postcodes.io, cached.
+let MAP=null, MLAYER=null, _mapSig='';
+const GEO=JSON.parse(localStorage.getItem('r2geo')||'{}');
+const DEPOTS=[['British Steel — Scunthorpe','DN16 1BP'],['Inframat / VAS — Askern','DN6 0AA'],['Arcelor Mittal — Marchwood','SO40 4UT']];
+function pcNorm(p){ return String(p||'').toUpperCase().replace(/\\s+/g,' ').trim(); }
+function mapInit(){
+  if(MAP || typeof L==='undefined' || !document.getElementById('map')) return;
+  MAP=L.map('map',{scrollWheelZoom:false}).setView([52.8,-1.4],6);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:18, attribution:'&copy; OpenStreetMap'}).addTo(MAP);
+  MLAYER=L.layerGroup().addTo(MAP);
+}
+async function geocode(pcs){
+  const need=[...new Set(pcs.map(pcNorm).filter(p=>p&&GEO[p]===undefined))];
+  for(let i=0;i<need.length;i+=90){
+    try{
+      const r=await fetch('https://api.postcodes.io/postcodes',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({postcodes:need.slice(i,i+90)})});
+      const d=await r.json();
+      (d.result||[]).forEach(x=>{ GEO[pcNorm(x.query)] = x.result ? {la:x.result.latitude,lo:x.result.longitude} : null; });
+    }catch(e){}
+  }
+  try{ localStorage.setItem('r2geo',JSON.stringify(GEO)); }catch(e){}
+}
+let _mapRecs=[], _mapBatch=[];
+async function renderMap(){
+  mapInit(); if(!MAP) return;
+  const pts=[];
+  _mapRecs.forEach(r=>{ if(r.postcode) pts.push({pc:r.postcode, kind:'tracker',
+    label:(r.orders||[]).join(' / ')+' — '+(r.site||'')+(r.delivery_date?(' · due '+r.delivery_date):'')}); });
+  _mapBatch.forEach(e=>{ if(e.postcode) pts.push({pc:e.postcode, kind:'batch',
+    label:(e.orders||[]).join(' / ')+' — '+((e.worksite||e.site)||'')+(e.date?(' · '+e.date):'')}); });
+  DEPOTS.forEach(d=>pts.push({pc:d[1], kind:'depot', label:d[0]}));
+  const sig=JSON.stringify(pts.map(p=>[p.pc,p.kind]));
+  if(sig===_mapSig) return;              // nothing changed - don't churn markers
+  await geocode(pts.map(p=>p.pc));
+  _mapSig=sig;
+  MLAYER.clearLayers();
+  const st={tracker:'#d40511', batch:'#d99e00', depot:'#1b1c1e', haulier:'#1da35e'};
+  let shown=0;
+  pts.forEach(p=>{
+    const g=GEO[pcNorm(p.pc)];
+    if(!g) return;
+    shown++;
+    L.circleMarker([g.la,g.lo],{radius:p.kind==='depot'?9:7, color:st[p.kind],
+        weight:2, fillColor:st[p.kind], fillOpacity:.7})
+     .addTo(MLAYER).bindPopup(esc(p.label)+'<br>'+esc(pcNorm(p.pc)));
+  });
+  document.getElementById('maphint').textContent = shown+' pinned';
+}
 // parsed delivery details - amber ones carry a one-click confirm that teaches it
 const DFIELDS=[['date','Date'],['time','Time'],['offloading','Offload'],['artic_access','Artic'],
                ['rear_steer','Rear steer'],['vehicle','Vehicle'],['pts','PTS'],
@@ -694,6 +766,7 @@ async function loadTracker(){
   try{
     const d = await (await api('/api/tracker')).json();
     const recs = d.records || [];
+    _mapRecs = recs; renderMap();
     document.getElementById('tkcount').textContent =
       recs.length===1 ? '1 open order group' : recs.length+' open order groups';
     const host = document.getElementById('tracker');

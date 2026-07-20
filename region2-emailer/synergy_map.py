@@ -185,6 +185,32 @@ UNMATCHED_FILE = os.path.join(HERE, "_synergy_unmatched.json")
 NEWSITES_FILE = os.path.join(HERE, "_synergy_newsites.json")
 
 
+def write_upload_sheet(mapped, path):
+    """The filled-in Synergy Upload Excel sheet - the intermediate working
+    record the manual process keeps BEFORE the NR CSV is produced. Columns in
+    the mapped order, header styled, columns sized."""
+    from openpyxl.styles import Font, PatternFill
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Synergy Upload"
+    if not mapped:
+        wb.save(path)
+        return path
+    cols = list(mapped[0].keys())
+    ws.append(cols)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+        c.fill = PatternFill("solid", fgColor="FFFF00")
+    for row in mapped:
+        ws.append([row.get(c) for c in cols])
+    for col in ws.columns:
+        mx = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max(mx + 2, 9), 42)
+    ws.freeze_panes = "A2"
+    wb.save(path)
+    return path
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == "addsites":
@@ -204,10 +230,14 @@ def main():
     with open(UNMATCHED_FILE, "w", encoding="utf-8") as f:
         json.dump([{"site": s, "count": n} for s, n in sorted(unmatched.items(), key=lambda x: -x[1])],
                   f, indent=1)
+    stamp = datetime.now().strftime("%d%m%Y%H%M%S")
+    # the filled-in Synergy Upload SHEET first (the working record the process
+    # expects), THEN the NR upload CSV derived from it
+    sheet = write_upload_sheet(mapped, outbox.path(f"Synergy Upload {stamp}.xlsx"))
     records = nr_csv.transform(mapped)
-    name = "NR_upload_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
-    out = nr_csv.write_csv(records, outbox.path(name))
+    out = nr_csv.write_csv(records, outbox.path(f"NR_upload_{stamp}.csv"))
     print(f"Mapped {len(mapped)} order line(s).")
+    print(f"  SHEET: {sheet}")
     if held:
         n = sum(held.values())
         print(f"  ~~ {n} row(s) HELD - delivery site needs a decision on the dashboard "

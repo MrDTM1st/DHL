@@ -151,7 +151,8 @@ def build_from_collected(collected):
     for (em, dpc, dd), bundle in groups.items():
         r0, C0, _ = bundle[0]
         orders = sorted(set(bd.base_order(r[C["order"]]) for r, C, _ in bundle))
-        subject = f"{' / '.join(orders)} {bd.clean(r0[C0['daddr']])} {dpc}"
+        wsite = r0[C0["dpoint"]] if C0.get("dpoint") is not None else ""
+        subject = bd.subject_for(orders, wsite, r0[C0["daddr"]], dpc)
         picked = [pick_product(r, C) for r, C, _ in bundle]
         items = [(r[C["qty"]], p[0]) for (r, C, _), p in zip(bundle, picked)]
         nm = bd.firstname(r0[C0['dcon']])

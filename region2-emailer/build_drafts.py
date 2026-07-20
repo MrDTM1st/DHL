@@ -218,6 +218,23 @@ def readable_product(prod, prod_code):
         return b
     return a or b   # both or neither look like words - keep the primary column
 
+def worksite_of(raw):
+    """The worksite name from the extract's Delivery Point column - the trailing
+    number is a CTMS site ref the contact doesn't use ('Avonmouth 2609676' ->
+    'Avonmouth')."""
+    return re.sub(r"\s*\d{5,}\s*$", "", clean(raw)).strip()
+
+
+def subject_for(orders, worksite, daddr, dpc):
+    """Email subject: orders + WORKSITE + address + postcode. The worksite is
+    skipped when blank or when it just repeats the address line (e.g. 'Hinkley
+    Station' / 'Hinkley Station')."""
+    ws, da = worksite_of(worksite), clean(daddr)
+    if ws and ws.lower() not in da.lower() and da.lower() not in ws.lower():
+        return f"{' / '.join(orders)} {ws} - {da} {dpc}"
+    return f"{' / '.join(orders)} {da or ws} {dpc}"
+
+
 def base_order(o):
     return str(o).split("-")[0]
 
@@ -466,7 +483,7 @@ def save_pending_batch(emails):
     Nothing is sent or drafted here."""
     slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date",
                                    "orders", "product_codes", "materials", "site",
-                                   "postcode", "source", "loose_ballast")} for e in emails]
+                                   "worksite", "postcode", "source", "loose_ballast")} for e in emails]
     with open(PENDING_BATCH, "w", encoding="utf-8") as f:
         json.dump(slim, f, indent=1, default=str)
     return slim
@@ -757,6 +774,7 @@ def load_rows(path):
         prod=ci("product / service code"), prod_code=ci("product / description"),
         qty=ci("product qty"), date=ci("delivery date"),
         daddr=ci("d address1", "d address 1"),
+        dpoint=ci("delivery point"),
         csite=ci("site name - collection"),
         instr=ci("shipping instructions", "delivery instructions"),
     )
@@ -851,7 +869,8 @@ def build_emails_multi(files):
             continue
         r0, C0, _ = bundle[0]
         orders = sorted(set(base_order(r[C["order"]]) for r, C, _ in bundle))
-        subject = f"{' / '.join(orders)} {clean(r0[C0['daddr']])} {dpc}"
+        wsite = r0[C0["dpoint"]] if C0.get("dpoint") is not None else ""
+        subject = subject_for(orders, wsite, r0[C0["daddr"]], dpc)
         items = [(r[C["qty"]], readable_product(
                     r[C["prod"]],
                     r[C["prod_code"]] if C.get("prod_code") is not None else ""))
@@ -868,7 +887,8 @@ def build_emails_multi(files):
                            product_codes=pcodes, materials=product_summary(items),
                            ballast=ballast_bags, only_ballast=(ptypes == {"ballast"}),
                            loose_ballast=any(is_loose_ballast(d) for _, d in items),
-                           site=clean(r0[C0['daddr']]), postcode=dpc, source=sources))
+                           site=clean(r0[C0['daddr']]), worksite=worksite_of(wsite),
+                           postcode=dpc, source=sources))
         # collect-first: a SEPARATE collection request to Anderton/BCM/Trough Tec,
         # sent alongside the delivery email (both go out together).
         sup = supcfg = None
