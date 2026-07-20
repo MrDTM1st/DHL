@@ -1,0 +1,297 @@
+"""Haulier directory - who they are, what they can do, where they are.
+
+Imports the "Haulier Contact List - Planner Version" workbook into
+_hauliers.json (gitignored - contacts), then answers the planner's real
+question: WHO SHOULD I RING FOR THIS JOB?
+
+    python hauliers.py import "<contact list .xlsx>"
+    python hauliers.py find --pc DN16 --need "Rail / S&C" "Artic Hiab" [--pts]
+    python hauliers.py show "Lawsons"
+
+Recommendation = capability match (hard filter) then ranked by distance from
+the collection postcode, tier, and any quote history for that lane
+(quotes.py). Distance is straight-line from postcode centroids - good enough
+to rank "who's nearest", not a routing engine.
+"""
+import os, re, sys, json, math
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PATH = os.path.join(HERE, "_hauliers.json")
+
+# capability columns start here in the Hauliers sheet (after the contact block)
+_FIRST_CAP = "Bags"
+_CONTACT_COLS = {"haulier name", "updated", "location", "postcode", "allocation",
+                 "daytime phone", "ooh phone", "email contacts"}
+_META_COLS = {"fors status & id", "oracle id", "cfx status"}
+
+
+def _yes(v):
+    return str(v or "").strip().upper().startswith("Y")
+
+
+def _clean(v):
+    return re.sub(r"\s+", " ", str(v or "")).strip()
+
+
+def _emails(v):
+    """The sheet packs several addresses into one cell, '/'-separated."""
+    return [e.strip() for e in re.split(r"[/;,]", str(v or "")) if "@" in e]
+
+
+def _outward(pc):
+    m = re.match(r"\s*([A-Za-z]{1,2}\d[A-Za-z\d]?)", str(pc or "").replace(" ", ""))
+    return m.group(1).upper() if m else ""
+
+
+def load():
+    try:
+        return json.load(open(PATH, encoding="utf-8"))
+    except Exception:
+        return {"hauliers": [], "couriers": [], "ctms": {}}
+
+
+def save(d):
+    tmp = PATH + ".tmp"
+    json.dump(d, open(tmp, "w", encoding="utf-8"), indent=1)
+    os.replace(tmp, PATH)
+
+
+def _fill(cell):
+    """The name cell's fill - the sheet encodes tier THERE, not in text."""
+    try:
+        f = cell.fill
+        if f and f.fgColor:
+            if f.fgColor.type == "rgb":
+                return str(f.fgColor.rgb)
+            if f.fgColor.type == "theme":
+                return f"theme{f.fgColor.theme}"
+    except Exception:
+        pass
+    return ""
+
+
+def _tier_from_fill(fill):
+    """Per the sheet's own 'Haulier Key' legend:
+         blue (theme4)  = Tier 1 / Fleet
+         no fill        = Tier 2
+         RED (FFFF0000) = DO NOT USE  <- must never be recommended
+    """
+    if fill.startswith("FFFF0000") or fill == "FFFF0000":
+        return "do_not_use"
+    if fill.startswith("theme4"):
+        return "tier1"
+    return "tier2"
+
+
+# legend/section rows that live in the same column as the names
+_NOT_A_HAULIER = ("haulier key", "courier key", "tier 1", "tier 2", "do not use",
+                  "region allocation", "s1 -", "s2 -", "s3 -", "s4 -")
+
+
+def import_workbook(path):
+    """Parse the contact list into the store. Re-runnable - a newer version of
+    the sheet just replaces it. Reads the name-cell FILL for tier/do-not-use."""
+    import openpyxl, warnings
+    warnings.filterwarnings("ignore")
+    wb = openpyxl.load_workbook(path, data_only=True)      # values
+    wbf = openpyxl.load_workbook(path)                     # styles (fills)
+
+    def sheet(*names):
+        for n in wb.sheetnames:
+            if n.strip().lower() in [x.lower() for x in names]:
+                return wb[n]
+        return None
+
+    out = {"hauliers": [], "couriers": [], "ctms": {}}
+
+    ct = sheet("CTMS Names")
+    if ct:
+        for r in ct.iter_rows(min_row=2, values_only=True):
+            if r[0] and r[1]:
+                out["ctms"][_clean(r[0]).lower()] = _clean(r[1])
+
+    for key, sh, capstart in (("hauliers", sheet("Hauliers"), _FIRST_CAP),
+                              ("couriers", sheet("Couriers"), "Small Van")):
+        if sh is None:
+            continue
+        shf = wbf[sh.title]
+        hdr = [_clean(sh.cell(1, c).value) for c in range(1, sh.max_column + 1)]
+        low = [h.lower() for h in hdr]
+        try:
+            ci = low.index(capstart.lower())
+        except ValueError:
+            ci = len(hdr)
+        for ri, row in enumerate(sh.iter_rows(min_row=2, values_only=True), start=2):
+            name = _clean(row[0] if row else "")
+            if not name or name.lower().startswith(_NOT_A_HAULIER):
+                continue                     # legend / section row, not a haulier
+            def g(col):
+                try:
+                    i = low.index(col)
+                    return row[i] if i < len(row) else ""
+                except ValueError:
+                    return ""
+            caps = [hdr[i] for i in range(ci, min(len(hdr), len(row)))
+                    if hdr[i] and hdr[i].lower() not in _META_COLS and _yes(row[i])]
+            tier = _tier_from_fill(_fill(shf.cell(ri, 1)))
+            out[key].append({
+                "name": name, "location": _clean(g("location")),
+                "postcode": _clean(g("postcode")).upper(),
+                "outward": _outward(g("postcode")),
+                "allocation": _clean(g("allocation")),
+                "tier": tier, "do_not_use": tier == "do_not_use",
+                "phone": _clean(g("daytime phone")), "ooh": _clean(g("ooh phone")),
+                "emails": _emails(g("email contacts")),
+                "caps": caps,
+                "ctms": out["ctms"].get(name.lower(), ""),
+                "fors": _clean(g("fors status & id")), "cfx": _clean(g("cfx status")),
+            })
+    save(out)
+    return out
+
+
+# ---- geography ---------------------------------------------------------
+def _haversine(a, b):
+    (la1, lo1), (la2, lo2) = a, b
+    r = 6371.0
+    p1, p2 = math.radians(la1), math.radians(la2)
+    dp, dl = math.radians(la2 - la1), math.radians(lo2 - lo1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h)) * 0.621371     # miles
+
+
+def geo_cache():
+    try:
+        return json.load(open(os.path.join(HERE, "_pc_geo.json"), encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _norm_pc(p):
+    """'LE12 9 BS' / 'dn161bp' -> 'LE12 9BS' / 'DN16 1BP'."""
+    s = re.sub(r"[^A-Za-z0-9]", "", str(p or "")).upper()
+    return f"{s[:-3]} {s[-3:]}" if len(s) > 3 else s
+
+
+def geocode(postcodes):
+    """Postcode centroids via postcodes.io, cached on disk. Industrial sites
+    often have TERMINATED postcodes that return nothing (DN16 1BP, the British
+    Steel depot) - those fall back to the OUTCODE centroid, which is plenty
+    accurate for ranking who's nearest."""
+    import urllib.request
+    cache = geo_cache()
+    want = {_norm_pc(p) for p in postcodes if p and _norm_pc(p)}
+    need = sorted(w for w in want if cache.get(w) is None and w not in cache)
+    for i in range(0, len(need), 90):
+        try:
+            req = urllib.request.Request(
+                "https://api.postcodes.io/postcodes",
+                data=json.dumps({"postcodes": need[i:i + 90]}).encode(),
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=20) as r:
+                res = json.loads(r.read()).get("result") or []
+            for x in res:
+                q = _norm_pc(x.get("query", ""))
+                rr = x.get("result")
+                cache[q] = [rr["latitude"], rr["longitude"]] if rr else None
+        except Exception:
+            break
+    # outcode fallback for anything still unresolved
+    for w in sorted(w for w in want if not cache.get(w)):
+        oc = _outward(w)
+        if not oc:
+            continue
+        key = f"OUTCODE:{oc}"
+        if key not in cache:
+            try:
+                with urllib.request.urlopen(
+                        f"https://api.postcodes.io/outcodes/{oc}", timeout=15) as r:
+                    rr = json.loads(r.read()).get("result") or {}
+                cache[key] = [rr["latitude"], rr["longitude"]] if rr.get("latitude") else None
+            except Exception:
+                cache[key] = None
+        if cache.get(key):
+            cache[w] = cache[key]
+    json.dump(cache, open(os.path.join(HERE, "_pc_geo.json"), "w", encoding="utf-8"))
+    return cache
+
+
+# ---- the actual question ----------------------------------------------
+def recommend(from_pc, needs=(), to_pc="", limit=6, include_couriers=False):
+    """Who should I ring for this job? Capability is a HARD filter (no point
+    ranking someone who can't carry it); the ranking is distance from the
+    collection, then tier, then whether we have quote history for the lane."""
+    d = load()
+    pool = list(d.get("hauliers", []))
+    if include_couriers:
+        pool += list(d.get("couriers", []))
+    needs = [str(n).strip().lower() for n in needs if str(n).strip()]
+    ok = []
+    for h in pool:
+        if h.get("do_not_use"):
+            continue                     # marked DO NOT USE on the sheet - never suggest
+        caps = [c.lower() for c in h.get("caps", [])]
+        if all(any(n in c for c in caps) for n in needs):
+            ok.append(h)
+    cache = geocode([from_pc] + [h.get("postcode") for h in ok])
+    origin = cache.get(_norm_pc(from_pc))
+    try:
+        import quotes
+        est = quotes.estimate(from_pc, to_pc) if to_pc else None
+    except Exception:
+        est = None
+    known = {q["haulier"].lower() for q in (est or {}).get("quotes", [])}
+    for h in ok:
+        g = cache.get(_norm_pc(h.get("postcode", "")))
+        h["miles"] = round(_haversine(origin, g), 1) if (origin and g) else None
+        h["rank_tier"] = 1 if h.get("tier") == "tier1" else 2      # fleet first
+        h["used_before"] = h["name"].lower() in known
+    # nearest first, fleet ahead of tier 2 at similar distance, then a haulier
+    # we've already used on this lane
+    ok.sort(key=lambda h: (h["rank_tier"], h["miles"] is None,
+                           h["miles"] or 9e9, not h["used_before"]))
+    return ok[:limit], est
+
+
+def main():
+    a = sys.argv[1:]
+    if a and a[0] == "import" and len(a) > 1:
+        d = import_workbook(a[1])
+        print(f"imported {len(d['hauliers'])} haulier(s), {len(d['couriers'])} courier(s), "
+              f"{len(d['ctms'])} CTMS id(s) -> _hauliers.json")
+    elif a and a[0] == "find":
+        pc, needs, to = "", [], ""
+        i = 1
+        while i < len(a):
+            if a[i] == "--pc": pc = a[i + 1]; i += 2
+            elif a[i] == "--to": to = a[i + 1]; i += 2
+            elif a[i] == "--need":
+                i += 1
+                while i < len(a) and not a[i].startswith("--"):
+                    needs.append(a[i]); i += 1
+            else: i += 1
+        hits, est = recommend(pc, needs, to)
+        if est:
+            print(f"lane estimate: ~£{est['typical']:.0f} "
+                  f"(£{est['price_low']:.0f}-£{est['price_high']:.0f}, {est['basis']})\n")
+        for h in hits:
+            m = f"{h['miles']}mi" if h["miles"] is not None else "  ? "
+            tag = "FLEET" if h.get("tier") == "tier1" else "tier2"
+            print(f"  {m:>7}  {tag:5}  {h['name'][:26]:26} {h['location'][:15]:15} "
+                  f"{h['phone'][:22]:22} {'(used before)' if h['used_before'] else ''}")
+            if h["emails"]: print(f"           {'; '.join(h['emails'][:2])}")
+    elif a and a[0] == "show" and len(a) > 1:
+        q = a[1].lower()
+        for h in load().get("hauliers", []) + load().get("couriers", []):
+            if q in h["name"].lower():
+                print(f"\n{h['name']}  [{h.get('ctms') or 'no CTMS id'}]")
+                print(f"  {h['location']} {h['postcode']}  | tier alloc: {h['allocation']}")
+                print(f"  day {h['phone']} | ooh {h['ooh']}")
+                print(f"  {'; '.join(h['emails'])}")
+                print(f"  can: {', '.join(h['caps'])}")
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

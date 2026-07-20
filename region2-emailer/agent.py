@@ -131,9 +131,26 @@ def report(state, detail, output="", email=None):
         pass
 
 
+def _slim_hauliers():
+    """Just enough for the map's haulier layer. DO-NOT-USE hauliers are never
+    published - they must not show up as an option anywhere."""
+    try:
+        import hauliers
+        out = []
+        for h in hauliers.load().get("hauliers", []):
+            if h.get("do_not_use") or not h.get("postcode"):
+                continue
+            out.append({"name": h["name"], "loc": h.get("location", ""),
+                        "pc": h.get("postcode", ""), "tier": h.get("tier", ""),
+                        "phone": (h.get("phone") or "")[:40]})
+        return out
+    except Exception:
+        return []
+
+
 def push_panel():
-    """Persistent dashboard panel: site decisions, known sites, handover, team.
-    Separate from /api/status so job chatter never wipes it. Safe to call often."""
+    """Persistent dashboard panel: site decisions, known sites, handover, team,
+    hauliers. Separate from /api/status so job chatter never wipes it."""
     try:
         ss = site_store()
         team = team_config()
@@ -143,6 +160,7 @@ def push_panel():
             "handover": handover.panel_state(handover.load(HANDOVER_PATH)),
             "team": [{"name": m.get("name", ""), "email": m.get("email", "")}
                      for m in team.get("members", [])],
+            "hauliers": _slim_hauliers(),
         })
     except Exception:
         pass

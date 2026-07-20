@@ -546,6 +546,7 @@ let holidayOpen=false;
 function toggleHoliday(){ holidayOpen=!holidayOpen; renderPanel(); }
 function renderPanel(){
   const p=panelCache||{};
+  if((p.hauliers||[]).length !== _mapHauliers.length){ _mapHauliers=p.hauliers||[]; _mapSig=''; renderMap(); }
   const decs=p.decisions||[];
   const mp=document.getElementById('matchpanel');
   if(decs.length){
@@ -704,7 +705,7 @@ async function geocode(pcs){
   }
   try{ localStorage.setItem('r2geo',JSON.stringify(GEO)); }catch(e){}
 }
-let _mapRecs=[], _mapBatch=[];
+let _mapRecs=[], _mapBatch=[], _mapHauliers=[];
 async function renderMap(){
   mapInit(); if(!MAP) return;
   const pts=[];
@@ -713,6 +714,8 @@ async function renderMap(){
   _mapBatch.forEach(e=>{ if(e.postcode) pts.push({pc:e.postcode, kind:'batch',
     label:(e.orders||[]).join(' / ')+' — '+((e.worksite||e.site)||'')+(e.date?(' · '+e.date):'')}); });
   DEPOTS.forEach(d=>pts.push({pc:d[1], kind:'depot', label:d[0], la:d[2], lo:d[3]}));
+  (_mapHauliers||[]).forEach(h=>{ if(h.pc) pts.push({pc:h.pc, kind:'haulier',
+    label:(h.tier==='tier1'?'FLEET · ':'')+h.name+(h.loc?' — '+h.loc:'')+(h.phone?'<br>'+h.phone:'')}); });
   const sig=JSON.stringify(pts.map(p=>[p.pc,p.kind]));
   if(sig===_mapSig) return;              // nothing changed - don't churn markers
   await geocode(pts.map(p=>p.pc));
