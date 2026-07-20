@@ -744,8 +744,10 @@ function mapInit(){
   L.tileLayer(TILES,{maxZoom:19, subdomains:'abcd', attribution:TILEATTR}).addTo(MAP);
   MLAYER=L.layerGroup().addTo(MAP);
 }
+function outcodeOf(p){ const m=String(p||'').toUpperCase().replace(/\s+/g,'').match(/^([A-Z]{1,2}\d[A-Z\d]?)/); return m?m[1]:''; }
 async function geocode(pcs){
-  const need=[...new Set(pcs.map(pcNorm).filter(p=>p&&GEO[p]===undefined))];
+  const want=[...new Set(pcs.map(pcNorm).filter(Boolean))];
+  const need=want.filter(p=>GEO[p]===undefined);
   for(let i=0;i<need.length;i+=90){
     try{
       const r=await fetch('https://api.postcodes.io/postcodes',{method:'POST',
@@ -754,6 +756,22 @@ async function geocode(pcs){
       const d=await r.json();
       (d.result||[]).forEach(x=>{ GEO[pcNorm(x.query)] = x.result ? {la:x.result.latitude,lo:x.result.longitude} : null; });
     }catch(e){}
+  }
+  // industrial sites often have TERMINATED postcodes that resolve to nothing
+  // (DN16 1BP - British Steel). Fall back to the OUTCODE centroid so a run
+  // still measures instead of silently showing nothing.
+  for(const p of want){
+    if(GEO[p]) continue;
+    const oc=outcodeOf(p); if(!oc) continue;
+    const key='OC:'+oc;
+    if(GEO[key]===undefined){
+      try{
+        const r=await fetch('https://api.postcodes.io/outcodes/'+oc);
+        const d=await r.json();
+        GEO[key]= d.result ? {la:d.result.latitude, lo:d.result.longitude} : null;
+      }catch(e){ GEO[key]=null; }
+    }
+    if(GEO[key]) GEO[p]=GEO[key];
   }
   try{ localStorage.setItem('r2geo',JSON.stringify(GEO)); }catch(e){}
 }
