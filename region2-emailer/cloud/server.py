@@ -181,8 +181,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .hnm{ flex:1; min-width:0; }
   .hnm b{ font-weight:600; }
   .hnm span{ color:var(--muted); }
-  .fleet{ font-size:9.5px; font-weight:700; letter-spacing:.04em; background:var(--gobg); color:var(--goink);
-          border:1px solid var(--gobd); border-radius:99px; padding:1px 6px; margin-left:6px; }
+  .fleet,.t1,.t2{ font-size:9.5px; font-weight:700; letter-spacing:.04em;
+          border-radius:99px; padding:1px 6px; margin-left:6px; white-space:nowrap; }
+  .fleet{ background:var(--gobg); color:var(--goink); border:1px solid var(--gobd); }
+  .t1{ background:#eef2fb; color:#3a5185; border:1px solid #dde5f5; }
+  .t2{ background:var(--seg); color:var(--muted); border:1px solid var(--border2); }
   .xbtn{ float:right; cursor:pointer; color:var(--muted); font-size:20px; line-height:1; }
   .leaflet-container{ font:inherit; }
   .maplegend{ font-size:11.5px; color:var(--muted); margin-top:8px; }
@@ -866,8 +869,10 @@ function recommendFor(r, geo){
     const g=geo[pcNorm(h.pc||'')];
     return Object.assign({}, h, {miles: origin&&g ? milesBetween(origin,g) : null});
   });
-  out.sort((a,b)=>(a.tier==='tier1'?0:1)-(b.tier==='tier1'?0:1)
-                 || (a.miles===null)-(b.miles===null) || (a.miles||9e9)-(b.miles||9e9));
+  // order of approach: OUR fleet (DHL NOC) -> tier 1 -> tier 2. Distance only
+  // breaks ties inside a band, so a nearer tier-2 never jumps a tier-1.
+  out.forEach(h=>{ h.rank = h.fleet ? 0 : (h.tier==='tier1' ? 1 : 2); });
+  out.sort((a,b)=>a.rank-b.rank || (a.miles===null)-(b.miles===null) || (a.miles||9e9)-(b.miles||9e9));
   return {need, list: out.slice(0,6)};
 }
 async function viewOrder(encId){
@@ -916,9 +921,10 @@ async function viewOrder(encId){
     pts.push([g.la,g.lo]); });
   setTimeout(()=>{ DMAP.invalidateSize(); if(pts.length) DMAP.fitBounds(pts,{padding:[28,28]}); }, 60);
 
+  const BADGE=['<span class="fleet">OUR FLEET</span>','<span class="t1">TIER 1</span>','<span class="t2">TIER 2</span>'];
   document.getElementById('drecs').innerHTML = list.length ? list.map(h=>
       '<div class="hrow"><span class="hmi">'+(h.miles!==null?h.miles+' mi':'—')+'</span>'
-      +'<span class="hnm"><b>'+esc(h.name)+'</b>'+(h.tier==='tier1'?'<span class="fleet">FLEET</span>':'')
+      +'<span class="hnm"><b>'+esc(h.name)+'</b>'+BADGE[h.rank]
       +'<br><span>'+esc(h.loc||'')+' · '+esc(h.phone||'')+(h.email?' · '+esc(h.email):'')+'</span></span></div>'
     ).join('')
     : '<span class="hint">No haulier in the list matches '+esc(need.join(', ')||'this job')+'.</span>';

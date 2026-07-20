@@ -83,6 +83,21 @@ def _tier_from_fill(fill):
     return "tier2"
 
 
+def _is_own_fleet(name):
+    """DHL's OWN fleet (DHL NOC) - our vehicles, so it's approached before any
+    external haulier. The sheet lumps it into the blue 'Tier 1 / Fleet' band,
+    but Delali's order of approach is: own fleet -> tier 1 -> tier 2."""
+    return "dhl" in str(name or "").lower()
+
+
+def rank_of(h):
+    """0 = our own fleet, 1 = tier 1, 2 = tier 2. Distance only ever breaks
+    ties WITHIN a band - a nearer tier-2 never jumps a tier-1."""
+    if h.get("own_fleet"):
+        return 0
+    return 1 if h.get("tier") == "tier1" else 2
+
+
 # legend/section rows that live in the same column as the names
 _NOT_A_HAULIER = ("haulier key", "courier key", "tier 1", "tier 2", "do not use",
                   "region allocation", "s1 -", "s2 -", "s3 -", "s4 -")
@@ -140,6 +155,7 @@ def import_workbook(path):
                 "outward": _outward(g("postcode")),
                 "allocation": _clean(g("allocation")),
                 "tier": tier, "do_not_use": tier == "do_not_use",
+                "own_fleet": _is_own_fleet(name) and tier != "do_not_use",
                 "phone": _clean(g("daytime phone")), "ooh": _clean(g("ooh phone")),
                 "emails": _emails(g("email contacts")),
                 "caps": caps,
@@ -244,11 +260,12 @@ def recommend(from_pc, needs=(), to_pc="", limit=6, include_couriers=False):
     for h in ok:
         g = cache.get(_norm_pc(h.get("postcode", "")))
         h["miles"] = round(_haversine(origin, g), 1) if (origin and g) else None
-        h["rank_tier"] = 1 if h.get("tier") == "tier1" else 2      # fleet first
+        h["rank"] = rank_of(h)
         h["used_before"] = h["name"].lower() in known
-    # nearest first, fleet ahead of tier 2 at similar distance, then a haulier
-    # we've already used on this lane
-    ok.sort(key=lambda h: (h["rank_tier"], h["miles"] is None,
+    # Delali's order of approach: our own fleet, then tier 1, then tier 2.
+    # Distance (and a haulier we've used on this lane) only breaks ties inside
+    # a band - a closer tier-2 must never outrank a tier-1.
+    ok.sort(key=lambda h: (h["rank"], h["miles"] is None,
                            h["miles"] or 9e9, not h["used_before"]))
     return ok[:limit], est
 
@@ -276,8 +293,8 @@ def main():
                   f"(£{est['price_low']:.0f}-£{est['price_high']:.0f}, {est['basis']})\n")
         for h in hits:
             m = f"{h['miles']}mi" if h["miles"] is not None else "  ? "
-            tag = "FLEET" if h.get("tier") == "tier1" else "tier2"
-            print(f"  {m:>7}  {tag:5}  {h['name'][:26]:26} {h['location'][:15]:15} "
+            tag = ("OUR FLEET", "TIER 1  ", "TIER 2  ")[h["rank"]]
+            print(f"  {m:>7}  {tag}  {h['name'][:26]:26} {h['location'][:15]:15} "
                   f"{h['phone'][:22]:22} {'(used before)' if h['used_before'] else ''}")
             if h["emails"]: print(f"           {'; '.join(h['emails'][:2])}")
     elif a and a[0] == "show" and len(a) > 1:
