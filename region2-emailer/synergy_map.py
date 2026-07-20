@@ -119,22 +119,21 @@ def map_orders(path):
             unmatched[site] = unmatched.get(site, 0) + 1
         sd = sd or {}
 
-        # Delivery-site matching + self-learning (SEPARATE store from the
-        # collection-site pop-up above). A brand-new delivery site is learned
-        # silently; a name that is a near-miss to one already known is held for a
-        # dashboard decision (likely a misspelling), so it never guesses wrong.
+        # The EXACT match in the synergy flow is on the COLLECTION site only -
+        # the template's Supplier Details VLOOKUP (Delali, 2026-07-20). The
+        # Delivery Point passes through from the extract UNTOUCHED: never
+        # canonicalised, never held - the template copies it verbatim, and a
+        # held row here just delayed real orders. Brand-new delivery names are
+        # still learned silently so the site list keeps growing.
         draw = str(g(r, "dpoint")).strip()
         dcanon = draw
         if draw:
-            msite, res = deliv_store.match(draw)
-            if msite:
-                dcanon = msite                       # exact / learned / confident fuzzy
-            elif res:                                # similar to a known site -> ask
-                deliv_store.request_decision(draw, context=f"order {str(g(r, 'order')).strip()}")
-                held[draw] = held.get(draw, 0) + 1
-                continue                             # hold row; resolve then re-run
-            else:
-                deliv_store.add_sites([draw])        # first time seen -> learn it
+            try:
+                msite, res = deliv_store.match(draw)
+                if not msite and not res:
+                    deliv_store.add_sites([draw])
+            except Exception:
+                pass
 
         cdate = _as_dt(g(r, "cdate"))
         ct = cte = ""
