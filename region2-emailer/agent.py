@@ -142,7 +142,9 @@ def _slim_hauliers():
                 continue
             out.append({"name": h["name"], "loc": h.get("location", ""),
                         "pc": h.get("postcode", ""), "tier": h.get("tier", ""),
-                        "phone": (h.get("phone") or "")[:40]})
+                        "phone": (h.get("phone") or "")[:40],
+                        "email": (h.get("emails") or [""])[0],
+                        "caps": h.get("caps", [])})   # capability match happens in the browser
         return out
     except Exception:
         return []

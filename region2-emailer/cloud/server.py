@@ -159,6 +159,31 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .dchip a{ text-decoration:none; margin-left:5px; font-weight:700; }
   .dmiss{ font-size:11px; color:var(--red); font-weight:600; }
   #map{ height:400px; border-radius:12px; background:var(--seg); z-index:0; }
+  /* ---- order detail overlay ---- */
+  .ovl{ position:fixed; inset:0; background:rgba(20,20,18,.45); z-index:900;
+        display:none; align-items:flex-start; justify-content:center; padding:24px 16px; overflow:auto; }
+  .ovl.on{ display:flex; }
+  .sheet{ background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow);
+          width:100%; max-width:920px; padding:20px 22px 22px; }
+  .sheet h3{ margin:0 0 2px; font-size:17px; }
+  .sheetsub{ color:var(--muted); font-size:12.5px; margin-bottom:14px; }
+  .sheetgrid{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:760px){ .sheetgrid{ grid-template-columns:1fr; } }
+  #dmap{ height:300px; border-radius:12px; background:var(--seg); z-index:0; }
+  .kv{ display:grid; grid-template-columns:112px 1fr; gap:5px 10px; font-size:12.5px; }
+  .kv dt{ color:var(--muted); }
+  .kv dd{ margin:0; font-weight:600; }
+  .runbar{ display:flex; align-items:center; gap:8px; margin:10px 0 4px; font-size:12px; color:var(--muted); }
+  .runbar b{ color:var(--text); font-weight:600; }
+  .hrow{ display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid var(--line); font-size:12.5px; }
+  .hrow:last-child{ border-bottom:none; }
+  .hmi{ width:56px; text-align:right; font-family:'Geist Mono',ui-monospace,monospace; color:var(--muted); }
+  .hnm{ flex:1; min-width:0; }
+  .hnm b{ font-weight:600; }
+  .hnm span{ color:var(--muted); }
+  .fleet{ font-size:9.5px; font-weight:700; letter-spacing:.04em; background:var(--gobg); color:var(--goink);
+          border:1px solid var(--gobd); border-radius:99px; padding:1px 6px; margin-left:6px; }
+  .xbtn{ float:right; cursor:pointer; color:var(--muted); font-size:20px; line-height:1; }
   .leaflet-container{ font:inherit; }
   .maplegend{ font-size:11.5px; color:var(--muted); margin-top:8px; }
   .maplegend b{ font-weight:600; }
@@ -393,6 +418,29 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
       <span class="dotl" style="background:#d99e00"></span>today's batch
       <span class="dotl" style="background:#1b1c1e"></span>collection depot
       <span class="dotl" style="background:#1da35e"></span>haulier (when the contact sheet is loaded)</div>
+  </div>
+</div>
+
+<div class="ovl" id="detail" onclick="if(event.target===this)closeDetail()">
+  <div class="sheet">
+    <span class="xbtn" onclick="closeDetail()">&times;</span>
+    <h3 id="dttl">Order</h3>
+    <div class="sheetsub" id="dsub"></div>
+    <div class="sheetgrid">
+      <div>
+        <dl class="kv" id="dkv"></dl>
+        <div class="runbar" id="drun"></div>
+      </div>
+      <div>
+        <div id="dmap"></div>
+        <div class="maplegend" style="margin-top:6px;">
+          <span class="dotl" style="background:#1b1c1e"></span>collection
+          <span class="dotl" style="background:#d40511"></span>delivery
+          <span class="dotl" style="background:#1da35e"></span>recommended haulier</div>
+      </div>
+    </div>
+    <div class="lbl" style="margin:16px 0 2px;">Who to contact <span class="hint" style="font-weight:400" id="dneed"></span></div>
+    <div id="drecs"><span class="hint">…</span></div>
   </div>
 </div>
 
@@ -677,6 +725,11 @@ function runChasers(){
 function seg(state){ return '<span class="seg '+state+'"></span>'; }
 // ---- map: deliveries + collection depots (hauliers layer once the contact
 // sheet with locations is provided). Geocoding via postcodes.io, cached.
+// Carto "Positron" - the clean, low-contrast basemap. Roads are muted and
+// minor detail drops away, so pins read clearly (OSM's default is far too
+// road-dense for this).
+const TILES='https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+const TILEATTR='&copy; OpenStreetMap &copy; CARTO';
 let MAP=null, MLAYER=null, _mapSig='';
 const GEO=JSON.parse(localStorage.getItem('r2geo')||'{}');
 // depots carry fixed coords - industrial postcodes are sometimes terminated
@@ -688,8 +741,7 @@ function pcNorm(p){ return String(p||'').toUpperCase().replace(/\\s+/g,' ').trim
 function mapInit(){
   if(MAP || typeof L==='undefined' || !document.getElementById('map')) return;
   MAP=L.map('map',{scrollWheelZoom:false}).setView([52.8,-1.4],6);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    {maxZoom:18, attribution:'&copy; OpenStreetMap'}).addTo(MAP);
+  L.tileLayer(TILES,{maxZoom:19, subdomains:'abcd', attribution:TILEATTR}).addTo(MAP);
   MLAYER=L.layerGroup().addTo(MAP);
 }
 async function geocode(pcs){
@@ -763,6 +815,99 @@ function detChips(r){
   if(miss.length) out+='<span class="dmiss">still needed: '+esc(miss.join(', '))+'</span>';
   return out ? '<div class="tkdet">'+out+'</div>' : '';
 }
+// ---- order detail view: the job, the run on a map, and who to ring ----
+let DMAP=null, DLAYER=null;
+function milesBetween(a,b){
+  if(!a||!b) return null;
+  const R=3958.8, t=Math.PI/180;
+  const dla=(b.la-a.la)*t, dlo=(b.lo-a.lo)*t;
+  const h=Math.sin(dla/2)**2 + Math.cos(a.la*t)*Math.cos(b.la*t)*Math.sin(dlo/2)**2;
+  return Math.round(2*R*Math.asin(Math.sqrt(h))*10)/10;
+}
+// what this job actually needs, from the order + whatever the customer told us
+function needsFor(r){
+  const need=[], d=r.details||{};
+  const mats=((r.materials||'')+' '+(r.product_codes||[]).join(' ')).toLowerCase();
+  if(/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
+  if(/ballast|bag/.test(mats)) need.push('bags');
+  const off=(d.offloading||{}).value||'';
+  if(off==='MOFFETT') need.push('moffett');
+  else if(off==='HIAB') need.push(((d.artic_access||{}).value==='no') ? 'rigid hiab' : 'artic hiab');
+  if(((d.rear_steer||{}).value)==='yes') need.push('rear steer');
+  if(((d.pts||{}).value)==='yes') need.push('pts');
+  return need;
+}
+function recommendFor(r, geo){
+  const need=needsFor(r);
+  const from=pcNorm(r.collection_pc||''), to=pcNorm(r.postcode||'');
+  const origin=geo[from]||geo[to];        // rank from the collection end when we have it
+  const out=(_mapHauliers||[]).filter(h=>{
+    const caps=(h.caps||[]).map(c=>c.toLowerCase());
+    return need.every(n=>caps.some(c=>c.includes(n)));
+  }).map(h=>{
+    const g=geo[pcNorm(h.pc||'')];
+    return Object.assign({}, h, {miles: origin&&g ? milesBetween(origin,g) : null});
+  });
+  out.sort((a,b)=>(a.tier==='tier1'?0:1)-(b.tier==='tier1'?0:1)
+                 || (a.miles===null)-(b.miles===null) || (a.miles||9e9)-(b.miles||9e9));
+  return {need, list: out.slice(0,6)};
+}
+async function viewOrder(encId){
+  const id=decodeURIComponent(encId);
+  const r=(_mapRecs||[]).find(x=>x.id===id);
+  if(!r) return;
+  document.getElementById('detail').classList.add('on');
+  document.getElementById('dttl').textContent=(r.orders||[]).join(' / ');
+  document.getElementById('dsub').textContent=[r.worksite,r.site,r.postcode].filter(Boolean).join(' · ');
+  const d=r.details||{}, v=k=>detVal(k,d[k]);
+  const rows=[['Materials',r.materials],['Delivery date',r.delivery_date],
+    ['Time',v('time')],['Contact',r.to],['Site contact',v('contact')],
+    ['Collection',[r.collection_site,r.collection_pc].filter(Boolean).join(' ')],
+    ['Offloading',v('offloading')],['Artic access',v('artic_access')],
+    ['Rear steer',v('rear_steer')],['PTS',v('pts')],['What3Words',v('what3words')]];
+  document.getElementById('dkv').innerHTML=rows.filter(x=>x[1])
+    .map(x=>'<dt>'+esc(x[0])+'</dt><dd>'+esc(x[1])+'</dd>').join('');
+  document.getElementById('drecs').innerHTML='<span class="hint">finding hauliers…</span>';
+
+  const pcs=[r.collection_pc,r.postcode].concat((_mapHauliers||[]).map(h=>h.pc)).filter(Boolean);
+  await geocode(pcs);
+  const cg=GEO[pcNorm(r.collection_pc||'')], dg=GEO[pcNorm(r.postcode||'')];
+  const run=milesBetween(cg,dg);
+  document.getElementById('drun').innerHTML = run!==null
+    ? 'Run: <b>'+esc(r.collection_site||'collection')+'</b> &rarr; <b>'+esc(r.worksite||r.site||'site')+'</b> &nbsp;<b>'+run+' mi</b>'
+    : (r.collection_pc ? '' : '<i>collection end not on this record (added for orders built from now on)</i>');
+
+  // map: collection, delivery, the line between, and the top recommendations
+  if(!DMAP){
+    DMAP=L.map('dmap',{scrollWheelZoom:false}).setView([52.8,-1.4],6);
+    L.tileLayer(TILES,{maxZoom:19,subdomains:'abcd',attribution:TILEATTR}).addTo(DMAP);
+    DLAYER=L.layerGroup().addTo(DMAP);
+  }
+  DLAYER.clearLayers();
+  const {need, list}=recommendFor(r, GEO);
+  document.getElementById('dneed').textContent = need.length ? '· needs '+need.join(', ') : '';
+  const pts=[];
+  if(cg){ L.circleMarker([cg.la,cg.lo],{radius:8,color:'#1b1c1e',weight:2,fillColor:'#1b1c1e',fillOpacity:.75})
+          .addTo(DLAYER).bindPopup('Collection<br>'+esc(r.collection_site||'')); pts.push([cg.la,cg.lo]); }
+  if(dg){ L.circleMarker([dg.la,dg.lo],{radius:8,color:'#d40511',weight:2,fillColor:'#d40511',fillOpacity:.75})
+          .addTo(DLAYER).bindPopup('Delivery<br>'+esc(r.worksite||r.site||'')); pts.push([dg.la,dg.lo]); }
+  if(cg&&dg) L.polyline([[cg.la,cg.lo],[dg.la,dg.lo]],{color:'#8a8b88',weight:2,dashArray:'5,6'}).addTo(DLAYER);
+  list.slice(0,4).forEach(h=>{ const g=GEO[pcNorm(h.pc||'')]; if(!g) return;
+    L.circleMarker([g.la,g.lo],{radius:6,color:'#1da35e',weight:2,fillColor:'#1da35e',fillOpacity:.6})
+     .addTo(DLAYER).bindPopup(esc(h.name)+'<br>'+esc(h.loc||'')+'<br>'+esc(h.phone||''));
+    pts.push([g.la,g.lo]); });
+  setTimeout(()=>{ DMAP.invalidateSize(); if(pts.length) DMAP.fitBounds(pts,{padding:[28,28]}); }, 60);
+
+  document.getElementById('drecs').innerHTML = list.length ? list.map(h=>
+      '<div class="hrow"><span class="hmi">'+(h.miles!==null?h.miles+' mi':'—')+'</span>'
+      +'<span class="hnm"><b>'+esc(h.name)+'</b>'+(h.tier==='tier1'?'<span class="fleet">FLEET</span>':'')
+      +'<br><span>'+esc(h.loc||'')+' · '+esc(h.phone||'')+(h.email?' · '+esc(h.email):'')+'</span></span></div>'
+    ).join('')
+    : '<span class="hint">No haulier in the list matches '+esc(need.join(', ')||'this job')+'.</span>';
+}
+function closeDetail(){ document.getElementById('detail').classList.remove('on'); }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDetail(); });
+
 function confirmDetail(encId, field, encVal, asIs){
   let v=decodeURIComponent(encVal);
   if(!asIs){ const nv=prompt('Correct value for '+field+':', v); if(nv===null||!nv.trim()) return; v=nv.trim(); }
@@ -798,7 +943,8 @@ async function loadTracker(){
       return '<div class="tkitem"><div class="tkrow'+(u?' urgent':'')+'">'
         + '<div class="tkmeta"><div class="ord">'+esc((r.orders||[]).join(' / '))+mat+(u?' <span class="pri">&le;3 DAYS</span>':'')+'</div>'
         + '<div class="sub">'+esc(r.to||'')+'</div>'
-        + '<button class="btn mini" style="margin-top:.45rem" onclick="bookedCall(\\''+encodeURIComponent(r.id||'')+'\\')">Booked via call</button>'
+        + '<button class="btn mini" style="margin-top:.45rem" onclick="viewOrder(\\''+encodeURIComponent(r.id||'')+'\\')">View</button>'
+        + '<button class="btn mini" style="margin-top:.45rem; margin-left:.3rem" onclick="bookedCall(\\''+encodeURIComponent(r.id||'')+'\\')">Booked via call</button>'
         + '</div>'
         + '<div class="pipewrap">'+pipe+'<div class="pipecap">'+emailedCap+'</div></div>'
         + '<div class="tktime'+(amber?' amber':'')+'"><b>'+esc(status)+'</b><br>'+due+'</div>'

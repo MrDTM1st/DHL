@@ -37,7 +37,10 @@ def _send_one(outlook, acct, e):
     tracker.log(orders=e.get("orders", []), to=e["to"], name=e.get("name", ""),
                 product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
                 site=e.get("site", ""), postcode=e.get("postcode", ""),
-                delivery_date=e["date"], source=e.get("source", ""), status="sent")
+                delivery_date=e["date"], source=e.get("source", ""), status="sent",
+                worksite=e.get("worksite", ""),
+                collection_site=e.get("collection_site", ""),
+                collection_pc=e.get("collection_pc", ""))
     metrics.log("waitlist_released", orders=e.get("orders", []), to=e["to"])
     return True, "sent"
 

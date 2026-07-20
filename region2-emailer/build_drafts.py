@@ -483,7 +483,8 @@ def save_pending_batch(emails):
     Nothing is sent or drafted here."""
     slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date",
                                    "orders", "product_codes", "materials", "site",
-                                   "worksite", "postcode", "source", "loose_ballast")} for e in emails]
+                                   "worksite", "postcode", "source", "loose_ballast",
+                                   "collection_site", "collection_pc")} for e in emails]
     with open(PENDING_BATCH, "w", encoding="utf-8") as f:
         json.dump(slim, f, indent=1, default=str)
     return slim
@@ -776,6 +777,9 @@ def load_rows(path):
         daddr=ci("d address1", "d address 1"),
         dpoint=ci("delivery point"),
         csite=ci("site name - collection"),
+        # the collection end (unprefixed columns) - needed to show the run on
+        # the map and to recommend a haulier near the pick-up
+        cpc=ci("postcode"), caddr=ci("address1", "address 1"),
         instr=ci("shipping instructions", "delivery instructions"),
     )
     return rows[1:], C
@@ -888,7 +892,9 @@ def build_emails_multi(files):
                            ballast=ballast_bags, only_ballast=(ptypes == {"ballast"}),
                            loose_ballast=any(is_loose_ballast(d) for _, d in items),
                            site=clean(r0[C0['daddr']]), worksite=worksite_of(wsite),
-                           postcode=dpc, source=sources))
+                           postcode=dpc, source=sources,
+                           collection_site=clean(r0[C0['csite']]) if C0.get('csite') is not None else "",
+                           collection_pc=clean(r0[C0['cpc']]) if C0.get('cpc') is not None else ""))
         # collect-first: a SEPARATE collection request to Anderton/BCM/Trough Tec,
         # sent alongside the delivery email (both go out together).
         sup = supcfg = None
@@ -958,7 +964,10 @@ def create_drafts(ns, emails):
         tracker.log(orders=e.get("orders", []), to=e["to"], name=e.get("name", ""),
                     product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
                     site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
-                    source=e.get("source", ""), status="drafted")
+                    source=e.get("source", ""), status="drafted",
+                    worksite=e.get("worksite", ""),
+                    collection_site=e.get("collection_site", ""),
+                    collection_pc=e.get("collection_pc", ""))
         made += 1
     return made
 
