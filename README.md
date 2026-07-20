@@ -17,3 +17,15 @@ browser. See `region2-emailer/cloud/README.md` for architecture and setup.
 
 No data is stored on the host: commands and status live in memory only, and
 all email/Outlook work happens on the home PC.
+
+## What isn't in this repo
+
+The code is here; the **data isn't**. Contacts, keys, live order state and
+everything the tool has learned are gitignored and live only on the home PC.
+
+**[`region2-emailer/LOCAL_STATE.md`](region2-emailer/LOCAL_STATE.md)** maps all
+of it — what each local file holds, which ones are irreplaceable and worth
+backing up, the rules the code encodes (region scope, booking detection,
+delivery-detail normalisation, haulier order of approach), how to restore on a
+new machine, and the known issues. Read that first if you're picking this up
+cold or after a break.
