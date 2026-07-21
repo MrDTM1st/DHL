@@ -183,6 +183,28 @@ def map_orders(path):
 
 UNMATCHED_FILE = os.path.join(HERE, "_synergy_unmatched.json")
 NEWSITES_FILE = os.path.join(HERE, "_synergy_newsites.json")
+ROUTES_FILE = os.path.join(HERE, "_synergy_routes.json")
+
+
+def write_routes(mapped):
+    """Dump this batch's collection->delivery legs for the dashboard Map tab.
+    One row per mapped order line; the browser geocodes the postcodes and draws
+    the road route. Best-effort - a failure here never blocks the CSV build."""
+    try:
+        routes = [{
+            "order": str(m.get("Customer Order No", "") or "").strip(),
+            "coll_site": m.get("Site Name - Collection", "") or "",
+            "coll_pc": str(m.get("Postcode", "") or "").strip(),
+            "deliv_site": m.get("Delivery Point", "") or "",
+            "deliv_pc": str(m.get("D Postcode", "") or "").strip(),
+            "product": m.get("Product / Description", "") or "",
+            "deliv_date": str(m.get("delivery time", "") or "").split(" ")[0],
+        } for m in mapped]
+        with open(ROUTES_FILE, "w", encoding="utf-8") as f:
+            json.dump({"at": datetime.now().strftime("%d/%m %H:%M"), "routes": routes},
+                      f, indent=1, default=str)
+    except Exception:
+        pass
 
 
 def main():
@@ -204,6 +226,7 @@ def main():
     with open(UNMATCHED_FILE, "w", encoding="utf-8") as f:
         json.dump([{"site": s, "count": n} for s, n in sorted(unmatched.items(), key=lambda x: -x[1])],
                   f, indent=1)
+    write_routes(mapped)
     records = nr_csv.transform(mapped)
     name = "NR_upload_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     out = nr_csv.write_csv(records, outbox.path(name))

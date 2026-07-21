@@ -86,6 +86,16 @@ def push_waitlist():
         pass
 
 
+def push_map():
+    """Push the latest order-upload batch's collection->delivery legs to the
+    dashboard Map tab. Written by synergy_map.py on every mapping run."""
+    try:
+        with open(os.path.join(HERE, "_synergy_routes.json"), encoding="utf-8") as f:
+            _req("/api/map", json.load(f))
+    except Exception:
+        pass
+
+
 def outbox_dir():
     return os.path.join(os.path.expanduser("~"), "Documents", "DHL", "outbox")
 
@@ -176,6 +186,7 @@ def main():
     push_tracker()
     push_waitlist()
     push_panel()
+    push_map()
     last_push = time.time()
     last_panel = time.time()
     last_index = time.time()
@@ -284,6 +295,7 @@ def main():
                     else:
                         report("done", "Order upload processed — NR upload CSV is in Files.", tail(out, 20))
                     push_panel()   # surface any delivery-site decisions the mapping raised
+                    push_map()     # feed the Map tab this batch's collection->delivery legs
             elif action == "add_sites":
                 report("running", "Learning new sites & re-processing…")
                 sites = cmd.get("sites") or {}
@@ -305,6 +317,7 @@ def main():
                            tail(out, 20), email=unmatched)
                 else:
                     report("done", f"Learned {len(sites)} site(s) — order upload re-processed, CSV in Files.", tail(out, 20))
+                push_map()     # refresh the Map tab after the re-process
             elif action == "order_preview" and order:
                 report("running", f"Finding order {order}…")
                 out = run(["send_order.py", order])

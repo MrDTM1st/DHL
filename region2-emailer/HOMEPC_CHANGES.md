@@ -148,6 +148,41 @@ git push origin main
 `.gitignore` already excludes work data and `cloud.json` (secrets) — double
 check `git status` output before committing anyway.
 
+## 5. Route map on the dashboard (Map tab) — added 2026-07-21
+
+The dashboard now has a **Desk | Map** tab bar. The Map tab draws the latest
+Order-upload batch as points and **road-following** routes (collection →
+delivery) on a real street map. The agent-side pieces are already in this repo,
+so on the home PC just `git pull` and restart the agent — no hand-editing.
+
+What was wired up:
+
+- **`synergy_map.py`** — every mapping run now also writes
+  `_synergy_routes.json` (gitignored runtime data): one row per mapped order
+  line with `order`, `coll_site`/`coll_pc`, `deliv_site`/`deliv_pc`, `product`,
+  `deliv_date`. Written for both a normal upload and the add-sites re-process.
+- **`agent.py`** — `push_map()` posts that file to the cloud's new `/api/map`
+  after `order_upload` and `add_sites`, and once on startup so a reconnecting
+  agent restores the last batch. Mirrors `push_tracker()`/`push_waitlist()`.
+- **`cloud/server.py`** — new in-memory `_map` store with `GET`/`POST
+  /api/map` (agent-key to push, dash-or-agent to read), plus the tab bar and
+  the Leaflet map itself.
+
+How the map gets coordinates (all client-side, in the work browser — nothing
+extra runs on the home PC):
+
+- **Leaflet 1.9.4** (map library) + **OpenStreetMap** tiles — the page loads
+  these from `unpkg.com` / `tile.openstreetmap.org`. This is the first time the
+  dashboard reaches any external host; if the work laptop's network blocks
+  them the map won't render (the rest of the dashboard is unaffected).
+- **postcodes.io** turns each UK postcode into lat/lon (free, no key, batched).
+- **OSRM public server** returns the road route between the two points. It's a
+  shared demo server — fine for this volume; for guaranteed capacity later,
+  point `roadRoute()` at an OpenRouteService key or a self-hosted OSRM.
+
+Until this reaches the home PC (or before the first upload after it does), the
+Map tab simply shows "Run an Order upload… to plot its routes here."
+
 ## Phase 2 - reply side (BUILT: phase2.py)
 
 Implemented on the home PC (`phase2.py`, wired into `agent.py`):

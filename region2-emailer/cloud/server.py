@@ -25,6 +25,7 @@ _queue = []
 _status = {"state": "idle", "detail": "Waiting for a command.", "at": "", "output": "", "email": None}
 _tracker = {"records": []}
 _waitlist = {"entries": []}
+_map = {"routes": [], "at": ""}   # latest order-upload batch's collection->delivery legs
 _upload = None       # one pending browser->agent file upload {name, data(b64), at}
 _agent_seen = 0.0
 _files = {}          # name -> {"data": b64, "size": int, "at": str}
@@ -80,6 +81,8 @@ def _sweep_queue_locked(agent_seen=None):
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DHL Haulage Desk</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
   *{ box-sizing:border-box; }
   :root{
@@ -178,6 +181,21 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .hint{ color:var(--muted); font-size:12px; }
   .warn{ color:var(--red); font-size:13px; }
 
+  .tabs{ display:flex; gap:6px; margin-bottom:14px; }
+  .tab{ font:inherit; font-size:13px; font-weight:600; cursor:pointer; border:1px solid var(--border);
+        background:var(--card); color:var(--muted); border-radius:11px; padding:9px 18px; box-shadow:var(--shadow);
+        transition:border-color .12s, background .12s, color .12s; }
+  .tab:hover{ color:var(--text); border-color:#c8c7c0; }
+  .tab.active{ background:var(--dark); color:#fff; border-color:var(--dark); }
+  #map{ height:min(62vh,600px); border-radius:12px; overflow:hidden; border:1px solid var(--border); background:var(--input); }
+  .leaflet-container{ font:inherit; }
+  .leaflet-popup-content{ font-size:12px; line-height:1.5; }
+  .leaflet-popup-content .mp-t{ font-weight:650; }
+  .leaflet-popup-content .mp-s{ color:var(--muted); }
+  .maplegend{ display:flex; align-items:center; gap:16px; margin-top:.7rem; flex-wrap:wrap; font-size:12px; color:var(--muted); }
+  .maplegend .dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .maplegend .ln{ display:inline-block; width:18px; height:0; border-top:3px solid var(--red); margin-right:6px; vertical-align:middle; }
+
   #login{ position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; z-index:10; }
   #login .lcard{ width:min(420px,90vw); background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:1.3rem 1.4rem; }
   #login h2{ font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:600; margin:0 0 1rem; }
@@ -206,6 +224,12 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="pill mono"><span id="clock">--:--:--</span></div>
   </header>
 
+  <div class="tabs">
+    <button class="tab active" id="tabDesk" onclick="showTab('desk')">Desk</button>
+    <button class="tab" id="tabMap" onclick="showTab('map')">Map</button>
+  </div>
+
+  <div id="tab-desk">
   <div class="grid">
     <div class="cmd">
       <div class="lbl">Today's extract</div>
@@ -363,8 +387,31 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
     </div>
     <div class="tkrows" id="waitlist"><span class="hint">Loading…</span></div>
   </div>
+  </div><!-- /tab-desk -->
+
+  <div id="tab-map" style="display:none;">
+    <div class="card">
+      <div class="tkhd">
+        <div class="lbl">Route map — <span id="mapcount">…</span></div>
+        <div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;">
+          <span class="hint" id="mapat"></span>
+          <button class="btn mini" onclick="loadMap(true)">Refresh</button>
+        </div>
+      </div>
+      <div class="hint" style="margin:-6px 0 12px; font-size:11.5px;">Latest Order-upload batch · collection &rarr; delivery along the roads · toggle layers top-right of the map</div>
+      <div id="map"></div>
+      <div class="maplegend">
+        <span><span class="dot" style="background:var(--yellow); border:1px solid #7a6a00"></span>Collection</span>
+        <span><span class="dot" style="background:var(--red)"></span>Delivery</span>
+        <span><span class="ln"></span>Road route</span>
+        <span class="hint" id="maphint" style="margin-left:auto;"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 const COLORS={idle:'var(--muted)',queued:'var(--amber)',running:'var(--amber)',done:'var(--go)',error:'var(--red)',preview_ready:'var(--red)',batch_ready:'var(--amber)',sites_needed:'var(--red)'};
 let currentOrder='';
@@ -734,12 +781,130 @@ async function dl(encName){
     URL.revokeObjectURL(url);
   }catch(e){}
 }
+// ---------- Map tab ----------
+let mapObj=null, mapLayers=null, mapInited=false, mapVisible=false;
+let geoCache={}, lastMapAt='__none__', mapBusy=false;
+const PC=p=>String(p||'').trim().toUpperCase();
+
+function showTab(t){
+  mapVisible=(t==='map');
+  document.getElementById('tab-desk').style.display=mapVisible?'none':'';
+  document.getElementById('tab-map').style.display =mapVisible?'':'none';
+  document.getElementById('tabDesk').classList.toggle('active', !mapVisible);
+  document.getElementById('tabMap').classList.toggle('active', mapVisible);
+  if(mapVisible){ initMap(); loadMap(); }
+}
+
+function initMap(){
+  if(mapInited){ if(mapObj) setTimeout(()=>mapObj.invalidateSize(),30); return; }
+  if(typeof L==='undefined'){ document.getElementById('maphint').textContent='Map library did not load — check the connection.'; return; }
+  mapInited=true;
+  mapObj=L.map('map',{scrollWheelZoom:true}).setView([54.4,-3.1],6);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              {maxZoom:18, attribution:'&copy; OpenStreetMap contributors'}).addTo(mapObj);
+  mapLayers={ collections:L.layerGroup().addTo(mapObj),
+              deliveries:L.layerGroup().addTo(mapObj),
+              routes:L.layerGroup().addTo(mapObj) };
+  L.control.layers(null,{ 'Collections':mapLayers.collections,
+                          'Deliveries':mapLayers.deliveries,
+                          'Routes':mapLayers.routes }, {collapsed:false}).addTo(mapObj);
+  setTimeout(()=>mapObj.invalidateSize(),60);
+}
+
+async function geocode(pcs){
+  // UK postcode -> lat/lon via postcodes.io (free, no key), cached; 100 per call
+  const need=[...new Set(pcs.map(PC).filter(p=>p && !(p in geoCache)))];
+  for(let i=0;i<need.length;i+=100){
+    const batch=need.slice(i,i+100);
+    try{
+      const r=await fetch('https://api.postcodes.io/postcodes',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({postcodes:batch})});
+      const j=await r.json();
+      (j.result||[]).forEach(o=>{
+        geoCache[PC(o.query)]=(o.result&&o.result.latitude!=null)
+          ?{lat:o.result.latitude,lon:o.result.longitude}:null;
+      });
+    }catch(e){}
+    batch.forEach(k=>{ if(!(k in geoCache)) geoCache[k]=null; });
+  }
+}
+
+async function roadRoute(a,b){
+  // OSRM public server -> road-following GeoJSON line between two points
+  try{
+    const u='https://router.project-osrm.org/route/v1/driving/'
+      +a.lon+','+a.lat+';'+b.lon+','+b.lat+'?overview=full&geometries=geojson';
+    const j=await (await fetch(u)).json();
+    return (j.routes&&j.routes[0])?j.routes[0].geometry:null;
+  }catch(e){ return null; }
+}
+
+function popupHtml(kind, site, pc, items){
+  const rows=items.slice(0,8).map(r=>'<div class="mp-s">'
+    +esc((r.order||'')+(r.product?(' · '+r.product):'')+(r.deliv_date?(' · '+r.deliv_date):''))+'</div>').join('');
+  const more=items.length>8?('<div class="mp-s">+'+(items.length-8)+' more…</div>'):'';
+  return '<div class="mp-t">'+esc(kind)+' · '+esc(site||'—')+'</div><div class="mp-s">'+esc(pc||'')+'</div>'+rows+more;
+}
+
+async function renderMap(routes){
+  const g=mapLayers; if(!g) return;
+  g.collections.clearLayers(); g.deliveries.clearLayers(); g.routes.clearLayers();
+  const hint=document.getElementById('maphint');
+  if(!routes.length){ hint.textContent='Run an Order upload on the Desk tab to plot its collection→delivery routes here.'; return; }
+  hint.textContent='Geocoding postcodes…';
+  const pcs=[]; routes.forEach(r=>{ if(r.coll_pc)pcs.push(r.coll_pc); if(r.deliv_pc)pcs.push(r.deliv_pc); });
+  await geocode(pcs);
+
+  const coll={}, del={}, bounds=[];
+  routes.forEach(r=>{
+    const a=geoCache[PC(r.coll_pc)], b=geoCache[PC(r.deliv_pc)];
+    if(a){ (coll[PC(r.coll_pc)]=coll[PC(r.coll_pc)]||{pt:a,site:r.coll_site,pc:r.coll_pc,items:[]}).items.push(r); bounds.push([a.lat,a.lon]); }
+    if(b){ (del[PC(r.deliv_pc)]=del[PC(r.deliv_pc)]||{pt:b,site:r.deliv_site,pc:r.deliv_pc,items:[]}).items.push(r); bounds.push([b.lat,b.lon]); }
+  });
+  Object.values(coll).forEach(c=>L.circleMarker([c.pt.lat,c.pt.lon],
+    {radius:7,color:'#7a6a00',weight:1.5,fillColor:'#ffcc00',fillOpacity:.95})
+    .bindPopup(popupHtml('Collection',c.site,c.pc,c.items)).addTo(g.collections));
+  Object.values(del).forEach(c=>L.circleMarker([c.pt.lat,c.pt.lon],
+    {radius:7,color:'#8a0308',weight:1.5,fillColor:'#d40511',fillOpacity:.9})
+    .bindPopup(popupHtml('Delivery',c.site,c.pc,c.items)).addTo(g.deliveries));
+  if(bounds.length) mapObj.fitBounds(bounds,{padding:[34,34],maxZoom:11});
+
+  hint.textContent='Drawing road routes…';
+  const seen={}; let drawn=0, missing=0, straight=0;
+  for(const r of routes){
+    const a=geoCache[PC(r.coll_pc)], b=geoCache[PC(r.deliv_pc)];
+    if(!a||!b){ missing++; continue; }
+    const pk=PC(r.coll_pc)+'>'+PC(r.deliv_pc);
+    if(seen[pk]) continue; seen[pk]=1;
+    const geo=await roadRoute(a,b);
+    if(geo){ L.geoJSON(geo,{style:{color:'#d40511',weight:4,opacity:.85}}).addTo(g.routes); drawn++; }
+    else { L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:'#d40511',weight:2,opacity:.5,dashArray:'6 7'}).addTo(g.routes); straight++; }
+  }
+  hint.textContent = drawn+' road route'+(drawn!==1?'s':'')
+    + (straight?(' · '+straight+' straight-line (routing busy)'):'')
+    + (missing?(' · '+missing+' leg(s) with an unknown postcode'):'');
+}
+
+async function loadMap(force){
+  if(!mapInited) return;
+  let d; try{ d=await (await api('/api/map')).json(); }catch(e){ return; }
+  const routes=d.routes||[];
+  document.getElementById('mapcount').textContent = routes.length? (routes.length+' leg'+(routes.length!==1?'s':'')) : 'no batch yet';
+  document.getElementById('mapat').textContent = d.at? ('updated '+d.at):'';
+  const sig=(d.at||'')+'|'+routes.length;
+  if(!force && sig===lastMapAt) return;
+  if(mapBusy) return;
+  lastMapAt=sig; mapBusy=true;
+  try{ await renderMap(routes); } finally{ mapBusy=false; }
+}
+
 function tick(){ document.getElementById('clock').textContent = new Date().toTimeString().slice(0,8); }
 setInterval(tick,1000); tick();
 setInterval(poll,1500); poll();
 setInterval(loadTracker,6000); loadTracker();
 setInterval(loadWaitlist,6000); loadWaitlist();
 setInterval(loadFiles,6000); loadFiles();
+setInterval(()=>{ if(mapVisible) loadMap(); },6000);
 </script></body></html>"""
 
 
@@ -809,6 +974,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             with _lock:
                 self._json(200, _waitlist)
+        elif self.path == "/api/map":
+            if not (self._is_dash() or self._is_agent()):
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                self._json(200, _map)
         elif self.path == "/api/files":
             if not (self._is_dash() or self._is_agent()):
                 return self._json(401, {"error": "auth"})
@@ -894,6 +1064,15 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if isinstance(data, dict) and "entries" in data:
                     _waitlist = data
+            self._json(200, {"ok": True})
+        elif self.path == "/api/map":
+            # agent pushes the latest order-upload batch's route legs
+            global _map
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            if isinstance(data, dict) and isinstance(data.get("routes"), list) and length < 500_000:
+                with _lock:
+                    _map = {"routes": data["routes"][:400], "at": str(data.get("at", ""))[:40]}
             self._json(200, {"ok": True})
         elif self.path == "/api/panel":
             # agent replaces the persistent panel state (decisions/handover/team)
