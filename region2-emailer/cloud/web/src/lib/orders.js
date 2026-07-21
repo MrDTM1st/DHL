@@ -154,3 +154,42 @@ export function recommendFor(r, hauliers, geo) {
 export const RANK_TAG = ['fleet', 't1', 't2'];
 export const RANK_LABEL = ['OUR FLEET', 'TIER 1', 'TIER 2'];
 
+// ---- drive time / ETA formatting ----
+export function fmtDur(seconds) {
+  if (seconds == null) return null;
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+export function metersToMiles(m) {
+  return m == null ? null : Math.round((m / 1609.344) * 10) / 10;
+}
+
+// Clock time `seconds` from now, e.g. an arrival if you left this minute.
+export function clockIn(seconds, from = new Date()) {
+  if (seconds == null) return null;
+  const t = new Date(from.getTime() + seconds * 1000);
+  const same = t.toDateString() === from.toDateString();
+  const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  return same ? hhmm : `${hhmm} +${Math.round((t - from) / 86400000) || 1}d`;
+}
+
+// The whole job as a haulier actually drives it: their base -> the collection
+// (repositioning, running empty) -> the delivery. `repo` and `leg` are
+// routeBetween results. Returns nulls rather than guessing when a leg is
+// missing, so the UI can say "—" instead of inventing a time.
+export function journeyFor(repo, leg) {
+  const s = (x) => (x && x.seconds != null ? x.seconds : null);
+  const m = (x) => (x && x.meters != null ? x.meters : null);
+  const repoS = s(repo), legS = s(leg);
+  return {
+    repoSeconds: repoS, repoMiles: metersToMiles(m(repo)),
+    legSeconds: legS, legMiles: metersToMiles(m(leg)),
+    totalSeconds: repoS != null && legS != null ? repoS + legS : null,
+    totalMiles: m(repo) != null && m(leg) != null ? metersToMiles(m(repo) + m(leg)) : null,
+    estimated: !!((repo && repo.road === false) || (leg && leg.road === false)),
+  };
+}
+

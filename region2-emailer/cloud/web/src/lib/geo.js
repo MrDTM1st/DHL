@@ -88,20 +88,28 @@ export async function geocode(pcs) {
 }
 
 // ---- OSRM road routing (public demo server) ----
+// v2: entries used to be a bare [[lat,lng],...] array; they now carry drive
+// distance and time too. The key is versioned so a browser holding the old
+// shape starts clean rather than reading `.line` off an array.
 let ROUTES = {};
-try { ROUTES = JSON.parse(localStorage.getItem('r2routes') || '{}'); } catch { ROUTES = {}; }
-function persistRoutes() { try { localStorage.setItem('r2routes', JSON.stringify(ROUTES)); } catch { /* quota */ } }
+try { ROUTES = JSON.parse(localStorage.getItem('r2routes2') || '{}'); } catch { ROUTES = {}; }
+function persistRoutes() { try { localStorage.setItem('r2routes2', JSON.stringify(ROUTES)); } catch { /* quota */ } }
 
 function routeKey(a, b) {
   const r = (n) => Math.round(n * 10000) / 10000;
   return `${r(a.la)},${r(a.lo)};${r(b.la)},${r(b.lo)}`;
 }
 
-// Road-based route geometry from a -> b ({la,lo} each), via the OSRM public
-// demo server. Returns an array of [lat,lng] pairs to draw as a polyline.
-// Falls back to a straight line (and caches that fallback) if OSRM is
-// unreachable or finds no route — the demo server is unauthenticated and
-// rate-limited, so failures are expected occasionally.
+// Road route from a -> b ({la,lo} each) via the OSRM public demo server.
+// Returns { line, meters, seconds, road } — the geometry to draw plus the
+// drive distance and time, which is what an ETA is actually made of. OSRM
+// hands us duration and distance in the same response, so asking for a route
+// and asking for an ETA is one request, not two.
+//
+// Falls back to a straight line (and caches it) if OSRM is unreachable or
+// finds no route — the demo server is unauthenticated and rate-limited, so
+// failures are expected. A fallback is marked road:false so the UI can be
+// honest that the time is estimated rather than routed.
 export async function routeBetween(a, b) {
   if (!a || !b) return null;
   const key = routeKey(a, b);
@@ -111,11 +119,14 @@ export async function routeBetween(a, b) {
     const url = `https://router.project-osrm.org/route/v1/driving/${a.lo},${a.la};${b.lo},${b.la}?overview=full&geometries=geojson`;
     const r = await fetch(url);
     const d = await r.json();
-    const coords = d && d.routes && d.routes[0] && d.routes[0].geometry && d.routes[0].geometry.coordinates;
-    const line = coords ? coords.map(([lng, lat]) => [lat, lng]) : straight;
-    ROUTES[key] = line;
+    const rt = d && d.routes && d.routes[0];
+    const coords = rt && rt.geometry && rt.geometry.coordinates;
+    ROUTES[key] = coords
+      ? { line: coords.map(([lng, lat]) => [lat, lng]),
+          meters: rt.distance, seconds: rt.duration, road: true }
+      : { line: straight, meters: null, seconds: null, road: false };
   } catch {
-    ROUTES[key] = straight;
+    ROUTES[key] = { line: straight, meters: null, seconds: null, road: false };
   }
   persistRoutes();
   return ROUTES[key];

@@ -64,7 +64,7 @@ function FlyToRoute({ id, line, from, to }) {
   return null;
 }
 
-export default function MapPage({ records, hauliers, onSelect, selectedId }) {
+export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier }) {
   const [tick, setTick] = useState(0);
   const [layers, setLayers] = useState({ orders: true, depots: true, hauliers: true, routes: true });
   const [routes, setRoutes] = useState({});
@@ -113,10 +113,10 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
         const key = r.id;
         if (routes[key] || fetching.current.has(key)) continue;
         fetching.current.add(key);
-        const line = await routeBetween(from, to);
+        const info = await routeBetween(from, to);
         fetching.current.delete(key);
         if (!live) return;
-        if (line) setRoutes((rt) => ({ ...rt, [key]: line }));
+        if (info) setRoutes((rt) => ({ ...rt, [key]: info }));
       }
     })();
     return () => { live = false; };
@@ -128,7 +128,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
   const selectedLeg = useMemo(
     () => legPairs.find((l) => l.r.id === selectedId) || null,
     [legPairs, selectedId]);
-  const selectedLine = selectedLeg ? routes[selectedLeg.r.id] : null;
+  const selectedLine = selectedLeg && routes[selectedLeg.r.id] ? routes[selectedLeg.r.id].line : null;
   const selectedRec = useMemo(() => {
     const rec = records.find((r) => r.id === selectedId);
     if (!rec) return [];
@@ -136,6 +136,19 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, records, hauliers, tick]);
   const recNames = useMemo(() => new Set(selectedRec.map((h) => h.name)), [selectedRec]);
+
+  // the picked haulier's run to the collection - drawn so the whole journey
+  // (base -> collection -> delivery) is visible, not just the delivery leg
+  const [repoLine, setRepoLine] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setRepoLine(null);
+    const cg = selectedLeg ? selectedLeg.from : null;
+    const hg = pickedHaulier ? geo[pcNorm(pickedHaulier.pc || '')] : null;
+    if (cg && hg) routeBetween(hg, cg).then((x) => { if (live && x) setRepoLine(x.line); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedHaulier && pickedHaulier.name, selectedLeg && selectedLeg.r.id, tick]);
 
   const pinnedCount = orderPts.length;
   const allPoints = useMemo(() => {
@@ -166,7 +179,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
 
         {/* every other run, kept quiet so the selected one reads clearly */}
         {layers.routes && legPairs.filter(({ r }) => r.id !== selectedId).map(({ r }) => {
-          const line = routes[r.id];
+          const line = routes[r.id] && routes[r.id].line;
           if (!line) return null;
           return (
             <Polyline key={'r' + r.id} positions={line}
@@ -196,6 +209,13 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
           <Polyline positions={[[selectedLeg.from.la, selectedLeg.from.lo], [selectedLeg.to.la, selectedLeg.to.lo]]}
             interactive={false} className="routeflow"
             pathOptions={{ color: '#1a73e8', weight: 4, opacity: 0.7, dashArray: '8 12' }} />
+        )}
+
+        {/* the picked haulier running empty to the collection - dashed green so
+            it reads as the approach, not the load-carrying leg */}
+        {repoLine && (
+          <Polyline positions={repoLine} interactive={false}
+            pathOptions={{ color: '#1da35e', weight: 3.5, opacity: 0.85, dashArray: '3 9', lineCap: 'round' }} />
         )}
 
         {selectedLeg && (
@@ -247,6 +267,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
           <>
             <div className="legrow"><span className="ld" style={{ background: '#1a73e8' }} />Selected run</div>
             <div className="legrow"><span className="ld" style={{ background: 'var(--go, #1da35e)' }} />Recommended haulier</div>
+            {repoLine && <div className="legrow"><span className="ld" style={{ background: 'var(--go, #1da35e)', opacity: .55 }} />Haulier → collection</div>}
           </>
         )}
       </div>

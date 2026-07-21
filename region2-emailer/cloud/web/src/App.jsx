@@ -29,6 +29,7 @@ export default function App() {
   const [page, setPage] = useState('dash');
   const [bellOpen, setBellOpen] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  const [pickedHaulier, setPickedHaulier] = useState(null);
   const [currentOrder, setCurrentOrder] = useState('');
   const [toasts, setToasts] = useState([]);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -158,7 +159,9 @@ export default function App() {
   const clearAll = () => setNotes([]);
   const dismissNote = (id) => setNotes((ns) => ns.filter((n) => n.id !== id));
 
-  const selectOrder = (o) => setSelectedId(o.id);
+  // A haulier picked in the drawer re-times the job from their base and draws
+  // their repositioning leg on the map, so it has to live above both.
+  const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); };
   const selectedRecord = records.find((r) => r.id === selectedId);
 
   // decorate notes with a display time + older flag at render
@@ -192,7 +195,8 @@ export default function App() {
           />
         )}
         {page === 'map' && (
-          <MapPage records={records} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId} />
+          <MapPage records={records} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
+            pickedHaulier={pickedHaulier} />
         )}
         {page === 'tracker' && (
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn} onBookedCall={onBookedCall} />
@@ -201,7 +205,10 @@ export default function App() {
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
         )}
         {selectedRecord && (
-          <Drawer record={selectedRecord} hauliers={hauliers} onClose={() => setSelectedId(null)} onCall={onCall} onBookedCall={onBookedCall} />
+          <Drawer record={selectedRecord} hauliers={hauliers}
+            onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
+            onCall={onCall} onBookedCall={onBookedCall}
+            pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier} />
         )}
       </div>
       <Toasts toasts={toasts} dismiss={dismissToast} />
