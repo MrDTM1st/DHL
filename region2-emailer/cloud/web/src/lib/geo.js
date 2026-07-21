@@ -6,11 +6,14 @@
 // points comes from the public OSRM demo server, cached the same way.
 
 // Fixed collection depots — industrial postcodes are sometimes terminated and
-// fail geocoding, and these three must always be on the map.
+// fail geocoding, and these three must always be on the map. Coordinates are
+// each postcode's real centroid from postcodes.io (DN16 1BP is terminated —
+// postcodes.io still returns its last-known centroid in the 404 body), not
+// hand-estimated, so the pins land on the actual site rather than nearby.
 export const DEPOTS = [
-  { key: 'scun',  name: 'British Steel',   town: 'Scunthorpe', pc: 'DN16 1BP', lat: 53.579, lng: -0.617 },
-  { key: 'ask',   name: 'Inframat / VAS',  town: 'Askern',     pc: 'DN6 0AA',  lat: 53.616, lng: -1.155 },
-  { key: 'march', name: 'ArcelorMittal',   town: 'Marchwood',  pc: 'SO40 4UT', lat: 50.895, lng: -1.442 },
+  { key: 'scun',  name: 'British Steel',   town: 'Scunthorpe', pc: 'DN16 1BP', lat: 53.5860, lng: -0.6543 },
+  { key: 'ask',   name: 'Inframat / VAS',  town: 'Askern',     pc: 'DN6 0AA',  lat: 53.6127, lng: -1.1514 },
+  { key: 'march', name: 'ArcelorMittal',   town: 'Marchwood',  pc: 'SO40 4UT', lat: 50.8926, lng: -1.4433 },
 ];
 
 export function pcNorm(p) {
@@ -24,6 +27,13 @@ function outcodeOf(p) {
 // ---- postcode cache (shared with the map + drawer) ----
 let GEO = {};
 try { GEO = JSON.parse(localStorage.getItem('r2geo') || '{}'); } catch { GEO = {}; }
+// Seed the shared cache with the depots' own precise coordinates (after
+// loading any persisted cache, so this always wins over a stale/coarser
+// cached value). Without this, a route leg or distance calc that looks up
+// one of these postcodes falls through to the outcode-centroid fallback
+// below — which can be ~2km off — while the depot pin itself renders at the
+// precise DEPOTS coordinate, so the route wouldn't visually touch the pin.
+DEPOTS.forEach((d) => { GEO[pcNorm(d.pc)] = { la: d.lat, lo: d.lng }; });
 export function geoCache() { return GEO; }
 function persist() { try { localStorage.setItem('r2geo', JSON.stringify(GEO)); } catch { /* quota */ } }
 
