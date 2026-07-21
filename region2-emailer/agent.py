@@ -397,6 +397,30 @@ def main():
                     report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
                 else:
                     report("done", "Form processed - upload CSV below and in the outbox.", tail(out, 10))
+            elif action == "form_upload":
+                report("running", "Processing ad hoc form upload…")
+                up = None
+                try:
+                    up = _req("/api/pull_upload")
+                except Exception:
+                    up = None
+                if not up or not up.get("data"):
+                    report("error", "No form received — pick the filled haulage request form and try again.")
+                else:
+                    import base64
+                    ext = os.path.splitext(up.get("name") or "")[1].lower()
+                    if ext not in (".xlsx", ".xlsm"):
+                        ext = ".xlsx"
+                    raw = os.path.join(HERE, "_adhoc_form_raw" + ext)
+                    with open(raw, "wb") as f:
+                        f.write(base64.b64decode(up["data"]))
+                    before = snap_outbox()
+                    out = run(["process_form.py", raw])
+                    push_new_files(before)
+                    if "Nothing written" in out or "INCOMPLETE ORDER" in out or "NOT FOUND" in out:
+                        report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
+                    else:
+                        report("done", "Ad hoc form processed - upload CSV below and in the outbox.", tail(out, 10))
             elif action == "tracker_refresh":
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])

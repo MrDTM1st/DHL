@@ -199,7 +199,7 @@ export default function App() {
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn} onBookedCall={onBookedCall} />
         )}
         {page === 'queue' && (
-          <AdhocQueue records={records} hauliers={hauliers} />
+          <AdhocQueue records={records} hauliers={hauliers} onUpload={onUpload} onCommand={onCommand} uploadBusy={uploadBusy} />
         )}
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />

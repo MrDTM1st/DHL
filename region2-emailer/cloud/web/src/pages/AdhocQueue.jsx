@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { I } from '../icons.jsx';
 import { isUrgent, within3, ordLabel, dueText, dateShort, needsFor, RANK_TAG, RANK_LABEL } from '../lib/orders.js';
 import { loadBoard, saveBoard, syncBoard, moveJob } from '../lib/board.js';
@@ -8,6 +8,33 @@ import { loadBoard, saveBoard, syncBoard, moveJob } from '../lib/board.js';
 // queue. No dnd-kit needed — the interaction is a single draggable list of
 // cards plus a handful of drop targets, which the platform API covers with
 // far less weight than pulling in a library for it.
+
+// Upload card for a filled ad hoc haulage request form, same drop-to-process
+// pattern as the dashboard's rail plan / order upload cards: drop or pick the
+// file, it uploads immediately and kicks off processing (form_upload ->
+// process_form.py on the home PC).
+function AdhocUploadCard({ onUpload, busy }) {
+  const fileRef = useRef(null);
+  const [name, setName] = useState('');
+  const [drag, setDrag] = useState(false);
+  const pick = (file) => { if (file) { setName(file.name); onUpload(file); } };
+  return (
+    <div className="cmd"
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}>
+      <div className="top"><div className="ci">{I.up}</div><h3>Ad hoc form upload</h3></div>
+      <div className="desc">Drop a filled haulage request form (.xlsx) to build the NR upload CSV and add it to the queue.</div>
+      <input ref={fileRef} type="file" accept=".xlsx,.xlsm" style={{ display: 'none' }}
+        onChange={(e) => pick(e.target.files[0])} />
+      <div className={'dropzone' + (drag ? ' drag' : '')} style={{ margin: '6px 0 0' }} onClick={() => fileRef.current && fileRef.current.click()}>
+        <div className="di">{I.file}</div>
+        <div className="d1">{busy ? 'Uploading…' : name ? name : 'Drop .xlsx here, or click'}</div>
+        <div className="d2">Filled haulage request form</div>
+      </div>
+    </div>
+  );
+}
 
 function JobCard({ job, from, dragging, onDragStart, onDragEnd, onDragOver }) {
   const need = needsFor(job);
@@ -98,7 +125,7 @@ function HaulierTarget({ h, jobs, dragId, overCol, overIndex, onDragStartJob, on
   );
 }
 
-export default function AdhocQueue({ records, hauliers }) {
+export default function AdhocQueue({ records, hauliers, onUpload, onCommand, uploadBusy }) {
   const [board, setBoard] = useState(loadBoard);
   const [dragId, setDragId] = useState(null);
   const [dragFrom, setDragFrom] = useState(null);
@@ -164,6 +191,10 @@ export default function AdhocQueue({ records, hauliers }) {
           <h1 className="h1">Ad hoc queue</h1>
           <p>Drag a job onto a haulier to assign it, or drag within the queue to reorder priority. Assignments live on this desk only — book the job as usual once it&rsquo;s settled.</p>
         </div>
+      </div>
+
+      <div style={{ maxWidth: 420, marginBottom: 16 }}>
+        <AdhocUploadCard busy={uploadBusy} onUpload={async (file) => { await onUpload(file); onCommand({ action: 'form_upload' }); }} />
       </div>
 
       <div className="queueboard">
