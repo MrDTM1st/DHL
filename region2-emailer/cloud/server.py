@@ -40,6 +40,38 @@ _MAX_DROPPED = 8
 _panel = {}          # agent-pushed persistent panel state: site decisions, handover, team
 
 
+# ---- front end -----------------------------------------------------------
+# The dashboard UI is the React app in ./web (built with Vite into a single
+# self-contained index.html). We serve that built file at "/" and fall back to
+# the inline PAGE below if the build is absent (e.g. running server.py straight
+# from a checkout without building). The REST API is unchanged either way, so
+# the home agent and the deployment model are untouched.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_WEB_INDEX_CANDIDATES = [
+    os.environ.get("WEB_INDEX", ""),          # explicit override
+    os.path.join(_HERE, "web_index.html"),    # where the Dockerfile copies the build
+    os.path.join(_HERE, "web", "dist", "index.html"),  # local `npm run build`
+]
+
+
+def _load_web_index():
+    for p in _WEB_INDEX_CANDIDATES:
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "rb") as f:
+                    return f.read(), p
+            except OSError:
+                pass
+    return None, None
+
+
+_WEB_INDEX, _WEB_INDEX_PATH = _load_web_index()
+
+
+def _index_bytes():
+    return _WEB_INDEX if _WEB_INDEX is not None else PAGE.encode()
+
+
 def _agent_online():
     # 30s tolerates the odd missed heartbeat / a redeploy blip; the agent
     # pings every 5s via /api/heartbeat, so this stays green whenever it lives.
@@ -1086,7 +1118,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
-            body = PAGE.encode()
+            body = _index_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -1250,5 +1282,6 @@ if __name__ == "__main__":
     if not DASH_KEY or not AGENT_KEY:
         print("REFUSING TO START: set DASH_KEY and AGENT_KEY environment variables.")
         sys.exit(1)
-    print(f"Cloud control plane on {HOST}:{PORT}")
+    ui = f"React build ({_WEB_INDEX_PATH})" if _WEB_INDEX is not None else "inline fallback page"
+    print(f"Cloud control plane on {HOST}:{PORT} — serving {ui}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

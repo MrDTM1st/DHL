@@ -1,0 +1,6 @@
+# Host build artifacts must not be copied into the image (native modules would
+# be wrong for the container arch; the build stage runs npm install itself).
+web/node_modules
+web/dist
+**/__pycache__
+*.pyc

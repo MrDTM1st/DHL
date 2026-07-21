@@ -1,0 +1,7 @@
+# Host build artifacts must not be copied into the image (native modules would
+# be wrong for the container arch; the build stage runs npm install itself).
+region2-emailer/cloud/web/node_modules
+region2-emailer/cloud/web/dist
+**/__pycache__
+*.pyc
+.git
