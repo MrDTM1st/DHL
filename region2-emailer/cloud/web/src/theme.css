@@ -205,13 +205,26 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 
 /* custom divIcon pins, replacing Leaflet's default marker image */
 .leaflet-div-icon{ background:transparent; border:none; }
-.pin-icon{ display:block; width:100%; height:100%; position:relative; cursor:pointer; }
+/* DO NOT set `position` (or width/height) here. Leaflet positions every marker
+   with `position:absolute` + a transform measured from the pane origin, and
+   sets the icon's size inline from iconSize. This selector has the same
+   specificity as Leaflet's `.leaflet-marker-icon` but loads AFTER it, so
+   `position:relative` silently won — which dropped every pin into normal
+   document flow and made its transform offset from wherever the flow had
+   stacked it. Each pin was pushed down by the combined height of the pins
+   before it (measured: 0, 8, 16, 24, 31, 39, 47px), and because that offset is
+   a fixed pixel amount it does NOT scale with the map: zoom out and the pins
+   slide to completely different places. Only style the LOOK here. */
+.pin-icon{ cursor:pointer; }
 .pin-depot{ display:block; width:100%; height:100%; background:var(--depot); border:2.2px solid #fff;
       border-radius:3px; transform:rotate(45deg); box-shadow:0 1px 4px rgba(0,0,0,.35); }
 .pin-haulier{ display:block; width:100%; height:100%; background:var(--yellow); border:1.8px solid #8a6d00;
       border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,.3); }
+/* position:relative is safe HERE - this span is ours, inside the marker, not
+   the Leaflet-positioned marker element itself. It gives the urgent pulse ring
+   below something of its own to anchor to. */
 .pin-order{ display:block; width:100%; height:100%; background:var(--red); border:2.6px solid #fff;
-      border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,.35); }
+      border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,.35); position:relative; }
 .pin-order.selected{ border-width:3.5px; }
 .pin-order.urgent::after{ content:''; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--red);
       opacity:.6; animation:pulsering 1.9s ease-out infinite; }
