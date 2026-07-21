@@ -16,12 +16,25 @@ export const DEPOTS = [
   { key: 'march', name: 'ArcelorMittal',   town: 'Marchwood',  pc: 'SO40 4UT', lat: 50.8926, lng: -1.4433 },
 ];
 
-export function pcNorm(p) {
-  return String(p || '').toUpperCase().replace(/\s+/g, ' ').trim();
+// A UK inward code is ALWAYS exactly three characters, so the outward code is
+// everything except the last three. Pattern-matching the outward code and
+// stripping the space (what this used to do) swallowed the inward code's first
+// character: "DN3 1ED" read as DN31 (Grimsby) rather than DN3 (Doncaster) —
+// ~40 miles out — and the same for PE3/CV3/B9. Mirrors postcodes.py.
+function compactPc(p) {
+  return String(p || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 }
-function outcodeOf(p) {
-  const m = String(p || '').toUpperCase().replace(/\s+/g, '').match(/^([A-Z]{1,2}\d[A-Z\d]?)/);
-  return m ? m[1] : '';
+// Canonical 'OUTWARD INWARD'. Extracts arrive spaced ("LE10 1BJ  "), unspaced
+// ("BS119DE") and occasionally with a stray middle space ("LE12 9 BS"); without
+// canonicalising, the same place lands in the cache under several keys and a
+// lookup from one spelling misses a pin geocoded under another.
+export function pcNorm(p) {
+  const s = compactPc(p);
+  return s.length > 3 ? `${s.slice(0, -3)} ${s.slice(-3)}` : s;
+}
+export function outcodeOf(p) {
+  const s = compactPc(p);
+  return s.length > 3 ? s.slice(0, -3) : '';
 }
 
 // ---- postcode cache (shared with the map + drawer) ----

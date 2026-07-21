@@ -5,6 +5,12 @@
 //     emailed_at, chases, reply_at, ooo_at, sendoff_ready, site, worksite,
 //     postcode, collection_site, collection_pc, details{}, missing[], loose_ballast }
 
+// ONE postcode normaliser lives in geo.js (it owns the geocode cache these keys
+// index). Re-exported here so existing importers don't have to change - two
+// copies is exactly how cache keys drift apart and pins go missing.
+import { pcNorm } from './geo.js';
+export { pcNorm };
+
 // Days from today to a dd/mm/yyyy string. null if unparseable.
 export function wlDays(dd) {
   const m = String(dd || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
@@ -148,6 +154,3 @@ export function recommendFor(r, hauliers, geo) {
 export const RANK_TAG = ['fleet', 't1', 't2'];
 export const RANK_LABEL = ['OUR FLEET', 'TIER 1', 'TIER 2'];
 
-export function pcNorm(p) {
-  return String(p || '').toUpperCase().replace(/\s+/g, ' ').trim();
-}

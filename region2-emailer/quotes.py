@@ -17,21 +17,18 @@ came from, so a number is never unexplained.
 """
 import os, re, sys, json
 from datetime import datetime
+import postcodes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "_quotes.json")
 
 
-def _outward(pc):
-    """'ST6 4NU' -> 'ST6' (district); '' when unparseable."""
-    m = re.match(r"\s*([A-Za-z]{1,2}\d[A-Za-z\d]?)", str(pc or ""))
-    return m.group(1).upper() if m else ""
-
-
-def _area(pc):
-    """'ST6 4NU' -> 'ST' (area)."""
-    m = re.match(r"\s*([A-Za-z]{1,2})", str(pc or ""))
-    return m.group(1).upper() if m else ""
+# postcodes.py is the single correct implementation. The old pattern here was
+# right only when the postcode arrived spaced - an unspaced "DN31ED" became
+# district DN31, so quotes for the same lane were filed under two districts and
+# never matched each other.
+_outward = postcodes.outward   # 'ST6 4NU' -> 'ST6'
+_area = postcodes.area         # 'ST6 4NU' -> 'ST'
 
 
 def _load():

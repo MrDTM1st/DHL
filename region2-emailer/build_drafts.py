@@ -13,6 +13,7 @@ Usage:
 """
 import sys, os, json, re, html as _html
 from collections import defaultdict, OrderedDict
+import postcodes
 import tracker
 import waitlist
 
@@ -305,15 +306,11 @@ def product_summary(items):
 
 
 # ---------- consolidation (share-a-vehicle) suggestions ----------
-def _outward(pc):
-    pc = str(pc or "").strip().upper()
-    i = pc.find(" ")
-    return (pc[:i] if i > 0 else pc).strip()   # "DN16 1BP" -> "DN16"
-
-
-def _pc_area(ow):
-    m = re.match(r"[A-Z]+", ow or "")
-    return m.group(0) if m else ow            # "DN16" -> "DN"
+# postcodes.py is the single correct implementation - splitting on the space
+# silently failed for unspaced postcodes ("BS119DE" grouped as its own district,
+# so it never paired with anything).
+_outward = postcodes.outward       # "DN16 1BP" / "BS119DE" -> "DN16" / "BS11"
+_pc_area = postcodes.area          # "DN16" -> "DN"
 
 
 def consolidation_candidates(groups):

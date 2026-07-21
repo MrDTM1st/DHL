@@ -14,6 +14,7 @@ the collection postcode, tier, and any quote history for that lane
 to rank "who's nearest", not a routing engine.
 """
 import os, re, sys, json, math
+import postcodes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "_hauliers.json")
@@ -38,9 +39,10 @@ def _emails(v):
     return [e.strip() for e in re.split(r"[/;,]", str(v or "")) if "@" in e]
 
 
-def _outward(pc):
-    m = re.match(r"\s*([A-Za-z]{1,2}\d[A-Za-z\d]?)", str(pc or "").replace(" ", ""))
-    return m.group(1).upper() if m else ""
+# postcodes.py is the single correct implementation - the old pattern here read
+# "DN3 1ED" as outcode DN31 (Grimsby, ~40mi from Doncaster), so the fallback
+# used when a full postcode won't geocode landed the haulier in the wrong county.
+_outward = postcodes.outward
 
 
 def load():
@@ -183,10 +185,7 @@ def geo_cache():
         return {}
 
 
-def _norm_pc(p):
-    """'LE12 9 BS' / 'dn161bp' -> 'LE12 9BS' / 'DN16 1BP'."""
-    s = re.sub(r"[^A-Za-z0-9]", "", str(p or "")).upper()
-    return f"{s[:-3]} {s[-3:]}" if len(s) > 3 else s
+_norm_pc = postcodes.norm      # 'LE12 9 BS' / 'dn161bp' -> 'LE12 9BS' / 'DN16 1BP'
 
 
 def geocode(postcodes):
