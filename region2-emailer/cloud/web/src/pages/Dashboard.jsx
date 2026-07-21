@@ -120,7 +120,31 @@ function RailPlanCard({ onUpload, onCommand }) {
   );
 }
 
-// ---- input-driven command card (send order / DTS / ad-hoc form) ----
+// ---- Ad hoc form card (file -> /api/upload -> form_upload command) ----
+function AdhocFormCard({ onUpload, busy }) {
+  const fileRef = useRef(null);
+  const [name, setName] = useState('');
+  const [drag, setDrag] = useState(false);
+  const pick = (file) => { if (file) { setName(file.name); onUpload(file); } };
+  return (
+    <div className="cmd"
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}>
+      <div className="top"><div className="ci">{I.form}</div><h3>Ad hoc form</h3></div>
+      <div className="desc">Drop a filled haulage request form (.xlsx) to build the CSV.</div>
+      <input ref={fileRef} type="file" accept=".xlsx,.xlsm" style={{ display: 'none' }}
+        onChange={(e) => pick(e.target.files[0])} />
+      <div className={'dropzone' + (drag ? ' drag' : '')} style={{ margin: '6px 0 0' }} onClick={() => fileRef.current && fileRef.current.click()}>
+        <div className="di">{I.file}</div>
+        <div className="d1">{busy ? 'Uploading…' : name ? name : 'Drop .xlsx here, or click'}</div>
+        <div className="d2">Filled haulage request form</div>
+      </div>
+    </div>
+  );
+}
+
+// ---- input-driven command card (send order / DTS) ----
 function InputCard({ ic, title, desc, placeholder, buttonLabel, kind, onSubmit }) {
   const [val, setVal] = useState('');
   return (
@@ -208,9 +232,7 @@ export default function Dashboard({
             placeholder="NN reference" kind="red" buttonLabel="Process"
             onSubmit={(v) => { if (v.trim()) onCommand({ action: 'dts', order: v.trim() }); }} />
 
-          <InputCard ic={I.form} title="Ad hoc form" desc="Build a CSV from a delivery form."
-            placeholder="Blank = latest" kind="red" buttonLabel="Build CSV"
-            onSubmit={(v) => onCommand({ action: 'form', order: v.trim() || 'latest' })} />
+          <AdhocFormCard busy={uploadBusy} onUpload={async (file) => { await onUpload(file); onCommand({ action: 'form_upload' }); }} />
 
           <RailPlanCard onUpload={onUpload} onCommand={onCommand} />
 
