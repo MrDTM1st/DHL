@@ -1,15 +1,9 @@
-// Map geometry + geocoding.
+// Geocoding + road routing for the Leaflet map.
 //
-// The redesign wants the prototype's animated d3-geo UK map (pins drop in,
-// routes draw). The real records carry POSTCODES, not lat/lng, so we geocode
-// them the same way the original page did — postcodes.io, cached in
-// localStorage, with an outcode-centroid fallback for terminated industrial
-// postcodes — then project the resulting lat/lng onto the d3-geo UK outline.
-
-import { geoMercator, geoPath } from 'd3-geo';
-import { feature } from 'topojson-client';
-
-export const VW = 720, VH = 900;
+// Real records carry POSTCODES, not lat/lng, so we geocode them via
+// postcodes.io (cached in localStorage), with an outcode-centroid fallback
+// for terminated industrial postcodes. Road-based route geometry between two
+// points comes from the public OSRM demo server, cached the same way.
 
 // Fixed collection depots — industrial postcodes are sometimes terminated and
 // fail geocoding, and these three must always be on the map.
@@ -70,26 +64,36 @@ export async function geocode(pcs) {
   return GEO;
 }
 
-// ---- d3-geo UK projection (for the animated SVG map) ----
-let _geom = null; // { land(path string), project(lng,lat) -> [x,y] }
+// ---- OSRM road routing (public demo server) ----
+let ROUTES = {};
+try { ROUTES = JSON.parse(localStorage.getItem('r2routes') || '{}'); } catch { ROUTES = {}; }
+function persistRoutes() { try { localStorage.setItem('r2routes', JSON.stringify(ROUTES)); } catch { /* quota */ } }
 
-function fallbackProjection() {
-  return geoMercator().center([-3.0, 54.9]).scale(2650).translate([VW * 0.52, VH * 0.5]);
+function routeKey(a, b) {
+  const r = (n) => Math.round(n * 10000) / 10000;
+  return `${r(a.la)},${r(a.lo)};${r(b.la)},${r(b.lo)}`;
 }
 
-export async function loadGeom() {
-  if (_geom) return _geom;
-  let projection, land = '';
+// Road-based route geometry from a -> b ({la,lo} each), via the OSRM public
+// demo server. Returns an array of [lat,lng] pairs to draw as a polyline.
+// Falls back to a straight line (and caches that fallback) if OSRM is
+// unreachable or finds no route — the demo server is unauthenticated and
+// rate-limited, so failures are expected occasionally.
+export async function routeBetween(a, b) {
+  if (!a || !b) return null;
+  const key = routeKey(a, b);
+  if (ROUTES[key]) return ROUTES[key];
+  const straight = [[a.la, a.lo], [b.la, b.lo]];
   try {
-    const topo = await (await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-110m.json')).json();
-    const feats = feature(topo, topo.objects.countries).features;
-    const uk = feats.find((f) => String(f.id) === '826' || (f.properties && f.properties.name === 'United Kingdom'));
-    projection = geoMercator().fitExtent([[46, 40], [VW - 30, VH - 40]], uk);
-    land = geoPath(projection)(uk);
+    const url = `https://router.project-osrm.org/route/v1/driving/${a.lo},${a.la};${b.lo},${b.la}?overview=full&geometries=geojson`;
+    const r = await fetch(url);
+    const d = await r.json();
+    const coords = d && d.routes && d.routes[0] && d.routes[0].geometry && d.routes[0].geometry.coordinates;
+    const line = coords ? coords.map(([lng, lat]) => [lat, lng]) : straight;
+    ROUTES[key] = line;
   } catch {
-    projection = fallbackProjection();
+    ROUTES[key] = straight;
   }
-  if (!projection) projection = fallbackProjection();
-  _geom = { land, project: (lng, lat) => projection([lng, lat]) };
-  return _geom;
+  persistRoutes();
+  return ROUTES[key];
 }

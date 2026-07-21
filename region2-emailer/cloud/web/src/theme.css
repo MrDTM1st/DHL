@@ -192,26 +192,27 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .emptybox{ text-align:center; color:var(--muted); padding:60px 20px; }
 .emptybox .big{ font-size:15px; font-weight:700; color:var(--ink2); margin-top:12px; }
 
-/* ---------- map ---------- */
-.mapwrap{ position:absolute; inset:0; overflow:hidden; background:
-      radial-gradient(120% 120% at 30% 0%, #fbfaf6 0%, #eef0ee 55%, #e6e9e6 100%); }
-.mapsvg{ width:100%; height:100%; display:block; }
-.land{ fill:#fcfbf8; stroke:#d7dad3; stroke-width:1.1; }
-.grat{ stroke:#dfe1da; stroke-width:.6; fill:none; opacity:.6; }
-.route{ fill:none; stroke:var(--faint); stroke-width:1.4; opacity:.5; }
-.route.urgent{ stroke:var(--red); stroke-width:1.8; opacity:.75; stroke-dasharray:5 5; }
-.route-draw{ stroke-dasharray:1; stroke-dashoffset:1; transition:stroke-dashoffset 1.1s ease; }
-.route-draw.on{ stroke-dashoffset:0; }
-.flow{ animation:flow 1s linear infinite; }
-@keyframes flow{ to{ stroke-dashoffset:-20; } }
-.pin{ cursor:pointer; transition:transform .55s cubic-bezier(.2,1.3,.4,1), opacity .5s ease; transform-box:fill-box; transform-origin:center bottom; }
-.pin.pre{ opacity:0; transform:translateY(-42px) scale(.4); }
-.pin.in{ opacity:1; transform:translateY(0) scale(1); }
-.pin:hover .pinhit{ r:13; }
-.pulsering{ transform-box:fill-box; transform-origin:center; animation:pulse 1.9s ease-out infinite; }
-@keyframes pulse{ 0%{ transform:scale(.6); opacity:.55; } 70%{ transform:scale(2.6); opacity:0; } 100%{ opacity:0; } }
-.pinlabel{ font-family:'Archivo',sans-serif; font-size:12px; font-weight:700; fill:var(--ink); paint-order:stroke;
-      stroke:#fff; stroke-width:3.5px; stroke-linejoin:round; pointer-events:none; }
+/* ---------- map (Leaflet + OpenStreetMap) ---------- */
+.mapwrap{ position:absolute; inset:0; overflow:hidden; background:#eef0ee; }
+.leafletmap{ width:100%; height:100%; }
+.mapwrap .leaflet-container{ font-family:'Archivo',system-ui,sans-serif; background:#eef0ee; }
+.mapwrap .leaflet-bottom.leaflet-left{ margin-bottom:16px; margin-left:16px; }
+.mapwrap .leaflet-control-zoom{ border:1px solid var(--line) !important; box-shadow:var(--sh) !important; }
+
+/* custom divIcon pins, replacing Leaflet's default marker image */
+.leaflet-div-icon{ background:transparent; border:none; }
+.pin-icon{ display:block; width:100%; height:100%; position:relative; cursor:pointer; }
+.pin-depot{ display:block; width:100%; height:100%; background:var(--depot); border:2.2px solid #fff;
+      border-radius:3px; transform:rotate(45deg); box-shadow:0 1px 4px rgba(0,0,0,.35); }
+.pin-haulier{ display:block; width:100%; height:100%; background:var(--yellow); border:1.8px solid #8a6d00;
+      border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,.3); }
+.pin-order{ display:block; width:100%; height:100%; background:var(--red); border:2.6px solid #fff;
+      border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,.35); }
+.pin-order.selected{ border-width:3.5px; }
+.pin-order.urgent::after{ content:''; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--red);
+      opacity:.6; animation:pulsering 1.9s ease-out infinite; }
+@keyframes pulsering{ 0%{ transform:scale(.6); opacity:.55; } 70%{ transform:scale(2.2); opacity:0; } 100%{ opacity:0; } }
+
 .legend{ position:absolute; right:16px; bottom:16px; background:rgba(255,255,255,.94); backdrop-filter:blur(6px);
       border:1px solid var(--line); border-radius:12px; padding:11px 14px; box-shadow:var(--sh); font-size:12px; z-index:20; }
 .legend .lt{ font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin-bottom:8px; }
@@ -220,6 +221,12 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .ld.sq{ border-radius:3px; transform:rotate(45deg); }
 .maploading{ position:absolute; top:16px; left:50%; transform:translateX(-50%); background:rgba(255,255,255,.94);
       border:1px solid var(--line); border-radius:99px; padding:7px 16px; font-size:12px; font-weight:600; color:var(--muted); box-shadow:var(--sh); z-index:20; }
+
+.layertoggle{ position:absolute; top:16px; right:16px; background:rgba(255,255,255,.94); backdrop-filter:blur(6px);
+      border:1px solid var(--line); border-radius:12px; padding:11px 14px; box-shadow:var(--sh); font-size:12px; z-index:30; }
+.layertoggle .lt{ font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin-bottom:8px; }
+.lyrow{ display:flex; align-items:center; gap:7px; margin-top:7px; color:var(--ink2); font-weight:500; cursor:pointer; user-select:none; }
+.lyrow input{ margin:0; accent-color:var(--red); cursor:pointer; }
 
 /* ---------- panels (orders / upload) ---------- */
 .uploadpanel{ position:absolute; top:16px; right:16px; width:322px; max-width:calc(100% - 32px); background:var(--card);

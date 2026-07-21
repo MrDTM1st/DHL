@@ -7,7 +7,8 @@ stdlib only; its UI is a React app (see below).
 ## The UI
 
 The dashboard front end is a React app in [`web/`](web/) — DHL red/yellow theme,
-top nav, animated UK map, dedicated tracker, and a notification system. It is
+top nav, a live Leaflet/OpenStreetMap map, dedicated tracker, and a notification
+system. It is
 built into one self-contained `index.html` and served by `server.py` at `/`
 (with the original inline page kept as a fallback). It talks to the **same REST
 API** documented below, so the home agent and this deployment are unchanged. The

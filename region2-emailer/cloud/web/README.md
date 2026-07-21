@@ -2,9 +2,10 @@
 
 The redesigned front end for the Region 2 cloud control plane. Replaces the big
 inline HTML page that used to live inside `server.py` with a modern React app —
-red/yellow DHL theme, a top nav, an animated UK map, a dedicated tracker, and a
-notification system — **wired to the exact same REST API**, so the home-PC agent
-and the deployment model are unchanged.
+red/yellow DHL theme, a top nav, a live Leaflet/OpenStreetMap map with layer
+toggles and road-based routes, a dedicated tracker, and a notification system —
+**wired to the exact same REST API**, so the home-PC agent and the deployment
+model are unchanged.
 
 ## What it talks to
 
@@ -16,7 +17,7 @@ the `DASH_KEY` typed at login (sent as `X-Auth`, stored in the browser only):
 | Command cards (extract, weeks, send, DTS, form, rail plan, order upload, handover) | `POST /api/command`, `POST /api/upload` |
 | Status card, review/batch/sites panels, dropped notices, agent-online pill | `GET /api/status` (state machine + `panel`) |
 | Tracker (pipeline, chips, chasers, booked-via-call, learn-detail) | `GET /api/tracker`, `POST /api/command` |
-| Map + Orders/hauliers panel + order drawer | `GET /api/tracker`, `panel.hauliers`, postcodes.io geocoding |
+| Map + Orders/hauliers panel + order drawer | `GET /api/tracker`, `panel.hauliers`, postcodes.io geocoding, OSRM (router.project-osrm.org) road routing |
 | Notifications | derived client-side from orders inside the ≤3-day window |
 
 No new backend endpoints were added. The haulier ranking (own fleet → tier 1 →
@@ -62,7 +63,7 @@ src/
   theme.css           DHL red/yellow design system
   icons.jsx           icon set
   lib/orders.js       urgency, pipeline, due text, needs + haulier ranking
-  lib/geo.js          postcodes.io geocoding + d3-geo UK projection
+  lib/geo.js          postcodes.io geocoding + OSRM road routing (cached in localStorage)
   components/         TopNav, Toasts, Drawer, NotifPop, OrdersPanel, FlowPanels, Login
   pages/              Dashboard, MapPage, TrackerPage, Notifications
 ```
