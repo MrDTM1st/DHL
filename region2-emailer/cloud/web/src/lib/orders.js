@@ -113,16 +113,30 @@ export function milesBetween(a, b) {
 // Rank hauliers for a job. Order of approach is DHL's OWN fleet -> tier 1 ->
 // tier 2; distance only breaks ties inside a band. `geo` is the postcode->
 // {la,lo} cache; hauliers come from the agent-pushed panel.
+//
+// Distance is measured from WHICHEVER END IS NEARER - collection or delivery.
+// A haulier based near the drop is just as workable as one near the pick-up
+// (they can run empty to collect, or be coming back that way), so ranking only
+// off the collection end hides good local options. `nearEnd` says which one it
+// is, so the reason a haulier is near is never a mystery.
 export function recommendFor(r, hauliers, geo) {
   const need = needsFor(r);
-  const from = pcNorm(r.collection_pc || ''), to = pcNorm(r.postcode || '');
-  const origin = geo[from] || geo[to];
+  const cg = geo[pcNorm(r.collection_pc || '')];
+  const dg = geo[pcNorm(r.postcode || '')];
   const out = (hauliers || []).filter((h) => {
     const caps = (h.caps || []).map((c) => c.toLowerCase());
     return need.every((n) => caps.some((c) => c.includes(n)));
   }).map((h) => {
     const g = geo[pcNorm(h.pc || '')];
-    return Object.assign({}, h, { miles: origin && g ? milesBetween(origin, g) : null });
+    const mc = g && cg ? milesBetween(cg, g) : null;
+    const md = g && dg ? milesBetween(dg, g) : null;
+    const both = [['collection', mc], ['delivery', md]].filter((x) => x[1] !== null);
+    both.sort((a, b) => a[1] - b[1]);
+    return Object.assign({}, h, {
+      miles: both.length ? both[0][1] : null,
+      nearEnd: both.length ? both[0][0] : null,
+      milesCollection: mc, milesDelivery: md,
+    });
   });
   out.forEach((h) => { h.rank = h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2); });
   out.sort((a, b) => a.rank - b.rank

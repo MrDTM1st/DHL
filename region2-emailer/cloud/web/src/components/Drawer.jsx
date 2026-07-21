@@ -82,7 +82,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           </div>
           {recs.length ? recs.map((h, i) => (
             <div className={'hrec' + (i === 0 ? ' best' : '')} key={h.name}>
-              <div className="hm mono">{h.miles !== null ? h.miles + ' mi' : '—'}</div>
+              <div className="hm mono">
+                {h.miles !== null ? h.miles + ' mi' : '—'}
+                {h.nearEnd && <span className="hend">from {h.nearEnd}</span>}
+              </div>
               <div className="hn">
                 <b>{h.name}</b>
                 <span className={'htag ' + RANK_TAG[h.rank]}>{RANK_LABEL[h.rank]}</span>

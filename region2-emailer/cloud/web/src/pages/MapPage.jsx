@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, ZoomControl, AttributionControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { isUrgent, within3, pcNorm } from '../lib/orders.js';
+import { isUrgent, within3, pcNorm, recommendFor } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween, DEPOTS } from '../lib/geo.js';
 import OrdersPanel from '../components/OrdersPanel.jsx';
 
@@ -15,6 +15,8 @@ function divIcon(className, size) {
 }
 const depotIcon = divIcon('pin-depot', 16);
 const haulierIcon = divIcon('pin-haulier', 14);
+const collectIcon = divIcon('pin-collect', 18);
+const recIcon = divIcon('pin-haulier rec', 18);
 function orderIcon(urgent, selected) {
   return divIcon('pin-order' + (urgent ? ' urgent' : '') + (selected ? ' selected' : ''), selected ? 22 : 16);
 }
@@ -30,6 +32,20 @@ function FitBounds({ points }) {
     map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 12 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count]);
+  return null;
+}
+
+// When an order is selected, glide to ITS run so the blue route fills the
+// view - the Google-Maps move of flying to the thing you just tapped.
+function FlyToRoute({ line, from, to }) {
+  const map = useMap();
+  const key = line ? line.length + ':' + line[0] : (from && to ? from.la + ',' + to.la : '');
+  useEffect(() => {
+    const pts = line && line.length ? line : (from && to ? [[from.la, from.lo], [to.la, to.lo]] : null);
+    if (!pts) return;
+    map.flyToBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 11, duration: 0.9 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
   return null;
 }
 
@@ -91,6 +107,20 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [legPairs]);
 
+  // the run for the order you pressed View on, plus the hauliers we'd ring for
+  // it - so the map answers "where is this, and who can do it" in one look
+  const selectedLeg = useMemo(
+    () => legPairs.find((l) => l.r.id === selectedId) || null,
+    [legPairs, selectedId]);
+  const selectedLine = selectedLeg ? routes[selectedLeg.r.id] : null;
+  const selectedRec = useMemo(() => {
+    const rec = records.find((r) => r.id === selectedId);
+    if (!rec) return [];
+    return recommendFor(rec, hauliers, geo).list.slice(0, 3);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, records, hauliers, tick]);
+  const recNames = useMemo(() => new Set(selectedRec.map((h) => h.name)), [selectedRec]);
+
   const pinnedCount = orderPts.length;
   const allPoints = useMemo(() => {
     const pts = orderPts.map((o) => o.pos);
@@ -118,14 +148,47 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
         <ZoomControl position="bottomleft" />
         <FitBounds points={allPoints} />
 
-        {layers.routes && legPairs.map(({ r }) => {
+        {/* every other run, kept quiet so the selected one reads clearly */}
+        {layers.routes && legPairs.filter(({ r }) => r.id !== selectedId).map(({ r }) => {
           const line = routes[r.id];
           if (!line) return null;
           return (
             <Polyline key={'r' + r.id} positions={line}
-              pathOptions={{ color: isUrgent(r) ? '#D40511' : '#75746d', weight: isUrgent(r) ? 3.5 : 2.5, opacity: isUrgent(r) ? 0.85 : 0.55, dashArray: isUrgent(r) ? '6 6' : null }} />
+              pathOptions={{ color: isUrgent(r) ? '#D40511' : '#9b9a92',
+                weight: isUrgent(r) ? 3 : 2, opacity: selectedId ? 0.18 : (isUrgent(r) ? 0.8 : 0.5),
+                dashArray: isUrgent(r) ? '6 6' : null }} />
           );
         })}
+
+        {/* the SELECTED run: a soft blue casing, the blue route on top, and a
+            dashed overlay whose stroke animates along the line so the
+            direction of travel is obvious at a glance */}
+        {selectedLeg && selectedLine && (
+          <>
+            <Polyline positions={selectedLine} interactive={false}
+              pathOptions={{ color: '#1a73e8', weight: 11, opacity: 0.18, lineCap: 'round' }} />
+            <Polyline positions={selectedLine} interactive={false}
+              pathOptions={{ color: '#1a73e8', weight: 5, opacity: 0.95, lineCap: 'round' }} />
+            <Polyline positions={selectedLine} interactive={false} className="routeflow"
+              pathOptions={{ color: '#ffffff', weight: 3, opacity: 0.9, dashArray: '10 18', lineCap: 'butt' }} />
+          </>
+        )}
+
+        {/* straight hop while the road geometry is still being fetched, so the
+            selection never looks like nothing happened */}
+        {selectedLeg && !selectedLine && (
+          <Polyline positions={[[selectedLeg.from.la, selectedLeg.from.lo], [selectedLeg.to.la, selectedLeg.to.lo]]}
+            interactive={false} className="routeflow"
+            pathOptions={{ color: '#1a73e8', weight: 4, opacity: 0.7, dashArray: '8 12' }} />
+        )}
+
+        {selectedLeg && (
+          <>
+            <Marker position={[selectedLeg.from.la, selectedLeg.from.lo]} icon={collectIcon}
+              title={'Collection — ' + (selectedLeg.r.collection_site || '')} />
+            <FlyToRoute line={selectedLine} from={selectedLeg.from} to={selectedLeg.to} />
+          </>
+        )}
 
         {layers.depots && depotPts.map((d) => (
           <Marker key={d.key} position={[d.lat, d.lng]} icon={depotIcon}
@@ -133,7 +196,10 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
         ))}
 
         {layers.hauliers && haulierPts.map(({ h, pos }) => (
-          <Marker key={h.name} position={pos} icon={haulierIcon} title={h.name} />
+          <Marker key={h.name} position={pos}
+            icon={recNames.has(h.name) ? recIcon : haulierIcon}
+            zIndexOffset={recNames.has(h.name) ? 400 : 0}
+            title={recNames.has(h.name) ? h.name + ' — recommended for this job' : h.name} />
         ))}
 
         {layers.orders && orderPts.map(({ r, pos }) => (
@@ -158,6 +224,12 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
         <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Urgent · ≤3 days</div>
         <div className="legrow"><span className="ld sq" style={{ background: 'var(--depot)' }} />Collection depot</div>
         <div className="legrow"><span className="ld" style={{ background: 'var(--yellow)', border: '1.5px solid #8a6d00' }} />Haulier base</div>
+        {selectedLeg && (
+          <>
+            <div className="legrow"><span className="ld" style={{ background: '#1a73e8' }} />Selected run</div>
+            <div className="legrow"><span className="ld" style={{ background: 'var(--go, #1da35e)' }} />Recommended haulier</div>
+          </>
+        )}
       </div>
 
       <OrdersPanel records={records} hauliers={hauliers} onSelect={onSelect} selectedId={selectedId} />

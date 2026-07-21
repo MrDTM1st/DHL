@@ -216,6 +216,18 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .pin-order.urgent::after{ content:''; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--red);
       opacity:.6; animation:pulsering 1.9s ease-out infinite; }
 @keyframes pulsering{ 0%{ transform:scale(.6); opacity:.55; } 70%{ transform:scale(2.2); opacity:0; } 100%{ opacity:0; } }
+/* collection end of the selected run — a dark square to match the depot shape */
+.pin-collect{ display:block; width:100%; height:100%; background:var(--depot); border:2.6px solid #fff;
+      border-radius:4px; box-shadow:0 1px 5px rgba(0,0,0,.4); }
+/* a haulier we're actually recommending for the selected job */
+.pin-haulier.rec{ background:var(--go, #1da35e); border-color:#fff; border-width:2.4px;
+      box-shadow:0 0 0 4px rgba(29,163,94,.25), 0 1px 4px rgba(0,0,0,.3); }
+
+/* the selected run: a dashed white overlay that flows along the blue route,
+   so direction of travel reads at a glance (Google-Maps style). */
+.routeflow{ animation:routeflow 1.1s linear infinite; }
+@keyframes routeflow{ to{ stroke-dashoffset:-28; } }
+@media (prefers-reduced-motion: reduce){ .routeflow{ animation:none; } }
 
 /* z-index here only has to beat Leaflet's own panes/controls (max 1000)
    inside .mapwrap's stacking context, not the rest of the app. */
@@ -314,6 +326,8 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .kv dt{ color:var(--muted); } .kv dd{ margin:0; font-weight:600; }
 .needchips{ display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 18px; }
 .needchip{ font-size:11px; font-weight:700; background:var(--yellow-t); color:#8a6d00; border:1px solid #f0d98f; border-radius:6px; padding:3px 8px; white-space:nowrap; }
+/* which end a haulier is nearest — collection or delivery */
+.hend{ display:block; font-size:9px; font-weight:600; color:var(--faint); letter-spacing:.02em; margin-top:1px; }
 .hrec{ display:flex; align-items:center; gap:11px; padding:11px 12px; border:1px solid var(--line); border-radius:11px; margin-bottom:8px; }
 .hrec.best{ border-color:var(--red); background:var(--red-t); }
 .hrec .hm{ width:52px; text-align:right; font-weight:700; font-size:13px; }
