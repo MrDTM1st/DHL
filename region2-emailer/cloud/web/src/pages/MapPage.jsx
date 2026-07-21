@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, ZoomControl, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, ZoomControl, AttributionControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { isUrgent, within3, pcNorm } from '../lib/orders.js';
@@ -106,12 +106,15 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
       {pinnedCount === 0 && records.length > 0 && (
         <div className="maploading">Geocoding {records.length} orders…</div>
       )}
-      <MapContainer center={UK_CENTER} zoom={UK_ZOOM} zoomControl={false} className="leafletmap">
+      <MapContainer center={UK_CENTER} zoom={UK_ZOOM} zoomControl={false} attributionControl={false} className="leafletmap">
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           maxZoom={19}
         />
+        {/* Both controls in the bottom-left corner, so the required OSM
+            attribution never collides with the legend panel (bottom-right). */}
+        <AttributionControl position="bottomleft" prefix={false} />
         <ZoomControl position="bottomleft" />
         <FitBounds points={allPoints} />
 
