@@ -216,6 +216,12 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .pin-order.urgent::after{ content:''; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--red);
       opacity:.6; animation:pulsering 1.9s ease-out infinite; }
 @keyframes pulsering{ 0%{ transform:scale(.6); opacity:.55; } 70%{ transform:scale(2.2); opacity:0; } 100%{ opacity:0; } }
+/* deliberate re-frame — the map never re-fits itself, so this is the way back */
+.fitbtn{ width:100%; margin:2px 0 8px; padding:5px 8px; font:inherit; font-size:11px; font-weight:700;
+      border:1px solid var(--line2); border-radius:7px; background:var(--card); color:var(--ink2);
+      cursor:pointer; transition:background .12s; }
+.fitbtn:hover{ background:var(--input); }
+
 /* collection end of the selected run — a dark square to match the depot shape */
 .pin-collect{ display:block; width:100%; height:100%; background:var(--depot); border:2.6px solid #fff;
       border-radius:4px; box-shadow:0 1px 5px rgba(0,0,0,.4); }

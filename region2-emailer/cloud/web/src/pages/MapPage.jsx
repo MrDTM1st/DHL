@@ -21,31 +21,46 @@ function orderIcon(urgent, selected) {
   return divIcon('pin-order' + (urgent ? ' urgent' : '') + (selected ? ' selected' : ''), selected ? 22 : 16);
 }
 
-// Fits the map to whatever pins are currently visible, once, whenever the
-// set of points changes size (avoids fighting the user's own pan/zoom).
-function FitBounds({ points }) {
+// Frames the map on the pins ONCE, when they first appear - and then never
+// again on its own.
+//
+// This used to re-fit whenever the NUMBER of plotted points changed, which
+// sounds harmless but isn't: the count changes as postcodes geocode in one by
+// one, every time the tracker re-polls, and whenever a layer is toggled. So
+// the map kept yanking itself back to a fresh bounding box under the user -
+// pan somewhere, zoom out, and a moment later it snapped elsewhere, which
+// reads exactly like "the pins won't stay put". Re-framing is now only ever
+// deliberate: this initial fit, the Fit-all button, or selecting an order.
+function FitBounds({ points, fitToken }) {
   const map = useMap();
+  const done = useRef(false);
   const count = points.length;
   useEffect(() => {
     if (!count) return;
+    if (done.current && !fitToken) return;   // already framed; leave the view alone
+    done.current = true;
     if (count === 1) { map.setView(points[0], 11); return; }
     map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 12 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [count]);
+  }, [count > 0, fitToken]);
   return null;
 }
 
 // When an order is selected, glide to ITS run so the blue route fills the
 // view - the Google-Maps move of flying to the thing you just tapped.
-function FlyToRoute({ line, from, to }) {
+//
+// Keyed on the ORDER, not on the route geometry. Keying on the geometry meant
+// flying twice for one click: once to the straight-line placeholder, then
+// again when the road route arrived from OSRM a second later - a second,
+// unasked-for lurch that looked like the map wandering off on its own.
+function FlyToRoute({ id, line, from, to }) {
   const map = useMap();
-  const key = line ? line.length + ':' + line[0] : (from && to ? from.la + ',' + to.la : '');
   useEffect(() => {
     const pts = line && line.length ? line : (from && to ? [[from.la, from.lo], [to.la, to.lo]] : null);
     if (!pts) return;
     map.flyToBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 11, duration: 0.9 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [id]);
   return null;
 }
 
@@ -53,6 +68,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
   const [tick, setTick] = useState(0);
   const [layers, setLayers] = useState({ orders: true, depots: true, hauliers: true, routes: true });
   const [routes, setRoutes] = useState({});
+  const [fitToken, setFitToken] = useState(0);   // bumped only by the Fit-all button
   const fetching = useRef(new Set());
 
   // Geocode every postcode we might pin (deliveries, collections, hauliers).
@@ -146,7 +162,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
             attribution never collides with the legend panel (bottom-right). */}
         <AttributionControl position="bottomleft" prefix={false} />
         <ZoomControl position="bottomleft" />
-        <FitBounds points={allPoints} />
+        <FitBounds points={allPoints} fitToken={fitToken} />
 
         {/* every other run, kept quiet so the selected one reads clearly */}
         {layers.routes && legPairs.filter(({ r }) => r.id !== selectedId).map(({ r }) => {
@@ -186,7 +202,8 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
           <>
             <Marker position={[selectedLeg.from.la, selectedLeg.from.lo]} icon={collectIcon}
               title={'Collection — ' + (selectedLeg.r.collection_site || '')} />
-            <FlyToRoute line={selectedLine} from={selectedLeg.from} to={selectedLeg.to} />
+            <FlyToRoute id={selectedLeg.r.id} line={selectedLine}
+              from={selectedLeg.from} to={selectedLeg.to} />
           </>
         )}
 
@@ -210,6 +227,8 @@ export default function MapPage({ records, hauliers, onSelect, selectedId }) {
 
       <div className="layertoggle">
         <div className="lt">Layers</div>
+        <button className="fitbtn" onClick={() => setFitToken((n) => n + 1)}
+          title="Re-frame the map around everything">Fit all</button>
         {[['orders', 'Delivery stops'], ['depots', 'Collection depots'], ['hauliers', 'Haulier bases'], ['routes', 'Routes']].map(([k, label]) => (
           <label key={k} className="lyrow">
             <input type="checkbox" checked={layers[k]} onChange={() => toggle(k)} />
