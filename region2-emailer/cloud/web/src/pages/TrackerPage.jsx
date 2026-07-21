@@ -56,7 +56,7 @@ function DetailChips({ r, onLearn }) {
   );
 }
 
-export default function TrackerPage({ records, onSelect, onCommand, onLearn, onBookedCall }) {
+export default function TrackerPage({ records, onSelect, onCommand, onLearn, onBookedCall, autoChase }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
 
@@ -87,7 +87,26 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
           <h1 className="h1">Order tracker</h1>
           <p>Every order the desk has emailed, from first draft to send-off brief. Drafted → Emailed → Reply → Sent off.</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Automatic follow-ups. OFF means nothing is ever chased without you
+              pressing Run chasers - the safe default while booked orders can
+              still slip through the net. */}
+          <button
+            className={'switch' + (autoChase ? ' on' : '')}
+            role="switch" aria-checked={!!autoChase}
+            title={autoChase
+              ? 'Chasers send automatically every 3h. Click to stop them.'
+              : 'Nothing is chased automatically. Click to let chasers send every 3h.'}
+            onClick={() => {
+              const turningOn = !autoChase;
+              if (turningOn && !window.confirm(
+                'Turn AUTOMATIC follow-ups on?\n\nChasers will then send on their own every 3 hours '
+                + 'to any order 2+ business days overdue a reply (max 3 per order).')) return;
+              onCommand({ action: 'set_auto_chase', on: turningOn });
+            }}>
+            <span className="knob" />
+            <span className="swlabel">Auto follow-ups {autoChase ? 'ON' : 'OFF'}</span>
+          </button>
           <button className="btn" onClick={() => onCommand({ action: 'tracker_refresh' })}>{I.check} Check replies</button>
           <button className="btn red" onClick={() => { if (window.confirm('Send follow-up chasers to every order that is 2+ business days overdue a reply?')) onCommand({ action: 'run_chasers' }); }}>Run chasers</button>
         </div>

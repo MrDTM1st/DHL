@@ -348,6 +348,22 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 /* which end a haulier is nearest — collection or delivery */
 .hend{ display:block; font-size:9px; font-weight:600; color:var(--faint); letter-spacing:.02em; margin-top:1px; }
 
+/* on/off switch — used for automatic follow-ups. Deliberately reads its state
+   in words as well as colour: "is the desk emailing people on its own?" is not
+   a question to answer by squinting at a toggle. */
+.switch{ display:inline-flex; align-items:center; gap:8px; padding:5px 12px 5px 6px;
+      border:1px solid var(--line2); border-radius:99px; background:var(--card);
+      cursor:pointer; font:inherit; font-size:12px; font-weight:700; color:var(--muted);
+      transition:background .14s, border-color .14s, color .14s; }
+.switch .knob{ width:30px; height:17px; border-radius:99px; background:var(--seg);
+      border:1px solid var(--line2); position:relative; flex:none; transition:background .14s; }
+.switch .knob::after{ content:''; position:absolute; top:1px; left:1px; width:13px; height:13px;
+      border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:transform .14s; }
+.switch.on{ background:var(--gobg, #eef6ef); border-color:var(--gobd, #dcebdf); color:var(--goink, #18804a); }
+.switch.on .knob{ background:var(--go, #1da35e); border-color:var(--go, #1da35e); }
+.switch.on .knob::after{ transform:translateX(13px); }
+.switch:hover{ border-color:var(--muted); }
+
 /* the run and its drive time */
 .runeta{ background:var(--input); border:1px solid var(--line2); border-radius:10px;
       padding:9px 11px; margin-bottom:14px; }

@@ -151,9 +151,33 @@ def _slim_hauliers():
         return []
 
 
+AUTO_CHASE_FLAG = os.path.join(HERE, "auto_chase.enabled")
+
+
+def auto_chase_on():
+    return os.path.exists(AUTO_CHASE_FLAG)
+
+
+def set_auto_chase(on):
+    """Flip automatic follow-ups. The flag is a FILE because the chase job is a
+    separate process - it re-reads the switch each run, so a change takes effect
+    without restarting anything."""
+    if on:
+        with open(AUTO_CHASE_FLAG, "w", encoding="utf-8") as f:
+            f.write("Automatic follow-ups ON. The local agent runs "
+                    "`phase2.py chase send` every 3h.\nDelete this file (or use the "
+                    "dashboard switch) to turn them off.\n")
+    else:
+        try:
+            os.remove(AUTO_CHASE_FLAG)
+        except FileNotFoundError:
+            pass
+    return auto_chase_on()
+
+
 def push_panel():
     """Persistent dashboard panel: site decisions, known sites, handover, team,
-    hauliers. Separate from /api/status so job chatter never wipes it."""
+    hauliers, switches. Separate from /api/status so job chatter never wipes it."""
     try:
         ss = site_store()
         team = team_config()
@@ -164,6 +188,7 @@ def push_panel():
             "team": [{"name": m.get("name", ""), "email": m.get("email", "")}
                      for m in team.get("members", [])],
             "hauliers": _slim_hauliers(),
+            "auto_chase": auto_chase_on(),
         })
     except Exception:
         pass
@@ -434,6 +459,14 @@ def main():
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])
                 report("done", "Chasers run.", tail(out, 10))
+            elif action == "set_auto_chase":
+                on = bool(cmd.get("on"))
+                now = set_auto_chase(on)
+                push_panel()
+                report("done", "Automatic follow-ups are now "
+                       + ("ON — chasers send every 3h for orders 2+ business days overdue."
+                          if now else
+                          "OFF — nothing is chased unless you press Run chasers."))
             elif action == "waitlist_release":
                 report("running", "Releasing any due wait-list emails…")
                 out = run(["waitlist_release.py", "send"])
@@ -505,7 +538,7 @@ def main():
         # ONLY the local agent chases (phase2 also holds a lock, but don't even
         # start the second one).
         if (IS_LOCAL
-                and os.path.exists(os.path.join(HERE, "auto_chase.enabled"))
+                and auto_chase_on()
                 and time.time() - last_chase > 10800):     # every 3h
             try:
                 subprocess.Popen([sys.executable, "phase2.py", "chase", "send"],

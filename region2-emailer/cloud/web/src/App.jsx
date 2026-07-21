@@ -199,7 +199,8 @@ export default function App() {
             pickedHaulier={pickedHaulier} />
         )}
         {page === 'tracker' && (
-          <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn} onBookedCall={onBookedCall} />
+          <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn}
+            onBookedCall={onBookedCall} autoChase={!!(panel && panel.auto_chase)} />
         )}
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
