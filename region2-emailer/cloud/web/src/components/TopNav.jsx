@@ -8,7 +8,6 @@ export default function TopNav({ page, setPage, unread, agentOnline, agentText, 
     ['dash', 'Dashboard', I.dash],
     ['map', 'Map', I.map],
     ['tracker', 'Tracker', I.track],
-    ['queue', 'Ad hoc queue', I.queue],
   ];
   return (
     <div className="topbar">

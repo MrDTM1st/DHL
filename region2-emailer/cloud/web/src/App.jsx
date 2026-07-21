@@ -7,7 +7,6 @@ import Login from './components/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import MapPage from './pages/MapPage.jsx';
 import TrackerPage from './pages/TrackerPage.jsx';
-import AdhocQueue from './pages/AdhocQueue.jsx';
 import Notifications from './pages/Notifications.jsx';
 import { useStatus, useTracker } from './hooks.js';
 import { isUrgent, within3, ordLabel, dueText } from './lib/orders.js';
@@ -197,9 +196,6 @@ export default function App() {
         )}
         {page === 'tracker' && (
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn} onBookedCall={onBookedCall} />
-        )}
-        {page === 'queue' && (
-          <AdhocQueue records={records} hauliers={hauliers} onUpload={onUpload} onCommand={onCommand} uploadBusy={uploadBusy} />
         )}
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
