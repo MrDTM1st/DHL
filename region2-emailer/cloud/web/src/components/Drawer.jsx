@@ -3,7 +3,7 @@ import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm,
-  fmtDur, metersToMiles, journeyFor, shortlist,
+  fmtDur, metersToMiles, journeyFor,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 
@@ -27,7 +27,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const d = r.details || {};
   const v = (k) => detVal(k, d[k]);
   const { need, list } = recommendFor(r, hauliers, geo);
-  const recs = shortlist(list, 4);
+  // The FULL list of hauliers that fit this job - fleet -> tier 1 -> tier 2,
+  // closest to furthest within each band (Delali: "give me everyone that fits",
+  // not a top few). The drawer body scrolls, so a long list costs nothing.
+  const recs = list;
   // The top pick is timed straight away rather than waiting for a tap - the
   // first thing you want on opening a brief is "who, and how long".
   const auto = recs[0] || null;
@@ -131,7 +134,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           </div>
 
           <div className="lbl" style={{ margin: '6px 0 10px' }}>
-            Who to contact <span style={{ color: 'var(--faint)', fontWeight: 600 }}>
+            Who to contact — {recs.length} fit this job <span style={{ color: 'var(--faint)', fontWeight: 600 }}>
               · timed from the top pick — tap another to compare</span>
           </div>
           {recs.length ? recs.map((h, i) => {

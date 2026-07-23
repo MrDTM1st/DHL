@@ -145,6 +145,7 @@ def _slim_hauliers():
                         "phone": (h.get("phone") or "")[:40],
                         "email": (h.get("emails") or [""])[0],
                         "fleet": bool(h.get("own_fleet")),   # DHL NOC - approached first
+                        "no_go": h.get("no_go_areas", []),   # areas they don't cover (HHL: the north)
                         "caps": h.get("caps", [])})   # capability match happens in the browser
         return out
     except Exception:

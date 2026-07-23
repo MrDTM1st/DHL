@@ -129,7 +129,12 @@ export function recommendFor(r, hauliers, geo) {
   const need = needsFor(r);
   const cg = geo[pcNorm(r.collection_pc || '')];
   const dg = geo[pcNorm(r.postcode || '')];
+  // coverage is a hard filter like capability: a haulier is never suggested
+  // for a job with either end in an area they don't work (HHL: the north)
+  const areaOf = (p) => { const m = pcNorm(p).match(/^[A-Z]+/); return m ? m[0] : ''; };
+  const jobAreas = [areaOf(r.collection_pc || ''), areaOf(r.postcode || '')].filter(Boolean);
   const out = (hauliers || []).filter((h) => {
+    if ((h.no_go || []).some((a) => jobAreas.includes(a))) return false;
     const caps = (h.caps || []).map((c) => c.toLowerCase());
     return need.every((n) => caps.some((c) => c.includes(n)));
   }).map((h) => {
@@ -174,19 +179,6 @@ export function recommendFor(r, hauliers, geo) {
     || (a.miles === null) - (b.miles === null)
     || (a.miles || 9e9) - (b.miles || 9e9));
   return { need, list: out };
-}
-
-// The shortlist actually shown: the first `n` in approach order, but never
-// without a haulier that is closer than everything above it. A tier 2 at 18mi
-// would otherwise drop off the end purely for being tier 2, when it is exactly
-// the option worth knowing about before you ring round in band order.
-export function shortlist(list, n = 4) {
-  const top = list.slice(0, n);
-  const bargain = list.find((h) => h.closerThanAbove);
-  if (bargain && !top.some((h) => h.name === bargain.name)) {
-    top[top.length - 1] = bargain;   // swap into the last slot, keeps the list short
-  }
-  return top;
 }
 
 export const RANK_TAG = ['fleet', 't1', 't2'];

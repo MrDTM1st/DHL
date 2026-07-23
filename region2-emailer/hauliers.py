@@ -45,9 +45,46 @@ def _emails(v):
 _outward = postcodes.outward
 
 
+# ---- coverage overrides ------------------------------------------------
+# Operational facts from Delali that the contact list doesn't record. Applied
+# in load() (not baked into the store) so re-importing a newer contact sheet
+# never wipes them. Keys match by substring of the haulier name.
+#
+# Postcode AREAS considered "the north" for coverage purposes - Yorkshire/
+# Humberside, the North East, the North West and Scotland. The Midlands belt
+# (B CV DY WS WV ST TF LE DE NG LN NN...) is deliberately NOT in here.
+NORTH_AREAS = sorted({
+    # Yorkshire & Humberside
+    "S", "DN", "HU", "YO", "LS", "BD", "HX", "HD", "WF", "HG",
+    # North East
+    "NE", "SR", "DH", "TS", "DL",
+    # North West
+    "CA", "LA", "PR", "FY", "BB", "BL", "OL", "M", "SK", "WA", "WN", "L", "CH",
+    # Scotland
+    "AB", "DD", "DG", "EH", "FK", "G", "HS", "IV", "KA", "KW", "KY", "ML",
+    "PA", "PH", "TD", "ZE",
+})
+
+_OVERRIDES = {
+    # "HHL mostly focus on the Midlands and southern/London region, so they
+    # wouldn't really be doing northern work" - Delali, 2026-07-22. A job with
+    # EITHER end in a northern area never suggests them.
+    "hotspur": {"no_go_areas": NORTH_AREAS},
+}
+
+
+def _apply_overrides(d):
+    for h in d.get("hauliers", []) + d.get("couriers", []):
+        nm = str(h.get("name", "")).lower()
+        for key, ov in _OVERRIDES.items():
+            if key in nm:
+                h.update(ov)
+    return d
+
+
 def load():
     try:
-        return json.load(open(PATH, encoding="utf-8"))
+        return _apply_overrides(json.load(open(PATH, encoding="utf-8")))
     except Exception:
         return {"hauliers": [], "couriers": [], "ctms": {}}
 
@@ -232,19 +269,25 @@ def geocode(postcodes):
 
 
 # ---- the actual question ----------------------------------------------
-def recommend(from_pc, needs=(), to_pc="", limit=6, include_couriers=False):
-    """Who should I ring for this job? Capability is a HARD filter (no point
-    ranking someone who can't carry it); the ranking is distance from the
-    collection, then tier, then whether we have quote history for the lane."""
+def recommend(from_pc, needs=(), to_pc="", limit=None, include_couriers=False):
+    """Who should I ring for this job? Returns EVERYONE who fits (Delali wants
+    the full list, not a top few), fleet -> tier 1 -> tier 2, closest to
+    furthest within each band. Capability is a HARD filter (no point ranking
+    someone who can't carry it), and so is coverage - a haulier is never
+    suggested for a job in an area they don't work (HHL never gets northern
+    jobs)."""
     d = load()
     pool = list(d.get("hauliers", []))
     if include_couriers:
         pool += list(d.get("couriers", []))
     needs = [str(n).strip().lower() for n in needs if str(n).strip()]
+    job_areas = {postcodes.area(from_pc), postcodes.area(to_pc)} - {""}
     ok = []
     for h in pool:
         if h.get("do_not_use"):
             continue                     # marked DO NOT USE on the sheet - never suggest
+        if job_areas & set(h.get("no_go_areas", [])):
+            continue                     # either end of the job is outside their coverage
         caps = [c.lower() for c in h.get("caps", [])]
         if all(any(n in c for c in caps) for n in needs):
             ok.append(h)
@@ -266,7 +309,7 @@ def recommend(from_pc, needs=(), to_pc="", limit=6, include_couriers=False):
     # a band - a closer tier-2 must never outrank a tier-1.
     ok.sort(key=lambda h: (h["rank"], h["miles"] is None,
                            h["miles"] or 9e9, not h["used_before"]))
-    return ok[:limit], est
+    return (ok[:limit] if limit else ok), est
 
 
 def main():
