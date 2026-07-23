@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, ZoomControl, AttributionControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { isUrgent, within3, pcNorm, recommendFor } from '../lib/orders.js';
+import { isUrgent, within3, pcNorm, recommendFor, collectionsOf } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween, DEPOTS } from '../lib/geo.js';
 import OrdersPanel from '../components/OrdersPanel.jsx';
 
@@ -20,6 +20,10 @@ const recIcon = divIcon('pin-haulier rec', 18);
 // Google-directions style A/B endpoints, used in focus mode
 const aIcon = L.divIcon({ className: 'pin-icon', html: '<span class="pin-ab a">A</span>', iconSize: [24, 24], iconAnchor: [12, 12] });
 const bIcon = L.divIcon({ className: 'pin-icon', html: '<span class="pin-ab b">B</span>', iconSize: [24, 24], iconAnchor: [12, 12] });
+// extra pick-ups on a multi-collection job: A2, A3, ...
+function aNIcon(n) {
+  return L.divIcon({ className: 'pin-icon', html: `<span class="pin-ab a">A${n}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] });
+}
 function orderIcon(urgent, selected) {
   return divIcon('pin-order' + (urgent ? ' urgent' : '') + (selected ? ' selected' : ''), selected ? 22 : 16);
 }
@@ -102,7 +106,8 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
   useEffect(() => {
     let live = true;
     const pcs = []
-      .concat(records.map((r) => r.postcode), records.map((r) => r.collection_pc))
+      .concat(records.map((r) => r.postcode))
+      .concat(records.flatMap((r) => collectionsOf(r).map((c) => c.pc)))
       .concat((hauliers || []).map((h) => h.pc))
       .filter(Boolean);
     geocode(pcs).then(() => { if (live) setTick((n) => n + 1); });
@@ -125,9 +130,16 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
 
   const legPairs = useMemo(() => records.map((r) => {
     const dg = geo[pcNorm(r.postcode || '')];
-    const cg = geo[pcNorm(r.collection_pc || '')];
+    const colls = collectionsOf(r);
+    const cg = geo[pcNorm((colls[0] || {}).pc || '')];
     if (!dg || !cg) return null;
-    return { r, from: { la: cg.la, lo: cg.lo }, to: { la: dg.la, lo: dg.lo } };
+    // the route is drawn from the FIRST collection; the rest become their own
+    // A2/A3 pins so every pick-up on the job is still visible
+    const extras = colls.slice(1).map((c) => {
+      const g = geo[pcNorm(c.pc || '')];
+      return g ? { site: c.site, pos: [g.la, g.lo] } : null;
+    }).filter(Boolean);
+    return { r, from: { la: cg.la, lo: cg.lo }, to: { la: dg.la, lo: dg.lo }, extras };
   }).filter(Boolean), [tick, records]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch road-based route geometry from OSRM for each collection->delivery
@@ -269,7 +281,11 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
         {selectedLeg && (
           <>
             <Marker position={[selectedLeg.from.la, selectedLeg.from.lo]} icon={aIcon} zIndexOffset={500}
-              title={'A — Collection: ' + (selectedLeg.r.collection_site || '')} />
+              title={'A — Collection: ' + ((collectionsOf(selectedLeg.r)[0] || {}).site || selectedLeg.r.collection_site || '')} />
+            {(selectedLeg.extras || []).map((x, i) => (
+              <Marker key={'a' + (i + 2)} position={x.pos} icon={aNIcon(i + 2)} zIndexOffset={500}
+                title={`A${i + 2} — Collection: ` + (x.site || '')} />
+            ))}
             <FlyToRoute id={selectedLeg.r.id} line={selectedLine}
               from={selectedLeg.from} to={selectedLeg.to} />
           </>

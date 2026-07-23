@@ -40,7 +40,8 @@ def _send_one(outlook, acct, e):
                 delivery_date=e["date"], source=e.get("source", ""), status="sent",
                 worksite=e.get("worksite", ""),
                 collection_site=e.get("collection_site", ""),
-                collection_pc=e.get("collection_pc", ""))
+                collection_pc=e.get("collection_pc", ""),
+                collections=e.get("collections"))
     metrics.log("waitlist_released", orders=e.get("orders", []), to=e["to"])
     return True, "sent"
 

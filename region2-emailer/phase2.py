@@ -197,6 +197,49 @@ def _answer(body, *fragments):
     return None
 
 
+def backfill_collections(ns, cap=12):
+    """Fill in the collection location(s) on tracker records that lack them.
+    Wait-list entries never carried collection until 23/07 (waitlist.add
+    dropped it), and older records predate collection capture entirely - so
+    the map, briefs and cover requests had nothing to show. Rebuilds from each
+    order's extract via the order index; capped per run so check/recover stay
+    quick."""
+    d = tracker.load()
+    fixed = 0
+    # records from before the collections LIST existed carry only the single
+    # collection_site/pc pair - lift it into the list so the UI has one shape
+    for r in d["records"]:
+        if not r.get("collections") and (r.get("collection_site") or r.get("collection_pc")):
+            r["collections"] = [{"site": r.get("collection_site", ""),
+                                 "pc": r.get("collection_pc", "")}]
+            fixed += 1
+    todo = [r for r in d["records"]
+            if r.get("kind") != "collection" and not r.get("collections")
+            and not r.get("collection_pc") and r.get("orders")]
+    tmp = os.path.join(bd.HERE, "_backfill.xlsx")
+    for r in todo[:cap]:
+        try:
+            path, fn = order_index.lookup(ns, r["orders"][0], tmp)
+            if not path:
+                continue
+            rows, C = bd.load_rows(path)
+            targets = {str(o) for o in r["orders"]}
+            bundle = [(row, C, fn) for row in rows
+                      if row[C["order"]] and bd.base_order(row[C["order"]]) in targets]
+            colls = bd.collections_of(bundle)
+            if not colls:
+                continue
+            r["collections"] = colls
+            r["collection_site"] = colls[0]["site"]
+            r["collection_pc"] = colls[0]["pc"]
+            fixed += 1
+        except Exception:
+            continue
+    if fixed:
+        tracker.save(d)
+    return fixed
+
+
 def repair_materials():
     """Records built from a BS extract before the column fix stored the NUMERIC
     code as their materials ("6x 0057/063740/0009") instead of the wording. The
@@ -334,7 +377,10 @@ def enrol_untracked(ns, limit=600):
                     site=w.get("site", ""), postcode=w.get("postcode", ""),
                     delivery_date=w.get("date", ""), source="wait-list (recovered)",
                     status="sent", emailed_at=bd._to_tracker_dt(when),
-                    only_if_new=True, kind="delivery", orig_entryid=eid)
+                    only_if_new=True, kind="delivery", orig_entryid=eid,
+                    worksite=w.get("worksite", ""), collections=w.get("collections"),
+                    collection_site=w.get("collection_site", ""),
+                    collection_pc=w.get("collection_pc", ""))
         metrics.log("order_recovered", orders=[o], via="wait-list")
         tracked.add(o)
         added += 1
@@ -362,7 +408,10 @@ def enrol_untracked(ns, limit=600):
                     site=e.get("site", ""), postcode=e.get("postcode", ""),
                     delivery_date=e.get("date", ""), source="sent (recovered)", status="sent",
                     emailed_at=bd._to_tracker_dt(when) if when else None,
-                    only_if_new=True, kind="delivery", orig_entryid=eid)
+                    only_if_new=True, kind="delivery", orig_entryid=eid,
+                    worksite=e.get("worksite", ""), collections=e.get("collections"),
+                    collection_site=e.get("collection_site", ""),
+                    collection_pc=e.get("collection_pc", ""))
         metrics.log("order_recovered", orders=ords, via="extract")
         tracked.update(ords)
         added += 1
@@ -805,6 +854,7 @@ def main():
         # slow (rebuilds each order from its extract) - runs on its own daily
         # cadence, never inside check()
         print(f"recovered {enrol_untracked(ns)} untracked order(s).")
+        print(f"backfilled collection(s) on {backfill_collections(ns)} record(s).")
     elif cmd == "check":
         check(ns)
     elif cmd == "chase":

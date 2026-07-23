@@ -219,6 +219,26 @@ def readable_product(prod, prod_code):
         return b
     return a or b   # both or neither look like words - keep the primary column
 
+def collections_of(bundle):
+    """EVERY distinct collection point in an email group, as
+    [{"site","pc"},...]. A group is one contact+delivery+date, but its rows can
+    collect from SEVERAL places (e.g. rails ex-Scunthorpe + fittings ex-Askern
+    on one job). The old code read only the FIRST row - so a blank first row
+    lost the collection entirely, and extra collection sites were dropped."""
+    out, seen = [], set()
+    for r, C, _ in bundle:
+        cs = clean(r[C["csite"]]) if C.get("csite") is not None else ""
+        cp = clean(r[C["cpc"]]) if C.get("cpc") is not None else ""
+        if not (cs or cp):
+            continue
+        key = (cs.lower(), postcodes.norm(cp))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"site": cs, "pc": cp})
+    return out
+
+
 def worksite_of(raw):
     """The worksite name from the extract's Delivery Point column - the trailing
     number is a CTMS site ref the contact doesn't use ('Avonmouth 2609676' ->
@@ -560,7 +580,7 @@ def save_pending_batch(emails):
     slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date",
                                    "orders", "product_codes", "materials", "site",
                                    "worksite", "postcode", "source", "loose_ballast",
-                                   "collection_site", "collection_pc")} for e in emails]
+                                   "collection_site", "collection_pc", "collections")} for e in emails]
     with open(PENDING_BATCH, "w", encoding="utf-8") as f:
         json.dump(slim, f, indent=1, default=str)
     return slim
@@ -962,6 +982,7 @@ def build_emails_multi(files):
         pcodes = sorted({clean(r[C['prod_code']]) for r, C, _ in bundle
                          if C['prod_code'] is not None and r[C['prod_code']]})
         sources = " + ".join(sorted({s for _, _, s in bundle if s}))
+        colls = collections_of(bundle)
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, orders=orders,
                            product_codes=pcodes, materials=product_summary(items),
@@ -969,8 +990,9 @@ def build_emails_multi(files):
                            loose_ballast=any(is_loose_ballast(d) for _, d in items),
                            site=clean(r0[C0['daddr']]), worksite=worksite_of(wsite),
                            postcode=dpc, source=sources,
-                           collection_site=clean(r0[C0['csite']]) if C0.get('csite') is not None else "",
-                           collection_pc=clean(r0[C0['cpc']]) if C0.get('cpc') is not None else ""))
+                           collections=colls,
+                           collection_site=colls[0]["site"] if colls else "",
+                           collection_pc=colls[0]["pc"] if colls else ""))
         # collect-first: a SEPARATE collection request to Anderton/BCM/Trough Tec,
         # sent alongside the delivery email (both go out together).
         sup = supcfg = None
@@ -1043,7 +1065,8 @@ def create_drafts(ns, emails):
                     source=e.get("source", ""), status="drafted",
                     worksite=e.get("worksite", ""),
                     collection_site=e.get("collection_site", ""),
-                    collection_pc=e.get("collection_pc", ""))
+                    collection_pc=e.get("collection_pc", ""),
+                    collections=e.get("collections"))
         made += 1
     return made
 

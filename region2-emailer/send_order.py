@@ -165,8 +165,9 @@ def build_from_collected(collected):
                            materials=bd.product_summary(items),
                            site=bd.clean(r0[C0['daddr']]), postcode=dpc, source=source,
                            worksite=bd.worksite_of(wsite),
-                           collection_site=bd.clean(r0[C0['csite']]) if C0.get('csite') is not None else "",
-                           collection_pc=bd.clean(r0[C0['cpc']]) if C0.get('cpc') is not None else ""))
+                           collections=bd.collections_of(bundle),
+                           collection_site=(bd.collections_of(bundle) or [{"site": ""}])[0]["site"],
+                           collection_pc=(bd.collections_of(bundle) or [{"pc": ""}])[0]["pc"]))
     return emails
 
 
@@ -303,7 +304,8 @@ def send_emails(ns, emails):
                     source=e.get("source", ""), status="sent",
                     worksite=e.get("worksite", ""),
                     collection_site=e.get("collection_site", ""),
-                    collection_pc=e.get("collection_pc", ""))
+                    collection_pc=e.get("collection_pc", ""),
+                    collections=e.get("collections"))
         # a chase passes _metric="chase_sent" so it isn't counted as fresh outreach
         metrics.log(e.get("_metric") or "email_sent", orders=e.get("orders", []), to=to)
         sent += 1

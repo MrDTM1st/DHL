@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
-  milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm,
+  milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
   fmtDur, metersToMiles, journeyFor,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
@@ -19,9 +19,12 @@ function coverRequest(r) {
   const when = [r.delivery_date, t.earliest && t.latest ? `${t.earliest} - ${t.latest}` : t.earliest]
     .filter(Boolean).join(' ');
   const off = (d.offloading || {}).value || '';
+  // some jobs load at more than one site - the haulier needs every pick-up
+  const collLine = collectionsOf(r)
+    .map((c) => [c.site, c.pc].filter(Boolean).join(' ')).join(' + ');
   return ['Hi,', '', 'Would you be able to cover the job below;', '',
     `Order: ${(r.orders || []).join(' / ')}`,
-    `Collection: ${[r.collection_site, r.collection_pc].filter(Boolean).join(' ')}`,
+    `Collection: ${collLine}`,
     `Delivery: ${[r.worksite || r.site, r.postcode].filter(Boolean).join(' ')}`,
     `Collection date/time: ${r.delivery_date || ''}`,
     `Delivery date/time: ${when}`,
@@ -56,11 +59,14 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   useEffect(() => { setComposing(null); }, [r.id]);   // a new brief means a fresh compose
   const [leg, setLeg] = useState(null);     // collection -> delivery
   const [repo, setRepo] = useState(null);   // picked haulier's base -> collection
+  const colls = collectionsOf(r);           // EVERY pick-up, not just the first
   useEffect(() => {
     let live = true;
-    const pcs = [r.collection_pc, r.postcode].concat((hauliers || []).map((h) => h.pc)).filter(Boolean);
+    const pcs = colls.map((c) => c.pc).concat([r.postcode], (hauliers || []).map((h) => h.pc))
+      .filter(Boolean);
     geocode(pcs).then(() => { if (live) setTick((n) => n + 1); });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [r.id, hauliers]);
 
   const geo = geoCache();
@@ -76,7 +82,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   // first thing you want on opening a brief is "who, and how long".
   const auto = recs[0] || null;
   const activeHaulier = pickedHaulier || auto;
-  const cg = geo[pcNorm(r.collection_pc || '')], dg = geo[pcNorm(r.postcode || '')];
+  // the drawn/timed run starts at the FIRST collection; extra pick-ups are
+  // listed and pinned but a multi-stop route isn't invented for the ETA
+  const firstPc = (colls[0] || {}).pc || '';
+  const cg = geo[pcNorm(firstPc)], dg = geo[pcNorm(r.postcode || '')];
   const run = milesBetween(cg, dg);
 
   // Time the job as the ACTIVE haulier would drive it: their base to the
@@ -86,7 +95,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   // hands back a fresh object every render, so an object dep re-fires this
   // effect forever, and each run resets repo to null before the fetch lands -
   // the timing never settles and the row reads "timing their run…" for ever.
-  const cKey = pcNorm(r.collection_pc || '');
+  const cKey = pcNorm(firstPc);
   const dKey = pcNorm(r.postcode || '');
   const hKey = activeHaulier ? pcNorm(activeHaulier.pc || '') : '';
   const cReady = !!geo[cKey];
@@ -119,7 +128,16 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
     ['Delivery', dueText(r)],
     ['Material', r.materials],
     ['Time', v('time')],
-    ['Collection', [r.collection_site, r.collection_pc].filter(Boolean).join(' ')],
+    [colls.length > 1 ? `Collections (${colls.length})` : 'Collection',
+      colls.length ? (
+        <span>
+          {colls.map((c, i) => (
+            <span key={i} style={{ display: 'block' }}>
+              {[c.site, c.pc].filter(Boolean).join(' ')}
+            </span>
+          ))}
+        </span>
+      ) : ''],
     ['Delivery to', [r.worksite || r.site, r.postcode].filter(Boolean).join(' · ')],
     ['Site contact', v('contact')],
     ['Assigned to', r.to],
@@ -157,7 +175,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           {run !== null && (
             <div className="runeta">
               <div className="runline">
-                <b>{r.collection_site || 'collection'}</b> → <b>{r.worksite || r.site || 'site'}</b>
+                <b>{(colls[0] || {}).site || 'collection'}</b>
+                {colls.length > 1 && <span className="hend"> +{colls.length - 1} pick-up{colls.length > 2 ? 's' : ''}</span>}
+                {' '}→ <b>{r.worksite || r.site || 'site'}</b>
               </div>
               <div className="runstat">
                 <span>{journey.legMiles != null ? journey.legMiles : run} mi</span>

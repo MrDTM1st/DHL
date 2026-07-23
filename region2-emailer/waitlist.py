@@ -88,6 +88,13 @@ def add(email):
         "html": email.get("html", ""),
         "date": email.get("date", ""),          # delivery date, dd/mm/yyyy
         "site": email.get("site", ""),
+        "worksite": email.get("worksite", ""),
+        # collection rides the wait-list too - it was dropped here, which is
+        # why every wait-list-released order landed on the tracker with no
+        # collection location at all
+        "collections": email.get("collections", []),
+        "collection_site": email.get("collection_site", ""),
+        "collection_pc": email.get("collection_pc", ""),
         "postcode": email.get("postcode", ""),
         "product_codes": email.get("product_codes", []),
         "materials": email.get("materials", ""),

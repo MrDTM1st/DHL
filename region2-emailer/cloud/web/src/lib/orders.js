@@ -11,6 +11,19 @@
 import { pcNorm } from './geo.js';
 export { pcNorm };
 
+// Every collection point on the record, one shape regardless of age: newer
+// records carry a `collections` list (a job can load at SEVERAL sites - e.g.
+// 6055263 collects at Trackwork Moll AND Cemex Somercotes), older ones only
+// the single collection_site/pc pair.
+export function collectionsOf(r) {
+  const list = (r.collections || []).filter((c) => c && (c.site || c.pc));
+  if (list.length) return list;
+  if (r.collection_site || r.collection_pc) {
+    return [{ site: r.collection_site || '', pc: r.collection_pc || '' }];
+  }
+  return [];
+}
+
 // Days from today to a dd/mm/yyyy string. null if unparseable.
 export function wlDays(dd) {
   const m = String(dd || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
@@ -127,19 +140,22 @@ export function milesBetween(a, b) {
 // is, so the reason a haulier is near is never a mystery.
 export function recommendFor(r, hauliers, geo) {
   const need = needsFor(r);
-  const cg = geo[pcNorm(r.collection_pc || '')];
+  const colls = collectionsOf(r);
+  const cgs = colls.map((c) => geo[pcNorm(c.pc || '')]).filter(Boolean);
   const dg = geo[pcNorm(r.postcode || '')];
   // coverage is a hard filter like capability. no_go_scope says WHICH end the
   // no-go areas apply to: HHL happily COLLECTS from the north (loads originate
   // at the steelworks and flow south) but won't DELIVER there, so their scope
-  // is 'delivery'; the default is 'both'.
+  // is 'delivery'; the default is 'both'. A multi-collection job needs the
+  // haulier at EVERY pick-up, so one no-go collection rules them out.
   const areaOf = (p) => { const m = pcNorm(p).match(/^[A-Z]+/); return m ? m[0] : ''; };
-  const cArea = areaOf(r.collection_pc || ''), dArea = areaOf(r.postcode || '');
+  const cAreas = colls.map((c) => areaOf(c.pc || '')).filter(Boolean);
+  const dArea = areaOf(r.postcode || '');
   const outsideCoverage = (h) => {
     const areas = h.no_go || [];
     if (!areas.length) return false;
     const scope = h.no_go_scope || 'both';
-    if ((scope === 'both' || scope === 'collection') && cArea && areas.includes(cArea)) return true;
+    if ((scope === 'both' || scope === 'collection') && cAreas.some((a) => areas.includes(a))) return true;
     if ((scope === 'both' || scope === 'delivery') && dArea && areas.includes(dArea)) return true;
     return false;
   };
@@ -149,7 +165,9 @@ export function recommendFor(r, hauliers, geo) {
     return need.every((n) => caps.some((c) => c.includes(n)));
   }).map((h) => {
     const g = geo[pcNorm(h.pc || '')];
-    const mc = g && cg ? milesBetween(cg, g) : null;
+    // nearest of the collection points - the run starts wherever suits them
+    const mcs = g ? cgs.map((c) => milesBetween(c, g)).filter((x) => x !== null) : [];
+    const mc = mcs.length ? Math.min(...mcs) : null;
     const md = g && dg ? milesBetween(dg, g) : null;
     const both = [['collection', mc], ['delivery', md]].filter((x) => x[1] !== null);
     both.sort((a, b) => a[1] - b[1]);
