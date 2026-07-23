@@ -67,6 +67,32 @@ def _load_web_index():
 
 _WEB_INDEX, _WEB_INDEX_PATH = _load_web_index()
 
+# ---- PWA assets (manifest / service worker / icons) ----------------------
+# Served so the dashboard installs as an app on a phone. Files come from the
+# Vite build's public/ dir: the Dockerfile copies the whole dist to ./web_dist,
+# and a local checkout serves straight from web/dist after `npm run build`.
+_PWA_FILES = {
+    "/manifest.webmanifest": "application/manifest+json",
+    "/sw.js": "text/javascript",
+    "/icon-192.png": "image/png",
+    "/icon-512.png": "image/png",
+    "/apple-touch-icon.png": "image/png",
+}
+
+
+def _pwa_asset(path):
+    name = path.lstrip("/")
+    for base in (os.path.join(_HERE, "web_dist"), os.path.join(_HERE, "web", "dist"),
+                 os.path.join(_HERE, "web", "public")):
+        p = os.path.join(base, name)
+        if os.path.isfile(p):
+            try:
+                with open(p, "rb") as f:
+                    return f.read()
+            except OSError:
+                pass
+    return None
+
 
 def _index_bytes():
     return _WEB_INDEX if _WEB_INDEX is not None else PAGE.encode()
@@ -1122,6 +1148,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path in _PWA_FILES:
+            body = _pwa_asset(self.path)
+            if body is None:
+                return self._json(404, {"error": "not found"})
+            self.send_response(200)
+            self.send_header("Content-Type", _PWA_FILES[self.path])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")   # SW/manifest must update on deploy
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/api/status":

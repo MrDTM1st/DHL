@@ -129,12 +129,22 @@ export function recommendFor(r, hauliers, geo) {
   const need = needsFor(r);
   const cg = geo[pcNorm(r.collection_pc || '')];
   const dg = geo[pcNorm(r.postcode || '')];
-  // coverage is a hard filter like capability: a haulier is never suggested
-  // for a job with either end in an area they don't work (HHL: the north)
+  // coverage is a hard filter like capability. no_go_scope says WHICH end the
+  // no-go areas apply to: HHL happily COLLECTS from the north (loads originate
+  // at the steelworks and flow south) but won't DELIVER there, so their scope
+  // is 'delivery'; the default is 'both'.
   const areaOf = (p) => { const m = pcNorm(p).match(/^[A-Z]+/); return m ? m[0] : ''; };
-  const jobAreas = [areaOf(r.collection_pc || ''), areaOf(r.postcode || '')].filter(Boolean);
+  const cArea = areaOf(r.collection_pc || ''), dArea = areaOf(r.postcode || '');
+  const outsideCoverage = (h) => {
+    const areas = h.no_go || [];
+    if (!areas.length) return false;
+    const scope = h.no_go_scope || 'both';
+    if ((scope === 'both' || scope === 'collection') && cArea && areas.includes(cArea)) return true;
+    if ((scope === 'both' || scope === 'delivery') && dArea && areas.includes(dArea)) return true;
+    return false;
+  };
   const out = (hauliers || []).filter((h) => {
-    if ((h.no_go || []).some((a) => jobAreas.includes(a))) return false;
+    if (outsideCoverage(h)) return false;
     const caps = (h.caps || []).map((c) => c.toLowerCase());
     return need.every((n) => caps.some((c) => c.includes(n)));
   }).map((h) => {

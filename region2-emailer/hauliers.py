@@ -67,9 +67,12 @@ NORTH_AREAS = sorted({
 
 _OVERRIDES = {
     # "HHL mostly focus on the Midlands and southern/London region, so they
-    # wouldn't really be doing northern work" - Delali, 2026-07-22. A job with
-    # EITHER end in a northern area never suggests them.
-    "hotspur": {"no_go_areas": NORTH_AREAS},
+    # wouldn't really be doing northern work... HHL is only for DELIVERY, not
+    # both" - Delali, 2026-07-22. Collecting FROM the north is fine (loads
+    # originate at the northern steelworks and flow south all the time); what
+    # they don't do is DELIVER up north. So the no-go only checks the
+    # delivery end.
+    "hotspur": {"no_go_areas": NORTH_AREAS, "no_go_scope": "delivery"},
 }
 
 
@@ -281,13 +284,28 @@ def recommend(from_pc, needs=(), to_pc="", limit=None, include_couriers=False):
     if include_couriers:
         pool += list(d.get("couriers", []))
     needs = [str(n).strip().lower() for n in needs if str(n).strip()]
-    job_areas = {postcodes.area(from_pc), postcodes.area(to_pc)} - {""}
+    c_area, d_area = postcodes.area(from_pc), postcodes.area(to_pc)
+
+    def outside_coverage(h):
+        """no_go_scope says WHICH end the no-go areas apply to: 'delivery'
+        (HHL - happy to collect up north, won't deliver there), 'collection',
+        or 'both' (the default)."""
+        areas = set(h.get("no_go_areas", []))
+        if not areas:
+            return False
+        scope = h.get("no_go_scope", "both")
+        if scope in ("both", "collection") and c_area and c_area in areas:
+            return True
+        if scope in ("both", "delivery") and d_area and d_area in areas:
+            return True
+        return False
+
     ok = []
     for h in pool:
         if h.get("do_not_use"):
             continue                     # marked DO NOT USE on the sheet - never suggest
-        if job_areas & set(h.get("no_go_areas", [])):
-            continue                     # either end of the job is outside their coverage
+        if outside_coverage(h):
+            continue
         caps = [c.lower() for c in h.get("caps", [])]
         if all(any(n in c for c in caps) for n in needs):
             ok.append(h)

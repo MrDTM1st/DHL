@@ -14,6 +14,8 @@ WORKDIR /app
 COPY server.py .
 # The built UI; server.py serves it at "/" (falls back to its inline page if absent).
 COPY --from=web /web/dist/index.html ./web_index.html
+# PWA assets (manifest, service worker, icons) from the build's public/ dir.
+COPY --from=web /web/dist/ ./web_dist/
 ENV PORT=8080
 EXPOSE 8080
 CMD ["python", "server.py"]
