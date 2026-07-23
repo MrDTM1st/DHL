@@ -464,6 +464,23 @@ def main():
                 out = run(["tracker.py", "book", order])
                 push_tracker()
                 report("done", "Booked via call - removed from the tracker.", tail(out, 4))
+            elif action == "haulier_email":
+                # cover-request to a haulier from the brief's contact list -
+                # user-reviewed text, sent once, never tracker-enrolled
+                e = cmd.get("email") or {}
+                if not (e.get("to") and e.get("message")):
+                    report("error", "Haulier email needs a recipient and a message.")
+                else:
+                    report("running", f"Emailing {e.get('haulier') or e['to']}…")
+                    with open(os.path.join(HERE, "_pending_haulier.json"), "w",
+                              encoding="utf-8") as f:
+                        json.dump(e, f, indent=1)
+                    out = run(["send_order.py", "sendhaulier"])
+                    if "sent to" in out:
+                        report("done", f"Cover request sent to {e.get('haulier') or e['to']}.",
+                               tail(out, 4))
+                    else:
+                        report("error", "Haulier email NOT sent - see below.", tail(out, 6))
             elif action == "run_chasers":
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])

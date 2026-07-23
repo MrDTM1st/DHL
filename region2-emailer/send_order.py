@@ -171,6 +171,43 @@ def build_from_collected(collected):
 
 
 PENDING = os.path.join(bd.HERE, "_pending_email.json")
+PENDING_HAULIER = os.path.join(bd.HERE, "_pending_haulier.json")
+
+
+def send_haulier(ns):
+    """Send a haulier cover-request from the dashboard's haulier list ("would
+    you be able to cover the job below"). Deliberately NOT tracker-logged: the
+    tracker chases DELIVERY CONTACTS for missing details, and enrolling a
+    haulier request would chase the haulier as if they were the customer (the
+    untracked-order recovery excludes these for the same reason)."""
+    import json as _json
+    e = _json.load(open(PENDING_HAULIER, encoding="utf-8"))
+    to, cc, _removed = bd.clean_to_cc(e.get("to", ""), e.get("cc", ""))
+    if not to:
+        print("No recipient - nothing sent.")
+        return 0
+    import win32com.client
+    outlook = win32com.client.Dispatch("Outlook.Application")
+    acct = dhl_account(ns)
+    m = outlook.CreateItem(0)
+    m.To = to
+    if cc:
+        m.CC = cc
+    m.Subject = str(e.get("subject") or "Delivery")[:150]
+    bd._attach_qr(m)
+    m.HTMLBody = bd.html_from_message(str(e.get("message") or ""))
+    if not bind_account(m, acct):
+        print("ABORT: could not bind DHL account - NOT sent.")
+        return 0
+    m.Send()
+    try:
+        ns.SendAndReceive(False)
+    except Exception:
+        pass
+    metrics.log("email_sent", kind="haulier_request", to=to,
+                orders=e.get("orders", []))
+    print(f"Haulier request sent to {to}: {m.Subject}")
+    return 1
 
 
 def save_pending(emails):
@@ -288,6 +325,9 @@ def main():
     if order == "sendjson":
         n = send_pending(ns)
         print(f"Sent {n} email(s) from your DHL account (edited version).")
+        return
+    if order == "sendhaulier":
+        send_haulier(ns)
         return
     if order == "sendbatch":
         sel = sys.argv[2] if len(sys.argv) > 2 else "all"

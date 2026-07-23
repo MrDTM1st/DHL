@@ -10,9 +10,50 @@ import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 // Full order brief: the job, the run distance, delivery details, and who to
 // ring — hauliers ranked by fit + distance from the collection end, exactly as
 // the original dashboard did, over the real agent-pushed haulier list.
+// The cover-request wording, prefilled the way Delali actually writes them
+// (taken from his real Sent Items). Anything unknown stays a blank line for
+// him to fill rather than an invented value.
+function coverRequest(r) {
+  const d = r.details || {};
+  const t = d.time || {};
+  const when = [r.delivery_date, t.earliest && t.latest ? `${t.earliest} - ${t.latest}` : t.earliest]
+    .filter(Boolean).join(' ');
+  const off = (d.offloading || {}).value || '';
+  return ['Hi,', '', 'Would you be able to cover the job below;', '',
+    `Order: ${(r.orders || []).join(' / ')}`,
+    `Collection: ${[r.collection_site, r.collection_pc].filter(Boolean).join(' ')}`,
+    `Delivery: ${[r.worksite || r.site, r.postcode].filter(Boolean).join(' ')}`,
+    `Collection date/time: ${r.delivery_date || ''}`,
+    `Delivery date/time: ${when}`,
+    `Materials: ${r.materials || ''}`,
+    `Vehicle: ${(d.vehicle || {}).value || ''}`,
+    `Offloading: ${off === 'SITE/NONE' ? 'site offloads' : off}`,
+  ].join('\n');
+}
+
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
-  pickedHaulier, onPickHaulier }) {
+  pickedHaulier, onPickHaulier, onCommand }) {
   const [, setTick] = useState(0);
+  // inline compose for the haulier cover request
+  const [composing, setComposing] = useState(null);   // haulier name
+  const [draft, setDraft] = useState({ to: '', subject: '', message: '' });
+  const startCompose = (h) => {
+    setComposing(h.name);
+    setDraft({
+      to: h.email || '',
+      subject: `${(r.orders || []).join(' / ')} Delivery`,
+      message: coverRequest(r),
+    });
+  };
+  const sendCompose = (h) => {
+    if (!draft.to.trim() || !draft.message.trim()) return;
+    onCommand && onCommand({ action: 'haulier_email', email: {
+      to: draft.to.trim(), subject: draft.subject.trim(),
+      message: draft.message, haulier: h.name, orders: r.orders || [],
+    } });
+    setComposing(null);
+  };
+  useEffect(() => { setComposing(null); }, [r.id]);   // a new brief means a fresh compose
   const [leg, setLeg] = useState(null);     // collection -> delivery
   const [repo, setRepo] = useState(null);   // picked haulier's base -> collection
   useEffect(() => {
@@ -140,7 +181,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           {recs.length ? recs.map((h, i) => {
             const picked = activeHaulier && activeHaulier.name === h.name;
             return (
-            <div className={'hrec' + (i === 0 ? ' best' : '') + (picked ? ' picked' : '')} key={h.name}
+            <div key={h.name}>
+            <div className={'hrec' + (i === 0 ? ' best' : '') + (picked ? ' picked' : '')}
               onClick={() => onPickHaulier && onPickHaulier(picked ? null : h)}
               role="button" tabIndex={0}
               onKeyDown={(e) => { if (e.key === 'Enter' && onPickHaulier) onPickHaulier(picked ? null : h); }}>
@@ -168,7 +210,38 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
                   </div>
                 )}
               </div>
-              <button className="callbtn" onClick={(e) => { e.stopPropagation(); onCall(h); }}>{I.phone} Call</button>
+              <div className="hbtns" onClick={(e) => e.stopPropagation()}>
+                <button className="callbtn" onClick={() => onCall(h)}>{I.phone} Call</button>
+                {h.email && (
+                  <button className="callbtn mail"
+                    onClick={() => (composing === h.name ? setComposing(null) : startCompose(h))}>
+                    Email
+                  </button>
+                )}
+              </div>
+            </div>
+            {composing === h.name && (
+              <div className="hcompose" onClick={(e) => e.stopPropagation()}>
+                <label>To
+                  <input value={draft.to}
+                    onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} />
+                </label>
+                <label>Subject
+                  <input value={draft.subject}
+                    onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))} />
+                </label>
+                <label>Message
+                  <textarea rows={11} value={draft.message}
+                    onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))} />
+                </label>
+                <div className="hcompose-foot">
+                  <span className="hint-sig">signature &amp; QR are added automatically</span>
+                  <button className="btn mini" onClick={() => setComposing(null)}>Cancel</button>
+                  <button className="btn mini red" disabled={!draft.to.trim() || !draft.message.trim()}
+                    onClick={() => sendCompose(h)}>Send</button>
+                </div>
+              </div>
+            )}
             </div>
             );
           }) : (

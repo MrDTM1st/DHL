@@ -211,7 +211,7 @@ export default function App() {
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
-            onCall={onCall} onBookedCall={onBookedCall}
+            onCall={onCall} onBookedCall={onBookedCall} onCommand={onCommand}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier} />
         )}
       </div>
