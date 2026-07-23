@@ -454,6 +454,85 @@ def find_synergy_upload(ns, days=3, bs_days=30, exclude=()):
     return found
 
 
+def find_bs_tree(ns, days=30, exclude=(), per_folder=150):
+    """BS batch/Ack files ANYWHERE in the Inbox tree.
+
+    Real miss (21/07/2026): two BS Ack emails were filed into
+    Inbox > Regions > Region 2 > Completed - a folder nothing scanned - and
+    their orders were never emailed; Delali had to catch them by hand. Emails
+    get filed fast (by hand or by rules), sometimes before the root scan ever
+    sees them, so for BS files - sporadic, and carrying real Region 2 orders -
+    the net has to cover the WHOLE Inbox subtree.
+
+    BS files only (the 3-day window for regular extracts exists precisely so
+    archives aren't re-swept; this deliberately doesn't widen it). Downstream
+    dedup (tracker, find_already_emailed, _already_done_orders) makes seeing
+    the same file twice harmless. Deleted Items is left alone - binned means
+    binned."""
+    from datetime import datetime, timedelta
+    dhl = dhl_store(ns)
+    inbox = sub(dhl, "Inbox")
+    if inbox is None:
+        return []
+    cutoff = datetime.now() - timedelta(days=days)
+    found, seen = [], set(exclude)
+
+    def scan(folder):
+        try:
+            items = folder.Items
+            items.Sort("[ReceivedTime]", True)
+        except Exception:
+            return
+        n = 0
+        for it in items:
+            n += 1
+            if n > per_folder:
+                break
+            try:
+                rt = it.ReceivedTime
+                if rt is not None and datetime(rt.year, rt.month, rt.day) < cutoff:
+                    break                     # newest-first: everything below is older
+            except Exception:
+                pass
+            try:
+                subj = str(getattr(it, "Subject", "") or "")
+                for j in range(1, it.Attachments.Count + 1):
+                    att = it.Attachments.Item(j)
+                    fn = str(att.FileName)
+                    low = fn.lower()
+                    if fn in seen or not is_wanted_extract(fn, subj):
+                        continue
+                    if not any(m in low or m in subj.lower() for m in BS_MARKERS):
+                        continue              # BS files only in the tree sweep
+                    seen.add(fn)
+                    path = os.path.join(HERE, f"_bs_tree_{len(found)}.xlsx")
+                    att.SaveAsFile(path)
+                    found.append((path, fn))
+            except Exception:
+                continue
+
+    def walk(folder, depth=0):
+        if folder is None or depth > 4:
+            return
+        scan(folder)
+        try:
+            for i in range(1, folder.Folders.Count + 1):
+                walk(folder.Folders.Item(i), depth + 1)
+        except Exception:
+            pass
+
+    # subfolders only - the root and ADHOC/Synergy Upload have their own scans
+    try:
+        for i in range(1, inbox.Folders.Count + 1):
+            f = inbox.Folders.Item(i)
+            if str(f.Name).strip().lower() == "adhoc":
+                continue
+            walk(f, 1)
+    except Exception:
+        pass
+    return found
+
+
 def _already_done_orders():
     """Base order numbers already drafted/emailed, from the tracker. Lets the
     daily run skip a batch it has already handled, so re-running commit - or the
@@ -1001,11 +1080,16 @@ def main():
         extracts = find_inbox_extracts(ns)
         root_names = {fn for _, fn in extracts}
         syn_extras = find_synergy_upload(ns, days=3, bs_days=30, exclude=root_names)
-        all_files = extracts + syn_extras
+        # BS files can be FILED anywhere in the Inbox tree before a scan sees
+        # them (21/07: two BS Acks in Regions/Region 2/Completed were missed)
+        tree_extras = find_bs_tree(ns, days=30,
+                                   exclude=root_names | {fn for _, fn in syn_extras})
+        all_files = extracts + syn_extras + tree_extras
         if not all_files:
             print("No Haulier Extracts / BS batches in the Inbox or the Synergy Upload folder."); return
         print(f"Found {len(extracts)} extract(s) in the Inbox"
-              + (f" + {len(syn_extras)} more in the Synergy Upload folder" if syn_extras else "") + ":")
+              + (f" + {len(syn_extras)} more in the Synergy Upload folder" if syn_extras else "")
+              + (f" + {len(tree_extras)} BS file(s) filed elsewhere in the Inbox tree" if tree_extras else "") + ":")
         for _, fn in all_files:
             print(f"  - {fn}")
         print()

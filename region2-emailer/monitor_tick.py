@@ -12,7 +12,7 @@ Seeds silently on the first run so it never floods on startup. Nothing is ever
 sent - it only builds/notifies. State + watermark live in _monitor_seen.json.
 """
 import os, sys, json, time, subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -119,6 +119,70 @@ def _scan(folder, limit):
             continue
 
 
+TREE_EVERY = 900     # full Inbox-tree BS sweep cadence (seconds)
+
+
+def _tree_bs(ns, known_ids, days=30, per_folder=60):
+    """BS batch/Ack emails ANYWHERE in the Inbox tree. Emails get filed fast -
+    by hand or by rules - and on 21/07 two BS Acks landed straight in
+    Regions/Region 2/Completed, which nothing watched, so their orders were
+    never emailed. This walks every Inbox subfolder on a slow cadence; the
+    per-folder cap plus the age break keeps the COM cost sane, and known_ids
+    keeps it incremental."""
+    out = []
+    dhl = bd.dhl_store(ns)
+    inbox = bd.sub(dhl, "Inbox")
+    if inbox is None:
+        return out
+    cutoff = datetime.now() - timedelta(days=days)
+
+    def walk(f, depth):
+        if f is None or depth > 4:
+            return
+        try:
+            items = f.Items
+            items.Sort("[ReceivedTime]", True)
+        except Exception:
+            items = None
+        if items is not None:
+            n = 0
+            for it in items:
+                n += 1
+                if n > per_folder:
+                    break
+                try:
+                    rt = it.ReceivedTime
+                    if rt is not None and datetime(rt.year, rt.month, rt.day) < cutoff:
+                        break                 # newest-first: the rest is older
+                except Exception:
+                    pass
+                try:
+                    eid = str(it.EntryID)
+                    if eid in known_ids:
+                        continue
+                    subj = str(it.Subject or "")
+                    for j in range(1, it.Attachments.Count + 1):
+                        fn = str(it.Attachments.Item(j).FileName)
+                        low = fn.lower()
+                        if (bd.is_wanted_extract(fn, subj)
+                                and any(m in low or m in subj.lower() for m in bd.BS_MARKERS)):
+                            out.append((eid, fn))
+                            break
+                except Exception:
+                    continue
+        try:
+            for i in range(1, f.Folders.Count + 1):
+                c = f.Folders.Item(i)
+                if depth == 0 and str(c.Name).strip().lower() == "adhoc":
+                    continue                  # Synergy Upload has its own fast path
+                walk(c, depth + 1)
+        except Exception:
+            pass
+
+    walk(inbox, 0)
+    return out
+
+
 def main():
     try:
         import win32com.client
@@ -150,6 +214,15 @@ def main():
                       and eid not in adhoc_ids):
                     adhoc_ids.add(eid)
                     new_adhocs.append(fn)
+    # slow full-tree sweep for BS files filed outside the watched folders
+    if time.time() - state.get("last_tree", 0) > TREE_EVERY:
+        try:
+            for eid, fn in _tree_bs(ns, ext_ids):
+                ext_ids.add(eid)
+                new_extracts.append(fn)
+        except Exception:
+            pass
+        state["last_tree"] = time.time()
     for eid, subj, riso, atts in _scan(inbox, 40):
         if riso > new_inbox_hwm:
             new_inbox_hwm = riso
