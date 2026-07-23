@@ -229,6 +229,13 @@ def main():
     push_tracker()
     push_waitlist()
     push_panel()
+    # The cloud keeps the Files list in MEMORY, so every Railway redeploy wipes
+    # it while the generated files still sit in the outbox. Push everything
+    # current at startup and re-push periodically (server replaces by name, and
+    # the outbox purges at 48h, so this stays a handful of small files). A data
+    # push, so it runs on BOTH agents - each fills its own control plane.
+    push_new_files({})
+    last_files = time.time()
     last_push = time.time()
     last_panel = time.time()
     last_index = time.time()
@@ -507,6 +514,9 @@ def main():
         if action or time.time() - last_panel > 30:
             push_panel()   # keep decisions / handover / team fresh on the dashboard
             last_panel = time.time()
+        if time.time() - last_files > 1800:   # heal the Files list after a redeploy
+            push_new_files({})
+            last_files = time.time()
         if IS_LOCAL and time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
             try:
                 subprocess.Popen([sys.executable, "build_drafts.py", "waitscan"],

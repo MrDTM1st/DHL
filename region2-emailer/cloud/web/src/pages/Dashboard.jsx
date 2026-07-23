@@ -1,7 +1,7 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { I } from '../icons.jsx';
 import { isUrgent, ordLabel, within3, dateShort } from '../lib/orders.js';
-import { fileToB64 } from '../api.js';
+import { fileToB64, getFiles, downloadFile } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
 
 // ---- Holiday cover / handover card ----
@@ -145,6 +145,53 @@ function AdhocFormCard({ onUpload, busy }) {
 }
 
 // ---- input-driven command card (send order / DTS) ----
+// ---- Generated files (upload CSVs, rail plans, Synergy sheets) ----
+// The agent pushes everything it writes to the outbox; this is where you
+// download it. This card was the missing half of every "process" action - the
+// CSV was generated on the home PC and there was nowhere on the dashboard to
+// get it from.
+function FilesCard() {
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState('');
+  useEffect(() => {
+    let live = true;
+    const load = () => getFiles().then((d) => { if (live) setFiles(d.files || []); }).catch(() => {});
+    load();
+    const t = setInterval(load, 15000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
+  const grab = async (name) => {
+    setBusy(name);
+    try { await downloadFile(name); } catch { /* gone after a redeploy - list refreshes */ }
+    setBusy('');
+  };
+  return (
+    <div className="card statuscard">
+      <div className="statushd" style={{ marginBottom: 8 }}>
+        <span className="sdot" style={{ background: 'var(--yellow)' }} />
+        <b>Files</b>
+        <span style={{ color: 'var(--muted)', fontSize: 12, marginLeft: 6 }}>
+          · what the desk has generated
+        </span>
+      </div>
+      {files.length ? files.map((f) => (
+        <div className="filerow" key={f.name}>
+          <div className="fn mono">{f.name}</div>
+          <div className="fm">{f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB'
+            : Math.max(1, Math.round(f.size / 1024)) + ' KB'} · {f.at}</div>
+          <button className="btn mini" disabled={busy === f.name} onClick={() => grab(f.name)}>
+            {busy === f.name ? '…' : 'Download'}
+          </button>
+        </div>
+      )) : (
+        <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+          Nothing yet — processed CSVs, rail plans and Synergy sheets appear here.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InputCard({ ic, title, desc, placeholder, buttonLabel, kind, onSubmit }) {
   const [val, setVal] = useState('');
   return (
@@ -277,6 +324,8 @@ export default function Dashboard({
               ))}
             </div>
           </div>
+
+          <FilesCard />
 
           <HolidayCard panel={panel} onCommand={onCommand} />
         </div>
