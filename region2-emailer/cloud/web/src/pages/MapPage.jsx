@@ -17,6 +17,9 @@ const depotIcon = divIcon('pin-depot', 16);
 const haulierIcon = divIcon('pin-haulier', 14);
 const collectIcon = divIcon('pin-collect', 18);
 const recIcon = divIcon('pin-haulier rec', 18);
+// Google-directions style A/B endpoints, used in focus mode
+const aIcon = L.divIcon({ className: 'pin-icon', html: '<span class="pin-ab a">A</span>', iconSize: [24, 24], iconAnchor: [12, 12] });
+const bIcon = L.divIcon({ className: 'pin-icon', html: '<span class="pin-ab b">B</span>', iconSize: [24, 24], iconAnchor: [12, 12] });
 function orderIcon(urgent, selected) {
   return divIcon('pin-order' + (urgent ? ' urgent' : '') + (selected ? ' selected' : ''), selected ? 22 : 16);
 }
@@ -55,6 +58,17 @@ function ResizeOnBrief({ open }) {
     const t = setTimeout(() => map.invalidateSize({ animate: false }), 260); // after the CSS width settles
     return () => clearTimeout(t);
   }, [open, map]);
+  return null;
+}
+
+// Focus fallback for an order with no collection end on record (older rows):
+// there is no route to frame, so glide to the delivery pin instead.
+function FlyToPoint({ id, pos }) {
+  const map = useMap();
+  useEffect(() => {
+    if (pos) map.flyTo(pos, 11, { duration: 0.9 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, !!pos]);
   return null;
 }
 
@@ -166,6 +180,21 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHaulier && activeHaulier.name, selectedLeg && selectedLeg.r.id, tick]);
 
+  // FOCUS MODE - Google-directions style. With a brief open, the map shows
+  // ONLY that job: A (collection), B (delivery), the blue route, and the
+  // active haulier with their approach leg. Every other order, depot and
+  // haulier base is hidden so the run is the only thing to read.
+  const focused = !!selectedId;
+  const selectedPt = orderPts.find((o) => o.r.id === selectedId) || null;
+
+  // Closing the brief returns to the overview - a deliberate re-frame, like
+  // leaving directions in Google Maps.
+  const prevSel = useRef(selectedId);
+  useEffect(() => {
+    if (prevSel.current && !selectedId) setFitToken((n) => n + 1);
+    prevSel.current = selectedId;
+  }, [selectedId]);
+
   const pinnedCount = orderPts.length;
   const allPoints = useMemo(() => {
     const pts = orderPts.map((o) => o.pos);
@@ -194,14 +223,14 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
         <FitBounds points={allPoints} fitToken={fitToken} />
         <ResizeOnBrief open={!!selectedId} />
 
-        {/* every other run, kept quiet so the selected one reads clearly */}
-        {layers.routes && legPairs.filter(({ r }) => r.id !== selectedId).map(({ r }) => {
+        {/* the overview's other runs - hidden entirely in focus mode */}
+        {layers.routes && !focused && legPairs.map(({ r }) => {
           const line = routes[r.id] && routes[r.id].line;
           if (!line) return null;
           return (
             <Polyline key={'r' + r.id} positions={line}
               pathOptions={{ color: isUrgent(r) ? '#D40511' : '#9b9a92',
-                weight: isUrgent(r) ? 3 : 2, opacity: selectedId ? 0.18 : (isUrgent(r) ? 0.8 : 0.5),
+                weight: isUrgent(r) ? 3 : 2, opacity: isUrgent(r) ? 0.8 : 0.5,
                 dashArray: isUrgent(r) ? '6 6' : null }} />
           );
         })}
@@ -235,61 +264,83 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
             pathOptions={{ color: '#1da35e', weight: 3.5, opacity: 0.85, dashArray: '3 9', lineCap: 'round' }} />
         )}
 
+        {/* the focused job's endpoints, Google-directions style: A = collection,
+            B = delivery */}
         {selectedLeg && (
           <>
-            <Marker position={[selectedLeg.from.la, selectedLeg.from.lo]} icon={collectIcon}
-              title={'Collection — ' + (selectedLeg.r.collection_site || '')} />
+            <Marker position={[selectedLeg.from.la, selectedLeg.from.lo]} icon={aIcon} zIndexOffset={500}
+              title={'A — Collection: ' + (selectedLeg.r.collection_site || '')} />
             <FlyToRoute id={selectedLeg.r.id} line={selectedLine}
               from={selectedLeg.from} to={selectedLeg.to} />
           </>
         )}
+        {focused && selectedPt && (
+          <Marker position={selectedPt.pos} icon={bIcon} zIndexOffset={500}
+            title={'B — Delivery: ' + (selectedPt.r.worksite || selectedPt.r.site || '')} />
+        )}
+        {focused && !selectedLeg && selectedPt && (
+          <FlyToPoint id={selectedId} pos={selectedPt.pos} />
+        )}
 
-        {layers.depots && depotPts.map((d) => (
+        {layers.depots && !focused && depotPts.map((d) => (
           <Marker key={d.key} position={[d.lat, d.lng]} icon={depotIcon}
             eventHandlers={{}} title={d.name + ' — ' + d.town} />
         ))}
 
-        {layers.hauliers && haulierPts.map(({ h, pos }) => (
-          <Marker key={h.name} position={pos}
-            icon={recNames.has(h.name) ? recIcon : haulierIcon}
-            zIndexOffset={recNames.has(h.name) ? 400 : 0}
-            title={recNames.has(h.name) ? h.name + ' — recommended for this job' : h.name} />
-        ))}
+        {/* focus mode keeps ONE haulier pin - the one being timed */}
+        {layers.hauliers && haulierPts
+          .filter(({ h }) => (focused ? (activeHaulier && h.name === activeHaulier.name) : true))
+          .map(({ h, pos }) => (
+            <Marker key={h.name} position={pos}
+              icon={focused || recNames.has(h.name) ? recIcon : haulierIcon}
+              zIndexOffset={focused || recNames.has(h.name) ? 400 : 0}
+              title={focused ? h.name + ' — timing this job' : h.name} />
+          ))}
 
-        {layers.orders && orderPts.map(({ r, pos }) => (
+        {/* focus mode hides the other orders; the focused one is the B pin */}
+        {layers.orders && !focused && orderPts.map(({ r, pos }) => (
           <Marker key={r.id} position={pos} icon={orderIcon(isUrgent(r), selectedId === r.id)}
             eventHandlers={{ click: () => onSelect(r) }} title={(r.worksite || r.site || '') + ' — ' + (r.orders || []).join(' / ')} />
         ))}
       </MapContainer>
 
-      <div className="layertoggle">
-        <div className="lt">Layers</div>
-        <button className="fitbtn" onClick={() => setFitToken((n) => n + 1)}
-          title="Re-frame the map around everything">Fit all</button>
-        {[['orders', 'Delivery stops'], ['depots', 'Collection depots'], ['hauliers', 'Haulier bases'], ['routes', 'Routes']].map(([k, label]) => (
-          <label key={k} className="lyrow">
-            <input type="checkbox" checked={layers[k]} onChange={() => toggle(k)} />
-            {label}
-          </label>
-        ))}
-      </div>
+      {!focused && (
+        <div className="layertoggle">
+          <div className="lt">Layers</div>
+          <button className="fitbtn" onClick={() => setFitToken((n) => n + 1)}
+            title="Re-frame the map around everything">Fit all</button>
+          {[['orders', 'Delivery stops'], ['depots', 'Collection depots'], ['hauliers', 'Haulier bases'], ['routes', 'Routes']].map(([k, label]) => (
+            <label key={k} className="lyrow">
+              <input type="checkbox" checked={layers[k]} onChange={() => toggle(k)} />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
 
       <div className="legend">
-        <div className="lt">Region 2 network</div>
-        <div className="legrow"><span className="ld" style={{ background: 'var(--red)' }} />Tracked delivery</div>
-        <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Urgent · ≤3 days</div>
-        <div className="legrow"><span className="ld sq" style={{ background: 'var(--depot)' }} />Collection depot</div>
-        <div className="legrow"><span className="ld" style={{ background: 'var(--yellow)', border: '1.5px solid #8a6d00' }} />Haulier base</div>
-        {selectedLeg && (
+        {focused ? (
           <>
-            <div className="legrow"><span className="ld" style={{ background: '#1a73e8' }} />Selected run</div>
-            <div className="legrow"><span className="ld" style={{ background: 'var(--go, #1da35e)' }} />Recommended haulier</div>
-            {repoLine && <div className="legrow"><span className="ld" style={{ background: 'var(--go, #1da35e)', opacity: .55 }} />Haulier → collection</div>}
+            <div className="lt">This job</div>
+            <div className="legrow"><span className="ld ab a">A</span>Collection</div>
+            <div className="legrow"><span className="ld ab b">B</span>Delivery</div>
+            <div className="legrow"><span className="ld" style={{ background: '#1a73e8' }} />Route</div>
+            {repoLine && <div className="legrow"><span className="ld" style={{ background: 'var(--go, #1da35e)' }} />Haulier → collection</div>}
+          </>
+        ) : (
+          <>
+            <div className="lt">Region 2 network</div>
+            <div className="legrow"><span className="ld" style={{ background: 'var(--red)' }} />Tracked delivery</div>
+            <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Urgent · ≤3 days</div>
+            <div className="legrow"><span className="ld sq" style={{ background: 'var(--depot)' }} />Collection depot</div>
+            <div className="legrow"><span className="ld" style={{ background: 'var(--yellow)', border: '1.5px solid #8a6d00' }} />Haulier base</div>
           </>
         )}
       </div>
 
-      <OrdersPanel records={records} hauliers={hauliers} onSelect={onSelect} selectedId={selectedId} />
+      {!focused && (
+        <OrdersPanel records={records} hauliers={hauliers} onSelect={onSelect} selectedId={selectedId} />
+      )}
     </div>
   );
 }

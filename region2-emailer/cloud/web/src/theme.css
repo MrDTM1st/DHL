@@ -242,6 +242,19 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .pin-haulier.rec{ background:var(--go, #1da35e); border-color:#fff; border-width:2.4px;
       box-shadow:0 0 0 4px rgba(29,163,94,.25), 0 1px 4px rgba(0,0,0,.3); }
 
+/* Google-directions A/B endpoint markers for the focused job. Only the LOOK -
+   Leaflet owns position/size on the marker element itself. */
+.pin-ab{ display:flex; align-items:center; justify-content:center; width:100%; height:100%;
+      border-radius:8px; border:2.2px solid #fff; color:#fff; font-weight:800; font-size:12.5px;
+      box-shadow:0 1px 5px rgba(0,0,0,.4); }
+.pin-ab.a{ background:var(--depot); }
+.pin-ab.b{ background:var(--red); }
+/* matching little chips in the legend */
+.ld.ab{ display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+      border-radius:5px; color:#fff; font-weight:800; font-size:9.5px; }
+.ld.ab.a{ background:var(--depot); }
+.ld.ab.b{ background:var(--red); }
+
 /* the selected run: a dashed white overlay that flows along the blue route,
    so direction of travel reads at a glance (Google-Maps style). */
 .routeflow{ animation:routeflow 1.1s linear infinite; }
