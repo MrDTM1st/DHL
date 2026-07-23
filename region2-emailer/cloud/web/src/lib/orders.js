@@ -145,10 +145,48 @@ export function recommendFor(r, hauliers, geo) {
     });
   });
   out.forEach((h) => { h.rank = h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2); });
+  // Band order is the order of APPROACH, but a haulier that is much closer than
+  // everyone ahead of it is worth surfacing rather than burying - a tier 2 at
+  // 18mi against tier 1s at 115mi+ is usually the cheaper run, and you'd want
+  // to know before ringing round in band order.
+  // "Closer" is measured against the band IMMEDIATELY above (the nearest band
+  // that actually has anyone in it) - not against the overall best.
+  //
+  // Comparing against the overall best is wrong because our own fleet is always
+  // approached first regardless of distance: a DHL depot next door to the job
+  // would set a bar no external haulier could beat, and a tier 2 sitting 18mi
+  // away against tier 1s at 115mi+ would never light up. The real question a
+  // tier 2 answers is "am I better than the tier 1s you'd otherwise ring?", so
+  // that is what it is compared with. (Once quote history is deep enough,
+  // cheapest supersedes distance here.)
+  const bandBest = (rank) => {
+    const m = out.filter((h) => h.rank === rank && h.miles !== null).map((h) => h.miles);
+    return m.length ? Math.min(...m) : null;
+  };
+  const best = [bandBest(0), bandBest(1), bandBest(2)];
+  out.forEach((h) => {
+    if (h.miles === null || h.rank === 0) return;   // the fleet leads by policy, never "closer"
+    let above = null;
+    for (let b = h.rank - 1; b >= 0 && above === null; b -= 1) above = best[b];
+    if (above !== null && h.miles < above) h.closerThanAbove = true;
+  });
   out.sort((a, b) => a.rank - b.rank
     || (a.miles === null) - (b.miles === null)
     || (a.miles || 9e9) - (b.miles || 9e9));
   return { need, list: out };
+}
+
+// The shortlist actually shown: the first `n` in approach order, but never
+// without a haulier that is closer than everything above it. A tier 2 at 18mi
+// would otherwise drop off the end purely for being tier 2, when it is exactly
+// the option worth knowing about before you ring round in band order.
+export function shortlist(list, n = 4) {
+  const top = list.slice(0, n);
+  const bargain = list.find((h) => h.closerThanAbove);
+  if (bargain && !top.some((h) => h.name === bargain.name)) {
+    top[top.length - 1] = bargain;   // swap into the last slot, keeps the list short
+  }
+  return top;
 }
 
 export const RANK_TAG = ['fleet', 't1', 't2'];

@@ -3,7 +3,7 @@ import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm,
-  fmtDur, metersToMiles, journeyFor,
+  fmtDur, metersToMiles, journeyFor, shortlist,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 
@@ -24,35 +24,51 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const geo = geoCache();
 
+  const d = r.details || {};
+  const v = (k) => detVal(k, d[k]);
+  const { need, list } = recommendFor(r, hauliers, geo);
+  const recs = shortlist(list, 4);
+  // The top pick is timed straight away rather than waiting for a tap - the
+  // first thing you want on opening a brief is "who, and how long".
+  const auto = recs[0] || null;
+  const activeHaulier = pickedHaulier || auto;
+  const cg = geo[pcNorm(r.collection_pc || '')], dg = geo[pcNorm(r.postcode || '')];
+  const run = milesBetween(cg, dg);
+
+  // Time the job as the ACTIVE haulier would drive it: their base to the
+  // collection (running empty), then the delivery leg. Runs for the auto-picked
+  // haulier too, so the ETA is on screen before you touch anything.
+  // Depend on stable PRIMITIVES, never on the geo objects themselves: geoCache()
+  // hands back a fresh object every render, so an object dep re-fires this
+  // effect forever, and each run resets repo to null before the fetch lands -
+  // the timing never settles and the row reads "timing their run…" for ever.
+  const cKey = pcNorm(r.collection_pc || '');
+  const dKey = pcNorm(r.postcode || '');
+  const hKey = activeHaulier ? pcNorm(activeHaulier.pc || '') : '';
+  const cReady = !!geo[cKey];
+  const dReady = !!geo[dKey];
+  const hReady = !!geo[hKey];
+
   // The delivery leg's real drive time, routed on roads. Re-fetched per order.
   useEffect(() => {
     let live = true;
     setLeg(null);
-    const cg = geo[pcNorm(r.collection_pc || '')], dg = geo[pcNorm(r.postcode || '')];
+    const cg = geo[cKey], dg = geo[dKey];
     if (cg && dg) routeBetween(cg, dg).then((x) => { if (live) setLeg(x); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [r.id, geo[pcNorm(r.collection_pc || '')], geo[pcNorm(r.postcode || '')]]);
+  }, [r.id, cKey, dKey, cReady, dReady]);
 
-  // Clicking a haulier re-times the job as THEY would drive it: their base to
-  // the collection (running empty), then the delivery leg.
   useEffect(() => {
     let live = true;
     setRepo(null);
-    const cg = geo[pcNorm(r.collection_pc || '')];
-    const hg = pickedHaulier ? geo[pcNorm(pickedHaulier.pc || '')] : null;
-    if (cg && hg) routeBetween(hg, cg).then((x) => { if (live) setRepo(x); });
+    const cgeo = geo[cKey], hg = geo[hKey];
+    if (cgeo && hg) routeBetween(hg, cgeo).then((x) => { if (live) setRepo(x); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickedHaulier && pickedHaulier.name, r.id]);
+  }, [r.id, cKey, hKey, cReady, hReady]);
 
   const journey = journeyFor(repo, leg);
-  const d = r.details || {};
-  const v = (k) => detVal(k, d[k]);
-  const { need, list } = recommendFor(r, hauliers, geo);
-  const recs = list.slice(0, 4);
-  const cg = geo[pcNorm(r.collection_pc || '')], dg = geo[pcNorm(r.postcode || '')];
-  const run = milesBetween(cg, dg);
 
   const rows = [
     ['Status', statusLabel(r)],
@@ -73,7 +89,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   return (
     <>
-      <div className="scrim" onClick={onClose} />
+      {/* No scrim: the brief sits BESIDE the map, not over a dimmed one - the
+          whole point is reading the job while looking at where it is. */}
       <div className="drawer">
         <div className="drawer-h">
           <button className="x" onClick={onClose}>×</button>
@@ -115,10 +132,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
           <div className="lbl" style={{ margin: '6px 0 10px' }}>
             Who to contact <span style={{ color: 'var(--faint)', fontWeight: 600 }}>
-              · tap one to time the job from their base</span>
+              · timed from the top pick — tap another to compare</span>
           </div>
           {recs.length ? recs.map((h, i) => {
-            const picked = pickedHaulier && pickedHaulier.name === h.name;
+            const picked = activeHaulier && activeHaulier.name === h.name;
             return (
             <div className={'hrec' + (i === 0 ? ' best' : '') + (picked ? ' picked' : '')} key={h.name}
               onClick={() => onPickHaulier && onPickHaulier(picked ? null : h)}
@@ -131,6 +148,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               <div className="hn">
                 <b>{h.name}</b>
                 <span className={'htag ' + RANK_TAG[h.rank]}>{RANK_LABEL[h.rank]}</span>
+                {h.closerThanAbove && <span className="htag near">CLOSER</span>}
                 <div>{[h.loc, (h.caps || []).join(', ')].filter(Boolean).join(' · ')}</div>
                 {picked && (
                   <div className="hjourney">

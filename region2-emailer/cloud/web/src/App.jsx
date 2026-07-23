@@ -159,9 +159,12 @@ export default function App() {
   const clearAll = () => setNotes([]);
   const dismissNote = (id) => setNotes((ns) => ns.filter((n) => n.id !== id));
 
-  // A haulier picked in the drawer re-times the job from their base and draws
-  // their repositioning leg on the map, so it has to live above both.
-  const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); };
+  // Opening a brief ALWAYS lands you on the map with that job framed - the
+  // brief and the place it's going are the same question, so viewing one
+  // without the other is half an answer. Works from the tracker too.
+  // The picked haulier lives here because both the brief and the map need it:
+  // it re-times the job from that haulier's base and draws their approach leg.
+  const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); setPage('map'); };
   const selectedRecord = records.find((r) => r.id === selectedId);
 
   // decorate notes with a display time + older flag at render

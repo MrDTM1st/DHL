@@ -46,6 +46,18 @@ function FitBounds({ points, fitToken }) {
   return null;
 }
 
+// Opening the brief narrows the map container. Leaflet caches the container
+// size, so without telling it, the projection keeps using the OLD width and
+// every pin and tile sits offset from where it belongs.
+function ResizeOnBrief({ open }) {
+  const map = useMap();
+  useEffect(() => {
+    const t = setTimeout(() => map.invalidateSize({ animate: false }), 260); // after the CSS width settles
+    return () => clearTimeout(t);
+  }, [open, map]);
+  return null;
+}
+
 // When an order is selected, glide to ITS run so the blue route fills the
 // view - the Google-Maps move of flying to the thing you just tapped.
 //
@@ -139,16 +151,20 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
 
   // the picked haulier's run to the collection - drawn so the whole journey
   // (base -> collection -> delivery) is visible, not just the delivery leg
+  // Falls back to the TOP recommendation when nothing is explicitly picked, so
+  // the approach leg is drawn the moment a brief opens - matching the drawer,
+  // which times that same haulier by default.
+  const activeHaulier = pickedHaulier || selectedRec[0] || null;
   const [repoLine, setRepoLine] = useState(null);
   useEffect(() => {
     let live = true;
     setRepoLine(null);
     const cg = selectedLeg ? selectedLeg.from : null;
-    const hg = pickedHaulier ? geo[pcNorm(pickedHaulier.pc || '')] : null;
+    const hg = activeHaulier ? geo[pcNorm(activeHaulier.pc || '')] : null;
     if (cg && hg) routeBetween(hg, cg).then((x) => { if (live && x) setRepoLine(x.line); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickedHaulier && pickedHaulier.name, selectedLeg && selectedLeg.r.id, tick]);
+  }, [activeHaulier && activeHaulier.name, selectedLeg && selectedLeg.r.id, tick]);
 
   const pinnedCount = orderPts.length;
   const allPoints = useMemo(() => {
@@ -161,7 +177,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
 
   return (
-    <div className="mapwrap page-anim">
+    <div className={'mapwrap page-anim' + (selectedId ? ' withbrief' : '')}>
       {pinnedCount === 0 && records.length > 0 && (
         <div className="maploading">Geocoding {records.length} orders…</div>
       )}
@@ -176,6 +192,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
         <AttributionControl position="bottomleft" prefix={false} />
         <ZoomControl position="bottomleft" />
         <FitBounds points={allPoints} fitToken={fitToken} />
+        <ResizeOnBrief open={!!selectedId} />
 
         {/* every other run, kept quiet so the selected one reads clearly */}
         {layers.routes && legPairs.filter(({ r }) => r.id !== selectedId).map(({ r }) => {

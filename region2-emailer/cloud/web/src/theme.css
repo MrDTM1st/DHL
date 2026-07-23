@@ -331,8 +331,15 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .toast .tx{ border:0; background:transparent; color:var(--faint); cursor:pointer; align-self:flex-start; padding:2px; }
 
 /* drawer */
-.scrim{ position:absolute; inset:0; background:rgba(20,19,15,.4); z-index:80; animation:fade .2s ease; }
 @keyframes fade{ from{ opacity:0; } to{ opacity:1; } }
+/* With the brief open on the map, shrink the map to the space left rather than
+   letting the panel cover it - you need to read the job and see where it is at
+   the same time, so nothing important should sit underneath the panel. */
+@media (min-width:900px){
+  .mapwrap.withbrief .leafletmap{ width:calc(100% - min(480px,100%)); }
+  .mapwrap.withbrief .legend,
+  .mapwrap.withbrief .layertoggle{ right:calc(min(480px,100%) + 16px); }
+}
 .drawer{ position:absolute; top:0; right:0; bottom:0; width:min(480px,100%); background:var(--card); z-index:81;
       box-shadow:var(--sh-lg); animation:slidedr .3s cubic-bezier(.2,.9,.3,1) both; display:flex; flex-direction:column; }
 @keyframes slidedr{ from{ transform:translateX(100%);} to{ transform:none; } }
@@ -373,6 +380,10 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .runstat .dot{ color:var(--faint); }
 .approx{ font-size:10px; font-weight:600; color:var(--faint); background:var(--seg);
       border-radius:5px; padding:1px 5px; }
+
+/* the physically nearest capable haulier, when that isn't the top of the
+   approach order — usually the cheaper run, so it shouldn't be buried */
+.htag.near{ background:var(--yellow-t, #fdf3d3); color:#8a6d00; border:1px solid #f0d98f; }
 
 /* a haulier row you've tapped: shows the job timed from THEIR base */
 .hrec{ cursor:pointer; }
