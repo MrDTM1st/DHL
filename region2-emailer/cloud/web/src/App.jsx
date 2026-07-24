@@ -174,6 +174,14 @@ export default function App() {
     pushToast('Calling ' + h.name, (h.phone || '') + ' — opening in your dialler…');
   }, [pushToast]);
 
+  // booked ad hocs leave the map (they were never in the tracker)
+  const onAdhocBooked = useCallback((r) => {
+    if (!window.confirm('Mark ' + ordLabel(r) + ' as booked and remove it from the map?')) return;
+    onCommand({ action: 'adhoc_booked', order: r.id });
+    setSelectedId(null);
+    setPickedHaulier(null);
+  }, [onCommand]);
+
   // ---- notifications actions ----
   const openNote = (n) => {
     setNotes((ns) => ns.map((x) => x.id === n.id ? { ...x, read: true } : x));
@@ -243,7 +251,8 @@ export default function App() {
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
-            onCall={onCall} onBookedCall={onBookedCall} onCommand={onCommand}
+            onCall={onCall} onBookedCall={onBookedCall} onAdhocBooked={onAdhocBooked}
+            onCommand={onCommand}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier} />
         )}
       </div>

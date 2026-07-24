@@ -50,7 +50,7 @@ function coverRequest(r) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
-  pickedHaulier, onPickHaulier, onCommand }) {
+  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand }) {
   const [, setTick] = useState(0);
   // inline compose for the haulier cover request
   const [composing, setComposing] = useState(null);   // haulier name
@@ -340,6 +340,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           {onBookedCall && r.kind !== 'adhoc' && (
             <button className="btn block" style={{ marginTop: 16 }} onClick={() => onBookedCall(r)}>
               Mark booked over the phone
+            </button>
+          )}
+          {onAdhocBooked && r.kind === 'adhoc' && (
+            <button className="btn block" style={{ marginTop: 16 }} onClick={() => onAdhocBooked(r)}>
+              Booked — remove from the map
             </button>
           )}
         </div>

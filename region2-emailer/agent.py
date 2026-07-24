@@ -486,6 +486,31 @@ def main():
                 out = run(["tracker.py", "book", order])
                 push_tracker()
                 report("done", "Booked via call - removed from the tracker.", tail(out, 4))
+            elif action == "adhoc_booked" and order:
+                # ad hocs live in _adhocs.json, not the tracker - booked means
+                # the job simply leaves the map
+                removed = 0
+                try:
+                    p = os.path.join(HERE, "_adhocs.json")
+                    with open(p, encoding="utf-8") as f:
+                        recs = json.load(f)
+                    keep = [r for r in recs if r.get("id") != order]
+                    removed = len(recs) - len(keep)
+                    if removed:
+                        with open(p, "w", encoding="utf-8") as f:
+                            json.dump(keep, f, indent=1)
+                except Exception:
+                    removed = 0
+                push_panel()
+                if removed:
+                    try:
+                        import metrics
+                        metrics.log("adhoc_booked", id=order)
+                    except Exception:
+                        pass
+                    report("done", "Ad hoc booked - removed from the map.")
+                else:
+                    report("done", "That ad hoc was already off the map.")
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled
