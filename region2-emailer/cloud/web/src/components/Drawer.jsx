@@ -124,6 +124,32 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const journey = journeyFor(repo, leg);
 
   const pp = parcelPassFor(r);   // Parcel Pass verdict - ad hoc records only
+  const parcelH = (hauliers || []).find((h) => h.parcel) || null;
+
+  // the inline cover-request compose, shared by the haulier rows and the
+  // Parcel Pass card - one open compose at a time, keyed by name
+  const composeBox = (h) => composing === h.name && (
+    <div className="hcompose" onClick={(e) => e.stopPropagation()}>
+      <label>To
+        <input value={draft.to}
+          onChange={(e) => setDraft((d2) => ({ ...d2, to: e.target.value }))} />
+      </label>
+      <label>Subject
+        <input value={draft.subject}
+          onChange={(e) => setDraft((d2) => ({ ...d2, subject: e.target.value }))} />
+      </label>
+      <label>Message
+        <textarea rows={11} value={draft.message}
+          onChange={(e) => setDraft((d2) => ({ ...d2, message: e.target.value }))} />
+      </label>
+      <div className="hcompose-foot">
+        <span className="hint-sig">signature &amp; QR are added automatically</span>
+        <button className="btn mini" onClick={() => setComposing(null)}>Cancel</button>
+        <button className="btn mini red" disabled={!draft.to.trim() || !draft.message.trim()}
+          onClick={() => sendCompose(h)}>Send</button>
+      </div>
+    </div>
+  );
 
   const rows = [
     ['Status', statusLabel(r)],
@@ -204,6 +230,19 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               <div>Small load{pp.vehicle ? ` on a ${pp.vehicle.toLowerCase()}` : ''}, no special
                 kit — book it through Parcel Pass as usual. The hauliers below are the backup
                 if they can't cover it.</div>
+              {parcelH && (
+                <div className="ppbtns">
+                  <span className="mono">{parcelH.phone}</span>
+                  <button className="callbtn" onClick={() => onCall(parcelH)}>{I.phone} Call</button>
+                  {parcelH.email && (
+                    <button className="callbtn mail"
+                      onClick={() => (composing === parcelH.name ? setComposing(null) : startCompose(parcelH))}>
+                      Email
+                    </button>
+                  )}
+                </div>
+              )}
+              {parcelH && composeBox(parcelH)}
             </div>
           ) : (
             <div className="ppcard warn">
@@ -258,28 +297,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
                 )}
               </div>
             </div>
-            {composing === h.name && (
-              <div className="hcompose" onClick={(e) => e.stopPropagation()}>
-                <label>To
-                  <input value={draft.to}
-                    onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} />
-                </label>
-                <label>Subject
-                  <input value={draft.subject}
-                    onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))} />
-                </label>
-                <label>Message
-                  <textarea rows={11} value={draft.message}
-                    onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))} />
-                </label>
-                <div className="hcompose-foot">
-                  <span className="hint-sig">signature &amp; QR are added automatically</span>
-                  <button className="btn mini" onClick={() => setComposing(null)}>Cancel</button>
-                  <button className="btn mini red" disabled={!draft.to.trim() || !draft.message.trim()}
-                    onClick={() => sendCompose(h)}>Send</button>
-                </div>
-              </div>
-            )}
+            {composeBox(h)}
             </div>
             );
           }) : (

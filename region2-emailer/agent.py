@@ -148,6 +148,14 @@ def _slim_hauliers():
                         "no_go": h.get("no_go_areas", []),   # areas they don't cover (HHL: the north)
                         "no_go_scope": h.get("no_go_scope", "both"),  # which end it applies to
                         "caps": h.get("caps", [])})   # capability match happens in the browser
+        # booking services (Parcel Pass): published for their contact details
+        # only - no postcode, never ranked, flagged so the browser knows
+        for s in hauliers.load().get("services", []):
+            out.append({"name": s["name"], "loc": "", "pc": "", "tier": "",
+                        "phone": (s.get("phone") or "")[:40],
+                        "email": (s.get("emails") or [""])[0],
+                        "fleet": False, "no_go": [], "no_go_scope": "both",
+                        "caps": [], "parcel": True})
         return out
     except Exception:
         return []

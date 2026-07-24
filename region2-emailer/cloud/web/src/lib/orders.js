@@ -180,6 +180,7 @@ export function recommendFor(r, hauliers, geo) {
     return false;
   };
   const out = (hauliers || []).filter((h) => {
+    if (h.parcel) return false;   // Parcel Pass is a booking service, never ranked
     if (outsideCoverage(h)) return false;
     const caps = (h.caps || []).map((c) => c.toLowerCase());
     return need.every((n) => caps.some((c) => c.includes(n)));

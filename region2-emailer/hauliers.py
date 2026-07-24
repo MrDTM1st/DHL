@@ -76,12 +76,27 @@ _OVERRIDES = {
 }
 
 
+# Parcel Pass - the parcel/pallet NETWORK the desk books small ad hoc loads
+# through (boxes/parcels/pallets on a transit van / 7.5t / 18t, no lifting
+# kit). Not on the contact sheet and not a ranked haulier: it has no depot
+# postcode and never joins the ring-round - the dashboard's ad hoc brief
+# offers it directly. Lives in code (like _OVERRIDES) so a contact-list
+# re-import never wipes it.
+PARCEL_PASS = {
+    "name": "Parcel Pass", "location": "", "postcode": "", "outward": "",
+    "allocation": "", "tier": "", "do_not_use": False, "own_fleet": False,
+    "phone": "0330 122 8447", "ooh": "", "emails": ["nr@parcelpass.co.uk"],
+    "caps": [], "ctms": "", "fors": "", "cfx": "", "parcel_service": True,
+}
+
+
 def _apply_overrides(d):
     for h in d.get("hauliers", []) + d.get("couriers", []):
         nm = str(h.get("name", "")).lower()
         for key, ov in _OVERRIDES.items():
             if key in nm:
                 h.update(ov)
+    d["services"] = [dict(PARCEL_PASS)]
     return d
 
 
@@ -89,7 +104,7 @@ def load():
     try:
         return _apply_overrides(json.load(open(PATH, encoding="utf-8")))
     except Exception:
-        return {"hauliers": [], "couriers": [], "ctms": {}}
+        return _apply_overrides({"hauliers": [], "couriers": [], "ctms": {}})
 
 
 def save(d):
@@ -359,7 +374,8 @@ def main():
             if h["emails"]: print(f"           {'; '.join(h['emails'][:2])}")
     elif a and a[0] == "show" and len(a) > 1:
         q = a[1].lower()
-        for h in load().get("hauliers", []) + load().get("couriers", []):
+        d = load()
+        for h in d.get("hauliers", []) + d.get("couriers", []) + d.get("services", []):
             if q in h["name"].lower():
                 print(f"\n{h['name']}  [{h.get('ctms') or 'no CTMS id'}]")
                 print(f"  {h['location']} {h['postcode']}  | tier alloc: {h['allocation']}")
