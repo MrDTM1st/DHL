@@ -3,7 +3,7 @@ import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
-  fmtDur, metersToMiles, journeyFor,
+  fmtDur, metersToMiles, journeyFor, parcelPassFor,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 
@@ -123,10 +123,14 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const journey = journeyFor(repo, leg);
 
+  const pp = parcelPassFor(r);   // Parcel Pass verdict - ad hoc records only
+
   const rows = [
     ['Status', statusLabel(r)],
     ['Delivery', dueText(r)],
     ['Material', r.materials],
+    ['Quantity', r.qty !== r.materials ? r.qty : ''],
+    ['Vehicle', v('vehicle')],
     ['Time', v('time')],
     [colls.length > 1 ? `Collections (${colls.length})` : 'Collection',
       colls.length ? (
@@ -193,6 +197,20 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             {need.length ? need.map((n, i) => <span className="needchip" key={i}>{n}</span>)
               : <span className="needchip" style={{ background: 'var(--seg)', color: 'var(--muted)', borderColor: 'var(--line2)' }}>general haulage</span>}
           </div>
+
+          {pp && (pp.ok ? (
+            <div className="ppcard go">
+              <b>PARCEL PASS — best bet for this one</b>
+              <div>Small load{pp.vehicle ? ` on a ${pp.vehicle.toLowerCase()}` : ''}, no special
+                kit — book it through Parcel Pass as usual. The hauliers below are the backup
+                if they can't cover it.</div>
+            </div>
+          ) : (
+            <div className="ppcard warn">
+              <b>NOT ONE FOR PARCEL PASS</b> — {pp.reasons.join(', ')}
+              <div>This is outside what Parcel Pass runs — ring round the hauliers below instead.</div>
+            </div>
+          ))}
 
           <div className="lbl" style={{ margin: '6px 0 10px' }}>
             Who to contact — {recs.length} fit this job <span style={{ color: 'var(--faint)', fontWeight: 600 }}>
@@ -270,7 +288,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             </div>
           )}
 
-          {onBookedCall && (
+          {onBookedCall && r.kind !== 'adhoc' && (
             <button className="btn block" style={{ marginTop: 16 }} onClick={() => onBookedCall(r)}>
               Mark booked over the phone
             </button>

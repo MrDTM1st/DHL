@@ -418,6 +418,17 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .hcompose-foot{ display:flex; align-items:center; gap:8px; justify-content:flex-end; }
 .hcompose-foot .hint-sig{ margin-right:auto; font-size:10.5px; color:var(--faint); }
 
+/* the Parcel Pass verdict on an ad hoc brief: green = book Parcel Pass as
+   usual; amber = the job's outside what they run, use the ring-round below */
+.ppcard{ margin:10px 0 12px; padding:10px 12px; border-radius:11px; font-size:12.5px;
+      border:1px solid var(--line2); background:var(--seg); color:var(--ink2); }
+.ppcard b{ font-size:11.5px; letter-spacing:.04em; }
+.ppcard div{ margin-top:4px; color:var(--muted); }
+.ppcard.go{ background:var(--gobg, #eef6ef); border-color:var(--gobd, #dcebdf); }
+.ppcard.go b{ color:var(--goink, #18804a); }
+.ppcard.warn{ background:var(--yellow-t, #fdf3d3); border-color:#f0d98f; }
+.ppcard.warn b{ color:#8a6d00; }
+
 /* a haulier row you've tapped: shows the job timed from THEIR base */
 .hrec{ cursor:pointer; }
 .hrec.picked{ background:var(--gobg, #eef6ef); border-color:var(--gobd, #dcebdf); }

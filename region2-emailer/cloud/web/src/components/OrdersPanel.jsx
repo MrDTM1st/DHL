@@ -1,5 +1,5 @@
 import { I } from '../icons.jsx';
-import { ordLabel, isUrgent, within3, dateShort, recommendFor } from '../lib/orders.js';
+import { ordLabel, isUrgent, within3, dateShort, recommendFor, parcelPassFor } from '../lib/orders.js';
 import { geoCache } from '../lib/geo.js';
 
 // Left-hand panel on the map: every tracked order with its recommended haulier.
@@ -24,6 +24,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId })
         {list.map((o) => {
           const { list: recs } = recommendFor(o, hauliers, geo);
           const best = recs[0];
+          const pp = parcelPassFor(o);
           return (
             <div className={'orow' + (selectedId === o.id ? ' sel' : '')} key={o.id} onClick={() => onSelect(o)}>
               <span className="pdot2" style={isUrgent(o)
@@ -32,9 +33,11 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId })
               <div className="pm">
                 <div className="o mono">
                   {ordLabel(o)} <span style={{ color: 'var(--faint)', fontWeight: 600 }}>· {o.worksite || o.site || ''}</span>
+                  {o.kind === 'adhoc' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>AD HOC</span>}
                 </div>
                 <div className="s">
-                  {best ? <>Rec: <b style={{ color: 'var(--ink2)' }}>{best.name}</b>{best.miles !== null ? ' · ' + best.miles + ' mi' : ''}</>
+                  {pp && pp.ok ? <>Rec: <b style={{ color: 'var(--goink, #18804a)' }}>Parcel Pass</b> · small load</>
+                    : best ? <>Rec: <b style={{ color: 'var(--ink2)' }}>{best.name}</b>{best.miles !== null ? ' · ' + best.miles + ' mi' : ''}</>
                     : 'No matching haulier yet'}
                 </div>
               </div>

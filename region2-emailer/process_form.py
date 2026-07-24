@@ -9,7 +9,7 @@ replicated database logic to build the NR upload CSV in the outbox.
     python process_form.py <reference or filename fragment>   # searches email
     python process_form.py latest                             # newest form in email
 """
-import sys, os, re
+import sys, os, re, json
 from datetime import datetime
 import nr_csv, outbox
 
@@ -148,6 +148,74 @@ def to_transform_row(d):
     return r
 
 
+# ---------- dashboard map record ----------
+# Each processed ad hoc is also saved as a record shaped like a tracker
+# record, so the dashboard's brief, haulier ranking and map focus mode all
+# work on it unchanged. The agent publishes these on the panel.
+ADHOCS = os.path.join(HERE, "_adhocs.json")
+
+
+def _flag(d, k):
+    return str(d.get(k) or "N").strip().upper() not in ("N", "")
+
+
+def _adhoc_record(d, csv_name):
+    s = lambda k: str(d.get(k) or "").strip()
+
+    def dt(v):
+        try:
+            return v.strftime("%d/%m/%Y"), v.strftime("%H:%M")
+        except Exception:
+            return "", ""
+
+    ddate, dtime = dt(d.get("delivery_time"))
+    _, dtime_end = dt(d.get("delivery_time_end"))
+    qty = d.get("Product Qty")
+    if isinstance(qty, float) and qty.is_integer():
+        qty = int(qty)
+    qty = str(qty if qty is not None else "").strip()
+    prod = s("Product / Description") or s("Product / Service Code")
+    # quantities are allowed to be TEXT on these forms ("3 x frames + straps");
+    # only a plain number reads as an "Nx" multiplier in front of the product
+    mats = (qty + "x " + prod) if re.fullmatch(r"\d{1,5}", qty) else (prod or qty)
+    off = "HIAB" if _flag(d, "HIAB") else ("MOFFETT" if _flag(d, "Moffett") else "")
+    return {
+        "id": "adhoc|" + s("Customer Order No") + "|" + datetime.now().strftime("%Y%m%d%H%M%S"),
+        "kind": "adhoc",
+        "orders": [s("Customer Order No")],
+        "site": s("Delivery Point"), "worksite": s("Delivery Point"),
+        "postcode": s("D Postcode"),
+        "collection_site": s("Site Name - Collection"), "collection_pc": s("Postcode"),
+        "collections": [{"site": s("Site Name - Collection"), "pc": s("Postcode")}],
+        "materials": mats,
+        "qty": qty, "product": prod,
+        "delivery_date": ddate,
+        "details": {
+            "time": {"earliest": dtime, "latest": dtime_end},
+            "vehicle": {"value": s("Vehicle Type")},
+            "offloading": {"value": off},
+            "pts": {"value": "yes" if _flag(d, "PTS") else ""},
+            "rear_steer": {"value": "yes" if _flag(d, "Rear Steer") else ""},
+            "contact": {"name": s("D Contact Name"), "phone": s("D Telephone No")},
+        },
+        "csv": os.path.basename(csv_name),
+        "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+def save_adhocs(rows, csv_name, keep=8):
+    """Newest first, capped - the map only ever needs the recent handful."""
+    try:
+        with open(ADHOCS, encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception:
+        old = []
+    recs = [_adhoc_record(d, csv_name) for d in rows]
+    with open(ADHOCS, "w", encoding="utf-8") as f:
+        json.dump((recs + old)[:keep], f, indent=1)
+    return len(recs)
+
+
 def main():
     arg = sys.argv[1].strip() if len(sys.argv) > 1 else "latest"
     if os.path.exists(arg):
@@ -189,6 +257,11 @@ def main():
     records = nr_csv.transform([to_transform_row(d) for d in rows])
     name = "NR_heavy_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     out = nr_csv.write_csv(records, outbox.path(name))
+    try:
+        save_adhocs(rows, name)
+        print("MAP : job saved for the dashboard map.")
+    except Exception as ex:   # the map extra must never cost the CSV
+        print(f"(map record not saved: {ex})")
     for d in rows:
         preset = str(d.get('Account') or '').strip().lower() not in UNSET_ACCOUNTS
         print(f"Order {d.get('Customer Order No')} | {d.get('Site Name - Collection')} "

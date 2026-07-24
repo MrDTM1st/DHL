@@ -153,6 +153,16 @@ def _slim_hauliers():
         return []
 
 
+def _adhocs():
+    """Recently processed ad hoc forms (map-ready records written by
+    process_form.py) - published so the dashboard can pin them on the map."""
+    try:
+        with open(os.path.join(HERE, "_adhocs.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
 AUTO_CHASE_FLAG = os.path.join(HERE, "auto_chase.enabled")
 
 
@@ -191,6 +201,7 @@ def push_panel():
                      for m in team.get("members", [])],
             "hauliers": _slim_hauliers(),
             "auto_chase": auto_chase_on(),
+            "adhocs": _adhocs(),
         })
     except Exception:
         pass
@@ -430,6 +441,7 @@ def main():
                 if "Nothing written" in out or "INCOMPLETE ORDER" in out or "NOT FOUND" in out:
                     report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
                 else:
+                    push_panel()   # the new map record rides on the panel
                     report("done", "Form processed - upload CSV below and in the outbox.", tail(out, 10))
             elif action == "form_upload":
                 report("running", "Processing ad hoc form upload…")
@@ -454,7 +466,8 @@ def main():
                     if "Nothing written" in out or "INCOMPLETE ORDER" in out or "NOT FOUND" in out:
                         report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
                     else:
-                        report("done", "Ad hoc form processed - upload CSV below and in the outbox.", tail(out, 10))
+                        push_panel()   # the new map record rides on the panel
+                        report("done", "Ad hoc form processed - CSV below; map shows the job.", tail(out, 10))
             elif action == "tracker_refresh":
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])

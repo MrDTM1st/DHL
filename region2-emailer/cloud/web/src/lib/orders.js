@@ -64,6 +64,7 @@ export function stageOf(r) {
 export const STAGES = ['Drafted', 'Emailed', 'Reply in', 'Sent off'];
 
 export function statusLabel(r) {
+  if (r.kind === 'adhoc') return 'Ad hoc — CSV ready';
   if (r.sendoff_ready) return 'Sent off';
   if (r.ooo_at) return 'Out of office';
   if ((r.chases || 0) > 0) return 'Chased ×' + r.chases;
@@ -119,6 +120,25 @@ export function needsFor(r) {
   if (((d.rear_steer || {}).value) === 'yes') need.push('rear steer');
   if (((d.pts || {}).value) === 'yes') need.push('pts');
   return need;
+}
+
+// Ad hoc routing rule: Parcel Pass is the default carrier for small ad hoc
+// loads (boxes, parcels, pallets) moving on a transit van, 7.5t or 18t with
+// no lifting kit. Anything needing a HIAB/Moffett, PTS, a rear steer or a
+// bigger/special vehicle goes to the normal haulier ring-round instead.
+// Returns null for non-adhoc records; {ok, reasons, vehicle} otherwise.
+export function parcelPassFor(r) {
+  if (r.kind !== 'adhoc') return null;
+  const d = r.details || {};
+  const off = (d.offloading || {}).value || '';
+  const veh = ((d.vehicle || {}).value || '').trim();
+  const reasons = [];
+  if (off === 'HIAB') reasons.push('needs a HIAB');
+  if (off === 'MOFFETT') reasons.push('needs a Moffett');
+  if ((d.pts || {}).value === 'yes') reasons.push('needs PTS');
+  if ((d.rear_steer || {}).value === 'yes') reasons.push('needs a rear steer');
+  if (veh && !/transit|van|7[.,]?5|18\s*t/i.test(veh)) reasons.push('needs a ' + veh);
+  return { ok: reasons.length === 0, reasons, vehicle: veh };
 }
 
 export function milesBetween(a, b) {

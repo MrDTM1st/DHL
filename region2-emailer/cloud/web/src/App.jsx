@@ -45,6 +45,10 @@ export default function App() {
 
   const panel = (status && status.panel) || {};
   const hauliers = panel.hauliers || [];
+  // recently processed ad hoc forms - shown on the map beside the tracked
+  // orders, but never in the tracker (they're not emailed orders)
+  const adhocs = panel.adhocs || [];
+  const mapRecords = records.concat(adhocs);
   const agentOnline = !!(status && status.agent_online);
   const ttlText = status && status.queue_ttl
     ? (status.queue_ttl >= 60 ? Math.floor(status.queue_ttl / 60) + ' minutes' : status.queue_ttl + ' seconds')
@@ -91,6 +95,27 @@ export default function App() {
     }
     bootstrapped.current = true;
   }, [records, pushToast]);
+
+  // ---- a freshly processed ad hoc takes you straight to the map ----
+  // The first panel we see is the baseline (old ad hocs shouldn't hijack the
+  // screen on page load); anything appearing AFTER that is a form you just
+  // uploaded, so jump to the map with the job framed and the brief open.
+  const knownAdhocs = useRef(null);
+  const adhocSig = adhocs.map((a) => a.id).join(',');
+  useEffect(() => {
+    if (!status) return;
+    const ids = adhocs.map((a) => a.id);
+    if (knownAdhocs.current === null) { knownAdhocs.current = new Set(ids); return; }
+    const fresh = ids.find((id) => !knownAdhocs.current.has(id));
+    ids.forEach((id) => knownAdhocs.current.add(id));
+    if (fresh) {
+      pushToast('Ad hoc processed', 'CSV is in Files — here\'s the job on the map.', 'go');
+      setSelectedId(fresh);
+      setPickedHaulier(null);
+      setPage('map');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adhocSig, status === null]);
 
   // ---- toast on command completion / expiry ----
   useEffect(() => {
@@ -165,7 +190,7 @@ export default function App() {
   // The picked haulier lives here because both the brief and the map need it:
   // it re-times the job from that haulier's base and draws their approach leg.
   const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); setPage('map'); };
-  const selectedRecord = records.find((r) => r.id === selectedId);
+  const selectedRecord = mapRecords.find((r) => r.id === selectedId);
 
   // decorate notes with a display time + older flag at render
   const shownNotes = notes.map((n) => ({ ...n, time: ago(n.createdAt), older: (Date.now() - n.createdAt) > 4 * 3600 * 1000 }));
@@ -198,7 +223,7 @@ export default function App() {
           />
         )}
         {page === 'map' && (
-          <MapPage records={records} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
+          <MapPage records={mapRecords} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
             pickedHaulier={pickedHaulier} />
         )}
         {page === 'tracker' && (
