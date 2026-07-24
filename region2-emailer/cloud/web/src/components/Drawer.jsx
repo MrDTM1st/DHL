@@ -3,7 +3,7 @@ import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
-  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo,
+  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 
@@ -50,24 +50,42 @@ function coverRequest(r) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
-  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand }) {
+  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams }) {
   const [, setTick] = useState(0);
-  // inline compose for the haulier cover request
-  const [composing, setComposing] = useState(null);   // haulier name
-  const [draft, setDraft] = useState({ to: '', subject: '', message: '' });
+  // inline compose - haulier cover requests AND materials-team escalations
+  const [composing, setComposing] = useState(null);   // haulier / team name
+  const [draft, setDraft] = useState({ to: '', cc: '', subject: '', message: '', what: '' });
   const startCompose = (h) => {
     setComposing(h.name);
     setDraft({
-      to: h.email || '',
+      to: h.email || '', cc: '',
       subject: `${(r.orders || []).join(' / ')} Delivery`,
-      message: coverRequest(r),
+      message: coverRequest(r), what: '',
+    });
+  };
+  // "I can't reach the contact - ask the materials team for someone else"
+  const startAltCompose = (team) => {
+    setComposing(team.name);
+    const who = r.name ? `${r.name} (${r.to})` : r.to;
+    setDraft({
+      to: team.email || '', cc: r.to || '',
+      subject: `${(r.orders || []).join(' / ')} ${r.worksite || r.site || ''} ${r.postcode || ''} - alternative contact needed`.replace(/\s+/g, ' '),
+      message: ['Hi,', '',
+        `I have been trying to reach ${who} (cc'd) about order ${(r.orders || []).join(' / ')}`
+        + ` - ${r.materials || 'the materials'} to ${[r.worksite || r.site, r.postcode].filter(Boolean).join(', ')}`
+        + `${r.delivery_date ? ', delivering ' + r.delivery_date : ''} - but I have not managed to get hold of them after a few attempts.`,
+        '',
+        'Could you point me to an alternative contact for this order so I can get the delivery sorted?',
+        '', 'Kind regards'].join('\n'),
+      what: 'alt_contact',
     });
   };
   const sendCompose = (h) => {
     if (!draft.to.trim() || !draft.message.trim()) return;
     onCommand && onCommand({ action: 'haulier_email', email: {
-      to: draft.to.trim(), subject: draft.subject.trim(),
+      to: draft.to.trim(), cc: draft.cc.trim(), subject: draft.subject.trim(),
       message: draft.message, haulier: h.name, orders: r.orders || [],
+      what: draft.what || '',
       form_file: r.form_file || '',   // ad hocs forward the filled form itself
     } });
     setComposing(null);
@@ -141,6 +159,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const pp = parcelPassFor(r);   // Parcel Pass verdict - ad hoc records only
   const parcelH = (hauliers || []).find((h) => h.parcel) || null;
+  // the materials team that owns this product - the alt-contact escalation
+  const mtype = materialsTypeFor(r);
+  const team = (r.kind !== 'adhoc' && r.to && mtype && matTeams) ? matTeams[mtype] : null;
 
   // the inline cover-request compose, shared by the haulier rows and the
   // Parcel Pass card - one open compose at a time, keyed by name
@@ -149,6 +170,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
       <label>To
         <input value={draft.to}
           onChange={(e) => setDraft((d2) => ({ ...d2, to: e.target.value }))} />
+      </label>
+      <label>Cc
+        <input value={draft.cc}
+          onChange={(e) => setDraft((d2) => ({ ...d2, cc: e.target.value }))} />
       </label>
       <label>Subject
         <input value={draft.subject}
@@ -232,6 +257,15 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               </div>
             ))}
           </dl>
+          {team && (
+            <div style={{ margin: '2px 0 10px' }}>
+              <button className="btn mini"
+                onClick={() => (composing === team.name ? setComposing(null) : startAltCompose(team))}>
+                Can't reach {r.name || 'them'}? Ask {team.name} for another contact
+              </button>
+              {composeBox({ name: team.name })}
+            </div>
+          )}
           {run !== null && (
             <div className="runeta">
               <div className="runline">

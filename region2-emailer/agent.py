@@ -172,6 +172,15 @@ def _adhocs():
         return []
 
 
+def _mat_teams():
+    """Materials-team escalation contacts (rails / ballast / sleepers)."""
+    try:
+        import hauliers
+        return hauliers.MATERIALS_TEAMS
+    except Exception:
+        return {}
+
+
 AUTO_CHASE_FLAG = os.path.join(HERE, "auto_chase.enabled")
 
 
@@ -211,6 +220,7 @@ def push_panel():
             "hauliers": _slim_hauliers(),
             "auto_chase": auto_chase_on(),
             "adhocs": _adhocs(),
+            "mat_teams": _mat_teams(),
         })
     except Exception:
         pass
@@ -523,11 +533,13 @@ def main():
                               encoding="utf-8") as f:
                         json.dump(e, f, indent=1)
                     out = run(["send_order.py", "sendhaulier"])
+                    label = ("Alternative-contact request" if e.get("what") == "alt_contact"
+                             else "Cover request")
                     if "sent to" in out:
-                        report("done", f"Cover request sent to {e.get('haulier') or e['to']}.",
+                        report("done", f"{label} sent to {e.get('haulier') or e['to']}.",
                                tail(out, 4))
                     else:
-                        report("error", "Haulier email NOT sent - see below.", tail(out, 6))
+                        report("error", f"{label} NOT sent - see below.", tail(out, 6))
             elif action == "run_chasers":
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])

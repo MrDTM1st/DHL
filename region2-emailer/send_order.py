@@ -218,7 +218,7 @@ def send_haulier(ns):
     # already in Sent Items - one press away from double-sending to a haulier).
     try:
         ns.SendAndReceive(False)
-        metrics.log("email_sent", what="haulier_request", to=to,
+        metrics.log("email_sent", what=e.get("what") or "haulier_request", to=to,
                     orders=e.get("orders", []))
         os.remove(PENDING_HAULIER)   # done - never resendable by accident
     except Exception as ex:

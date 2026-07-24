@@ -90,8 +90,19 @@ _OVERRIDES = {
 PARCEL_PASS = {
     "name": "Parcel Pass", "location": "", "postcode": "", "outward": "",
     "allocation": "", "tier": "", "do_not_use": False, "own_fleet": False,
-    "phone": "0330 122 8447", "ooh": "", "emails": ["nr@parcelpass.co.uk"],
+    "phone": "0330 122 8447", "ooh": "", "emails": ["NR@Passlogistics.co.uk"],
     "caps": [], "ctms": "", "fors": "", "cfx": "", "parcel_service": True,
+}
+
+# The Network Rail MATERIALS TEAMS - the escalation route when an order's
+# site contact can't be reached after a few tries: ask the team that owns
+# the material for an alternative contact (Delali, 24/07). Addresses
+# resolved from their real emails in the mailbox, never guessed - the
+# sleepers team hasn't emailed him yet, so its address waits for Delali.
+MATERIALS_TEAMS = {
+    "rails":    {"name": "Steel Materials", "email": "SteelMaterials@networkrail.co.uk"},
+    "ballast":  {"name": "Track Aggregates", "email": "Track.Aggregates@networkrail.co.uk"},
+    "sleepers": {"name": "Sleeper Contracts & Management", "email": ""},
 }
 
 

@@ -165,6 +165,18 @@ export function needsFor(r) {
   return need;
 }
 
+// Which NR materials team owns this order's product - the escalation route
+// when the site contact can't be reached ("ask the steel materials people for
+// an alternative contact"). Mirrors build_drafts.product_type's keywords.
+// Returns 'rails' | 'ballast' | 'sleepers' | null.
+export function materialsTypeFor(r) {
+  const d = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toUpperCase();
+  if (d.includes('SLEEPER')) return 'sleepers';
+  if (d.includes('BALLAST')) return 'ballast';
+  if (d.includes('RAIL')) return 'rails';
+  return null;
+}
+
 // Is any leg of this job at night (window starting 20:00-05:59) or on a
 // weekend? Some carriers avoid that work - DHL NOC in particular - so the
 // ranking needs to know. Returns e.g. ['night', 'weekend'] or [].

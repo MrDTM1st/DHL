@@ -252,7 +252,7 @@ export default function App() {
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
             onCall={onCall} onBookedCall={onBookedCall} onAdhocBooked={onAdhocBooked}
-            onCommand={onCommand}
+            onCommand={onCommand} matTeams={panel.mat_teams || {}}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier} />
         )}
       </div>
