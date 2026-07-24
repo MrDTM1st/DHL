@@ -96,13 +96,13 @@ PARCEL_PASS = {
 
 # The Network Rail MATERIALS TEAMS - the escalation route when an order's
 # site contact can't be reached after a few tries: ask the team that owns
-# the material for an alternative contact (Delali, 24/07). Addresses
-# resolved from their real emails in the mailbox, never guessed - the
-# sleepers team hasn't emailed him yet, so its address waits for Delali.
+# the material for an alternative contact (Delali, 24/07). Every address
+# verified against the team's real emails in the mailbox, never guessed
+# (yes, the sleepers address genuinely contains an ampersand).
 MATERIALS_TEAMS = {
     "rails":    {"name": "Steel Materials", "email": "SteelMaterials@networkrail.co.uk"},
     "ballast":  {"name": "Track Aggregates", "email": "Track.Aggregates@networkrail.co.uk"},
-    "sleepers": {"name": "Sleeper Contracts & Management", "email": ""},
+    "sleepers": {"name": "SCO Sleepers & Troughing", "email": "SCOSleepers&Troughing@networkrail.co.uk"},
 }
 
 
