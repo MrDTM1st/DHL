@@ -210,14 +210,20 @@ def send_haulier(ns):
     if not bind_account(m, acct):
         print("ABORT: could not bind DHL account - NOT sent.")
         return 0
+    subject = str(m.Subject)   # the COM item can be invalid after Send
     m.Send()
+    # From here the email is GONE - nothing below may turn a real send into a
+    # reported failure (24/07: metrics.log was called with `kind` twice, the
+    # TypeError ate the success line, the dashboard said "failed" for an email
+    # already in Sent Items - one press away from double-sending to a haulier).
     try:
         ns.SendAndReceive(False)
-    except Exception:
-        pass
-    metrics.log("email_sent", kind="haulier_request", to=to,
-                orders=e.get("orders", []))
-    print(f"Haulier request sent to {to}: {m.Subject}")
+        metrics.log("email_sent", what="haulier_request", to=to,
+                    orders=e.get("orders", []))
+        os.remove(PENDING_HAULIER)   # done - never resendable by accident
+    except Exception as ex:
+        print(f"(post-send bookkeeping hiccup, email IS sent: {ex})")
+    print(f"Haulier request sent to {to}: {subject}")
     return 1
 
 
