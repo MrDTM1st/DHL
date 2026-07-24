@@ -196,6 +196,16 @@ def send_haulier(ns):
         m.CC = cc
     m.Subject = str(e.get("subject") or "Delivery")[:150]
     bd._attach_qr(m)
+    # ad hoc cover requests forward the FILLED REQUEST FORM itself - the
+    # haulier gets every detail exactly as the requester wrote it
+    ff = str(e.get("form_file") or "").strip()
+    if ff:
+        fpath = os.path.join(bd.HERE, "_adhoc_forms", os.path.basename(ff))
+        if os.path.exists(fpath):
+            m.Attachments.Add(fpath)
+            print(f"attached form: {os.path.basename(fpath)}")
+        else:
+            print(f"!! form attachment {ff} missing - sending WITHOUT it")
     m.HTMLBody = bd.html_from_message(str(e.get("message") or ""))
     if not bind_account(m, acct):
         print("ABORT: could not bind DHL account - NOT sent.")

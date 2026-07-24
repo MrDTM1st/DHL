@@ -15,23 +15,34 @@ import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 // him to fill rather than an invented value.
 function coverRequest(r) {
   const d = r.details || {};
-  const t = d.time || {};
-  const when = [r.delivery_date, t.earliest && t.latest ? `${t.earliest} - ${t.latest}` : t.earliest]
+  const win = (t) => (t && t.earliest ? (t.latest ? `${t.earliest} - ${t.latest}` : t.earliest) : '');
+  const when = [r.delivery_date, win(d.time)].filter(Boolean).join(' ');
+  // ad hoc forms carry their own collection date (it can differ from the
+  // delivery date); tracked orders only know the delivery date
+  const collWhen = [r.collection_date || r.delivery_date, win(d.collection_time)]
     .filter(Boolean).join(' ');
   const off = (d.offloading || {}).value || '';
   // some jobs load at more than one site - the haulier needs every pick-up
   const collLine = collectionsOf(r)
     .map((c) => [c.site, c.pc].filter(Boolean).join(' ')).join(' + ');
+  const rl = r.return_leg;
+  const returnLine = rl ? 'Return leg: collect '
+    + [rl.collection_date, win(rl.collection_time)].filter(Boolean).join(' ')
+    + ' → ' + [rl.to_site, rl.to_pc].filter(Boolean).join(' ')
+    + (rl.delivery_date
+      ? ` — deliver ${[rl.delivery_date, win(rl.time)].filter(Boolean).join(' ')}`
+      : ' (delivery date TBC)') : null;
   return ['Hi,', '', 'Would you be able to cover the job below;', '',
     `Order: ${(r.orders || []).join(' / ')}`,
     `Collection: ${collLine}`,
     `Delivery: ${[r.worksite || r.site, r.postcode].filter(Boolean).join(' ')}`,
-    `Collection date/time: ${r.delivery_date || ''}`,
+    `Collection date/time: ${collWhen}`,
     `Delivery date/time: ${when}`,
-    `Materials: ${r.materials || ''}`,
+    returnLine,
+    `Materials: ${[r.materials, r.weight].filter(Boolean).join(' — ')}`,
     `Vehicle: ${(d.vehicle || {}).value || ''}`,
     `Offloading: ${off === 'SITE/NONE' ? 'site offloads' : off}`,
-  ].join('\n');
+  ].filter((x) => x !== null).join('\n');
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
@@ -53,6 +64,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
     onCommand && onCommand({ action: 'haulier_email', email: {
       to: draft.to.trim(), subject: draft.subject.trim(),
       message: draft.message, haulier: h.name, orders: r.orders || [],
+      form_file: r.form_file || '',   // ad hocs forward the filled form itself
     } });
     setComposing(null);
   };
@@ -73,7 +85,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const d = r.details || {};
   const v = (k) => detVal(k, d[k]);
-  const { need, list } = recommendFor(r, hauliers, geo);
+  const { need, list, nw } = recommendFor(r, hauliers, geo);
   // The FULL list of hauliers that fit this job - fleet -> tier 1 -> tier 2,
   // closest to furthest within each band (Delali: "give me everyone that fits",
   // not a top few). The drawer body scrolls, so a long list costs nothing.
@@ -143,7 +155,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           onChange={(e) => setDraft((d2) => ({ ...d2, message: e.target.value }))} />
       </label>
       <div className="hcompose-foot">
-        <span className="hint-sig">signature &amp; QR are added automatically</span>
+        <span className="hint-sig">
+          {r.form_file ? 'signature, QR & the filled request form are attached automatically'
+            : 'signature & QR are added automatically'}
+        </span>
         <button className="btn mini" onClick={() => setComposing(null)}>Cancel</button>
         <button className="btn mini red" disabled={!draft.to.trim() || !draft.message.trim()}
           onClick={() => sendCompose(h)}>Send</button>
@@ -155,9 +170,16 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
     ['Status', statusLabel(r)],
     ['Delivery', dueText(r)],
     ['Material', r.materials],
-    ['Quantity', r.qty !== r.materials ? r.qty : ''],
+    ['Quantity', r.qty && !(r.materials || '').includes(r.qty) ? r.qty : ''],
+    ['Weight', r.weight],
     ['Vehicle', v('vehicle')],
-    ['Time', v('time')],
+    ['Collect', [r.collection_date, detVal('time', d.collection_time)].filter(Boolean).join(' · ')],
+    [r.collection_date ? 'Delivery time' : 'Time', v('time')],
+    ['Return', r.return_leg ? [
+      [r.return_leg.collection_date, detVal('time', r.return_leg.collection_time)].filter(Boolean).join(' '),
+      '→ ' + [r.return_leg.to_site, r.return_leg.to_pc].filter(Boolean).join(' '),
+      r.return_leg.delivery_date ? '' : '(delivery date TBC)',
+    ].filter(Boolean).join(' · ') : ''],
     [colls.length > 1 ? `Collections (${colls.length})` : 'Collection',
       colls.length ? (
         <span>
@@ -271,6 +293,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
                 <b>{h.name}</b>
                 <span className={'htag ' + RANK_TAG[h.rank]}>{RANK_LABEL[h.rank]}</span>
                 {h.closerThanAbove && <span className="htag near">CLOSER</span>}
+                {h.nwAvoid && <span className="htag near">AVOIDS {nw.join(' & ').toUpperCase()} WORK</span>}
                 <div>{[h.loc, (h.caps || []).join(', ')].filter(Boolean).join(' · ')}</div>
                 {picked && (
                   <div className="hjourney">

@@ -191,6 +191,13 @@ export default function App() {
   // it re-times the job from that haulier's base and draws their approach leg.
   const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); setPage('map'); };
   const selectedRecord = mapRecords.find((r) => r.id === selectedId);
+  // a selected record can vanish on refresh (booked orders drop off, old ad
+  // hocs rotate out) - clear the selection or the map stays focused on nothing
+  useEffect(() => {
+    if (selectedId && records.length + adhocs.length > 0 && !selectedRecord) {
+      setSelectedId(null); setPickedHaulier(null);
+    }
+  }, [selectedId, selectedRecord, records.length, adhocs.length]);
 
   // decorate notes with a display time + older flag at render
   const shownNotes = notes.map((n) => ({ ...n, time: ago(n.createdAt), older: (Date.now() - n.createdAt) > 4 * 3600 * 1000 }));

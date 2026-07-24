@@ -73,6 +73,11 @@ _OVERRIDES = {
     # they don't do is DELIVER up north. So the no-go only checks the
     # delivery end.
     "hotspur": {"no_go_areas": NORTH_AREAS, "no_go_scope": "delivery"},
+    # "DHL NOC doesn't like doing night jobs and weekend jobs" - Delali,
+    # 2026-07-24. Not a hard no: they stay on the list, but a night/weekend
+    # job flags them and drops them below the external hauliers so the first
+    # call is someone who'll actually take it.
+    "dhl": {"avoid_night_weekend": True},
 }
 
 

@@ -122,6 +122,31 @@ export function needsFor(r) {
   return need;
 }
 
+// Is any leg of this job at night (window starting 20:00-05:59) or on a
+// weekend? Some carriers avoid that work - DHL NOC in particular - so the
+// ranking needs to know. Returns e.g. ['night', 'weekend'] or [].
+export function nightWeekendFor(r) {
+  const d = r.details || {};
+  const rl = r.return_leg || null;
+  const dates = [r.delivery_date, r.collection_date,
+    rl && rl.collection_date, rl && rl.delivery_date].filter(Boolean);
+  const weekend = dates.some((dd) => {
+    const m = String(dd).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m) return false;
+    const day = new Date(+m[3], +m[2] - 1, +m[1]).getDay();
+    return day === 0 || day === 6;
+  });
+  const wins = [d.time, d.collection_time, rl && rl.time, rl && rl.collection_time].filter(Boolean);
+  const night = wins.some((t) => {
+    const h = parseInt(String(t.earliest || '').split(':')[0], 10);
+    return !Number.isNaN(h) && (h >= 20 || h < 6);
+  });
+  const out = [];
+  if (night) out.push('night');
+  if (weekend) out.push('weekend');
+  return out;
+}
+
 // Ad hoc routing rule: Parcel Pass is the default carrier for small ad hoc
 // loads (boxes, parcels, pallets) moving on a transit van, 7.5t or 18t with
 // no lifting kit. Anything needing a HIAB/Moffett, PTS, a rear steer or a
@@ -199,6 +224,10 @@ export function recommendFor(r, hauliers, geo) {
     });
   });
   out.forEach((h) => { h.rank = h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2); });
+  // A night/weekend job flags carriers that avoid that work (DHL NOC) and
+  // drops them to the bottom - still listed, but never the first call.
+  const nw = nightWeekendFor(r);
+  out.forEach((h) => { h.nwAvoid = !!(h.avoid_nw && nw.length); });
   // Band order is the order of APPROACH, but a haulier that is much closer than
   // everyone ahead of it is worth surfacing rather than burying - a tier 2 at
   // 18mi against tier 1s at 115mi+ is usually the cheaper run, and you'd want
@@ -214,7 +243,7 @@ export function recommendFor(r, hauliers, geo) {
   // that is what it is compared with. (Once quote history is deep enough,
   // cheapest supersedes distance here.)
   const bandBest = (rank) => {
-    const m = out.filter((h) => h.rank === rank && h.miles !== null).map((h) => h.miles);
+    const m = out.filter((h) => h.rank === rank && !h.nwAvoid && h.miles !== null).map((h) => h.miles);
     return m.length ? Math.min(...m) : null;
   };
   const best = [bandBest(0), bandBest(1), bandBest(2)];
@@ -224,10 +253,11 @@ export function recommendFor(r, hauliers, geo) {
     for (let b = h.rank - 1; b >= 0 && above === null; b -= 1) above = best[b];
     if (above !== null && h.miles < above) h.closerThanAbove = true;
   });
-  out.sort((a, b) => a.rank - b.rank
+  out.sort((a, b) => (a.nwAvoid - b.nwAvoid)
+    || a.rank - b.rank
     || (a.miles === null) - (b.miles === null)
     || (a.miles || 9e9) - (b.miles || 9e9));
-  return { need, list: out };
+  return { need, list: out, nw };
 }
 
 export const RANK_TAG = ['fleet', 't1', 't2'];

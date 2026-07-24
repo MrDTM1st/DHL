@@ -101,8 +101,17 @@ def read_rhpc_rows(path):
 
 
 def fmt_dt(v):
+    """Excel encodes 'no date' as the 1899/1900 epoch (a bare time cell reads
+    as time(0,0), COM gives 1899-12-30) - those are placeholders for a date
+    the requester hasn't set (e.g. a TBC return leg), NOT real dates. They
+    must come out EMPTY, never '30/12/1899 00:00' in the upload."""
+    import datetime as _dt
     if v is None or v == "":
         return ""
+    if isinstance(v, _dt.datetime):
+        return "" if v.year < 1990 else v.strftime("%d/%m/%Y %H:%M")
+    if isinstance(v, _dt.time):
+        return ""   # a bare time has no date - can't make an upload window
     try:
         return v.strftime("%d/%m/%Y %H:%M")
     except Exception:
@@ -153,33 +162,88 @@ def to_transform_row(d):
 # record, so the dashboard's brief, haulier ranking and map focus mode all
 # work on it unchanged. The agent publishes these on the panel.
 ADHOCS = os.path.join(HERE, "_adhocs.json")
+FORMS_DIR = os.path.join(HERE, "_adhoc_forms")   # kept to forward with cover requests
 
 
 def _flag(d, k):
     return str(d.get(k) or "N").strip().upper() not in ("N", "")
 
 
-def _adhoc_record(d, csv_name):
+def _dt_parts(v):
+    """(date_str, time_str) from an Excel cell that may hold a datetime, a
+    bare time, or nothing. The 1899/1900 epoch and time(0,0) are Excel's
+    'not set' placeholders (a TBC return leg) - they read as EMPTY."""
+    import datetime as _dt
+    if isinstance(v, _dt.datetime):
+        if v.year < 1990:
+            return "", (v.strftime("%H:%M") if (v.hour or v.minute) else "")
+        return v.strftime("%d/%m/%Y"), v.strftime("%H:%M")
+    if isinstance(v, _dt.time):
+        return "", (v.strftime("%H:%M") if (v.hour or v.minute) else "")
+    return "", ""
+
+
+def _covers(qty, prod):
+    """True when the qty text already says what the product is ('12 x pallets'
+    covers 'PALLET'), so the materials line doesn't need the product repeated.
+    Compared on stemmed words: 'Cable Drums' is NOT covered by 'X1 DRUM'
+    (the 'cable' is information) so that pair combines."""
+    words = {w.rstrip("s") for w in re.findall(r"[a-z]+", qty.lower())}
+    pw = [w.rstrip("s") for w in re.findall(r"[a-z]+", prod.lower())]
+    return bool(pw) and all(w in words for w in pw)
+
+
+def _leg_dates(d):
+    """(collection_date, coll window, delivery_date, del window) for one row.
+    The form has dedicated DATE columns, and collection/delivery can differ
+    (collect Thu, deliver Sat) - never derive one date from the other."""
+    cdate, _ = _dt_parts(d.get("Collection Date"))
+    cd2, ct1 = _dt_parts(d.get("collection_time"))
+    _, ct2 = _dt_parts(d.get("collection_time_end"))
+    ddate, _ = _dt_parts(d.get("Delivery Date"))
+    dd2, dt1 = _dt_parts(d.get("delivery_time"))
+    _, dt2 = _dt_parts(d.get("delivery_time_end"))
+    return (cdate or cd2, {"earliest": ct1, "latest": ct2},
+            ddate or dd2, {"earliest": dt1, "latest": dt2})
+
+
+def _pair_return(rows):
+    """The form's row 4 is the RETURN leg of row 3's order (same ref + '_R').
+    One order, one email, one map record - so legs are paired, not split."""
+    if len(rows) == 2:
+        a = str(rows[0].get("Customer Order No") or "").strip()
+        b = str(rows[1].get("Customer Order No") or "").strip()
+        if a and b == a + "_R":
+            return [(rows[0], rows[1])]
+    return [(r, None) for r in rows]
+
+
+def _adhoc_record(d, csv_name, ret=None, form_file=""):
     s = lambda k: str(d.get(k) or "").strip()
 
-    def dt(v):
-        try:
-            return v.strftime("%d/%m/%Y"), v.strftime("%H:%M")
-        except Exception:
-            return "", ""
+    cdate, cwin, ddate, dwin = _leg_dates(d)
 
-    ddate, dtime = dt(d.get("delivery_time"))
-    _, dtime_end = dt(d.get("delivery_time_end"))
     qty = d.get("Product Qty")
     if isinstance(qty, float) and qty.is_integer():
         qty = int(qty)
     qty = str(qty if qty is not None else "").strip()
     prod = s("Product / Description") or s("Product / Service Code")
-    # quantities are allowed to be TEXT on these forms ("3 x frames + straps");
-    # only a plain number reads as an "Nx" multiplier in front of the product
-    mats = (qty + "x " + prod) if re.fullmatch(r"\d{1,5}", qty) else (prod or qty)
+    # quantities are allowed to be TEXT on these forms ("X1 DRUM",
+    # "12 x pallets") - a plain number becomes an "Nx" multiplier, text that
+    # already names the product stands alone, otherwise both are kept
+    if re.fullmatch(r"\d{1,5}", qty):
+        mats = qty + "x " + prod
+    elif qty and prod and not _covers(qty, prod):
+        mats = prod + " — " + qty
+    else:
+        mats = qty or prod
+    # the weight/dimensions ride inside Delivery Instructions
+    # ("... Qty X1 DRUM Weight - 400KG-DRUM W= 580MM X H 1000MM")
+    wm = re.search(r"[Ww]eight\s*-?\s*(.+)", s("Delivery Instructions"))
+    weight = wm.group(1).strip(" -") if wm else ""
+
     off = "HIAB" if _flag(d, "HIAB") else ("MOFFETT" if _flag(d, "Moffett") else "")
-    return {
+    rec = {
         "id": "adhoc|" + s("Customer Order No") + "|" + datetime.now().strftime("%Y%m%d%H%M%S"),
         "kind": "adhoc",
         "orders": [s("Customer Order No")],
@@ -188,10 +252,13 @@ def _adhoc_record(d, csv_name):
         "collection_site": s("Site Name - Collection"), "collection_pc": s("Postcode"),
         "collections": [{"site": s("Site Name - Collection"), "pc": s("Postcode")}],
         "materials": mats,
-        "qty": qty, "product": prod,
+        "qty": qty, "product": prod, "weight": weight,
         "delivery_date": ddate,
+        "collection_date": cdate,
+        "form_file": form_file,
         "details": {
-            "time": {"earliest": dtime, "latest": dtime_end},
+            "time": dwin,
+            "collection_time": cwin,
             "vehicle": {"value": s("Vehicle Type")},
             "offloading": {"value": off},
             "pts": {"value": "yes" if _flag(d, "PTS") else ""},
@@ -201,16 +268,35 @@ def _adhoc_record(d, csv_name):
         "csv": os.path.basename(csv_name),
         "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+    if ret is not None:
+        r2 = lambda k: str(ret.get(k) or "").strip()
+        rcd, rcwin, rdd, rdwin = _leg_dates(ret)
+        rec["return_leg"] = {
+            "order": r2("Customer Order No"),
+            "collection_date": rcd, "collection_time": rcwin,
+            "delivery_date": rdd, "time": rdwin,
+            "to_site": r2("Delivery Point"), "to_pc": r2("D Postcode"),
+        }
+    return rec
 
 
-def save_adhocs(rows, csv_name, keep=8):
-    """Newest first, capped - the map only ever needs the recent handful."""
+def save_adhocs(rows, csv_name, form_path="", keep=8):
+    """Newest first, capped - the map only ever needs the recent handful.
+    Keeps a copy of the filled form so the cover-request email can forward it."""
+    form_file = ""
+    if form_path and os.path.exists(form_path) and rows:
+        import shutil
+        os.makedirs(FORMS_DIR, exist_ok=True)
+        ref = re.sub(r"[^A-Za-z0-9._-]", "-", str(rows[0].get("Customer Order No") or "form"))
+        form_file = "Haulage Request Form " + ref + os.path.splitext(form_path)[1]
+        shutil.copyfile(form_path, os.path.join(FORMS_DIR, form_file))
     try:
         with open(ADHOCS, encoding="utf-8") as f:
             old = json.load(f)
     except Exception:
         old = []
-    recs = [_adhoc_record(d, csv_name) for d in rows]
+    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file)
+            for d, ret in _pair_return(rows)]
     with open(ADHOCS, "w", encoding="utf-8") as f:
         json.dump((recs + old)[:keep], f, indent=1)
     return len(recs)
@@ -258,8 +344,8 @@ def main():
     name = "NR_heavy_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     out = nr_csv.write_csv(records, outbox.path(name))
     try:
-        save_adhocs(rows, name)
-        print("MAP : job saved for the dashboard map.")
+        save_adhocs(rows, name, form_path=path)
+        print("MAP : job saved for the dashboard map (form kept for forwarding).")
     except Exception as ex:   # the map extra must never cost the CSV
         print(f"(map record not saved: {ex})")
     for d in rows:
@@ -267,6 +353,13 @@ def main():
         print(f"Order {d.get('Customer Order No')} | {d.get('Site Name - Collection')} "
               f"-> {d.get('Delivery Point')} | qty {d.get('Product Qty')} | "
               f"acct {account_for(d)}{' (preset)' if preset else ' (defaulted)'}")
+        tr = to_transform_row(d)
+        missing = [lbl for lbl, k in (("collection", "collection time"),
+                                      ("delivery", "delivery time")) if not tr[k]]
+        if missing:
+            print(f"!! {d.get('Customer Order No')}: {' & '.join(missing)} date/time NOT SET on "
+                  f"the form (TBC leg?) - those times are BLANK in the CSV; fill them in before "
+                  f"uploading, or book that leg once the date is known.")
     print(f"CSV : {out}")
 
 
