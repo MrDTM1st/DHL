@@ -3,7 +3,7 @@ import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
-  fmtDur, metersToMiles, journeyFor, parcelPassFor,
+  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 
@@ -40,7 +40,11 @@ function coverRequest(r) {
     `Delivery date/time: ${when}`,
     returnLine,
     `Materials: ${[r.materials, r.weight].filter(Boolean).join(' — ')}`,
-    `Vehicle: ${(d.vehicle || {}).value || ''}`,
+    `Vehicle: ${(() => {
+      const code = (d.vehicle || {}).value || '';
+      const vl = vehicleInfo(code).label;
+      return vl && vl !== code.toLowerCase() ? `${vl} (${code})` : code;
+    })()}`,
     `Offloading: ${off === 'SITE/NONE' ? 'site offloads' : off}`,
   ].filter((x) => x !== null).join('\n');
 }
@@ -172,7 +176,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
     ['Material', r.materials],
     ['Quantity', r.qty && !(r.materials || '').includes(r.qty) ? r.qty : ''],
     ['Weight', r.weight],
-    ['Vehicle', v('vehicle')],
+    ['Vehicle', (() => {
+      const code = v('vehicle');
+      const vl = vehicleInfo(code).label;
+      return vl && vl !== code.toLowerCase() ? `${vl} (${code})` : code;
+    })()],
     ['Collect', [r.collection_date, detVal('time', d.collection_time)].filter(Boolean).join(' · ')],
     [r.collection_date ? 'Delivery time' : 'Time', v('time')],
     ['Return', r.return_leg ? [

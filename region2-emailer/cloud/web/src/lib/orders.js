@@ -107,6 +107,40 @@ export function detVal(k, v) {
   return v.value || '';
 }
 
+// CTMS vehicle codes, decoded. Delali (24/07): "NR_ART_40_CT means artic
+// curtain". The codes compose: ART(IC)=artic, CT=curtain, FL=flat,
+// TAIL=tail-lift, a bare number = trailer length in ft, <n>T = tonnage.
+// Known examples: NR_ART_40_CT (artic curtain 40ft), NR_ARTIC_FL (artic
+// flat), NR_60_ART_FL (artic flat 60ft), NR_7.5T_TAIL (7.5t tail-lift).
+// `need` is the matching capability-sheet term - only set when the pair is
+// certain, because needsFor treats it as a HARD filter.
+export function vehicleInfo(code) {
+  const c = String(code || '').toUpperCase().trim();
+  if (!c) return { label: '', need: null, weight: null };
+  const artic = /ART/.test(c);
+  const curtain = /(^|_)CT(_|$)|CURT/.test(c);
+  const flat = /(^|_)FL(_|$)|FLAT/.test(c);
+  const tail = /TAIL|_TL(_|$)/.test(c);
+  const weight = (c.match(/(\d+(?:\.\d+)?)T(_|$)/) || [])[1] || null;
+  const len = (c.match(/(^|_)(\d{2})(_|$)/) || [])[2] || null;
+  const bits = [];
+  if (weight) bits.push(weight + 't');
+  if (artic) bits.push('artic');
+  if (curtain) bits.push('curtain');
+  else if (flat) bits.push('flat');
+  if (len && !weight) bits.push(len + 'ft');
+  if (tail) bits.push('tail-lift');
+  const label = bits.join(' ');
+  let need = null;
+  if (artic && curtain) need = 'artic curtain';
+  else if (artic && flat) need = (len === '60') ? '60ft flat' : 'artic flat';
+  else if (weight && tail) need = weight + 't with t/l';
+  else if (weight && curtain) need = weight + 't curtain';
+  else if (weight === '7.5') need = '7.5t';
+  else if (/TRANSIT/.test(c)) need = 'transit';
+  return { label, need, weight };
+}
+
 // What a job needs, from its materials + parsed customer details. Drives the
 // haulier capability match. Ported verbatim from the original browser logic.
 export function needsFor(r) {
@@ -114,11 +148,20 @@ export function needsFor(r) {
   const mats = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toLowerCase();
   if (/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
   if (/ballast|bag/.test(mats)) need.push('bags');
+  // a stated vehicle type is a requirement too - an artic-curtain job only
+  // fits hauliers who run artic curtains (need names mirror the caps sheet)
+  const vi = vehicleInfo((d.vehicle || {}).value || '');
   const off = (d.offloading || {}).value || '';
   if (off === 'MOFFETT') need.push('moffett');
-  else if (off === 'HIAB') need.push(((d.artic_access || {}).value === 'no') ? 'rigid hiab' : 'artic hiab');
+  else if (off === 'HIAB') {
+    // a tonnage-coded vehicle (7.5t/18t/26t) is a rigid - its hiab is a
+    // rigid hiab regardless of what the site's artic access is
+    const rigid = !!vi.weight || ((d.artic_access || {}).value === 'no');
+    need.push(rigid ? 'rigid hiab' : 'artic hiab');
+  }
   if (((d.rear_steer || {}).value) === 'yes') need.push('rear steer');
   if (((d.pts || {}).value) === 'yes') need.push('pts');
+  if (vi.need && !need.includes(vi.need)) need.push(vi.need);
   return need;
 }
 
@@ -157,13 +200,18 @@ export function parcelPassFor(r) {
   const d = r.details || {};
   const off = (d.offloading || {}).value || '';
   const veh = ((d.vehicle || {}).value || '').trim();
+  const vi = vehicleInfo(veh);
   const reasons = [];
   if (off === 'HIAB') reasons.push('needs a HIAB');
   if (off === 'MOFFETT') reasons.push('needs a Moffett');
   if ((d.pts || {}).value === 'yes') reasons.push('needs PTS');
   if ((d.rear_steer || {}).value === 'yes') reasons.push('needs a rear steer');
-  if (veh && !/transit|van|7[.,]?5|18\s*t/i.test(veh)) reasons.push('needs a ' + veh);
-  return { ok: reasons.length === 0, reasons, vehicle: veh };
+  // Parcel Pass runs transits, 7.5-tonners and 18-tonners - anything bigger
+  // or more specialist is a no (named readably, not as the raw CTMS code)
+  const smallVehicle = !veh || /transit|van|sprinter/i.test(veh)
+    || vi.weight === '7.5' || vi.weight === '18';
+  if (!smallVehicle) reasons.push('needs a ' + (vi.label || veh));
+  return { ok: reasons.length === 0, reasons, vehicle: vi.label || veh };
 }
 
 export function milesBetween(a, b) {
