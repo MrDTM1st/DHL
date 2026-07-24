@@ -387,8 +387,9 @@ def enrol_untracked(ns, limit=600):
     # Anything left (emailed by hand, no wait-list entry) needs rebuilding from
     # its extract - the same path a chase uses. Slow, so capped per run. If it
     # can't be resolved we don't enrol it: a record whose date/site/contact we
-    # don't know can't be chased properly anyway.
-    rebuild = rebuild[:8]
+    # don't know can't be chased properly anyway. (Cap raised 8 -> 24 on 24/07:
+    # a backlog of by-hand sends outgrew 8/day and orders sat untracked.)
+    rebuild = rebuild[:24]
     if not rebuild:
         return added
     try:
@@ -636,8 +637,14 @@ def check(ns=None):
     all_orders = {o for r in d["records"] for o in r.get("orders", [])}
     booked = bd.find_already_emailed(ns, all_orders, limit=1500) if all_orders else {}
     before = len(d["records"])
-    d["records"] = [r for r in d["records"]
-                    if not (r.get("orders") and any(booked.get(o, {}).get("booked") for o in r["orders"]))]
+    dropped_orders = []
+    keep = []
+    for r in d["records"]:
+        if r.get("orders") and any(booked.get(o, {}).get("booked") for o in r["orders"]):
+            dropped_orders.extend(r["orders"])
+        else:
+            keep.append(r)
+    d["records"] = keep
     # CONSOLIDATION-AWARE: two orders often share one vehicle (same contact +
     # postcode + date) but the booked-in reply sits in ONE order's thread.
     # 6055235+6055299 were booked together (MAN in the 6055235 thread) and
@@ -654,11 +661,21 @@ def check(ns=None):
              bd._pc_norm(r.get("postcode")), str(r.get("delivery_date") or "").strip())
         v = slots.get(k)
         return bool(v and v.get("booked"))
-    d["records"] = [r for r in d["records"] if not _slot_booked(r)]
+    keep = []
+    for r in d["records"]:
+        if _slot_booked(r):
+            dropped_orders.extend(r.get("orders", []))
+        else:
+            keep.append(r)
+    d["records"] = keep
     booked_removed = before - len(d["records"])
     if booked_removed:
-        # each one is a contact who will NOT be chased about a booked order
-        metrics.log("booked_removed", n=booked_removed)
+        # each one is a contact who will NOT be chased about a booked order.
+        # Remember them: the enrol sweeps re-find the same Sent Items every
+        # run and must never resurrect a booked order (the n=3-every-tick
+        # churn of 24/07).
+        tracker.remember_drops(dropped_orders)
+        metrics.log("booked_removed", n=booked_removed, orders=dropped_orders[:20])
     removed = tracker.drop_completed(d)   # completed orders leave the tracker
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "

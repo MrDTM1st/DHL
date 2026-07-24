@@ -37,6 +37,28 @@ def _key(orders, date):
     return "-".join(orders) + "|" + str(date)
 
 
+# Orders removed from the tracker because YOU booked them stay removed. The
+# enrol sweeps (by-hand recovery, collection requests) re-discover the same
+# Sent Items every run, and without this memory they re-added booked orders
+# each check just for the sweep to remove them again - endless churn, and a
+# booked_removed metric that fired every tick.
+DROPS = os.path.join(HERE, "_booked_drops.json")
+
+
+def booked_drops():
+    try:
+        with open(DROPS, encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def remember_drops(orders):
+    s = booked_drops() | {str(o) for o in orders}
+    with open(DROPS, "w", encoding="utf-8") as f:
+        json.dump(sorted(s)[-400:], f)
+
+
 def log(orders, to, name, product_codes, materials, site, postcode, delivery_date, source,
         status="drafted", emailed_at=None, only_if_new=False, kind="delivery", orig_entryid=None,
         worksite="", collection_site="", collection_pc="", collections=None):
@@ -48,6 +70,8 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
     (chased by rebuilding from the extract) or 'collection' (chased in-thread);
     orig_entryid points at the exact Sent item so a collection chase can reply on
     the same thread."""
+    if only_if_new and any(str(o) in booked_drops() for o in orders):
+        return   # booked and dropped - an enrol sweep must never resurrect it
     d = load()
     k = _key(orders, delivery_date)
     for r in d["records"]:
