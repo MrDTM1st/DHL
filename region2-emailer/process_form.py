@@ -125,7 +125,10 @@ UNSET_ACCOUNTS = {"", "please select", "select", "none"}
 def _norm_order(ref):
     """Normalise an order number for the upload: spaces are not allowed, so a
     reference like 'FS-PLC CARDS' becomes 'FS-PLC-CARDS'. Collapses runs of
-    whitespace/hyphens to a single hyphen and trims the ends."""
+    whitespace/hyphens to a single hyphen and trims the ends. Excel hands
+    numeric refs over as floats - 1770679.0 must upload as 1770679."""
+    if isinstance(ref, float) and ref.is_integer():
+        ref = int(ref)
     r = str(ref or "").strip()
     r = re.sub(r"\s+", "-", r)
     r = re.sub(r"-{2,}", "-", r).strip("-")
@@ -147,12 +150,53 @@ def account_for(d):
     return acct if acct.lower() not in UNSET_ACCOUNTS else ADHOC_ACCOUNT
 
 
+def _dateonly_window(a, b):
+    """True for Excel's 'date picked, NO time': a zero-length midnight window
+    (start == end == 00:00 on the same day, or no end at all). A real
+    midnight job always has a non-zero window (e.g. 00:00-02:00)."""
+    import datetime as _dt
+    mid = lambda v: (isinstance(v, _dt.datetime) and v.year >= 1990
+                     and (v.hour, v.minute) == (0, 0))
+    return mid(a) and (b in (None, "") or (mid(b) and b == a))
+
+
 def to_transform_row(d):
     r = dict(d)
     r["collection time"] = fmt_dt(d.get("collection_time"))
     r["collection time end"] = fmt_dt(d.get("collection_time_end"))
     r["delivery time"] = fmt_dt(d.get("delivery_time"))
     r["delivery time end"] = fmt_dt(d.get("delivery_time_end"))
+    # a date-only window (midnight-to-midnight) means the requester never set
+    # a time - blank it so the 09:00-17:00 default below takes over
+    if _dateonly_window(d.get("collection_time"), d.get("collection_time_end")):
+        r["collection time"] = r["collection time end"] = ""
+    if _dateonly_window(d.get("delivery_time"), d.get("delivery_time_end")):
+        r["delivery time"] = r["delivery time end"] = ""
+    # Delali (24/07): "if you ever get one where there is no delivery time,
+    # just put nine to five so when I upload it the system recognizes it."
+    # Only the WINDOW is invented - the date comes from the leg's own date
+    # column (the other end's date as a last resort) and a form with no date
+    # at all still comes out blank; a date is never made up.
+    def _date_of(*keys):
+        for k in keys:
+            ds, _ = _dt_parts(d.get(k))
+            if ds:
+                return ds
+        return ""
+    if not r["collection time"]:
+        base = _date_of("Collection Date", "collection_time", "Delivery Date", "delivery_time")
+        if base:
+            r["collection time"] = base + " 09:00"
+            r["collection time end"] = base + " 17:00"
+    if not r["delivery time"]:
+        base = _date_of("Delivery Date", "delivery_time", "Collection Date", "collection_time")
+        if base:
+            r["delivery time"] = base + " 09:00"
+            r["delivery time end"] = base + " 17:00"
+    # a window with a start but no end closes at 17:00
+    for a, b in (("collection time", "collection time end"), ("delivery time", "delivery time end")):
+        if r[a] and not r[b]:
+            r[b] = r[a][:10] + " 17:00"
     r["Account"] = account_for(d)   # preset account wins; else NRADHOC
     return r
 
@@ -196,13 +240,20 @@ def _covers(qty, prod):
 def _leg_dates(d):
     """(collection_date, coll window, delivery_date, del window) for one row.
     The form has dedicated DATE columns, and collection/delivery can differ
-    (collect Thu, deliver Sat) - never derive one date from the other."""
+    (collect Thu, deliver Sat) - never derive one date from the other. A
+    date-only window (midnight-to-midnight) shows BLANK on the brief - the
+    CSV gets the 9-5 default, but the brief never claims a time the
+    requester didn't give."""
     cdate, _ = _dt_parts(d.get("Collection Date"))
     cd2, ct1 = _dt_parts(d.get("collection_time"))
     _, ct2 = _dt_parts(d.get("collection_time_end"))
     ddate, _ = _dt_parts(d.get("Delivery Date"))
     dd2, dt1 = _dt_parts(d.get("delivery_time"))
     _, dt2 = _dt_parts(d.get("delivery_time_end"))
+    if _dateonly_window(d.get("collection_time"), d.get("collection_time_end")):
+        ct1 = ct2 = ""
+    if _dateonly_window(d.get("delivery_time"), d.get("delivery_time_end")):
+        dt1 = dt2 = ""
     return (cdate or cd2, {"earliest": ct1, "latest": ct2},
             ddate or dd2, {"earliest": dt1, "latest": dt2})
 
@@ -327,6 +378,18 @@ def main():
         if str(d.get("Shipment No") or "").strip():
             d["Shipment No"] = _norm_order(d.get("Shipment No"))
 
+    # a row 4 with the SAME ref as row 3 (no _R suffix) is a form-filling
+    # duplicate, not a return leg - keeping it would book the order TWICE
+    seen_refs, uniq = set(), []
+    for d in rows:
+        refn = str(d.get("Customer Order No"))
+        if refn in seen_refs:
+            print(f"NOTE {refn}: duplicate row on the form (same ref, not a return leg) - ignored.")
+            continue
+        seen_refs.add(refn)
+        uniq.append(d)
+    rows = uniq
+
     # Guard: a truncated order number (e.g. 'FS-' when the Collection Ref was
     # left blank) would be rejected by the upload. Refuse rather than produce a
     # dead file, and say exactly what to fix.
@@ -358,12 +421,20 @@ def main():
               f"-> {d.get('Delivery Point')} | qty {d.get('Product Qty')} | "
               f"acct {account_for(d)}{' (preset)' if preset else ' (defaulted)'}")
         tr = to_transform_row(d)
+        defaulted = []
+        for lbl, rs, re_, k in (("collection", "collection_time", "collection_time_end", "collection time"),
+                                ("delivery", "delivery_time", "delivery_time_end", "delivery time")):
+            had_time = bool(fmt_dt(d.get(rs))) and not _dateonly_window(d.get(rs), d.get(re_))
+            if not had_time and tr[k]:
+                defaulted.append(lbl)
         missing = [lbl for lbl, k in (("collection", "collection time"),
                                       ("delivery", "delivery time")) if not tr[k]]
+        if defaulted:
+            print(f"NOTE {d.get('Customer Order No')}: {' & '.join(defaulted)} time not set on the "
+                  f"form - defaulted to 09:00-17:00 in the CSV (correct in CTMS if wrong).")
         if missing:
-            print(f"!! {d.get('Customer Order No')}: {' & '.join(missing)} date/time NOT SET on "
-                  f"the form (TBC leg?) - those times are BLANK in the CSV; fill them in before "
-                  f"uploading, or book that leg once the date is known.")
+            print(f"!! {d.get('Customer Order No')}: {' & '.join(missing)} has NO DATE on the form "
+                  f"at all - times are BLANK in the CSV; fill in before uploading.")
     print(f"CSV : {out}")
 
 
