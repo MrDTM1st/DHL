@@ -159,9 +159,14 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const pp = parcelPassFor(r);   // Parcel Pass verdict - ad hoc records only
   const parcelH = (hauliers || []).find((h) => h.parcel) || null;
-  // the materials team that owns this product - the alt-contact escalation
+  // the materials team that owns this product - the alt-contact escalation.
+  // When the product doesn't map to a team (blank/odd materials), EVERY team
+  // is offered instead - an unreachable contact still needs escalating.
   const mtype = materialsTypeFor(r);
-  const team = (r.kind !== 'adhoc' && r.to && mtype && matTeams) ? matTeams[mtype] : null;
+  const canEscalate = r.kind !== 'adhoc' && !!r.to;
+  const team = (canEscalate && mtype && matTeams) ? matTeams[mtype] : null;
+  const teamChoices = canEscalate && !team
+    ? Object.values(matTeams || {}).filter((t) => t && t.name && t.email) : [];
 
   // the inline cover-request compose, shared by the haulier rows and the
   // Parcel Pass card - one open compose at a time, keyed by name
@@ -264,6 +269,24 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
                 Can't reach {r.name || 'them'}? Ask {team.name} for another contact
               </button>
               {composeBox({ name: team.name })}
+            </div>
+          )}
+          {teamChoices.length > 0 && (
+            <div style={{ margin: '2px 0 10px' }}>
+              <div className="lbl" style={{ marginBottom: 6 }}>
+                Can't reach {r.name || 'them'}? Ask a materials team for another contact
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {teamChoices.map((t) => (
+                  <button key={t.name} className="btn mini"
+                    onClick={() => (composing === t.name ? setComposing(null) : startAltCompose(t))}>
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+              {teamChoices.map((t) => (
+                <div key={'c' + t.name}>{composeBox({ name: t.name })}</div>
+              ))}
             </div>
           )}
           {run !== null && (

@@ -70,7 +70,17 @@ function ResizeOnBrief({ open }) {
 function FlyToPoint({ id, pos }) {
   const map = useMap();
   useEffect(() => {
-    if (pos) map.flyTo(pos, 11, { duration: 0.9 });
+    if (!pos) return;
+    let live = true;
+    // whenReady + catch: flying before the map has laid out (View brief from
+    // the tracker mounts the map with a selection already set) used to THROW
+    // and blank the whole app for any order with no collection on record.
+    map.whenReady(() => {
+      if (!live) return;
+      try { map.flyTo(pos, 11, { duration: 0.9 }); }
+      catch { try { map.setView(pos, 11); } catch { /* map not ready - skip the glide */ } }
+    });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, !!pos]);
   return null;
@@ -88,7 +98,14 @@ function FlyToRoute({ id, line, from, to }) {
   useEffect(() => {
     const pts = line && line.length ? line : (from && to ? [[from.la, from.lo], [to.la, to.lo]] : null);
     if (!pts) return;
-    map.flyToBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 11, duration: 0.9 });
+    let live = true;
+    map.whenReady(() => {   // same pre-layout guard as FlyToPoint
+      if (!live) return;
+      const b = L.latLngBounds(pts);
+      try { map.flyToBounds(b, { padding: [70, 70], maxZoom: 11, duration: 0.9 }); }
+      catch { try { map.fitBounds(b, { padding: [70, 70], maxZoom: 11 }); } catch { /* not ready */ } }
+    });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
   return null;

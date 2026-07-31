@@ -171,9 +171,11 @@ export function needsFor(r) {
 // Returns 'rails' | 'ballast' | 'sleepers' | null.
 export function materialsTypeFor(r) {
   const d = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toUpperCase();
-  if (d.includes('SLEEPER')) return 'sleepers';
+  // troughing belongs to the sleepers team (it's literally in their name);
+  // S&C call-offs come FROM Steel Materials, so switches/crossings go there
+  if (d.includes('SLEEPER') || d.includes('TROUGH')) return 'sleepers';
   if (d.includes('BALLAST')) return 'ballast';
-  if (d.includes('RAIL')) return 'rails';
+  if (d.includes('RAIL') || d.includes('SWITCH') || d.includes('CROSSING') || d.includes('S&C')) return 'rails';
   return null;
 }
 
