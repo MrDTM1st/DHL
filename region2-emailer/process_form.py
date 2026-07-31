@@ -341,7 +341,11 @@ def main():
         return
     rows = good
     records = nr_csv.transform([to_transform_row(d) for d in rows])
-    name = "NR_heavy_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
+    # the order ref rides in the FILENAME - a Files card full of bare
+    # timestamps gives no clue which CSV belongs to which job
+    ref = re.sub(r"[^A-Za-z0-9]+", "-", str(rows[0].get("Customer Order No") or "")).strip("-")[:24]
+    name = ("NR_heavy_" + (ref + "_" if ref else "")
+            + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv")
     out = nr_csv.write_csv(records, outbox.path(name))
     try:
         save_adhocs(rows, name, form_path=path)

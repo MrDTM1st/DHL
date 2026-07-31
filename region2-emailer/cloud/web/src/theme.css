@@ -418,6 +418,13 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .hcompose-foot{ display:flex; align-items:center; gap:8px; justify-content:flex-end; }
 .hcompose-foot .hint-sig{ margin-right:auto; font-size:10.5px; color:var(--faint); }
 
+/* an ad hoc's upload CSV, one tap from its brief - the Files card is a wall
+   of timestamps, this is the "which CSV was mine" answer */
+.csvrow{ display:flex; align-items:center; gap:8px; margin:2px 0 10px; padding:7px 10px;
+      background:var(--seg); border:1px solid var(--line2); border-radius:9px; }
+.csvrow .csvname{ flex:1; min-width:0; font-size:11px; color:var(--muted);
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
 /* the Parcel Pass verdict on an ad hoc brief: green = book Parcel Pass as
    usual; amber = the job's outside what they run, use the ring-round below */
 .ppcard{ margin:10px 0 12px; padding:10px 12px; border-radius:11px; font-size:12.5px;

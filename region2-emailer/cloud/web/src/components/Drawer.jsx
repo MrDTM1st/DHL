@@ -50,7 +50,7 @@ function coverRequest(r) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
-  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams }) {
+  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onDownloadCsv }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -262,6 +262,15 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               </div>
             ))}
           </dl>
+          {r.kind === 'adhoc' && r.csv && (
+            <div className="csvrow">
+              <span className="lbl" style={{ margin: 0, flex: 'none' }}>Upload CSV</span>
+              <span className="mono csvname" title={r.csv}>{r.csv}</span>
+              {onDownloadCsv && (
+                <button className="btn mini" onClick={() => onDownloadCsv(r.csv)}>Download</button>
+              )}
+            </div>
+          )}
           {team && (
             <div style={{ margin: '2px 0 10px' }}>
               <button className="btn mini"

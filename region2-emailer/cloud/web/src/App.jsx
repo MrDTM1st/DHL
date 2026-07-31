@@ -174,6 +174,15 @@ export default function App() {
     pushToast('Calling ' + h.name, (h.phone || '') + ' — opening in your dialler…');
   }, [pushToast]);
 
+  // download an ad hoc's upload CSV straight from its brief
+  const onDownloadCsv = useCallback(async (name) => {
+    try {
+      await api.downloadFile(name);
+    } catch {
+      pushToast('Download failed', name + " isn't on the cloud right now — it may have aged out of the outbox (48h).", 'warn');
+    }
+  }, [pushToast]);
+
   // booked ad hocs leave the map (they were never in the tracker)
   const onAdhocBooked = useCallback((r) => {
     if (!window.confirm('Mark ' + ordLabel(r) + ' as booked and remove it from the map?')) return;
@@ -252,7 +261,7 @@ export default function App() {
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
             onCall={onCall} onBookedCall={onBookedCall} onAdhocBooked={onAdhocBooked}
-            onCommand={onCommand} matTeams={panel.mat_teams || {}}
+            onCommand={onCommand} matTeams={panel.mat_teams || {}} onDownloadCsv={onDownloadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier} />
         )}
       </div>
