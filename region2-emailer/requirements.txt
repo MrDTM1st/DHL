@@ -1,0 +1,25 @@
+# The engine's ENTIRE third-party surface. Four packages, and that is the lot -
+# taken from the import graph, not from memory. Everything else the toolkit
+# uses is the Python standard library or a local module in this folder.
+#
+#   pip install -r requirements.txt
+#
+# All four ship as ready-built wheels on Windows, so there is no compiler and
+# no admin rights involved. If pip is blocked on the machine, add --user, or
+# --index-url pointing at an approved internal mirror.
+#
+# NOT listed, on purpose:
+#   - the cloud control plane (cloud/server.py) is stdlib only
+#   - the local dashboard, supervisor, watchdog and agent are stdlib only
+#   - the work_pc/ CTMS tools are stdlib only, so they run before any install
+#   - Node is needed only to BUILD the React UI, and the container does that
+#
+# The one thing pip cannot supply is Office: the engine drives Classic Outlook
+# over COM, and process_form.py opens ad hoc forms through Excel so the form's
+# own formulas evaluate. Without Excel it falls back to openpyxl's cached
+# values, which are only as good as the workbook's last save.
+
+pywin32       # win32com.client - Outlook and Excel over COM. Windows only.
+openpyxl      # .xlsx read/write: extracts, haulier list, forms, rail plan
+pdfplumber    # DTS PDFs -> text (dts_convert.py)
+xlrd          # legacy .xls, still turns up in DTS attachments

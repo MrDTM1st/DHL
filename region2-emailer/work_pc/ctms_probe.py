@@ -10,6 +10,7 @@ changes nothing, installs nothing, and never touches credentials.
 
 Then email ctms_probe_report.txt to yourself (subject: CTMS probe).
 """
+import glob
 import os
 import platform
 import shutil
@@ -98,12 +99,31 @@ def collect():
     check("pip", lambda: subprocess.run(
         [sys.executable, "-m", "pip", "--version"], capture_output=True,
         text=True, timeout=60).stdout.strip() or "no output")
-    for mod in ("requests", "playwright", "selenium", "win32com.client", "openpyxl"):
+    say()
+
+    # The engine's ENTIRE third-party surface, taken from the import graph and
+    # not from memory: four pip packages, all pure-wheel on Windows. Worth
+    # reporting separately from the automation extras, because these four are
+    # the answer to "could the whole toolkit run on this machine".
+    say("ENGINE DEPENDENCIES (pip install -r requirements.txt)")
+    for mod, why in (("win32com.client", "pywin32 - drives Outlook"),
+                     ("openpyxl", "reads/writes .xlsx"),
+                     ("pdfplumber", "DTS PDFs"),
+                     ("xlrd", "legacy .xls")):
         try:
             __import__(mod)
-            say(f"  [OK]   module already present: {mod}")
+            say(f"  [OK]   present: {mod:16} ({why})")
         except Exception:
-            say(f"  [--]   module not installed (fine): {mod}")
+            say(f"  [--]   missing: {mod:16} ({why})")
+    say()
+
+    say("AUTOMATION EXTRAS (not needed - the CTMS tools are stdlib only)")
+    for mod in ("requests", "playwright", "selenium"):
+        try:
+            __import__(mod)
+            say(f"  [OK]   present: {mod}")
+        except Exception:
+            say(f"  [--]   missing: {mod} (fine)")
     say()
 
     say("NETWORK (from this machine)")
@@ -115,6 +135,25 @@ def collect():
     proxies = {k: v for k, v in os.environ.items()
                if k.upper() in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")}
     say(f"  [..]   proxy env vars: {proxies or 'none set'}")
+    say()
+
+    # Outlook is the one thing that cannot be pip-installed, and process_form.py
+    # opens the ad hoc form through Excel itself so the form's own formulas
+    # produce the real values (it falls back to openpyxl's cached values, which
+    # are only as good as the last save). So: is Office actually on this box?
+    say("OFFICE (the only non-Python requirement)")
+    for exe, why in (("OUTLOOK.EXE", "required - the engine drives it over COM"),
+                     ("EXCEL.EXE", "wanted - ad hoc forms evaluate properly")):
+        found = None
+        for pat in (r"C:\Program Files\Microsoft Office\root\Office*",
+                    r"C:\Program Files (x86)\Microsoft Office\root\Office*",
+                    r"C:\Program Files\Microsoft Office\Office*",
+                    r"C:\Program Files (x86)\Microsoft Office\Office*"):
+            hits = glob.glob(os.path.join(pat, exe))
+            if hits:
+                found = hits[0]
+                break
+        say(f"  [{'OK' if found else '--'}]   {exe}: {found or 'not found in the usual places'}  ({why})")
     say()
 
     say("BROWSERS (for driving YOUR logged-in session - no passwords, ever)")
