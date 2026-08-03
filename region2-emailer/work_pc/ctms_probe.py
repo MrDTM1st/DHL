@@ -110,10 +110,33 @@ def windows_proxy():
         host = str(server).split(";")[0].split("=")[-1]
         say(f"  ==>    try: pip install --proxy http://{host} -r requirements.txt")
     elif pac:
-        say("  ==>    PAC-only. pip CANNOT read a PAC file - it needs a real")
-        say("         host:port. Open the PAC URL above in the browser and read")
-        say("         the PROXY line out of it, or ask IT for the host:port and")
-        say("         whether there is an internal package mirror to use instead.")
+        # pip cannot read a PAC, but WE can: it is just JavaScript, and the
+        # host:port pip needs is sitting in its PROXY directives. A corporate
+        # agent serves it from 127.0.0.1, so fetching it needs no proxy and no
+        # credentials. Beats telling him to open it in a browser and squint.
+        say("  [..]   pip cannot read a PAC file - reading it here instead")
+        try:
+            with urllib.request.urlopen(pac, timeout=10) as r:
+                body = r.read().decode("utf-8", "replace")
+            found = sorted(set(re.findall(r"PROXY\s+([A-Za-z0-9_.\-]+:\d+)", body)))
+            direct = "DIRECT" in body
+            say(f"  [OK]   PAC fetched ({len(body)} bytes)")
+            if found:
+                for p in found[:8]:
+                    say(f"  [OK]   proxy named in the PAC: {p}")
+                say(f"  ==>    try: pip install --proxy http://{found[0]} -r requirements.txt")
+            elif direct:
+                say("  [--]   the PAC only ever returns DIRECT - so a proxy is NOT")
+                say("         what is stopping pip. Something local is refusing the")
+                say("         connection (agent, firewall). Use the offline wheels.")
+            else:
+                say("  [--]   no PROXY directive found - use the offline wheels.")
+        except Exception as e:
+            say(f"  [NO]   could not fetch the PAC: {type(e).__name__}: {e}")
+            say("         Open the URL in the browser and read the PROXY line out.")
+        say("         If pip then fails on CERTIFICATE VERIFY, that is TLS")
+        say("         inspection: it needs the corporate root CA, via")
+        say("         pip install --cert <corp-ca.pem>")
     else:
         say("  ==>    no proxy configured here. If pip still cannot reach pypi,")
         say("         it is being blocked outright - use the offline wheel route.")
