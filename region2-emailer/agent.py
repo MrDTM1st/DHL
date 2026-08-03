@@ -8,7 +8,7 @@ the control plane - nothing connects in to this PC.
     python agent.py                 # points at the local control plane
     python agent.py https://your-hosted-url   # points at the deployed one
 """
-import sys, time, json, subprocess, os, threading, socket
+import sys, time, json, subprocess, os, threading, socket, re
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -232,6 +232,28 @@ def run(args):
     return (proc.stdout or "") + (proc.stderr or "")
 
 
+def send_verdict(out):
+    """(ok, n) from a send_order.py run - never guessed.
+
+    24/07 taught us that everything after m.Send() is dangerous; 03/08 taught
+    us the opposite half. extract_send, order_send and order_send_edited all
+    reported "done - Batch sent from your DHL account" WITHOUT ever looking at
+    what happened, so an abort inside send_order (most easily "DHL account not
+    found", which gates every send path there is) showed on the dashboard as a
+    successful send, with the ABORT line buried in the output blob. Emails
+    silently stopped going out and the desk said everything was fine.
+
+    So the verdict comes from an explicit SEND_RESULT line, not from prose:
+    wording can change, this can't drift back into a false success. No line at
+    all is a failure too - it means send_order died before it got there.
+    """
+    m = re.findall(r"SEND_RESULT sent=(\d+)", out or "")
+    if not m:
+        return False, 0
+    n = sum(int(x) for x in m)
+    return n > 0, n
+
+
 def tail(out, n=8):
     return "\n".join(out.strip().splitlines()[-n:])
 
@@ -326,7 +348,11 @@ def main():
                     os.remove(os.path.join(HERE, "_pending_batch.json"))
                 except Exception:
                     pass
-                report("done", "Batch sent from your DHL account.", tail(out, 12))
+                ok, n = send_verdict(out)
+                if ok:
+                    report("done", f"Batch sent from your DHL account - {n} email(s).", tail(out, 12))
+                else:
+                    report("error", "NOTHING SENT - the batch did not go out. See below.", tail(out, 12))
             elif action == "learn_detail":
                 # one-click confirm/correct of a parsed delivery detail - the
                 # wording is remembered so it's never guessed again
@@ -429,7 +455,11 @@ def main():
             elif action == "order_send" and order:
                 report("running", f"Sending order {order}…")
                 out = run(["send_order.py", order, "send"])
-                report("done", f"Order {order} sent.", tail(out))
+                ok, n = send_verdict(out)
+                if ok:
+                    report("done", f"Order {order} sent.", tail(out))
+                else:
+                    report("error", f"Order {order} NOT SENT - see below.", tail(out, 10))
             elif action == "order_send_edited":
                 report("running", "Sending (with your edits)…")
                 try:
@@ -443,7 +473,11 @@ def main():
                         emails[0]["message"] = edits.get("message", emails[0]["message"])
                         json.dump(emails, open(pend, "w", encoding="utf-8"), indent=1)
                     out = run(["send_order.py", "sendjson"])
-                    report("done", "Email sent (with your edits).", tail(out))
+                    ok, n = send_verdict(out)
+                    if ok:
+                        report("done", "Email sent (with your edits).", tail(out))
+                    else:
+                        report("error", "NOT SENT - see below.", tail(out, 10))
                 except Exception as e:
                     report("error", f"Edited send failed: {e}")
             elif action == "dts" and order:
@@ -543,7 +577,12 @@ def main():
             elif action == "run_chasers":
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])
-                report("done", "Chasers run.", tail(out, 10))
+                # "0 sent" here is legitimate - nothing may be due. An ABORT is
+                # not, and used to read identically on the dashboard.
+                if "ABORT" in out or "not found in Outlook" in out:
+                    report("error", "Chasers could NOT send - see below.", tail(out, 10))
+                else:
+                    report("done", "Chasers run.", tail(out, 10))
             elif action == "set_auto_chase":
                 on = bool(cmd.get("on"))
                 now = set_auto_chase(on)

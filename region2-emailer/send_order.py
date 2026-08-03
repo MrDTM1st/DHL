@@ -186,6 +186,7 @@ def send_haulier(ns):
     to, cc, _removed = bd.clean_to_cc(e.get("to", ""), e.get("cc", ""))
     if not to:
         print("No recipient - nothing sent.")
+        print("SEND_RESULT sent=0")
         return 0
     import win32com.client
     outlook = win32com.client.Dispatch("Outlook.Application")
@@ -209,6 +210,7 @@ def send_haulier(ns):
     m.HTMLBody = bd.html_from_message(str(e.get("message") or ""))
     if not bind_account(m, acct):
         print("ABORT: could not bind DHL account - NOT sent.")
+        print("SEND_RESULT sent=0")
         return 0
     subject = str(m.Subject)   # the COM item can be invalid after Send
     m.Send()
@@ -224,6 +226,7 @@ def send_haulier(ns):
     except Exception as ex:
         print(f"(post-send bookkeeping hiccup, email IS sent: {ex})")
     print(f"Haulier request sent to {to}: {subject}")
+    print("SEND_RESULT sent=1")
     return 1
 
 
@@ -263,12 +266,60 @@ def send_batch_pending(ns, sel="all"):
     return send_emails(ns, emails)
 
 
+def me_smtp():
+    """The address the toolkit sends AS. team.json's "me" wins over the
+    built-in constant, so a mailbox rename doesn't need a code change."""
+    try:
+        return str(bd.team_config().get("me") or bd.DHL_SMTP).strip().lower()
+    except Exception:
+        return bd.DHL_SMTP
+
+
+def acct_smtp(a):
+    """An Outlook Account's real SMTP address.
+
+    Account.SmtpAddress comes back EMPTY, or as an X.500 DN, on some Exchange
+    configurations - the same quirk home_tick._sender_smtp() already works
+    around for message senders. Without a fallback, dhl_account() returns None
+    on a perfectly healthy profile, and then EVERY send path in the toolkit
+    aborts: site contacts, hauliers, chasers, wait-list releases, the rail
+    plan and handover all gate on this one lookup.
+    """
+    try:
+        s = str(a.SmtpAddress or "").strip()
+    except Exception:
+        s = ""
+    if "@" in s:
+        return s.lower()
+    try:                                    # Exchange DN -> real SMTP
+        p = str(a.CurrentUser.AddressEntry.GetExchangeUser().PrimarySmtpAddress or "").strip()
+        if "@" in p:
+            return p.lower()
+    except Exception:
+        pass
+    try:                                    # some profiles name the account by address
+        d = str(a.DisplayName or "").strip()
+        if "@" in d:
+            return d.lower()
+    except Exception:
+        pass
+    return s.lower()
+
+
 def dhl_account(ns):
+    want = me_smtp()
+    seen = []
     accts = ns.Accounts
     for i in range(1, accts.Count + 1):
         a = accts.Item(i)
-        if str(a.SmtpAddress).strip().lower() == bd.DHL_SMTP:
+        got = acct_smtp(a)
+        seen.append(got or "(no address)")
+        if got == want:
             return a
+    # Say WHICH accounts were found. "DHL account not found" on its own sends
+    # you looking at Outlook with no idea what it was looking for.
+    print(f"!! no Outlook account matches {want!r} - accounts present: "
+          f"{', '.join(seen) or 'none'}")
     return None
 
 
@@ -284,7 +335,7 @@ def bind_account(mail, acct):
         except Exception:
             pass
     try:
-        return str(mail.SendUsingAccount.SmtpAddress).strip().lower() == bd.DHL_SMTP
+        return acct_smtp(mail.SendUsingAccount) == me_smtp()
     except Exception:
         return False
 
@@ -343,6 +394,7 @@ def main():
     if order == "sendjson":
         n = send_pending(ns)
         print(f"Sent {n} email(s) from your DHL account (edited version).")
+        print(f"SEND_RESULT sent={n}")
         return
     if order == "sendhaulier":
         send_haulier(ns)
@@ -351,6 +403,7 @@ def main():
         sel = sys.argv[2] if len(sys.argv) > 2 else "all"
         n = send_batch_pending(ns, sel)
         print(f"Sent {n} email(s) from your DHL account (batch).")
+        print(f"SEND_RESULT sent={n}")
         return
 
     collected, tokens, not_found = resolve_orders(ns, order)
@@ -379,6 +432,7 @@ def main():
         print("Sending...")
         n = send_emails(ns, emails)
         print(f"Sent {n} email(s) from your DHL account.")
+        print(f"SEND_RESULT sent={n}")
     else:
         save_pending(emails)
         print(f"(preview only - {len(emails)} email(s) ready. Nothing sent.)")
