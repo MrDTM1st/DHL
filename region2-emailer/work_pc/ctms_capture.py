@@ -1,10 +1,11 @@
 """
 CTMS screen capture - the walkthrough, without you saving anything by hand.
 
-With the debug browser open (see ctms_attach_test.py) and CTMS logged in,
+With the debug browser open (run start_here.py first) and CTMS logged in,
 run this and just USE CTMS normally: search an order, open it, start a
-booking. Every time you press ENTER here it snapshots the current tab -
-URL, title, full HTML, and the form fields on screen.
+booking. Every time you name a screen here it snapshots the current tab -
+URL, title, full HTML, a PNG screenshot, and every form field on screen
+including the ones inside frames and web components.
 
     python ctms_capture.py
 
@@ -54,10 +55,8 @@ class WS:
         self._buf = buf.split(b"\r\n\r\n", 1)[1]
         self._id = 0
 
-    def send(self, method, params=None):
-        self._id += 1
-        payload = json.dumps({"id": self._id, "method": method, "params": params or {}}).encode()
-        head = b"\x81"
+    def _frame_out(self, opcode, payload):
+        head = bytes([0x80 | opcode])
         n, mask = len(payload), os.urandom(4)
         if n < 126:
             head += bytes([0x80 | n])
@@ -66,6 +65,11 @@ class WS:
         else:
             head += bytes([0x80 | 127]) + struct.pack(">Q", n)
         self.s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    def send(self, method, params=None):
+        self._id += 1
+        self._frame_out(0x1, json.dumps(
+            {"id": self._id, "method": method, "params": params or {}}).encode())
         return self._id
 
     def _read(self, n):
@@ -77,35 +81,115 @@ class WS:
         out, self._buf = self._buf[:n], self._buf[n:]
         return out
 
-    def recv(self):
+    def _frame_in(self):
         b1, b2 = self._read(2)
         ln = b2 & 0x7F
         if ln == 126:
             ln = struct.unpack(">H", self._read(2))[0]
         elif ln == 127:
             ln = struct.unpack(">Q", self._read(8))[0]
-        return json.loads(self._read(ln).decode("utf-8", "replace"))
+        return b1 & 0x80, b1 & 0x0F, self._read(ln)
+
+    def recv(self):
+        # A CDP reply is usually one clean text frame, so the first version of
+        # this just json.loads()'d whatever arrived. Two things break that, and
+        # both break it mid-walkthrough with CTMS half-captured: the browser
+        # sends a PING that has to be ponged or the socket dies, and a big
+        # payload - a full-page screenshot is around a megabyte - arrives
+        # FRAGMENTED across several frames that have to be joined first.
+        buf = b""
+        while True:
+            fin, op, payload = self._frame_in()
+            if op == 0x9:                      # ping -> pong, keep waiting
+                self._frame_out(0xA, payload)
+                continue
+            if op == 0xA:                      # pong, ignore
+                continue
+            if op == 0x8:                      # close
+                raise ConnectionError("the browser closed the debug socket")
+            buf += payload                     # 0x1 text or 0x0 continuation
+            if fin:
+                return json.loads(buf.decode("utf-8", "replace"))
 
     def call(self, method, params=None):
         want = self.send(method, params)
         while True:
             msg = self.recv()
             if msg.get("id") == want:
+                if msg.get("error"):
+                    raise RuntimeError(f"{method}: {msg['error'].get('message')}")
                 return msg.get("result", {})
 
     def evaluate(self, expr):
         r = self.call("Runtime.evaluate", {"expression": expr, "returnByValue": True})
         return (r.get("result") or {}).get("value")
 
+    def close(self):
+        try:
+            self._frame_out(0x8, b"")
+        except Exception:
+            pass
+        try:
+            self.s.close()
+        except Exception:
+            pass
 
+
+# The fields are what selectors get written from, so a field the walk cannot
+# see is a field the booking bot will not be able to fill. Enterprise screens
+# put their real form in an IFRAME and their controls behind a SHADOW ROOT, and
+# a plain document.querySelectorAll walks straight past both and reports a page
+# with almost nothing on it. Descend into everything same-origin, and where a
+# frame is cross-origin say so out loud rather than leaving a silent gap.
 FIELDS_JS = """
-JSON.stringify([...document.querySelectorAll('input,select,textarea,button')].map(e => ({
-  tag: e.tagName, type: e.type || '', id: e.id || '', name: e.name || '',
-  label: (e.labels && e.labels[0] ? e.labels[0].innerText : '').slice(0,60),
-  placeholder: e.placeholder || '', value: (e.value || '').slice(0,60),
-  text: (e.innerText || '').slice(0,40),
-  options: e.tagName === 'SELECT' ? [...e.options].map(o => o.text).slice(0,40) : undefined
-})))
+(() => {
+  const out = [], seen = new Set();
+  const walk = (root, where) => {
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    root.querySelectorAll('input,select,textarea,button').forEach(e => out.push({
+      where,
+      tag: e.tagName, type: e.type || '', id: e.id || '', name: e.name || '',
+      label: (e.labels && e.labels[0] ? e.labels[0].innerText : '').slice(0,60),
+      aria: e.getAttribute('aria-label') || '',
+      placeholder: e.placeholder || '', value: (e.value || '').slice(0,60),
+      text: (e.innerText || '').slice(0,40),
+      required: !!e.required, disabled: !!e.disabled,
+      options: e.tagName === 'SELECT' ? [...e.options].map(o => o.text).slice(0,40) : undefined
+    }));
+    root.querySelectorAll('*').forEach(e => {
+      if (e.shadowRoot) walk(e.shadowRoot, where + ' > shadow:' + e.tagName.toLowerCase());
+    });
+    root.querySelectorAll('iframe,frame').forEach((f, i) => {
+      const tag = where + ' > frame:' + (f.name || f.id || i);
+      let d = null;
+      try { d = f.contentDocument; } catch (err) { d = null; }
+      if (d) walk(d, tag);
+      else out.push({ where: tag, tag: 'FRAME', type: 'cross-origin', id: f.id || '',
+                      name: f.name || '', label: '', placeholder: '',
+                      value: (f.src || '').slice(0,120),
+                      text: 'NOT READABLE FROM HERE (cross-origin frame)' });
+    });
+  };
+  walk(document, 'page');
+  return JSON.stringify(out);
+})()
+"""
+
+# Same reason: outerHTML stops at the frame boundary, so a booking form living
+# in a frame would arrive as a one-line <iframe> tag and nothing else.
+HTML_JS = """
+(() => {
+  const parts = ['<!-- page: ' + location.href + ' -->\\n'
+                 + document.documentElement.outerHTML];
+  document.querySelectorAll('iframe,frame').forEach((f, i) => {
+    let d = null;
+    try { d = f.contentDocument; } catch (err) { d = null; }
+    if (d) parts.push('\\n\\n<!-- frame[' + (f.name || f.id || i) + '] '
+                      + (f.src || '') + ' -->\\n' + d.documentElement.outerHTML);
+  });
+  return parts.join('\\n');
+})()
 """
 
 
@@ -132,11 +216,23 @@ def main():
             break
         page = pick_page()
         ws = WS(page["webSocketDebuggerUrl"])
-        ws.call("Runtime.enable")
-        url = ws.evaluate("location.href")
-        title = ws.evaluate("document.title")
-        html = ws.evaluate("document.documentElement.outerHTML") or ""
-        fields = ws.evaluate(FIELDS_JS) or "[]"
+        try:
+            ws.call("Runtime.enable")
+            url = ws.evaluate("location.href")
+            title = ws.evaluate("document.title")
+            html = ws.evaluate(HTML_JS) or ""
+            fields = json.loads(ws.evaluate(FIELDS_JS) or "[]")
+            shot = None
+            try:
+                # Replaces the Win+Shift+S step: a picture of the screen the
+                # fields came from is what makes the field list readable later.
+                ws.call("Page.enable")
+                shot = ws.call("Page.captureScreenshot", {"format": "png"}).get("data")
+            except Exception as e:
+                print(f"  (no screenshot: {type(e).__name__}: {e})")
+        finally:
+            ws.close()
+
         n += 1
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", label)[:40]
         stamp = datetime.now().strftime("%H%M%S")
@@ -145,9 +241,15 @@ def main():
             f.write(html)
         with open(base + "_fields.json", "w", encoding="utf-8") as f:
             f.write(json.dumps({"url": url, "title": title,
-                                "fields": json.loads(fields)}, indent=1))
+                                "fields": fields}, indent=1))
+        if shot:
+            with open(base + ".png", "wb") as f:
+                f.write(base64.b64decode(shot))
+        frames = sorted({f.get("where") for f in fields} - {"page"})
         print(f"  captured: {title} | {url}")
-        print(f"  -> {os.path.basename(base)}.html + _fields.json")
+        print(f"  {len(fields)} field(s)" + (f" across {len(frames)} frame/shadow root(s)" if frames else ""))
+        print(f"  -> {os.path.basename(base)}.html + _fields.json"
+              + (" + .png" if shot else ""))
     print(f"\nDone. {n} screen(s) in {OUTDIR}")
     print("Zip that folder and email it to yourself, subject: CTMS walkthrough")
 

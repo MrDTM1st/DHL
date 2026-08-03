@@ -4,7 +4,8 @@ The work PC never needs Claude installed. The build loop is:
 
 ```
 home PC (Claude writes code) -> GitHub -> work PC (download & run)
-work PC (reports, screen captures) -> email to yourself -> home Outlook (Claude reads)
+work PC (reports, screen captures) -> paste into the chat, or email to
+                                      yourself -> home Outlook (Claude reads)
 ```
 
 ## Ground rules (non-negotiable)
@@ -24,41 +25,68 @@ work PC (reports, screen captures) -> email to yourself -> home Outlook (Claude 
 3. Updates later = download the ZIP again and replace the folder
    (or `git clone` / `git pull` if git is allowed here — even better).
 
-## Step 2 — run the probe
+## Step 2 — one command
 
 Open Command Prompt in the extracted `region2-emailer\work_pc` folder and run:
 
 ```
-python ctms_probe.py
+python start_here.py
 ```
 
-It checks (using nothing but Python itself — no installs needed):
+That is the whole setup. Using nothing but Python itself — no installs — it:
 
-- Python version and where it is
-- whether `pip` works, and whether pypi.org is reachable (for installing
-  Playwright later)
-- whether the Railway control plane is reachable (the dashboard link-up)
-- whether Edge/Chrome exist and whether a debug session can be attached
-  (how the automation will drive YOUR logged-in browser — no passwords)
-- proxy settings that installs might need
+- checks Python, `pip`, and whether pypi.org / GitHub / the Railway control
+  plane are reachable from this machine
+- finds Edge (or Chrome) and **launches it for you** on a debug port, with its
+  own separate profile. You do **not** need to close the Edge you are working
+  in, and you do not need to paste a long command line
+- proves the automation can attach to that browser — the no-password approach
+- writes `ctms_workpc_report.txt` **and** prints the report between two
+  markers at the end
 
-It writes **`ctms_probe_report.txt`** next to itself.
+**Then:** select everything between `----- BEGIN CTMS WORK-PC REPORT -----`
+and `----- END ... -----`, copy it, and paste it into the chat. (Or email
+`ctms_workpc_report.txt` to yourself, subject **CTMS probe**, if that is
+easier — the home toolkit picks it up from there.)
 
-## Step 3 — send the report home
+A fresh browser window will have opened. **Log into CTMS in that window**, as
+normal, and leave it open.
 
-Email `ctms_probe_report.txt` to yourself (delali.opoku@dhl.com) with the
-subject **CTMS probe**. The home toolkit picks it up from there and the next
-build step gets written against what your work PC can actually do.
+> If the report says the debug port never opened, that is usually group policy
+> switching remote debugging off on a managed build. Send the report anyway —
+> the next step gets rewritten around what this machine does allow.
 
-## Step 4 — the CTMS walkthrough (when ready)
+## Step 3 — the CTMS walkthrough
 
-For each main CTMS screen (login landing, order search, an order open on
-screen, the booking form):
+With CTMS logged in in that window, run:
 
-1. Open the screen in the browser.
-2. `Ctrl+S` → save as **"Webpage, Complete"** into one folder.
-3. Also take a screenshot of each (Win+Shift+S) if easy.
+```
+python ctms_capture.py
+```
 
-Email the lot to yourself, subject **CTMS walkthrough**. The saved HTML is
-what the automation's selectors get written from — the more screens, the
-fewer guesses.
+Then just **use CTMS normally** — search an order, open it, start a booking.
+Give each screen a name when it asks, and it snapshots the current tab:
+
+- the URL and title
+- the full HTML, **including inside frames** (enterprise screens keep the real
+  form in one, and a snapshot that stops at the frame boundary is empty)
+- every input / select / button, with id, name, label, placeholder and
+  **dropdown options** — this is exactly what selectors get written from
+- a **PNG screenshot**, so the field list is readable later
+
+Cover at least: the login landing, order search, an order open on screen, and
+the booking form. Snapshots land in `work_pc\ctms_capture\`.
+
+Zip that folder and email it to yourself, subject **CTMS walkthrough**.
+
+It is **read-only** — it takes pictures, it never clicks, types or submits.
+The capture does include page text and field values, so avoid capturing a
+screen showing anything you would not want in your own mailbox.
+
+---
+
+### The older scripts
+
+`ctms_probe.py` and `ctms_attach_test.py` still work standalone and do the
+probe and the attach test separately — `start_here.py` just does both, plus
+the browser launch, in one go. Nothing was removed.

@@ -21,6 +21,22 @@ from datetime import datetime
 
 LINES = []
 
+# Where the browsers live on a corporate Windows build. start_here.py launches
+# from this same list - two copies of "where is Edge" is exactly how one of them
+# ends up knowing about a path the other doesn't.
+BROWSERS = {
+    "Edge": [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ],
+    "Chrome": [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ],
+}
+
+DEBUG_PORT = 9222
+
 
 def say(line=""):
     print(line)
@@ -47,7 +63,32 @@ def url_status(url, timeout=10):
         return f"reachable (server answered HTTP {e.code})"
 
 
-def main():
+def find_browser(name):
+    """Full path to Edge/Chrome, or None. Shared with start_here.py."""
+    return (next((p for p in BROWSERS[name] if os.path.exists(p)), None)
+            or shutil.which(name.lower())
+            or shutil.which("msedge" if name == "Edge" else "chrome"))
+
+
+def port_open(port=DEBUG_PORT, timeout=2):
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect(("127.0.0.1", port))
+        return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+
+def collect():
+    """Run every check and return the report lines.
+
+    Split out of main() so start_here.py can fold the probe into its own
+    single-command report instead of shelling out and re-parsing the text.
+    """
+    LINES.clear()
     say(f"CTMS work-PC probe - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     say(f"machine: {platform.node()} | {platform.platform()}")
     say()
@@ -77,32 +118,20 @@ def main():
     say()
 
     say("BROWSERS (for driving YOUR logged-in session - no passwords, ever)")
-    candidates = {
-        "Edge": [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        ],
-        "Chrome": [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        ],
-    }
-    for name, paths in candidates.items():
-        found = next((p for p in paths if os.path.exists(p)), None) \
-            or shutil.which(name.lower()) or shutil.which("msedge" if name == "Edge" else "chrome")
+    for name in BROWSERS:
+        found = find_browser(name)
         say(f"  [{'OK' if found else 'NO'}]   {name}: {found or 'not found'}")
     # is a debug session already listening? (harmless port check, no launch)
-    s = socket.socket()
-    s.settimeout(2)
-    try:
-        s.connect(("127.0.0.1", 9222))
-        say("  [OK]   something already listening on the debug port 9222")
-    except Exception:
-        say("  [--]   nothing on debug port 9222 (expected - nothing launched yet)")
-    finally:
-        s.close()
+    if port_open():
+        say(f"  [OK]   something already listening on the debug port {DEBUG_PORT}")
+    else:
+        say(f"  [--]   nothing on debug port {DEBUG_PORT} (expected - nothing launched yet)")
     say()
+    return list(LINES)
 
+
+def main():
+    collect()
     say("Next: email ctms_probe_report.txt to yourself, subject 'CTMS probe'.")
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "ctms_probe_report.txt")
