@@ -207,6 +207,11 @@ STATE_GROUPS = [
             ("_booked_drops.json", "booked drops, so sweeps can't resurrect them"),
             ("_adhocs.json", "ad hoc map records"),
             ("order_index.json", "order -> extract (rebuilds itself, slowly)"),
+            # Missed on the first pass. If a holiday handover is running, this
+            # file IS the handover - lose it and replies stop being forwarded
+            # to the cover person, silently, while you are away.
+            ("_handover.json", "holiday cover: who is covering, until when"),
+            ("_monitor_seen.json", "watermarks so the live monitor doesn't re-fire"),
         ]),
         ("REBUILDABLE - from a source sheet, but not quickly", [
             ("_hauliers.json", "hauliers.py import <contact list.xlsx>"),
@@ -218,6 +223,13 @@ STATE_GROUPS = [
             ("qr.png", "feedback QR in the signature"),
             ("auto_chase.enabled", "switch: chasers send by themselves"),
             ("auto_recover.enabled", "switch: daily untracked-order sweep"),
+            # Not cosmetic: self_update skips any R2 UPDATE email whose id is
+            # already in this ledger. Arrive without it and every update email
+            # still sitting in the inbox gets applied again on the new machine
+            # - including a "team remove" that was since undone.
+            ("_updates_seen.json", "R2 UPDATE emails already applied - stops replays"),
+            ("_settings.json", "settings set by R2 UPDATE emails"),
+            ("_pc_geo.json", "postcode coordinate cache (safe to lose, just slower)"),
         ]),
 ]
 
