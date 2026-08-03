@@ -1293,10 +1293,18 @@ class Handler(BaseHTTPRequestHandler):
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
             name = str(data.get("name", ""))[:150]
-            if name and data.get("data"):
-                with _lock:
-                    _upload = {"name": name, "data": data["data"],
-                               "at": datetime.now().strftime("%H:%M:%S")}
+            if not (name and data.get("data")):
+                # Used to answer 200 {"ok": True} here regardless - so a body
+                # that arrived empty or failed to parse (data = {} in the
+                # handler above) was reported to the browser as a successful
+                # upload. The browser then fired form_upload at the agent,
+                # which pulled an empty slot and said "No form received" - the
+                # failure surfacing two hops from where it happened, blamed on
+                # the form. Say it here, where it is actually known.
+                return self._json(400, {"error": "upload had no name or data"})
+            with _lock:
+                _upload = {"name": name, "data": data["data"],
+                           "at": datetime.now().strftime("%H:%M:%S")}
             self._json(200, {"ok": True})
         elif self.path == "/api/files":
             if not self._is_agent():

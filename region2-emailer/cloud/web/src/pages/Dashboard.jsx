@@ -100,7 +100,8 @@ function RailPlanCard({ onUpload, onCommand }) {
   const run = async (mode) => {
     if (!file) { window.alert('Pick the CTMS rail-plan CSV first.'); return; }
     if (mode === 'send' && !window.confirm('Build and SEND the rail plan to all suppliers, hauliers and your DHL colleagues?')) return;
-    await onUpload(file);
+    // no command unless the file actually landed - see onUpload in App.jsx
+    if (!await onUpload(file)) return;
     onCommand({ action: 'rail_plan', mode, week });
   };
   return (
@@ -279,11 +280,11 @@ export default function Dashboard({
             placeholder="NN reference" kind="red" buttonLabel="Process"
             onSubmit={(v) => { if (v.trim()) onCommand({ action: 'dts', order: v.trim() }); }} />
 
-          <AdhocFormCard busy={uploadBusy} onUpload={async (file) => { await onUpload(file); onCommand({ action: 'form_upload' }); }} />
+          <AdhocFormCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'form_upload' }); }} />
 
           <RailPlanCard onUpload={onUpload} onCommand={onCommand} />
 
-          <UploadCard busy={uploadBusy} onUpload={async (file) => { await onUpload(file); onCommand({ action: 'order_upload' }); }} />
+          <UploadCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'order_upload' }); }} />
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

@@ -140,15 +140,26 @@ export default function App() {
     }
   }, [refreshStatus, onAuthFail]);
 
+  // Returns TRUE only if the file actually reached the control plane.
+  //
+  // It used to swallow the failure and return undefined either way, and every
+  // caller then fired its command regardless - so a failed upload still sent
+  // form_upload/order_upload/rail_plan to the agent. The agent would pull an
+  // empty slot and report "No form received", which reads as "the form is
+  // broken" rather than "the upload never arrived". Worse, if an earlier file
+  // was still sitting unpulled in the slot, the agent would pull THAT and
+  // cheerfully process the wrong form under the new one's name.
   const onUpload = useCallback(async (file) => {
-    if (!file) return;
+    if (!file) return false;
     setUploadBusy(true);
     try {
       const b64 = await api.fileToB64(file);
       await api.upload(file.name, b64);
+      return true;
     } catch (e) {
       if (e instanceof api.AuthError) onAuthFail();
       else pushToast('Upload failed', String(e && e.message || e), 'warn');
+      return false;
     } finally {
       setUploadBusy(false);
     }
