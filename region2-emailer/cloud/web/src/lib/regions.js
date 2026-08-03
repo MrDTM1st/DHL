@@ -11,9 +11,10 @@
 // area is split across two NR regions.
 import { areaOf } from './geo';
 
-// The region this desk actually runs. Anything else showing up on the tracker
-// is worth seeing rather than hiding - it means an order got in that is not
-// ours, or that the region scope needs widening (SS was missing until 2026-08).
+// The region this desk actually runs. Kept for callers that need to ask "is
+// this ours" - but note that out-of-region work here is normal, not an error:
+// pasted orders skip the region filter by design, and ad hocs are never region
+// filtered at all. Do not treat a non-R2 delivery as a fault.
 export const HOME_REGION = 'R2';
 
 export const AREA_REGION = {
