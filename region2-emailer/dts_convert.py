@@ -69,7 +69,8 @@ def parse_pdf(path):
     if m:
         ref = m.group(1)
     raiser_email = ""
-    em = re.search(r"Email Address:\s*([\w.\-+]+@[\w.\-]+)", text)
+    # apostrophes are legal in the local part (O'Callaghan) - see email_of()
+    em = re.search(r"Email Address:\s*([\w.\-+]+(?:['’][\w.\-+]+)*@[\w.\-]+)", text)
     if em:
         raiser_email = em.group(1)
     pallets = 0

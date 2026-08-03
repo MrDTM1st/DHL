@@ -160,8 +160,17 @@ def area(pc):
     m = re.match(r"\s*([A-Za-z]{1,2})", str(pc or ""))
     return m.group(1).upper() if m else "?"
 
+# An apostrophe is a legal local-part character and Network Rail is full of
+# them (Thomas.O'Callaghan@, Darren.O'Reilly@). Without it in the class the
+# match starting at the name FAILS at the apostrophe, the engine slides right,
+# and it succeeds on the tail - turning Thomas.O'Callaghan@networkrail.co.uk
+# into Callaghan@networkrail.co.uk. A wrong address that still looks like an
+# address, so nothing downstream flags it. Allowed only BETWEEN word chars,
+# never leading, so a quoted 'name@site.co.uk' still yields the bare address.
+_EMAIL = r"[\w.\-+]+(?:['’][\w.\-+]+)*@[\w.\-]+"
+
 def email_of(s):
-    m = re.search(r"[\w.\-+]+@[\w.\-]+", str(s or ""))
+    m = re.search(_EMAIL, str(s or ""))
     return m.group(0) if m else None
 
 # leading words that are never a real first name - free-text notes ("This order
