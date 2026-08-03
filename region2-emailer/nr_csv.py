@@ -11,6 +11,8 @@ byte-compatible with what the database exports.
 import os, sys, json, re
 from datetime import datetime, timedelta
 
+import postcodes   # the ONE outward-code implementation - never write a sixth
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = json.load(open(os.path.join(HERE, "postcode_regions.json"), encoding="utf-8"))
 
@@ -22,10 +24,14 @@ def nc(v):
 
 
 def region_of(pc):
-    pc = ("" if pc is None else str(pc)).strip().upper()
-    i = pc.find(" ")
-    district = pc[:i] if i > 0 else "UNKNOWN"
-    hit = REGIONS.get(district)
+    # Was: split on the first space and take what is left of it. That is a
+    # FIFTH copy of "get the outward code", and it fails on the one shape the
+    # extracts genuinely produce - an unspaced postcode. "BS119DE" has no
+    # space, so the district came out "UNKNOWN" and the region followed it,
+    # writing UNKNOWN into the upload CSV for a real Bristol order. Spaced and
+    # stray-space postcodes agree with the old code exactly, so nothing that
+    # worked before changes; only the ones that were failing.
+    hit = REGIONS.get(postcodes.outward(pc))
     return hit["region"] if hit else "UNKNOWN"
 
 

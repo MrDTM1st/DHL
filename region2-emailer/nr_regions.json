@@ -1,0 +1,478 @@
+{
+ "AB": {
+  "town": "Aberdeen",
+  "region": "R1"
+ },
+ "AL": {
+  "town": "St. Albans",
+  "region": "R4"
+ },
+ "B": {
+  "town": "Birmingham",
+  "region": "R2"
+ },
+ "BA": {
+  "town": "Bath",
+  "region": "R3"
+ },
+ "BB": {
+  "town": "Blackburn",
+  "region": "R1"
+ },
+ "BD": {
+  "town": "Bradford",
+  "region": "R1"
+ },
+ "BH": {
+  "town": "Bournemouth",
+  "region": "R3"
+ },
+ "BL": {
+  "town": "Bolton",
+  "region": "R1"
+ },
+ "BN": {
+  "town": "Brighton",
+  "region": "R4"
+ },
+ "BR": {
+  "town": "Bromley",
+  "region": "R4"
+ },
+ "BS": {
+  "town": "Bristol",
+  "region": "R3"
+ },
+ "CA": {
+  "town": "Carlisle",
+  "region": "R1"
+ },
+ "CB": {
+  "town": "Cambridge",
+  "region": "R2"
+ },
+ "CF": {
+  "town": "Cardiff",
+  "region": "R3"
+ },
+ "CH": {
+  "town": "Chester",
+  "region": "R1"
+ },
+ "CM": {
+  "town": "Chelmsford",
+  "region": "R4"
+ },
+ "CO": {
+  "town": "Colchester",
+  "region": "R2"
+ },
+ "CR": {
+  "town": "Croydon",
+  "region": "R4"
+ },
+ "CT": {
+  "town": "Canterbury",
+  "region": "R4"
+ },
+ "CV": {
+  "town": "Coventry",
+  "region": "R2"
+ },
+ "CW": {
+  "town": "Crewe",
+  "region": "R1"
+ },
+ "DA": {
+  "town": "Dartford",
+  "region": "R4"
+ },
+ "DD": {
+  "town": "Dundee",
+  "region": "R1"
+ },
+ "DE": {
+  "town": "Derby",
+  "region": "R2"
+ },
+ "DG": {
+  "town": "Dumfries",
+  "region": "R1"
+ },
+ "DH": {
+  "town": "Durham",
+  "region": "R1"
+ },
+ "DL": {
+  "town": "Darlington",
+  "region": "R1"
+ },
+ "DN": {
+  "town": "Doncaster",
+  "region": "R2"
+ },
+ "DT": {
+  "town": "Dorchester",
+  "region": "R3"
+ },
+ "DY": {
+  "town": "Dudley",
+  "region": "R2"
+ },
+ "E": {
+  "town": "London E",
+  "region": "R4"
+ },
+ "EC": {
+  "town": "London EC",
+  "region": "R4"
+ },
+ "EH": {
+  "town": "Edinburgh",
+  "region": "R1"
+ },
+ "EN": {
+  "town": "Enfield",
+  "region": "R4"
+ },
+ "EX": {
+  "town": "Exeter",
+  "region": "R3"
+ },
+ "FK": {
+  "town": "Falkirk",
+  "region": "R1"
+ },
+ "FY": {
+  "town": "Blackpool",
+  "region": "R1"
+ },
+ "G": {
+  "town": "Glasgow",
+  "region": "R1"
+ },
+ "GL": {
+  "town": "Gloucester",
+  "region": "R3"
+ },
+ "GU": {
+  "town": "Guildford",
+  "region": "R4"
+ },
+ "HA": {
+  "town": "Harrow",
+  "region": "R4"
+ },
+ "HD": {
+  "town": "Huddersfield",
+  "region": "R1"
+ },
+ "HG": {
+  "town": "Harrogate",
+  "region": "R1"
+ },
+ "HP": {
+  "town": "Hemel Hempstead",
+  "region": "R4"
+ },
+ "HR": {
+  "town": "Hereford",
+  "region": "R2"
+ },
+ "HU": {
+  "town": "Hull",
+  "region": "R1"
+ },
+ "HX": {
+  "town": "Halifax",
+  "region": "R1"
+ },
+ "IG": {
+  "town": "Ilford",
+  "region": "R4"
+ },
+ "IP": {
+  "town": "Ipswich",
+  "region": "R2"
+ },
+ "IV": {
+  "town": "Inverness",
+  "region": "R1"
+ },
+ "KA": {
+  "town": "Kilmarnock",
+  "region": "R1"
+ },
+ "KT": {
+  "town": "Kingston Upon Thames",
+  "region": "R4"
+ },
+ "KW": {
+  "town": "Kirkwall",
+  "region": "R1"
+ },
+ "KY": {
+  "town": "Kirkcaldy",
+  "region": "R1"
+ },
+ "L": {
+  "town": "Liverpool",
+  "region": "R1"
+ },
+ "LA": {
+  "town": "Lancaster",
+  "region": "R1"
+ },
+ "LD": {
+  "town": "Llandrindod Wells",
+  "region": "R3"
+ },
+ "LE": {
+  "town": "Leicester",
+  "region": "R2"
+ },
+ "LL": {
+  "town": "Llandudno",
+  "region": "R2"
+ },
+ "LN": {
+  "town": "Lincoln",
+  "region": "R2"
+ },
+ "LS": {
+  "town": "Leeds",
+  "region": "R1"
+ },
+ "LU": {
+  "town": "Luton",
+  "region": "R4"
+ },
+ "M": {
+  "town": "Manchester",
+  "region": "R1"
+ },
+ "ME": {
+  "town": "Medway",
+  "region": "R4"
+ },
+ "MK": {
+  "town": "Milton Keynes",
+  "region": "R4"
+ },
+ "ML": {
+  "town": "Motherwell",
+  "region": "R1"
+ },
+ "N": {
+  "town": "London N",
+  "region": "R4"
+ },
+ "NE": {
+  "town": "Newcastle Upon Tyne",
+  "region": "R1"
+ },
+ "NG": {
+  "town": "Nottingham",
+  "region": "R2"
+ },
+ "NN": {
+  "town": "Northampton",
+  "region": "R2"
+ },
+ "NP": {
+  "town": "Newport",
+  "region": "R3"
+ },
+ "NR": {
+  "town": "Norwich",
+  "region": "R2"
+ },
+ "NW": {
+  "town": "London Nw",
+  "region": "R4"
+ },
+ "OL": {
+  "town": "Oldham",
+  "region": "R1"
+ },
+ "OX": {
+  "town": "Oxford",
+  "region": "R4"
+ },
+ "PA": {
+  "town": "Paisley",
+  "region": "R1"
+ },
+ "PE": {
+  "town": "Peterborough",
+  "region": "R2"
+ },
+ "PH": {
+  "town": "Perth",
+  "region": "R1"
+ },
+ "PL": {
+  "town": "Plymouth",
+  "region": "R3"
+ },
+ "PO": {
+  "town": "Portsmouth",
+  "region": "R4"
+ },
+ "PR": {
+  "town": "Preston",
+  "region": "R1"
+ },
+ "RG": {
+  "town": "Reading",
+  "region": "R4"
+ },
+ "RH": {
+  "town": "Redhill",
+  "region": "R4"
+ },
+ "RM": {
+  "town": "Romford",
+  "region": "R4"
+ },
+ "S": {
+  "town": "Sheffield",
+  "region": "R2"
+ },
+ "SA": {
+  "town": "Swansea",
+  "region": "R3"
+ },
+ "SE": {
+  "town": "London SE",
+  "region": "R4"
+ },
+ "SG": {
+  "town": "Stevenage",
+  "region": "R4"
+ },
+ "SK": {
+  "town": "Stockport",
+  "region": "R1"
+ },
+ "SL": {
+  "town": "Slough",
+  "region": "R4"
+ },
+ "SM": {
+  "town": "Sutton",
+  "region": "R4"
+ },
+ "SN": {
+  "town": "Swindon",
+  "region": "R3"
+ },
+ "SO": {
+  "town": "Southampton",
+  "region": "R4"
+ },
+ "SP": {
+  "town": "Salisbury",
+  "region": "R3"
+ },
+ "SR": {
+  "town": "Sunderland",
+  "region": "R1"
+ },
+ "SS": {
+  "town": "Southend-On-Sea",
+  "region": "R2"
+ },
+ "ST": {
+  "town": "Stoke-On-Trent",
+  "region": "R2"
+ },
+ "SW": {
+  "town": "London SW",
+  "region": "R4"
+ },
+ "SY": {
+  "town": "Shrewsbury",
+  "region": "R2"
+ },
+ "TA": {
+  "town": "Taunton",
+  "region": "R3"
+ },
+ "TD": {
+  "town": "Galashiels",
+  "region": "R1"
+ },
+ "TF": {
+  "town": "Telford",
+  "region": "R2"
+ },
+ "TN": {
+  "town": "Tonbridge",
+  "region": "R4"
+ },
+ "TQ": {
+  "town": "Torquay",
+  "region": "R3"
+ },
+ "TR": {
+  "town": "Truro",
+  "region": "R3"
+ },
+ "TS": {
+  "town": "Cleveland",
+  "region": "R1"
+ },
+ "TW": {
+  "town": "Twickenham",
+  "region": "R4"
+ },
+ "UB": {
+  "town": "Southall",
+  "region": "R4"
+ },
+ "W": {
+  "town": "London W",
+  "region": "R4"
+ },
+ "WA": {
+  "town": "Warrington",
+  "region": "R1"
+ },
+ "WC": {
+  "town": "London WC",
+  "region": "R4"
+ },
+ "WD": {
+  "town": "Watford",
+  "region": "R4"
+ },
+ "WF": {
+  "town": "Wakefield",
+  "region": "R1"
+ },
+ "WN": {
+  "town": "Wigan",
+  "region": "R1"
+ },
+ "WR": {
+  "town": "Worcester",
+  "region": "R2"
+ },
+ "WS": {
+  "town": "Walsall",
+  "region": "R2"
+ },
+ "WV": {
+  "town": "Wolverhampton",
+  "region": "R2"
+ },
+ "YO": {
+  "town": "York",
+  "region": "R1"
+ },
+ "ZE": {
+  "town": "Lerwick",
+  "region": "R1"
+ }
+}
