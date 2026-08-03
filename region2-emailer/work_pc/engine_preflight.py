@@ -79,23 +79,54 @@ def outlook():
         say(f"  [OK]   Outlook answered COM - {len(accounts)} account(s):")
         for a in accounts:
             say(f"         - {mask(getattr(a, 'SmtpAddress', ''))}")
-        # The engine files briefs into "Region 2 > Send Out". Finding it here is
-        # the difference between "Outlook works" and "this is the right mailbox".
-        found = []
+        # The engine files briefs into "Region 2 > Send Out". Finding it is the
+        # difference between "Outlook works" and "this is the right mailbox".
+        #
+        # This has to RECURSE. The first version looked one level down from
+        # each store, but "Region 2" is normally a subfolder of the Inbox, not
+        # a top-level folder of the mailbox - so it reported "no Region 2
+        # folder seen" on a mailbox that has one. A false negative on the one
+        # check that confirms the right mailbox is worse than no check.
+        found, tops, budget = [], [], [400]
+        def walk(folder, path, depth):
+            if depth > 3 or budget[0] <= 0:
+                return
+            try:
+                subs = list(folder.Folders)
+            except Exception:
+                return
+            for f in subs:
+                budget[0] -= 1
+                if budget[0] <= 0:
+                    return
+                try:
+                    name = f.Name.strip()
+                except Exception:
+                    continue
+                here = f"{path}\\{name}"
+                if depth == 1:
+                    tops.append(name)
+                if name.lower() == "region 2":
+                    try:
+                        kids = [s.Name for s in f.Folders]
+                    except Exception:
+                        kids = []
+                    found.append((here, kids))
+                walk(f, here, depth + 1)
         for store in ns.Folders:
             try:
-                for f in store.Folders:
-                    if f.Name.strip().lower() == "region 2":
-                        subs = [s.Name for s in f.Folders]
-                        found.append(f"{store.Name}: Region 2 ({', '.join(subs) or 'no subfolders'})")
+                walk(store, store.Name, 1)
             except Exception:
                 continue
         if found:
-            for f in found:
-                say(f"  [OK]   folder found -> {f}")
+            for path, kids in found:
+                say(f"  [OK]   folder found -> {path}")
+                say(f"         subfolders: {', '.join(kids) or 'none'}")
         else:
-            say("  [--]   no 'Region 2' folder seen - either a different mailbox,")
-            say("         or the folders have not been made on this profile yet")
+            say("  [--]   no 'Region 2' folder within 3 levels. Top-level folders:")
+            say(f"         {', '.join(tops[:20]) or '(none readable)'}")
+            say("         Either a different mailbox, or the folders have not")
+            say("         been made on this profile yet.")
         return True
     except Exception as e:
         say(f"  [NO]   Outlook COM failed: {type(e).__name__}: {e}")
