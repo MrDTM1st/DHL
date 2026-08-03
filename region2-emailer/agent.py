@@ -344,11 +344,16 @@ def main():
                 report("running", "Sending today's extract batch…")
                 out = run(["send_order.py", "sendbatch", sel])
                 push_tracker()
-                try:
-                    os.remove(os.path.join(HERE, "_pending_batch.json"))
-                except Exception:
-                    pass
                 ok, n = send_verdict(out)
+                # Only discard the prepared batch once it has actually gone.
+                # This used to run unconditionally, so a failed send threw away
+                # the very thing you would want to retry - the batch was built,
+                # reviewed, and then deleted for failing to send.
+                if ok:
+                    try:
+                        os.remove(os.path.join(HERE, "_pending_batch.json"))
+                    except Exception:
+                        pass
                 if ok:
                     report("done", f"Batch sent from your DHL account - {n} email(s).", tail(out, 12))
                 else:
@@ -574,6 +579,22 @@ def main():
                                tail(out, 4))
                     else:
                         report("error", f"{label} NOT sent - see below.", tail(out, 6))
+            elif action == "resend_backlog":
+                # emails the tool prepared but never sent. mode 'send' actually
+                # sends; anything else is a dry run that only lists them.
+                mode = str(cmd.get("mode") or "preview")
+                args = ["resend_backlog.py"] + (["send"] if mode == "send" else [])
+                report("running", "Checking the unsent backlog…" if mode != "send"
+                       else "Sending the backlog…")
+                out = run(args)
+                push_tracker()
+                ok, n = send_verdict(out)
+                if mode != "send":
+                    report("done", "Backlog checked - nothing sent (dry run).", tail(out, 20))
+                elif ok:
+                    report("done", f"Backlog sent - {n} email(s).", tail(out, 20))
+                else:
+                    report("error", "Backlog NOT sent - see below.", tail(out, 20))
             elif action == "run_chasers":
                 report("running", "Running chasers (2-business-day follow-ups)…")
                 out = run(["phase2.py", "chase", "send"])
