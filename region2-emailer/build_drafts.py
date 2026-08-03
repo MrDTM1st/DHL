@@ -111,7 +111,35 @@ SIGNATURE_HTML = (
 )
 
 
+def is_past(dd):
+    """True if this delivery date has already gone by. Same rule waitlist_release
+    and resend_backlog use; unparseable dates are never treated as past."""
+    n = waitlist.days_until(dd)
+    return n is not None and n < 0
+
+
 def _bodies(name, items, dd):
+    greet = f"Hi {name}," if name else "Hi,"
+    greet_h = f"Hi {_html.escape(name)}," if name else "Hi,"
+
+    if is_past(dd):
+        # The delivery date has gone. Asking someone to arrange a delivery that
+        # already happened reads as DHL having lost track of it - the same
+        # reason waitlist_release and resend_backlog refuse to send here. Follow
+        # up on the outcome instead, and drop the details questionnaire: every
+        # question in it is about arranging a job that is no longer ahead of us.
+        what_t = ", ".join(f"{q}x {pr}" for q, pr in items)
+        what_h = ", ".join(f"{q}x {_html.escape(pr)}" for q, pr in items)
+        ask = ("Could you confirm this was delivered as expected, and let me know "
+               "if anything is still outstanding?")
+        line_t = f"I'm following up on {what_t}, which was due with you on {dd}. {ask}"
+        line_h = f"I'm following up on {what_h}, which was due with you on {dd}. {ask}"
+        message = f"{greet}\n\n{line_t}"
+        text = f"{message}\n\n\n{SIGNATURE}"
+        html = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
+                f"{greet_h}<br><br>{line_h}<br><br>{SIGNATURE_HTML}</div>")
+        return text, html, message
+
     ask = "Can you please help with the details below and I can get the delivery arranged for you?"
     if len(items) == 1:
         q, pr = items[0]
@@ -123,8 +151,6 @@ def _bodies(name, items, dd):
         line_h = (f"I've got the following available on {dd}:<br><br>"
                   + "".join(f"&nbsp;&nbsp;&nbsp;&nbsp;{q}x {_html.escape(pr)}<br>" for q, pr in items)
                   + f"<br>{ask}")
-    greet = f"Hi {name}," if name else "Hi,"
-    greet_h = f"Hi {_html.escape(name)}," if name else "Hi,"
     message = f"{greet}\n\n{line_t}\n\n{QUESTIONS}"
     text = f"{message}\n\n\n{SIGNATURE}"
     q_html = _html.escape(QUESTIONS).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")

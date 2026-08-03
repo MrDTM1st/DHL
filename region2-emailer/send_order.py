@@ -425,6 +425,13 @@ def main():
     for e in emails:
         print("=" * 70)
         print(f"To:      {e['to']}\nSubject: {e['subject']}   [area {e['area']}]")
+        if bd.is_past(e.get("date")):
+            # Say it on the preview, not just in the wording: the reader needs to
+            # know they are looking at a job that has already been and gone
+            # before they press Send.
+            print(f"!! DELIVERY DATE {e['date']} HAS PASSED - this is a follow-up on"
+                  " the outcome, not a request to arrange the delivery. Check it"
+                  " is still worth sending.")
         print("-" * 70)
         print(e["body"])
         print()
