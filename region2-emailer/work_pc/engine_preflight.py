@@ -173,7 +173,25 @@ def ports():
 
 def state_files():
     section("LOCAL STATE (not in the repo - it has to be copied across)")
-    groups = [
+    groups = STATE_GROUPS
+    have = missing = 0
+    for title, files in groups:
+        say(f"  {title}")
+        for name, why in files:
+            if os.path.exists(os.path.join(ENGINE, name)):
+                have += 1
+                say(f"    [OK]   {name:24} {why}")
+            else:
+                missing += 1
+                say(f"    [--]   {name:24} {why}")
+    say(f"  -> {have} present, {missing} not here yet")
+    return have, missing
+
+
+# The one list of what has to travel between machines. collect_state.py imports
+# it rather than keeping its own copy - two lists is how the backup script ends
+# up not knowing about the file the preflight is checking for.
+STATE_GROUPS = [
         ("IRREPLACEABLE - copy these or lose them", [
             ("_metrics.jsonl", "the evidence log for the business case"),
             ("_details_learned.json", "every parser correction you've confirmed"),
@@ -201,19 +219,7 @@ def state_files():
             ("auto_chase.enabled", "switch: chasers send by themselves"),
             ("auto_recover.enabled", "switch: daily untracked-order sweep"),
         ]),
-    ]
-    have = missing = 0
-    for title, files in groups:
-        say(f"  {title}")
-        for name, why in files:
-            if os.path.exists(os.path.join(ENGINE, name)):
-                have += 1
-                say(f"    [OK]   {name:24} {why}")
-            else:
-                missing += 1
-                say(f"    [--]   {name:24} {why}")
-    say(f"  -> {have} present, {missing} not here yet")
-    return have, missing
+]
 
 
 def power():
