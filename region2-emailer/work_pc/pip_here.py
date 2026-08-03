@@ -83,26 +83,38 @@ def proxy_from_pac():
 
 
 def write_bundle():
-    """The machine's own trusted roots as a PEM bundle pip can use."""
-    try:
-        certs = ssl.enum_certificates("ROOT")     # Windows only
-    except Exception as e:
-        print(f"  no Windows root store available ({type(e).__name__}) - skipping --cert")
-        return None
-    out, n = [], 0
-    for der, enc, trust in certs:
-        if enc != "x509_asn":
-            continue
-        b64 = base64.b64encode(der).decode()
-        body = "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64))
-        out.append(f"-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n")
-        n += 1
-    if not n:
-        print("  root store was empty - skipping --cert")
+    """The machine's own trusted certificates as a PEM bundle pip can use.
+
+    BOTH stores, not just ROOT. An inspection chain is normally leaf ->
+    "<vendor> Intermediate Root CA" -> "<vendor> Root CA", and Windows files
+    the intermediate under "CA", not "ROOT". Export ROOT alone and OpenSSL
+    still cannot build the chain - it fails with exactly the error we are
+    here to fix, "unable to get local issuer certificate", which looks like
+    the bundle did not work at all.
+    """
+    out, counts = [], {}
+    for store in ("ROOT", "CA"):
+        try:
+            certs = ssl.enum_certificates(store)   # Windows only
+        except Exception as e:
+            print(f"  no Windows '{store}' store ({type(e).__name__}) - skipping --cert")
+            return None
+        n = 0
+        for der, enc, trust in certs:
+            if enc != "x509_asn":
+                continue
+            b64 = base64.b64encode(der).decode()
+            body = "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64))
+            out.append(f"-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n")
+            n += 1
+        counts[store] = n
+    if not out:
+        print("  certificate stores were empty - skipping --cert")
         return None
     with open(BUNDLE, "w", encoding="ascii") as f:
         f.write("".join(out))
-    print(f"  CA bundle: {n} roots -> {BUNDLE}")
+    print(f"  CA bundle: {counts.get('ROOT', 0)} root + {counts.get('CA', 0)} "
+          f"intermediate -> {BUNDLE}")
     return BUNDLE
 
 
