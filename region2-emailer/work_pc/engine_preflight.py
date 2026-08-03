@@ -58,7 +58,11 @@ def packages():
             missing.append(mod)
             say(f"  [NO]   {mod:16} {why}")
     if missing:
-        say("         -> pip install -r ..\\requirements.txt")
+        # Absolute, not "..\requirements.txt" - that hint is only right if you
+        # happen to be standing in work_pc\, and the natural place to run this
+        # from is the engine folder, where it sent you looking for a file that
+        # is already in front of you.
+        say(f"         -> pip install -r \"{os.path.join(ENGINE, 'requirements.txt')}\"")
     return not missing
 
 
@@ -231,8 +235,13 @@ def autostart():
     except Exception as e:
         say(f"  [NO]   not writable ({type(e).__name__}) - policy may be locking it;")
         say("         Task Scheduler at logon is the fallback")
-    existing = [f for f in os.listdir(startup) if "desk" in f.lower() or "dhl" in f.lower()]
-    say(f"  [{'OK' if existing else '--'}]   already there: {existing or 'nothing yet'}")
+    # desktop.ini is Windows' own folder-metadata file and is in EVERY Startup
+    # folder. Matching it on "desk" reported "already there: ['desktop.ini']",
+    # which reads as "the watchdog is installed" when nothing is installed.
+    existing = [f for f in os.listdir(startup)
+                if f.lower() != "desktop.ini"
+                and ("desk_watchdog" in f.lower() or "dhl" in f.lower())]
+    say(f"  [{'OK' if existing else '--'}]   watchdog already installed: {existing or 'no - nothing yet'}")
 
 
 def main():
