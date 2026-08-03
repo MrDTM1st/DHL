@@ -168,6 +168,13 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .dmiss{ font-size:11px; color:var(--red); font-weight:600; align-self:center; }
 .ubadge{ font-size:9.5px; font-weight:800; letter-spacing:.04em; color:#fff; background:var(--red); border-radius:5px; padding:2px 6px; }
 .lbadge{ font-size:9.5px; font-weight:800; letter-spacing:.04em; color:var(--red); background:var(--red-t); border:1px solid #f5c9cd; border-radius:5px; padding:2px 6px; }
+/* NR region of the DELIVERY postcode. The home region is quiet - it is the
+   expected answer and shouldn't compete with the address. Anything else is
+   red, because an order outside R2 on this desk is the thing worth noticing. */
+.rgbadge{ font-size:9.5px; font-weight:800; letter-spacing:.04em; margin-left:6px;
+  color:var(--muted); background:var(--seg); border:1px solid var(--line2);
+  border-radius:5px; padding:1px 5px; vertical-align:1px; cursor:help; }
+.rgbadge.away{ color:#fff; background:var(--red); border-color:var(--red); }
 .chases{ font-size:9.5px; font-weight:700; color:var(--yellow-d); background:var(--yellow-t); border-radius:5px; padding:2px 6px; }
 
 /* ---------- notifications ---------- */

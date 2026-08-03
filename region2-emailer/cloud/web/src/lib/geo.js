@@ -36,6 +36,14 @@ export function outcodeOf(p) {
   const s = compactPc(p);
   return s.length > 3 ? s.slice(0, -3) : '';
 }
+// The AREA - the letters only: 'DN3 1ED' -> 'DN'. Lives here with the other two
+// rather than in regions.js, because this is the file that owns "what shape is
+// a postcode" in the browser and a fourth private copy of that is exactly what
+// put pins 41 miles out. Mirrors postcodes.area() on the Python side.
+export function areaOf(p) {
+  const m = /^[A-Z]+/.exec(compactPc(p));
+  return m ? m[0] : '';
+}
 
 // ---- postcode cache (shared with the map + drawer) ----
 let GEO = {};

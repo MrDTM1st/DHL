@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { I } from '../icons.jsx';
+import { RegionBadge } from '../components/RegionBadge.jsx';
 import {
   isUrgent, within3, ordLabel, statusLabel, isAmberStatus, dueText, dateShort,
   stageOf, DFIELDS, detVal,
@@ -137,7 +138,11 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
               {within3(r.delivery_date) && <span className="ubadge">≤3 DAYS</span>}
               {(r.chases || 0) > 0 && <span className="chases">{r.chases} chase{r.chases > 1 ? 's' : ''}</span>}
             </div>
-            <div className="sub">{[r.worksite || r.site, r.postcode].filter(Boolean).join(', ')}{r.to ? ' · ' + r.to : ''}</div>
+            <div className="sub">
+              {[r.worksite || r.site, r.postcode].filter(Boolean).join(', ')}
+              <RegionBadge pc={r.postcode} />
+              {r.to ? ' · ' + r.to : ''}
+            </div>
           </div>
           <div className="tkright">
             <div className={'tkstatus' + (isAmberStatus(r) ? ' amber' : '')}>{statusLabel(r)}</div>

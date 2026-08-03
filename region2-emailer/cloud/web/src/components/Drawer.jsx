@@ -6,6 +6,7 @@ import {
   fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
+import { RegionBadge } from './RegionBadge.jsx';
 
 // Full order brief: the job, the run distance, delivery details, and who to
 // ring — hauliers ranked by fit + distance from the collection end, exactly as
@@ -228,7 +229,12 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           ))}
         </span>
       ) : ''],
-    ['Delivery to', [r.worksite || r.site, r.postcode].filter(Boolean).join(' · ')],
+    ['Delivery to', (
+      <span>
+        {[r.worksite || r.site, r.postcode].filter(Boolean).join(' · ')}
+        <RegionBadge pc={r.postcode} />
+      </span>
+    )],
     ['Site contact', v('contact')],
     ['Assigned to', r.to],
     ['Offloading', v('offloading')],
