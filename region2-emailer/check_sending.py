@@ -22,6 +22,76 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 
+def _sent_folder(ns, match, want):
+    """The Sent Items of the mailbox we actually send AS.
+
+    NOT ns.GetDefaultFolder(5). That returns the sent folder of the profile's
+    DEFAULT store, which need not be the work account - on this profile the
+    default is a personal account idle since 2023. Reading it reported
+    "NOTHING SENT" while the DHL mailbox had sent 120 emails in three weeks,
+    inventing an outage that was never there. A ground-truth check that can be
+    wrong about the ground is worse than no check at all, so resolve the store
+    explicitly: the account's own DeliveryStore, then a match on store name.
+    """
+    if match is not None:
+        try:
+            return match.DeliveryStore.GetDefaultFolder(5)   # 5 = olFolderSentMail
+        except Exception:
+            pass
+    for i in range(1, ns.Stores.Count + 1):
+        try:
+            st = ns.Stores.Item(i)
+            if str(st.DisplayName or "").strip().lower() == str(want).strip().lower():
+                return st.GetDefaultFolder(5)
+        except Exception:
+            continue
+    return None
+
+
+def _report_sent(ns, match, want, days=14, scan=400):
+    """Print what actually left the sending mailbox in the last `days`."""
+    print("\nRECENT SENT ITEMS (ground truth - did anything actually leave?)")
+    try:
+        sent = _sent_folder(ns, match, want)
+        if sent is None:
+            print(f"  (no mailbox found for {want} - cannot tell what was sent)")
+            return
+        print(f"  reading: {sent.Store.DisplayName} \\ {sent.Name}")
+        items = sent.Items
+        items.Sort("[SentOn]", True)
+        cutoff = datetime.now() - timedelta(days=days)
+        total = getattr(items, "Count", 0)
+        n, capped = 0, False
+        for i in range(1, min(total, scan) + 1):
+            it = items.Item(i)
+            try:
+                when = it.SentOn
+                subj = str(it.Subject or "")[:60]
+            except Exception:
+                continue
+            try:
+                if when.replace(tzinfo=None) < cutoff:
+                    break
+            except Exception:
+                pass
+            n += 1
+            if n <= 10:
+                print(f"  {when:%d/%m %H:%M}  {subj}")
+            if i == scan:
+                capped = True          # ran out of scan before running out of days
+        if n > 10:
+            print(f"  ... and {n - 10} more")
+        print(f"  -> {n}{'+' if capped else ''} item(s) sent in the last {days} days"
+              + ("  (hit the scan cap - there may be more)" if capped else ""))
+        if n == 0:
+            print("     ** NOTHING SENT from this mailbox **"
+                  + ("  - consistent with the gate failing" if match is None else
+                     "  - but the gate PASSES, so the cause is upstream:"
+                     " has a batch actually been built and run?"))
+    except Exception as e:
+        print(f"  (could not read Sent Items: {type(e).__name__}: {e})")
+
+
 def main():
     print(f"Send check - {datetime.now():%d/%m/%Y %H:%M}\n")
     try:
@@ -87,32 +157,7 @@ def main():
         print("  yours, exactly as Outlook reports it. No code change needed.")
 
     # Sent Items is the ground truth - the tool's own logs can lie, this can't
-    print("\nRECENT SENT ITEMS (ground truth - did anything actually leave?)")
-    try:
-        sent = ns.GetDefaultFolder(5)          # 5 = olFolderSentMail
-        items = sent.Items
-        items.Sort("[SentOn]", True)
-        cutoff = datetime.now() - timedelta(days=14)
-        n = 0
-        for i in range(1, min(getattr(items, "Count", 0), 40) + 1):
-            it = items.Item(i)
-            try:
-                when = it.SentOn
-                subj = str(it.Subject or "")[:60]
-            except Exception:
-                continue
-            try:
-                if when.replace(tzinfo=None) < cutoff:
-                    break
-            except Exception:
-                pass
-            n += 1
-            if n <= 10:
-                print(f"  {when:%d/%m %H:%M}  {subj}")
-        print(f"  -> {n} item(s) sent in the last 14 days"
-              + ("  ** NOTHING SENT - consistent with the gate failing **" if n == 0 else ""))
-    except Exception as e:
-        print(f"  (could not read Sent Items: {type(e).__name__}: {e})")
+    _report_sent(ns, match, want)
 
     return 0 if match else 2
 
