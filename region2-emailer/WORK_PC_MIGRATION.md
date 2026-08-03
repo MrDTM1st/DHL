@@ -137,7 +137,7 @@ point of no overlap.
 1. **Back up** the irreplaceable files from the home PC to somewhere that is
    neither PC.
 2. On the work PC: get the code (`git clone`, or Download ZIP), then
-   `pip install -r requirements.txt`.
+   `pip install -r requirements.txt`. If pip cannot reach pypi.org, see §4.1.
 3. `python work_pc\engine_preflight.py` — expect green Python/packages/Outlook/
    ports, and read what it says about sleep settings.
 4. Copy the **irreplaceable** and **rebuildable** files across. Re-run the
@@ -165,6 +165,55 @@ point of no overlap.
    `auto_chase.enabled`, no `auto_recover.enabled`. Those are the two jobs that
    act without asking; leave them off until a day has gone cleanly, then turn
    them back on one at a time.
+
+---
+
+### 4.1 When pip cannot reach pypi.org
+
+`WinError 10061 ... actively refused` on a machine whose browser downloads from
+GitHub fine is the signature of a corporate proxy: the browser reads the
+system proxy (and PAC file) automatically, pip reads neither.
+
+`work_pc\ctms_probe.py` reports the registry proxy settings, the PAC URL and
+`netsh winhttp show proxy`, and prints the `pip --proxy` line to try. Three
+outcomes:
+
+1. **A real `host:port`** — `pip install --proxy http://host:port -r requirements.txt`.
+   Make it permanent in `%APPDATA%\pip\pip.ini`.
+2. **A PAC URL only** — pip cannot read a PAC file. Open the PAC URL in the
+   browser, read the `PROXY host:port` out of it, and use that. This is also
+   the moment to ask IT whether there is an **internal package mirror**
+   (Artifactory / Nexus), which is what they will prefer you use anyway:
+   `pip install --index-url https://<mirror>/simple -r requirements.txt`.
+3. **Blocked outright** — use the offline route below.
+
+**The offline route — wheels on a USB stick.** This works regardless of policy,
+and costs nothing extra, because *you have to visit the home PC anyway* for the
+state files in §2 and the cutover in step 6. Do both in one trip.
+
+On the **home PC** (which already has all four packages and working internet):
+
+```
+cd region2-emailer
+pip download -r requirements.txt -d wheels --only-binary :all: ^
+    --platform win_amd64 --python-version 312
+```
+
+Copy the `wheels` folder onto the same USB stick as the state files. Then on the
+**work PC**:
+
+```
+pip install --no-index --find-links=wheels -r requirements.txt
+```
+
+`--platform`/`--python-version` matter: without them pip downloads wheels for
+the machine it is standing on. Both PCs are Windows on Python 3.12 here, so the
+values above are right — but check the work PC's version (the preflight prints
+it) if that ever stops being true.
+
+If USB storage is blocked by policy, the same wheels can travel as an email
+attachment to yourself — they are ordinary files, though `pywin32` is ~10 MB
+and some filters dislike archives.
 
 ---
 

@@ -64,6 +64,62 @@ def url_status(url, timeout=10):
         return f"reachable (server answered HTTP {e.code})"
 
 
+def windows_proxy():
+    """Where the corporate proxy actually is, and what pip needs to be told.
+
+    A managed Windows box almost never sets HTTP(S)_PROXY environment
+    variables - the proxy lives in the registry, and very often only as a PAC
+    URL. The browser reads all of that automatically. pip reads none of it, so
+    it tries to reach pypi.org directly and gets "WinError 10061 ... actively
+    refused" while the same machine is quite happily browsing GitHub. Reporting
+    the env vars alone made that look like "no proxy set", which is the exact
+    wrong conclusion.
+    """
+    if os.name != "nt":
+        say("PROXY (Windows only - skipped)")
+        say()
+        return
+    say("PROXY (why pip can fail on a machine whose browser works fine)")
+    server = pac = None
+    try:
+        import winreg
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as k:
+            def val(name):
+                try:
+                    return winreg.QueryValueEx(k, name)[0]
+                except OSError:
+                    return None
+            enabled, server, pac = val("ProxyEnable"), val("ProxyServer"), val("AutoConfigURL")
+        say(f"  [..]   ProxyEnable: {enabled}")
+        say(f"  [..]   ProxyServer: {server or 'not set'}")
+        say(f"  [..]   AutoConfigURL (PAC): {pac or 'not set'}")
+    except Exception as e:
+        say(f"  [--]   could not read the registry: {type(e).__name__}: {e}")
+    try:
+        out = subprocess.run(["netsh", "winhttp", "show", "proxy"],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+        for line in out.splitlines():
+            if line.strip():
+                say(f"  [..]   netsh: {line.strip()}")
+    except Exception as e:
+        say(f"  [--]   netsh failed: {type(e).__name__}: {e}")
+
+    if server:
+        host = str(server).split(";")[0].split("=")[-1]
+        say(f"  ==>    try: pip install --proxy http://{host} -r requirements.txt")
+    elif pac:
+        say("  ==>    PAC-only. pip CANNOT read a PAC file - it needs a real")
+        say("         host:port. Open the PAC URL above in the browser and read")
+        say("         the PROXY line out of it, or ask IT for the host:port and")
+        say("         whether there is an internal package mirror to use instead.")
+    else:
+        say("  ==>    no proxy configured here. If pip still cannot reach pypi,")
+        say("         it is being blocked outright - use the offline wheel route.")
+    say()
+
+
 def find_browser(name):
     """Full path to Edge/Chrome, or None. Shared with start_here.py."""
     return (next((p for p in BROWSERS[name] if os.path.exists(p)), None)
@@ -136,6 +192,7 @@ def collect():
                if k.upper() in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")}
     say(f"  [..]   proxy env vars: {proxies or 'none set'}")
     say()
+    windows_proxy()
 
     # Outlook is the one thing that cannot be pip-installed, and process_form.py
     # opens the ad hoc form through Excel itself so the form's own formulas
