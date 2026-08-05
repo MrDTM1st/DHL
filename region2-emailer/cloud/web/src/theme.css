@@ -502,3 +502,25 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
   .sitegrid{ grid-template-columns:1fr; }
 }
 @media (max-width:520px){ .metrics{ grid-template-columns:1fr 1fr; } .uploadpanel{ width:calc(100% - 24px); left:12px; right:12px; } }
+
+/* ---- map order search: pin an order you emailed by hand ---- */
+.mapsearch{ position:absolute; top:12px; left:12px; z-index:1000; width:290px;
+  font-family:'Geist',-apple-system,system-ui,sans-serif; }
+.mapsearch form{ display:flex; gap:6px; }
+.mapsearch input{ flex:1; min-width:0; padding:7px 10px; font-size:.82rem;
+  border:1px solid var(--border); border-radius:8px; background:var(--card);
+  color:var(--text); box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.mapsearch button{ padding:7px 12px; font-size:.78rem; font-weight:600; cursor:pointer;
+  border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text);
+  box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.mapsearch button:hover:not(:disabled){ border-color:var(--red); color:var(--red); }
+.mapsearch button:disabled{ opacity:.5; cursor:default; }
+.mapsearch-msg{ margin-top:6px; padding:7px 10px; font-size:.76rem; border-radius:8px;
+  background:var(--card); border:1px solid var(--border); color:var(--faint);
+  box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.mapsearch-res{ margin-top:6px; border-radius:8px; background:var(--card);
+  border:1px solid var(--border); box-shadow:0 1px 6px rgba(0,0,0,.16); overflow:hidden; }
+.mapsearch-res pre{ margin:0; padding:9px 10px; font-size:.7rem; line-height:1.45;
+  white-space:pre-wrap; word-break:break-word; max-height:230px; overflow:auto; color:var(--ink); }
+.mapsearch-btns{ display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--line); }
+.mapsearch-btns button{ flex:1; box-shadow:none; }

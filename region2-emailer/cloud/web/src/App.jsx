@@ -48,7 +48,11 @@ export default function App() {
   // recently processed ad hoc forms - shown on the map beside the tracked
   // orders, but never in the tracker (they're not emailed orders)
   const adhocs = panel.adhocs || [];
-  const mapRecords = records.concat(adhocs);
+  // orders emailed BY HAND and pinned with the map search. The toolkit never
+  // saw those emails, so they are in neither the tracker nor the ad hocs - and
+  // the map was blankest on exactly the days with the most manual work.
+  const pins = panel.pins || [];
+  const mapRecords = records.concat(adhocs).concat(pins);
   const agentOnline = !!(status && status.agent_online);
   const ttlText = status && status.queue_ttl
     ? (status.queue_ttl >= 60 ? Math.floor(status.queue_ttl / 60) + ' minutes' : status.queue_ttl + ' seconds')
@@ -259,7 +263,7 @@ export default function App() {
         )}
         {page === 'map' && (
           <MapPage records={mapRecords} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
-            pickedHaulier={pickedHaulier} />
+            pickedHaulier={pickedHaulier} status={status} />
         )}
         {page === 'tracker' && (
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn}

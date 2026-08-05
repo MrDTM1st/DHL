@@ -172,6 +172,16 @@ def _adhocs():
         return []
 
 
+def _pins():
+    """Orders emailed BY HAND and pinned on the map (order_pin.py). The tool
+    never saw the email, so they are in neither the tracker nor the ad hocs."""
+    try:
+        import pins
+        return pins.load()
+    except Exception:
+        return []
+
+
 def _mat_teams():
     """Materials-team escalation contacts (rails / ballast / sleepers)."""
     try:
@@ -220,6 +230,7 @@ def push_panel():
             "hauliers": _slim_hauliers(),
             "auto_chase": auto_chase_on(),
             "adhocs": _adhocs(),
+            "pins": _pins(),
             "mat_teams": _mat_teams(),
         })
     except Exception:
@@ -457,6 +468,36 @@ def main():
                            out[:4000], email=email)
                 else:
                     report("done", f"No email built for {order}.", tail(out, 10))
+            elif action == "order_find" and order:
+                # Look an order up WITHOUT building or sending anything - for
+                # orders emailed by hand, which the toolkit never saw.
+                report("running", f"Looking up {order}…")
+                out = run(["order_pin.py", order])
+                if "NOT FOUND" in out:
+                    report("error", f"{order} is not in the index or any extract.",
+                           tail(out, 6))
+                else:
+                    report("found", f"Found {order} — pin it on the map?", out[:4000])
+            elif action == "order_pin" and order:
+                track = bool(cmd.get("track"))
+                report("running", f"Pinning {order}…")
+                args = ["order_pin.py", order, "pin"] + (["track"] if track else [])
+                out = run(args)
+                n = 0
+                for line in out.splitlines():
+                    if line.startswith("PIN_RESULT pinned="):
+                        try:
+                            n = int(line.split("=")[1].strip())
+                        except Exception:
+                            n = 0
+                push_panel()          # the pin rides on the panel, like the ad hocs
+                if n:
+                    report("done", f"{order} pinned on the map"
+                           + (" and tracked." if track else " (map only)."), tail(out, 14))
+                    if track:
+                        push_tracker()
+                else:
+                    report("error", f"{order} was NOT pinned - see below.", tail(out, 10))
             elif action == "order_send" and order:
                 report("running", f"Sending order {order}…")
                 out = run(["send_order.py", order, "send"])

@@ -5,6 +5,7 @@ import 'leaflet/dist/leaflet.css';
 import { isUrgent, within3, pcNorm, recommendFor, collectionsOf } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween, DEPOTS } from '../lib/geo.js';
 import OrdersPanel from '../components/OrdersPanel.jsx';
+import { command } from '../api.js';
 
 // UK-centred default view, used before we have anything to fit bounds to.
 const UK_CENTER = [54.3, -2.6];
@@ -111,7 +112,57 @@ function FlyToRoute({ id, line, from, to }) {
   return null;
 }
 
-export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier }) {
+/* Search an order and put it on the map.
+   For orders emailed BY HAND: the toolkit never saw the email, so the order is
+   in neither the tracker nor the ad hocs and the map simply does not know about
+   it. Find looks it up and sends nothing; the pin buttons only appear once
+   something has actually been found. */
+function OrderSearch({ status }) {
+  const [order, setOrder] = useState('');
+  const [asked, setAsked] = useState('');       // what we last searched for
+  const [busy, setBusy] = useState(false);
+  const state = (status && status.state) || '';
+  const found = asked && state === 'found';
+  const missing = asked && state === 'error' && (status.detail || '').indexOf(asked) >= 0;
+
+  async function find(e) {
+    e.preventDefault();
+    const o = order.trim();
+    if (!o) return;
+    setBusy(true); setAsked(o);
+    try { await command({ action: 'order_find', order: o }); } finally { setBusy(false); }
+  }
+  async function pin(track) {
+    setBusy(true);
+    try { await command({ action: 'order_pin', order: asked, track }); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="mapsearch">
+      <form onSubmit={find}>
+        <input value={order} onChange={(e) => setOrder(e.target.value)}
+          placeholder="Order number…" aria-label="Search an order to pin on the map" />
+        <button type="submit" disabled={busy || !order.trim()}>Find</button>
+      </form>
+      {asked && state === 'running' && <div className="mapsearch-msg">Looking up {asked}…</div>}
+      {missing && <div className="mapsearch-msg">{status.detail}</div>}
+      {found && (
+        <div className="mapsearch-res">
+          <pre>{(status.output || '').slice(0, 1200)}</pre>
+          <div className="mapsearch-btns">
+            <button onClick={() => pin(false)} disabled={busy}>Pin only</button>
+            <button onClick={() => pin(true)} disabled={busy}>Pin + track</button>
+          </div>
+        </div>
+      )}
+      {asked && state === 'done' && (status.detail || '').indexOf('pinned') >= 0 && (
+        <div className="mapsearch-msg">{status.detail}</div>
+      )}
+    </div>
+  );
+}
+
+export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier, status }) {
   const [tick, setTick] = useState(0);
   const [layers, setLayers] = useState({ orders: true, depots: true, hauliers: true, routes: true });
   const [routes, setRoutes] = useState({});
@@ -239,6 +290,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
       {pinnedCount === 0 && records.length > 0 && (
         <div className="maploading">Geocoding {records.length} orders…</div>
       )}
+      <OrderSearch status={status} />
       <MapContainer center={UK_CENTER} zoom={UK_ZOOM} zoomControl={false} attributionControl={false} className="leafletmap">
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'

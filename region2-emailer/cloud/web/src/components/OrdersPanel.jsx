@@ -34,6 +34,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId })
                 <div className="o mono">
                   {ordLabel(o)} <span style={{ color: 'var(--faint)', fontWeight: 600 }}>· {o.worksite || o.site || ''}</span>
                   {o.kind === 'adhoc' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>AD HOC</span>}
+                  {o.kind === 'pinned' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>BY HAND</span>}
                 </div>
                 <div className="s">
                   {pp && pp.ok ? <>Rec: <b style={{ color: 'var(--goink, #18804a)' }}>Parcel Pass</b> · small load</>

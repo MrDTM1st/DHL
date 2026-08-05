@@ -122,6 +122,13 @@ def resolve_orders(ns, order_string):
             not_found.append(tok)
             continue
         rows, C = bd.load_rows(path)          # load now: tmp is reused next token
+        # find_extract matches on raw text anywhere in the workbook, so a typo'd
+        # or unknown order can land on a spreadsheet that has no order column at
+        # all. C["order"] is then None and indexing the row with it raises
+        # TypeError - a crash where the honest answer is "not found".
+        if C.get("order") is None:
+            not_found.append(tok)
+            continue
         target = tok.split("-")[0]
         base_rows = [r for r in rows if r[C["order"]] and bd.base_order(r[C["order"]]) == target]
         if not base_rows:

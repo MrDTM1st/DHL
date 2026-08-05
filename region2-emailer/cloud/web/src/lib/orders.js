@@ -65,6 +65,10 @@ export const STAGES = ['Drafted', 'Emailed', 'Reply in', 'Sent off'];
 
 export function statusLabel(r) {
   if (r.kind === 'adhoc') return 'Ad hoc — CSV ready';
+  // pinned by hand: there is no tracker record behind it, so none of the
+  // stage fields below mean anything for one of these
+  if (r.kind === 'pinned') return r.booked ? 'By hand — booked in'
+    : (r.tracked ? 'By hand — tracked' : 'By hand — map only');
   if (r.sendoff_ready) return 'Sent off';
   if (r.ooo_at) return 'Out of office';
   if ((r.chases || 0) > 0) return 'Chased ×' + r.chases;
