@@ -1,8 +1,15 @@
 """
 git pull, without git. For the work PC, where git is not installed.
 
-    python update_from_github.py           DRY RUN - shows what would change
-    python update_from_github.py apply     actually updates the code
+    python update_from_github.py             DRY RUN - shows what would change
+    python update_from_github.py apply       actually updates the code
+
+If Python cannot get out at all - proxy, TLS, policy - fetch the ZIP with the
+BROWSER instead (github.com/MrDTM1st/DHL -> Code -> Download ZIP, or the
+dashboard's update button) and point this at the file. No network needed:
+
+    python update_from_github.py <path-to.zip>         DRY RUN
+    python update_from_github.py <path-to.zip> apply
 
 Downloads the repo's ZIP straight from GitHub and lays it over the working
 copy. It reuses pip_here.py's proxy-from-PAC and Windows-CA-bundle logic,
@@ -119,12 +126,25 @@ def plan(zf, top):
 
 
 def main():
-    apply = "apply" in [a.strip().lower() for a in sys.argv[1:]]
-    print(__doc__ if not apply else "Updating from GitHub.\n")
+    args = [a.strip() for a in sys.argv[1:]]
+    apply = any(a.lower() == "apply" for a in args)
+    local = next((a for a in args if a.lower().endswith(".zip")), None)
+    print(__doc__ if not apply else "Updating.\n")
+
+    if local and not os.path.isfile(local):
+        raise SystemExit(f"  no such file: {local}")
 
     tmp = tempfile.mkdtemp(prefix="dhl-update-")
     try:
-        zpath = fetch(os.path.join(tmp, "main.zip"))
+        # A ZIP the browser already fetched needs no network from Python at all,
+        # which is the whole point on a machine where git, pip and urllib are
+        # all walled off but the browser reaches github.com fine.
+        if local:
+            print(f"Using the ZIP you already have:\n  {local}"
+                  f"  ({os.path.getsize(local):,} bytes)")
+            zpath = local
+        else:
+            zpath = fetch(os.path.join(tmp, "main.zip"))
         with zipfile.ZipFile(zpath) as zf:
             names = zf.namelist()
             top = names[0].split("/")[0] + "/"
