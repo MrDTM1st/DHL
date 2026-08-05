@@ -4,6 +4,13 @@ Move the local state between machines, without forgetting a file.
 On the HOME PC, onto a USB stick:      python collect_state.py backup  D:\\dhl-state
 On the WORK PC, from that same stick:  python collect_state.py restore D:\\dhl-state
 
+Two flags, both about not arriving hot:
+  --no-live      skip the live state (use before cutover, while the home
+                 engine is still writing to it)
+  --no-optional  skip auto_chase.enabled, auto_recover.enabled and cloud.json,
+                 so the new machine's first day is not spent being surprised
+                 by jobs that act without asking
+
 The code is on GitHub; the data never is. That data is the whole difference
 between an engine that runs and an engine that knows anything - contacts, the
 learned corrections, the quote history, the live tracker, and `_metrics.jsonl`,
@@ -28,19 +35,29 @@ from engine_preflight import ENGINE, STATE_GROUPS
 # already stale by the time you cut over.
 LIVE = "LIVE STATE"
 
+# The OPTIONAL group is not all cosmetic: auto_chase.enabled and
+# auto_recover.enabled are the two switches that make the engine act WITHOUT
+# being asked, and cloud.json arms the second agent. Restoring the group
+# wholesale therefore turns those on for the new machine's very first tick -
+# which is the opposite of the "watch one day with both switches off" step in
+# WORK_PC_MIGRATION.md. --no-optional is how you honour that step.
+OPTIONAL = "OPTIONAL"
 
-def files_to_move(include_live=True):
+
+def files_to_move(include_live=True, include_optional=True):
     for title, entries in STATE_GROUPS:
         if not include_live and title.startswith(LIVE):
+            continue
+        if not include_optional and title.startswith(OPTIONAL):
             continue
         for name, why in entries:
             yield title, name, why
 
 
-def backup(dest, include_live):
+def backup(dest, include_live, include_optional=True):
     os.makedirs(dest, exist_ok=True)
     copied = skipped = 0
-    for title, name, why in files_to_move(include_live):
+    for title, name, why in files_to_move(include_live, include_optional):
         src = os.path.join(ENGINE, name)
         if not os.path.exists(src):
             print(f"  [--]  not on this machine: {name}")
@@ -55,14 +72,19 @@ def backup(dest, include_live):
     with open(stamp, "w", encoding="utf-8") as f:
         f.write(f"{datetime.now():%d/%m/%Y %H:%M:%S} from {os.environ.get('COMPUTERNAME', '?')}\n")
         f.write(f"live state included: {include_live}\n")
+        f.write(f"optional group included: {include_optional}\n")
     print(f"\n  {copied} copied, {skipped} not present, into {dest}")
     if not include_live:
         print("  Live state was NOT included (--no-live). Take a second backup")
         print("  with live state once the engine here is stopped.")
+    if not include_optional:
+        print("  OPTIONAL was NOT included (--no-optional): no auto_chase/")
+        print("  auto_recover switches, no cloud.json. Copy those by hand later,")
+        print("  one at a time, once a day has gone cleanly.")
     return copied
 
 
-def restore(src):
+def restore(src, include_optional=True):
     if not os.path.isdir(src):
         print(f"  nothing at {src}")
         return 0
@@ -70,7 +92,7 @@ def restore(src):
     if os.path.exists(stamp):
         print("  backup taken: " + open(stamp, encoding="utf-8").read().strip().replace("\n", " | "))
     plan = []
-    for title, name, why in files_to_move(True):
+    for title, name, why in files_to_move(True, include_optional):
         s = os.path.join(src, name)
         if os.path.exists(s):
             plan.append((name, os.path.exists(os.path.join(ENGINE, name))))
@@ -103,12 +125,14 @@ def restore(src):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--no-live"]
+    flags = ("--no-live", "--no-optional")
+    args = [a for a in sys.argv[1:] if a not in flags]
     include_live = "--no-live" not in sys.argv
+    include_optional = "--no-optional" not in sys.argv
     if len(args) != 2 or args[0] not in ("backup", "restore"):
         print(__doc__)
-        print("  backup  <folder>  [--no-live]   copy state OUT of this machine")
-        print("  restore <folder>                copy state INTO this machine")
+        print("  backup  <folder>  [--no-live] [--no-optional]   copy state OUT")
+        print("  restore <folder>              [--no-optional]   copy state IN")
         return 2
     mode, folder = args
     folder = os.path.abspath(folder)
@@ -117,9 +141,9 @@ def main():
         return 2
     print(f"\n{mode} | engine: {ENGINE}\n")
     if mode == "backup":
-        backup(folder, include_live)
+        backup(folder, include_live, include_optional)
     else:
-        restore(folder)
+        restore(folder, include_optional)
     return 0
 
 

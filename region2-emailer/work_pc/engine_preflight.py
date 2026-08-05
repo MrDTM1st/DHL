@@ -66,6 +66,54 @@ def packages():
     return not missing
 
 
+def store_name(ns):
+    """Does a top-level store DISPLAY NAME equal the sending address exactly?
+
+    This is the migration's quietest failure. build_drafts.dhl_store(),
+    phase2._dhl(), order_index and tracker all locate the mailbox with
+
+        if f.Name.lower() == DHL_SMTP:      # the store's display name
+
+    - the name Outlook shows in the folder pane, which is a property of how the
+    mailbox was added to THIS profile, not of the account. The home profile
+    happens to display it as the address. A managed corporate profile very
+    often displays it as "Opoku, Delali" or "DHL Supply Chain" instead, and
+    then dhl_store() returns None and every caller degrades in silence: no
+    extracts found, no replies matched, nothing filed, no error raised. The
+    engine looks perfectly alive and knows nothing.
+
+    config/team.json's "me" does NOT fix this - it feeds the sending identity
+    on a different code path.
+    """
+    say("")
+    want = "delali.opoku@dhl.com"
+    try:                                     # team.json wins if it is here yet
+        cfg = os.path.join(ENGINE, "config", "team.json")
+        if os.path.exists(cfg):
+            import json
+            want = str(json.load(open(cfg, encoding="utf-8")).get("me") or want)
+    except Exception:
+        pass
+    want = want.strip().lower()
+    names = []
+    for store in ns.Folders:
+        try:
+            names.append(str(store.Name).strip())
+        except Exception:
+            continue
+    if any(n.lower() == want for n in names):
+        say(f"  [OK]   a store is displayed as {mask(want)} - dhl_store() will find it")
+        return True
+    say(f"  [NO]   NO store is displayed as {mask(want)}.")
+    say(f"         Stores are displayed as: {', '.join(names) or '(none readable)'}")
+    say("         dhl_store() matches the DISPLAY NAME against that address, so")
+    say("         it will return None and the engine will run and find nothing,")
+    say("         silently. Fix before starting the supervisor: rename the")
+    say("         account in Outlook (File > Account Settings > double-click the")
+    say("         account > change the display name) to exactly that address.")
+    return False
+
+
 def outlook():
     section("OUTLOOK (required - there is no substitute for this one)")
     try:
@@ -127,6 +175,7 @@ def outlook():
             say(f"         {', '.join(tops[:20]) or '(none readable)'}")
             say("         Either a different mailbox, or the folders have not")
             say("         been made on this profile yet.")
+        store_name(ns)
         return True
     except Exception as e:
         say(f"  [NO]   Outlook COM failed: {type(e).__name__}: {e}")
@@ -200,6 +249,11 @@ STATE_GROUPS = [
             ("config/team.json", "roster + never-email-yourself"),
             ("synergy_template.xlsx", "the Supplier Details contact book"),
             ("_rail_recipients.json", "rail-plan distribution chains"),
+            # Gitignored by *.xlsx like everything else, so GitHub does not carry
+            # it - and dts_fill_form.py:17 hardcodes it and copies it for EVERY
+            # Haulage Request Form. Without it that path dies with FileNotFound
+            # on a machine that otherwise looks perfectly set up.
+            ("haulage_request_template.xlsx", "the blank Haulage Request Form"),
         ]),
         ("LIVE STATE - copy at cutover, not before", [
             ("tracker.json", "open orders being chased"),
@@ -212,6 +266,17 @@ STATE_GROUPS = [
             # to the cover person, silently, while you are away.
             ("_handover.json", "holiday cover: who is covering, until when"),
             ("_monitor_seen.json", "watermarks so the live monitor doesn't re-fire"),
+            # The three "composed, awaiting your confirm" files. Each one is an
+            # email a human already reviewed and has not yet pressed send on.
+            # Leave them behind and they vanish with no trace anywhere - the
+            # tracker never saw them, because they were never sent.
+            ("_pending_email.json", "a composed site email awaiting confirm"),
+            ("_pending_haulier.json", "a composed haulier request awaiting confirm"),
+            ("_pending_batch.json", "a built extract batch awaiting confirm"),
+            # phase2.py:293 rate-limits the recovery sweep on this stamp and the
+            # read is wrapped in except:pass, so the guard FAILS OPEN: arrive
+            # without it and the sweep runs on the new machine's first tick.
+            ("_last_recover.txt", "when the recovery sweep last ran"),
         ]),
         ("REBUILDABLE - from a source sheet, but not quickly", [
             ("_hauliers.json", "hauliers.py import <contact list.xlsx>"),

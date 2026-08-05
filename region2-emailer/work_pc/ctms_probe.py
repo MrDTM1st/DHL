@@ -13,6 +13,10 @@ Then email ctms_probe_report.txt to yourself (subject: CTMS probe).
 import glob
 import os
 import platform
+import re                      # used by the PAC parse below - without it that
+                               # branch raised NameError inside an except that
+                               # reported it as "could not fetch the PAC", which
+                               # reads as a network fault and hides the real one
 import shutil
 import socket
 import subprocess
