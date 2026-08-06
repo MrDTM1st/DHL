@@ -6,7 +6,7 @@ cannot pick up NIGHT on one route and not on another.
 
     NIGHT          delivery between 21:00 and 04:00
     SATURDAY       the driver's day is a Saturday
-    SUN/BANK_HOL   the driver's day is a Sunday or a bank holiday
+    SUN_BANK_HOL   the driver's day is a Sunday or a bank holiday
 
 The day service is the day the DRIVER FINISHES, not always the delivery date.
 A job delivering late at night is still on the road after midnight, so from
@@ -22,9 +22,14 @@ The two thresholds are deliberately different, and it is not a typo:
 So a 22:00 delivery on a Friday is a night job that still counts as Friday;
 23:00 on the same Friday is a night job that counts as Saturday.
 
-Sunday and bank holidays share one service - SUN/BANK_HOL - because they are
+Sunday and bank holidays share one service - SUN_BANK_HOL - because they are
 charged the same. Any bank holiday counts, not only the Monday ones: Good
 Friday and Boxing Day are worked no differently.
+
+Keep the labels free of punctuation. CTMS silently refused the one order
+carrying "SUN/BANK_HOL" while NIGHT and SATURDAY went through in the same
+upload, and a refused order looks like nothing at all until someone notices it
+missing days later. If a new service is ever added, name it in the same style.
 """
 from datetime import date, datetime, time, timedelta
 
@@ -34,7 +39,11 @@ ROLL_FROM = time(23, 0)       # ...but the DAY only rolls forward from here
 
 NIGHT = "NIGHT"
 SATURDAY = "SATURDAY"
-SUN_BANK_HOL = "SUN/BANK_HOL"
+# Underscore, NOT a slash. CTMS rejected the order carrying "SUN/BANK_HOL"
+# while the same week's NIGHT and SATURDAY orders went through untouched - the
+# two labels with no punctuation in them. It is the only label that appeared
+# solely on the failed order, so the name is what it choked on, not the rule.
+SUN_BANK_HOL = "SUN_BANK_HOL"
 
 # England & Wales bank holidays. phase2.py imports this rather than keeping a
 # second copy - one list, so the chasers and the services can never disagree
