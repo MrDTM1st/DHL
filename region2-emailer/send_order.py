@@ -392,19 +392,39 @@ def send_emails(ns, emails):
             m.CC = cc
         m.Subject = e["subject"]
         bd._attach_qr(m)
+        # Optional attachments, by absolute path. send_haulier could already do
+        # this; the reviewed-email path could not, so anything that needed a
+        # sheet attaching had to go out by hand.
+        for p in (e.get("attach") or []):
+            if p and os.path.exists(p):
+                m.Attachments.Add(p)
+                print(f"   attached: {os.path.basename(p)}")
+            else:
+                print(f"   !! attachment missing, sending WITHOUT it: {p}")
         m.HTMLBody = e.get("html") or e["body"]
         if not bind_account(m, acct):
             print(f"   ! could not bind DHL account - NOT sending: {e['subject']}")
             continue
         m.Send()
-        tracker.log(orders=e.get("orders", []), to=to, name=e.get("name", ""),
-                    product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
-                    site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
-                    source=e.get("source", ""), status="sent",
-                    worksite=e.get("worksite", ""),
-                    collection_site=e.get("collection_site", ""),
-                    collection_pc=e.get("collection_pc", ""),
-                    collections=e.get("collections"))
+        # no_track: this is not an email to a DELIVERY contact. The tracker
+        # chases delivery contacts for missing details, so enrolling a haulier
+        # cover request here would chase the haulier as if they were the
+        # customer - the same reason send_haulier is not tracker-logged.
+        if not e.get("no_track"):
+            tracker.log(orders=e.get("orders", []), to=to, name=e.get("name", ""),
+                        product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                        site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
+                        source=e.get("source", ""), status="sent",
+                        worksite=e.get("worksite", ""),
+                        collection_site=e.get("collection_site", ""),
+                        collection_pc=e.get("collection_pc", ""),
+                        collections=e.get("collections"))
+        else:
+            try:    # but DO remember we asked, so the brief shows it
+                import haulier_asks
+                haulier_asks.record(e.get("orders", []), e.get("haulier") or to, to)
+            except Exception:
+                pass
         # a chase passes _metric="chase_sent" so it isn't counted as fresh outreach
         metrics.log(e.get("_metric") or "email_sent", orders=e.get("orders", []), to=to)
         sent += 1

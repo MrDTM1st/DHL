@@ -221,6 +221,60 @@ def fill_sheet(rows, week, out_path):
     return out_path
 
 
+# Parcel Pass carry the media sets - small, single-item runs. The address is
+# the one already used for them in Sent Items, not the personal ones.
+PARCEL_PASS = "NR@Passlogistics.co.uk"
+
+
+def cover_request(orders, week, sheet_path):
+    """The 'can you cover this week?' email, staged for Review & send.
+
+    The postcodes listed are the COLLECTIONS. Every media set delivers to the
+    same place - EMCC Derby - so a list of delivery postcodes is one line and
+    tells a courier nothing. Where the driver actually travels is the pickups,
+    and that is what decides whether they can cover.
+    """
+    seen = {}
+    for o in orders:
+        pc = str(o.get("Postcode") or "").strip()
+        if not pc:
+            continue
+        seen.setdefault(pc, {"n": 0, "site": str(o.get("Site Name - Collection") or "")})
+        seen[pc]["n"] += 1
+    dests = sorted({str(o.get("D Postcode") or "").strip()
+                    for o in orders if str(o.get("D Postcode") or "").strip()})
+    dates = sorted({o["Collection Date"] for o in orders if o.get("Collection Date")})
+    when = (f"{dates[0]:%d/%m} to {dates[-1]:%d/%m}" if len(dates) > 1
+            else (f"{dates[0]:%d/%m}" if dates else ""))
+
+    lines = ["Hi,", "",
+             f"Please see attached the media sets for week {week}"
+             + (f", {when}" if when else "") + ".",
+             "",
+             f"Would you be able to cover? There {'are' if len(orders) != 1 else 'is'} "
+             f"{len(orders)} run{'s' if len(orders) != 1 else ''}, collecting from the "
+             f"postcodes below and delivering to "
+             f"{', '.join(dests) if dests else 'the address on the sheet'}.",
+             ""]
+    for pc, d in sorted(seen.items()):
+        lines.append(f"    {pc:10} {d['site']}" + (f"  (x{d['n']})" if d["n"] > 1 else ""))
+    lines += ["", "Dates and times for each run are on the attached sheet.",
+              "", "Let me know if you can take them and I will get them raised."]
+
+    return {
+        "to": PARCEL_PASS, "cc": "", "name": "",
+        "subject": f"Media sets week {week} - can you cover?",
+        "message": "\n".join(lines),
+        "date": f"{dates[0]:%d/%m/%Y}" if dates else "",
+        "area": "", "orders": [o["Customer Order No"] for o in orders if o.get("Customer Order No")],
+        "product_codes": [PRODUCT_CODE], "materials": f"{len(orders)}x media sets",
+        "site": "", "postcode": "", "source": f"media sets week {week}",
+        "attach": [sheet_path] if sheet_path else [],
+        # a haulier cover request, NOT a delivery contact - see send_emails
+        "no_track": True, "haulier": "PARCELPASS", "_metric": "haulier_request",
+    }
+
+
 def main():
     args = [a for a in sys.argv[1:]]
     if not args or not os.path.exists(args[0]):
@@ -291,6 +345,20 @@ def main():
     if sheet_out:
         print(f"  SHEET: {sheet_out}")
     print(f"  CSV  : {csv_out}")
+
+    # A clean week can go straight to the courier. A week with backwards dates
+    # cannot - the date query is already staged in _pending_email.json and must
+    # not be overwritten by a cover request for runs nobody has confirmed yet.
+    if not backwards:
+        import json as _json
+        email = cover_request(orders, week or "?", sheet_out)
+        with open(os.path.join(HERE, "_pending_email.json"), "w", encoding="utf-8") as f:
+            _json.dump([email], f, indent=1)
+        pcs = len({str(o.get("Postcode") or "").strip() for o in orders
+                   if str(o.get("Postcode") or "").strip()})
+        print(f"\n  COVER: email to {PARCEL_PASS} ready for Review & send "
+              f"- {len(orders)} run(s) from {pcs} collection postcode(s), sheet attached.")
+    print(f"  COVER_READY {0 if backwards else 1}")
     try:
         import metrics
         metrics.log("media_sets_built", orders=[o["Customer Order No"] for o in orders],

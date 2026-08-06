@@ -533,6 +533,14 @@ def main():
                                f"check the dates before uploading. The CSV is in Files, "
                                f"but do not upload it until this is answered.",
                                tail(out, 24), email=email)
+                    elif "COVER_READY 1" in out:
+                        # Clean week: the cover request to Parcel Pass is staged.
+                        # Same Review & send panel - read it, then send it.
+                        report("preview_ready",
+                               f"Media sets processed — {n} order(s), CSV is in Files. "
+                               f"A cover request to Parcel Pass is ready below, with the "
+                               f"sheet attached.",
+                               tail(out, 24), email=_staged_email())
                     else:
                         # the run's own warnings (UNKNOWN regions, over-capacity)
                         # are in the tail - show enough of it
