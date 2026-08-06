@@ -50,23 +50,102 @@ function coverRequest(r) {
   ].filter((x) => x !== null).join('\n');
 }
 
+/* Edits to a cover request are remembered PER ORDER.
+   Chasing haulage means sending the same job to several hauliers in a row. Any
+   wording you fix for the first one - a gate code, a corrected time, a note
+   about access - was thrown away the moment you opened the next haulier,
+   because startCompose rebuilt the body from coverRequest(r) every time. So the
+   same correction got retyped for every haulier on the list.
+
+   Kept per order id, not globally: the body carries this job's sites, dates and
+   materials, so carrying it to a different order would send the wrong details.
+   In localStorage rather than component state so it survives closing the brief
+   and coming back. Dropped after 14 days so it cannot grow without limit or
+   resurrect wording for a job long finished. `to` is never remembered - that is
+   the one field that must change per haulier. */
+const COMPOSE_STORE = 'r2compose';
+const COMPOSE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+function loadEdits() {
+  try {
+    const all = JSON.parse(localStorage.getItem(COMPOSE_STORE) || '{}');
+    const cut = Date.now() - COMPOSE_TTL_MS;
+    let pruned = false;
+    Object.keys(all).forEach((k) => {
+      if (!all[k] || !(all[k].at > cut)) { delete all[k]; pruned = true; }
+    });
+    if (pruned) localStorage.setItem(COMPOSE_STORE, JSON.stringify(all));
+    return all;
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveEdit(id, patch) {
+  if (!id) return;
+  try {
+    const all = loadEdits();
+    all[id] = { ...(all[id] || {}), ...patch, at: Date.now() };
+    localStorage.setItem(COMPOSE_STORE, JSON.stringify(all));
+  } catch (e) {
+    /* private mode or quota - not worth breaking the compose box over */
+  }
+}
+
+function clearEdit(id) {
+  try {
+    const all = loadEdits();
+    delete all[id];
+    localStorage.setItem(COMPOSE_STORE, JSON.stringify(all));
+  } catch (e) { /* nothing to do */ }
+}
+
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
   onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onDownloadCsv, asks }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
   const [draft, setDraft] = useState({ to: '', cc: '', subject: '', message: '', what: '' });
+  const [kind, setKind] = useState('');        // 'haulier' | 'team' - only haulier edits are kept
+  const [remembered, setRemembered] = useState(false);
+
+  const defaultSubject = () => `${(r.orders || []).join(' / ')} Delivery`;
+
   const startCompose = (h) => {
+    const saved = loadEdits()[r.id] || {};
     setComposing(h.name);
+    setKind('haulier');
+    setRemembered(!!saved.message);
     setDraft({
-      to: h.email || '', cc: '',
-      subject: `${(r.orders || []).join(' / ')} Delivery`,
-      message: coverRequest(r), what: '',
+      to: h.email || '',                       // never remembered: this is the haulier
+      cc: saved.cc || '',
+      subject: saved.subject || defaultSubject(),
+      message: saved.message || coverRequest(r),
+      what: '',
     });
+  };
+
+  // One handler for every field, so remembering cannot be forgotten on a field
+  // someone adds later. `to` is excluded on purpose.
+  const edit = (field) => (e) => {
+    const v = e.target.value;
+    setDraft((d2) => ({ ...d2, [field]: v }));
+    if (kind === 'haulier' && field !== 'to') {
+      saveEdit(r.id, { [field]: v });
+      setRemembered(true);
+    }
+  };
+
+  const resetWording = () => {
+    clearEdit(r.id);
+    setRemembered(false);
+    setDraft((d2) => ({ ...d2, cc: '', subject: defaultSubject(), message: coverRequest(r) }));
   };
   // "I can't reach the contact - ask the materials team for someone else"
   const startAltCompose = (team) => {
     setComposing(team.name);
+    setKind('team');            // a materials escalation is a different email - not remembered
+    setRemembered(false);
     const who = r.name ? `${r.name} (${r.to})` : r.to;
     setDraft({
       to: team.email || '', cc: r.to || '',
@@ -184,21 +263,23 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const composeBox = (h) => composing === h.name && (
     <div className="hcompose" onClick={(e) => e.stopPropagation()}>
       <label>To
-        <input value={draft.to}
-          onChange={(e) => setDraft((d2) => ({ ...d2, to: e.target.value }))} />
+        <input value={draft.to} onChange={edit('to')} />
       </label>
       <label>Cc
-        <input value={draft.cc}
-          onChange={(e) => setDraft((d2) => ({ ...d2, cc: e.target.value }))} />
+        <input value={draft.cc} onChange={edit('cc')} />
       </label>
       <label>Subject
-        <input value={draft.subject}
-          onChange={(e) => setDraft((d2) => ({ ...d2, subject: e.target.value }))} />
+        <input value={draft.subject} onChange={edit('subject')} />
       </label>
       <label>Message
-        <textarea rows={11} value={draft.message}
-          onChange={(e) => setDraft((d2) => ({ ...d2, message: e.target.value }))} />
+        <textarea rows={11} value={draft.message} onChange={edit('message')} />
       </label>
+      {remembered && kind === 'haulier' && (
+        <div className="hcompose-kept">
+          Using your edited wording for this order.
+          <button type="button" onClick={resetWording}>Reset to the standard wording</button>
+        </div>
+      )}
       <div className="hcompose-foot">
         <span className="hint-sig">
           {r.form_file ? 'signature, QR & the filled request form are attached automatically'
