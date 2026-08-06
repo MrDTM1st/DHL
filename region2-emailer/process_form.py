@@ -364,10 +364,14 @@ def save_adhocs(rows, csv_name, form_path="", keep=8):
             old = []
     recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file)
             for d, ret in _pair_return(rows)]
-    # Same order can be reprocessed - replace its previous record rather than
-    # stacking a duplicate pin on the map.
-    fresh_ids = {r.get("id") for r in recs}
-    old = [r for r in old if r.get("id") not in fresh_ids]
+    # Same order reprocessed - replace its previous record rather than stacking
+    # duplicate pins. Keyed on the ORDER NUMBERS, not the id: the id carries a
+    # timestamp, so it is different on every run and never matched anything.
+    # Reprocessing one form five times left five pins on the same spot, and the
+    # stale ones kept whatever dates the form had at the time.
+    fresh = {frozenset(str(o).strip() for o in r.get("orders", [])) for r in recs}
+    old = [r for r in old
+           if frozenset(str(o).strip() for o in r.get("orders", [])) not in fresh]
     tmp = ADHOCS + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump((recs + old)[:keep], f, indent=1)
@@ -425,7 +429,25 @@ def main():
         print("Nothing written - no usable order number on the form.")
         return
     rows = good
-    records = nr_csv.transform([to_transform_row(d) for d in rows])
+    transformed = [to_transform_row(d) for d in rows]
+    records = nr_csv.transform(transformed)
+
+    # A delivery timed before its own collection is not bookable, and which end
+    # is wrong is the requester's call, not ours. Checked on the TRANSFORMED
+    # rows because that is where the date and time are finally combined - the
+    # raw form columns keep them apart.
+    import date_query
+    backwards = date_query.raise_query(
+        transformed,
+        str(rows[0].get("Raised by") or "").split(";")[0].strip(),
+        f"Ad hoc {rows[0].get('Customer Order No') or 'form'}")
+    if backwards:
+        print(f"!! {len(backwards)} DELIVERY BEFORE COLLECTION - not bookable as they stand:")
+        for p in backwards:
+            print(f"     {p['ref']}  collect {p['collection']}  "
+                  f"deliver {p['delivery']}  ({p['back_by']} earlier)")
+        print("   An email asking them to confirm is ready for Review & send.")
+    print(f"BACKWARDS_DATES {len(backwards)}")
     # the order ref rides in the FILENAME - a Files card full of bare
     # timestamps gives no clue which CSV belongs to which job
     ref = re.sub(r"[^A-Za-z0-9]+", "-", str(rows[0].get("Customer Order No") or "")).strip("-")[:24]

@@ -286,6 +286,20 @@ def _plain_sheet(mapped, path):
     return path
 
 
+def _raised_by(mapped):
+    """Who to ask about a bad date: whoever the extract says raised the orders,
+    falling back to the team's own address rather than sending it nowhere."""
+    for o in mapped:
+        who = str(o.get("Raised by") or "").strip()
+        if who:
+            return who
+    try:
+        import build_drafts as bd
+        return bd.team_config().get("me") or bd.DHL_SMTP
+    except Exception:
+        return ""
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == "addsites":
@@ -314,6 +328,20 @@ def main():
     out = nr_csv.write_csv(records, outbox.path(f"NR_upload_{stamp}.csv"))
     print(f"Mapped {len(mapped)} order line(s).")
     print(f"  SHEET: {sheet}")
+
+    # A delivery timed before its own collection cannot be booked, and it is not
+    # ours to correct - the extract's raiser has to say which end is wrong. The
+    # email that asks is staged for Review & send; nothing goes on its own.
+    import date_query
+    backwards = date_query.raise_query(
+        mapped, _raised_by(mapped), f"Synergy upload {stamp[:8]}")
+    if backwards:
+        print(f"  !! {len(backwards)} DELIVERY BEFORE COLLECTION - not bookable as they stand:")
+        for p in backwards:
+            print(f"       {p['ref']}  collect {p['collection']}  "
+                  f"deliver {p['delivery']}  ({p['back_by']} earlier)")
+        print("     An email asking them to confirm is ready for Review & send.")
+    print(f"  BACKWARDS_DATES {len(backwards)}")
     if held:
         n = sum(held.values())
         print(f"  ~~ {n} row(s) HELD - delivery site needs a decision on the dashboard "

@@ -172,6 +172,32 @@ def _adhocs():
         return []
 
 
+def _backwards_in(out):
+    """How many backwards dates the run reported (0 if it said nothing)."""
+    for line in (out or "").splitlines():
+        if line.strip().startswith("BACKWARDS_DATES"):
+            try:
+                return int(line.split()[-1])
+            except Exception:
+                return 0
+    return 0
+
+
+def _backwards_msg(n):
+    return (f"{n} run(s) have the delivery BEFORE the collection — check the dates "
+            f"before uploading. The CSV is in Files, but do not upload it until "
+            f"this is answered.")
+
+
+def _staged_email():
+    """The query email date_query staged, for the Review & send panel."""
+    try:
+        with open(os.path.join(HERE, "_pending_email.json"), encoding="utf-8") as f:
+            return json.load(f) or None
+    except Exception:
+        return None
+
+
 def _asks():
     """Which hauliers have already been asked about each order - worked out
     from Sent Items, so it counts the ones emailed by hand too."""
@@ -441,6 +467,9 @@ def main():
                     if unmatched:
                         report("sites_needed", f"{len(unmatched)} unknown collection site(s) — add their details to finish.",
                                tail(out, 20), email=unmatched)
+                    elif _backwards_in(out):
+                        report("preview_ready", _backwards_msg(_backwards_in(out)),
+                               tail(out, 20), email=_staged_email())
                     else:
                         report("done", "Order upload processed — NR upload CSV is in Files.", tail(out, 20))
                     push_panel()   # surface any delivery-site decisions the mapping raised
@@ -653,6 +682,10 @@ def main():
                 push_new_files(before)
                 if "Nothing written" in out or "INCOMPLETE ORDER" in out or "NOT FOUND" in out:
                     report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
+                elif _backwards_in(out):
+                    push_panel()
+                    report("preview_ready", _backwards_msg(_backwards_in(out)),
+                           tail(out, 14), email=_staged_email())
                 else:
                     push_panel()   # the new map record rides on the panel
                     report("done", "Form processed - upload CSV below and in the outbox.", tail(out, 10))
@@ -796,6 +829,17 @@ def main():
                 handover.end(HANDOVER_PATH)
                 push_panel()
                 report("done", "Handover ended — you're back in charge.")
+            elif action:
+                # An action this agent has never heard of used to fall straight
+                # off the end of the chain: no branch, no report, nothing. The
+                # dashboard sat on "queued" until the command expired, which
+                # reads exactly like a dead button. It happens for one reason -
+                # the dashboard has been redeployed with a new card while this
+                # agent is still running older code - so say that, because the
+                # fix is to restart the agent.
+                report("error", f"This home PC does not know the action '{action}'. "
+                       "It is running older code than the dashboard - restart the "
+                       "desk (or the agent) and try again.")
         except Exception as e:
             report("error", str(e))
         if action or time.time() - last_push > 60:
