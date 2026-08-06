@@ -291,14 +291,7 @@ export default function Dashboard({
             </div>
           </div>
 
-          <div className="cmd">
-            <div className="top"><div className="ci">{I.cal}</div><h3>Upcoming weeks</h3></div>
-            <div className="desc">Pull orders for the weeks ahead.</div>
-            <div className="col" style={{ flexDirection: 'row' }}>
-              <button className="btn block" onClick={() => onCommand({ action: 'extract_preview', week: 'next' })}>Next week</button>
-              <button className="btn block" onClick={() => onCommand({ action: 'extract_preview', week: 'after' })}>Week after</button>
-            </div>
-          </div>
+          <MediaSetsCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'media_sets' }); }} />
 
           <InputCard ic={I.send} title="Send order(s)" desc="Find specific order numbers and send."
             placeholder="Order no(s), space-separate to group" buttonLabel="Find &amp; preview" onSubmit={findOrder} />
@@ -312,7 +305,15 @@ export default function Dashboard({
           <RailPlanCard onUpload={onUpload} onCommand={onCommand} />
 
           <UploadCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'order_upload' }); }} />
-          <MediaSetsCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'media_sets' }); }} />
+
+          <div className="cmd">
+            <div className="top"><div className="ci">{I.cal}</div><h3>Upcoming weeks</h3></div>
+            <div className="desc">Pull orders for the weeks ahead.</div>
+            <div className="col" style={{ flexDirection: 'row' }}>
+              <button className="btn block" onClick={() => onCommand({ action: 'extract_preview', week: 'next' })}>Next week</button>
+              <button className="btn block" onClick={() => onCommand({ action: 'extract_preview', week: 'after' })}>Week after</button>
+            </div>
+          </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
