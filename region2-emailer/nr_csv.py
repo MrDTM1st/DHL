@@ -12,6 +12,7 @@ import os, sys, json, re
 from datetime import datetime, timedelta
 
 import postcodes   # the ONE outward-code implementation - never write a sixth
+import services    # the ONE night/weekend/bank-holiday rule
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = json.load(open(os.path.join(HERE, "postcode_regions.json"), encoding="utf-8"))
@@ -104,6 +105,16 @@ def transform(rows):
             v = o.get(field)
             if v is not None and str(v).strip().upper() != "N":
                 rec(seq, ordno, {0: "ORD_TASKS", 1: label, 2: "1"})
+        # Night / Saturday / Sunday-bank-holiday services, worked out from the
+        # delivery time by services.py. Done HERE rather than in each mapper so
+        # every upload gets them on the same rule - media sets, Synergy, ad hoc
+        # forms and DTS alike - and a new route cannot quietly forget to. A
+        # mapper may still pass an explicit "Services" list to add its own.
+        # SEQ 8.5 keeps them with the other ORD_TASKS rows; SEQ only orders the
+        # records, it is never written to the file.
+        svc = list(o.get("Services") or []) + services.for_delivery(o.get("delivery time"))
+        for label in dict.fromkeys(s for s in svc if s):      # de-duped, order kept
+            rec(8.5, ordno, {0: "ORD_TASKS", 1: label, 2: "1"})
         # ORD_SUB_REFS 1002 (SEQ 9): col1=1002, col2=Raised by
         rec(9, ordno, {0: "ORD_SUB_REFS", 1: "1002", 2: o.get("Raised by")})
         # ORD_SUB_REFS 1003 (SEQ 10): col1=1003, col2=Cost Centre or "0"

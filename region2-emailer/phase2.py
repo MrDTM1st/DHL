@@ -32,13 +32,10 @@ DHL_SMTP = "delali.opoku@dhl.com"
 CHASE_AFTER_BDAYS = 2
 MAX_CHASES = 3
 
-# England & Wales bank holidays (2026-2027). Extend as needed.
-BANK_HOLIDAYS = {
-    "2026-01-01", "2026-04-03", "2026-04-06", "2026-05-04", "2026-05-25",
-    "2026-08-31", "2026-12-25", "2026-12-28",
-    "2027-01-01", "2027-03-26", "2027-03-29", "2027-05-03", "2027-05-31",
-    "2027-08-30", "2027-12-27", "2027-12-28",
-}
+# England & Wales bank holidays - ONE list, in services.py, which also uses it
+# to decide SUN/BANK_HOL. Two copies would eventually disagree about whether a
+# day is worked, and the chasers and the upload would each be right on their own.
+from services import BANK_HOLIDAYS   # noqa: E402,F401  (re-exported: callers use phase2.BANK_HOLIDAYS)
 
 
 # ---------- dates ----------

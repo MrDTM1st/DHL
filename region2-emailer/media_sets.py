@@ -39,8 +39,11 @@ import outbox                      # noqa: E402
 TEMPLATE = os.path.join(HERE, "media_sets_template.xlsx")
 
 # Baked into every row by the form itself (RHPC Admin, columns Y/Z/AF/AG/AP).
-PRODUCT_CODE = "Media_Sets"
-PRODUCT_DESC = "Media Sets"
+PRODUCT_CODE = "MEDIA_SETS"
+# nr_csv's ITEMS line takes the DESCRIPTION first and only falls back to the
+# code, so both carry MEDIA_SETS - otherwise the CSV would still read
+# "Media Sets" however the code was spelled.
+PRODUCT_DESC = "MEDIA_SETS"
 ACCOUNT = "NRADHOC"
 COST_CENTRE = "618294"
 CONFIRMATION_EMAILS = ("Sophie.Robinson@networkrail.co.uk; "
@@ -241,10 +244,13 @@ def main():
 
     orders, problems = to_orders(rows, week)
 
+    import services
     for o in orders:
+        svc = services.for_delivery(o.get("delivery time"))
         print(f"  {o['Customer Order No'] or '(no ref)':26} "
               f"{str(o['Site Name - Collection'])[:26]:26} {str(o['Postcode'] or ''):9}"
-              f" -> {str(o['Delivery Point'])[:12]:12} {o['D Postcode']}")
+              f" -> {str(o['Delivery Point'])[:12]:12} {str(o['D Postcode']):9}"
+              f" {('  ' + ', '.join(svc)) if svc else ''}")
 
     # An unrecognised outward code ships as the literal 'UNKNOWN' rather than
     # failing, so count them here instead of letting them through unremarked.
