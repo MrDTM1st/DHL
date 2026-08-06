@@ -444,6 +444,16 @@ def main():
                     else:
                         report("done", "Order upload processed — NR upload CSV is in Files.", tail(out, 20))
                     push_panel()   # surface any delivery-site decisions the mapping raised
+            elif action == "resend_files":
+                # The cloud holds the Files list in memory, so a restart or a
+                # redeploy empties it while every file is still sitting in the
+                # outbox here. The 30-minute heal is a long wait when you are
+                # after one CSV, so this is the same push on demand.
+                report("running", "Re-sending the outbox…")
+                push_new_files({})          # {} = nothing seen before, send the lot
+                n = len(snap_outbox())
+                report("done", f"Re-sent {n} file(s) from the outbox."
+                       + (" The cloud keeps the newest 12." if n > 12 else ""))
             elif action == "media_sets":
                 # A week of courier runs -> the NR upload CSV, through the Media
                 # Sets Input Sheet. Deliberately NOT reported as 'sites_needed'

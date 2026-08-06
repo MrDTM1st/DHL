@@ -194,7 +194,11 @@ export default function App() {
     try {
       await api.downloadFile(name);
     } catch {
-      pushToast('Download failed', name + " isn't on the cloud right now — it may have aged out of the outbox (48h).", 'warn');
+      // Two different causes, and the old wording only named one of them - which
+      // sent you looking in the outbox for a file that was still sitting there.
+      pushToast('Download failed', name + " isn't on the cloud right now. Either the cloud "
+        + "restarted and emptied its file list — press Re-send on the Files card — or it "
+        + "aged out of the outbox after 48h.", 'warn');
     }
   }, [pushToast]);
 

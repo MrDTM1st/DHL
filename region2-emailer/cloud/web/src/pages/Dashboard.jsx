@@ -178,9 +178,14 @@ function AdhocFormCard({ onUpload, busy }) {
 // download it. This card was the missing half of every "process" action - the
 // CSV was generated on the home PC and there was nowhere on the dashboard to
 // get it from.
-function FilesCard() {
+// The cloud keeps this list in MEMORY only, so a restart or redeploy empties it
+// even though the files are still sitting in the outbox on the home PC. The
+// agent re-sends everything every 30 minutes, which is a long wait when you are
+// looking for one CSV - hence Re-send.
+function FilesCard({ onCommand }) {
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState('');
+  const [resent, setResent] = useState(false);
   useEffect(() => {
     let live = true;
     const load = () => getFiles().then((d) => { if (live) setFiles(d.files || []); }).catch(() => {});
@@ -201,6 +206,11 @@ function FilesCard() {
         <span style={{ color: 'var(--muted)', fontSize: 12, marginLeft: 6 }}>
           · what the desk has generated
         </span>
+        <button className="btn mini" style={{ marginLeft: 'auto' }} disabled={resent}
+          title="Ask the home PC to send everything in its outbox again"
+          onClick={() => { setResent(true); onCommand && onCommand({ action: 'resend_files' }); }}>
+          {resent ? 'Re-sending…' : 'Re-send'}
+        </button>
       </div>
       {files.length ? files.map((f) => (
         <div className="filerow" key={f.name}>
@@ -213,7 +223,9 @@ function FilesCard() {
         </div>
       )) : (
         <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
-          Nothing yet — processed CSVs, rail plans and Synergy sheets appear here.
+          Nothing here — processed CSVs, rail plans and Synergy sheets appear as they
+          are made. If you were expecting something, the cloud may have restarted and
+          emptied this list: press Re-send.
         </div>
       )}
     </div>
@@ -355,7 +367,7 @@ export default function Dashboard({
             </div>
           </div>
 
-          <FilesCard />
+          <FilesCard onCommand={onCommand} />
 
           <HolidayCard panel={panel} onCommand={onCommand} />
         </div>
