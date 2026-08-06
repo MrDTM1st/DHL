@@ -172,6 +172,16 @@ def _adhocs():
         return []
 
 
+def _asks():
+    """Which hauliers have already been asked about each order - worked out
+    from Sent Items, so it counts the ones emailed by hand too."""
+    try:
+        import haulier_asks
+        return haulier_asks.load()
+    except Exception:
+        return {}
+
+
 def _pins():
     """Orders emailed BY HAND and pinned on the map (order_pin.py). The tool
     never saw the email, so they are in neither the tracker nor the ad hocs."""
@@ -231,6 +241,7 @@ def push_panel():
             "auto_chase": auto_chase_on(),
             "adhocs": _adhocs(),
             "pins": _pins(),
+            "asks": _asks(),
             "mat_teams": _mat_teams(),
         })
     except Exception:
@@ -307,6 +318,7 @@ def main():
     last_recover = 0.0        # daily untracked-order recovery (runs on first tick)
     last_waitscan = 0         # capture far-ahead orders onto the wait list (soon, then every 12h)
     last_release = 0          # auto-send due wait-list emails (soon after start, then every 3h)
+    last_asks = 0             # who has already been asked to cover each job (read-only)
     while True:
         try:
             cmd = _req("/api/next")
@@ -694,6 +706,13 @@ def main():
         if time.time() - last_files > 1800:   # heal the Files list after a redeploy
             push_new_files({})
             last_files = time.time()
+        if IS_LOCAL and time.time() - last_asks > 1800:       # every 30 min: who has already been asked to cover each job (read-only sweep of Sent Items)
+            try:
+                subprocess.Popen([sys.executable, "haulier_asks.py"],
+                                 cwd=HERE, creationflags=0x08000000)
+            except Exception:
+                pass
+            last_asks = time.time()
         if IS_LOCAL and time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
             try:
                 subprocess.Popen([sys.executable, "build_drafts.py", "waitscan"],

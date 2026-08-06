@@ -229,6 +229,15 @@ def send_haulier(ns):
         ns.SendAndReceive(False)
         metrics.log("email_sent", what=e.get("what") or "haulier_request", to=to,
                     orders=e.get("orders", []))
+        # Remember WHO was asked, so the brief can show it and the same haulier
+        # doesn't get asked twice. The Sent Items sweep would find this anyway,
+        # but not until the next refresh - and the double-ask usually happens in
+        # the same sitting.
+        try:
+            import haulier_asks
+            haulier_asks.record(e.get("orders", []), e.get("haulier") or to, to)
+        except Exception:
+            pass
         os.remove(PENDING_HAULIER)   # done - never resendable by accident
     except Exception as ex:
         print(f"(post-send bookkeeping hiccup, email IS sent: {ex})")

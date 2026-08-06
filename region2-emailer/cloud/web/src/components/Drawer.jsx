@@ -51,7 +51,7 @@ function coverRequest(r) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
-  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onDownloadCsv }) {
+  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onDownloadCsv, asks }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -109,6 +109,16 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const d = r.details || {};
   const v = (k) => detVal(k, d[k]);
   const { need, list, nw } = recommendFor(r, hauliers, geo);
+  // Who has ALREADY been emailed about this job, keyed by haulier name. Worked
+  // out from Sent Items on the home PC, so it counts the ones sent by hand -
+  // which is most of them. An order can carry several numbers; any of them
+  // having asked a haulier counts as asked.
+  const askedBy = {};
+  (r.orders || []).forEach((o) => {
+    ((asks || {})[String(o)] || []).forEach((a) => {
+      if (!askedBy[a.name]) askedBy[a.name] = a;
+    });
+  });
   // The FULL list of hauliers that fit this job - fleet -> tier 1 -> tier 2,
   // closest to furthest within each band (Delali: "give me everyone that fits",
   // not a top few). The drawer body scrolls, so a long list costs nothing.
@@ -258,6 +268,20 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             {r.loose_ballast && <span className="lbadge" style={{ marginLeft: 8 }}>LOOSE BALLAST</span>}
             {within3(r.delivery_date) && <span className="ubadge" style={{ marginLeft: 6 }}>≤3 DAYS</span>}
           </div>
+          {/* Booking a job is the most common thing done from this drawer and it
+              was the last thing in a long scrolling body - past the haulier
+              list, so it meant scrolling to the bottom every single time. It
+              belongs where you can always reach it. */}
+          {onBookedCall && r.kind !== 'adhoc' && (
+            <button className="btn block drawer-act" onClick={() => onBookedCall(r)}>
+              Mark booked over the phone
+            </button>
+          )}
+          {onAdhocBooked && r.kind === 'adhoc' && (
+            <button className="btn block drawer-act" onClick={() => onAdhocBooked(r)}>
+              Booked — remove from the map
+            </button>
+          )}
         </div>
         <div className="drawer-b">
           <dl className="kv">
@@ -372,6 +396,12 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               <div className="hn">
                 <b>{h.name}</b>
                 <span className={'htag ' + RANK_TAG[h.rank]}>{RANK_LABEL[h.rank]}</span>
+                {askedBy[h.name] && (
+                  <span className="htag asked" title={'Emailed ' + askedBy[h.name].when
+                    + ' (' + (askedBy[h.name].how || '') + ')'}>
+                    ASKED {String(askedBy[h.name].when || '').slice(0, 5)}
+                  </span>
+                )}
                 {h.closerThanAbove && <span className="htag near">CLOSER</span>}
                 {h.nwAvoid && <span className="htag near">AVOIDS {nw.join(' & ').toUpperCase()} WORK</span>}
                 <div>{[h.loc, (h.caps || []).join(', ')].filter(Boolean).join(' · ')}</div>
@@ -409,16 +439,6 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             </div>
           )}
 
-          {onBookedCall && r.kind !== 'adhoc' && (
-            <button className="btn block" style={{ marginTop: 16 }} onClick={() => onBookedCall(r)}>
-              Mark booked over the phone
-            </button>
-          )}
-          {onAdhocBooked && r.kind === 'adhoc' && (
-            <button className="btn block" style={{ marginTop: 16 }} onClick={() => onAdhocBooked(r)}>
-              Booked — remove from the map
-            </button>
-          )}
         </div>
       </div>
     </>

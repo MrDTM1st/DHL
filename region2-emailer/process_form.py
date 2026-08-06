@@ -341,15 +341,37 @@ def save_adhocs(rows, csv_name, form_path="", keep=8):
         ref = re.sub(r"[^A-Za-z0-9._-]", "-", str(rows[0].get("Customer Order No") or "form"))
         form_file = "Haulage Request Form " + ref + os.path.splitext(form_path)[1]
         shutil.copyfile(form_path, os.path.join(FORMS_DIR, form_file))
-    try:
-        with open(ADHOCS, encoding="utf-8") as f:
-            old = json.load(f)
-    except Exception:
-        old = []
+    # An unreadable store must NOT become an empty one. This used to be
+    # `except: old = []`, so a single failed read replaced the whole map with
+    # just the job being processed - it silently binned five live records
+    # twice in one day. Keep the bad file so it can be looked at, and never
+    # start from empty while a non-empty file is sitting there.
+    old = []
+    if os.path.exists(ADHOCS):
+        try:
+            with open(ADHOCS, encoding="utf-8") as f:
+                old = json.load(f)
+            if not isinstance(old, list):
+                raise ValueError("not a list")
+        except Exception as ex:
+            keep_name = ADHOCS + ".unreadable"
+            try:
+                os.replace(ADHOCS, keep_name)
+                print(f"  !! _adhocs.json unreadable ({type(ex).__name__}) - kept as "
+                      f"{os.path.basename(keep_name)}; the map starts from this job only")
+            except Exception:
+                pass
+            old = []
     recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file)
             for d, ret in _pair_return(rows)]
-    with open(ADHOCS, "w", encoding="utf-8") as f:
+    # Same order can be reprocessed - replace its previous record rather than
+    # stacking a duplicate pin on the map.
+    fresh_ids = {r.get("id") for r in recs}
+    old = [r for r in old if r.get("id") not in fresh_ids]
+    tmp = ADHOCS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump((recs + old)[:keep], f, indent=1)
+    os.replace(tmp, ADHOCS)        # atomic: a concurrent reader never sees a partial file
     return len(recs)
 
 

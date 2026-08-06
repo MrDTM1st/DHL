@@ -504,8 +504,10 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 @media (max-width:520px){ .metrics{ grid-template-columns:1fr 1fr; } .uploadpanel{ width:calc(100% - 24px); left:12px; right:12px; } }
 
 /* ---- map order search: pin an order you emailed by hand ---- */
-.mapsearch{ position:absolute; top:12px; left:12px; z-index:1000; width:290px;
-  font-family:'Geist',-apple-system,system-ui,sans-serif; }
+/* In normal flow inside the orders card - NOT absolutely positioned over the
+   map. It used to be, at top-left, which is exactly where the orders card sits;
+   the card has the higher z-index and covered it. */
+.mapsearch{ padding:10px 12px; border-bottom:1px solid var(--line); background:var(--input); }
 .mapsearch form{ display:flex; gap:6px; }
 .mapsearch input{ flex:1; min-width:0; padding:7px 10px; font-size:.82rem;
   border:1px solid var(--border); border-radius:8px; background:var(--card);
@@ -524,3 +526,9 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
   white-space:pre-wrap; word-break:break-word; max-height:230px; overflow:auto; color:var(--ink); }
 .mapsearch-btns{ display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--line); }
 .mapsearch-btns button{ flex:1; box-shadow:none; }
+
+/* Booked action in the drawer HEADER, not buried at the foot of the body. */
+.drawer-act{ margin-top:12px; }
+
+/* "already asked" on a haulier in the brief - so the same one is not emailed twice */
+.htag.asked{ background:var(--ink); color:#fff; border-color:var(--ink); }

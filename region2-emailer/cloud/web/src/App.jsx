@@ -277,7 +277,8 @@ export default function App() {
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
             onCall={onCall} onBookedCall={onBookedCall} onAdhocBooked={onAdhocBooked}
             onCommand={onCommand} matTeams={panel.mat_teams || {}} onDownloadCsv={onDownloadCsv}
-            pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier} />
+            pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
+            asks={panel.asks || {}} />
         )}
       </div>
       <Toasts toasts={toasts} dismiss={dismissToast} />
