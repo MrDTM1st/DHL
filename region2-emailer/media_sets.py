@@ -261,7 +261,19 @@ def main():
               f"upload as UNKNOWN:")
         for o in unknown[:8]:
             print(f"       {o['Customer Order No']}  {o['Postcode']} -> {o['D Postcode']}")
-    if problems:
+    # Dates that run backwards are a question for whoever raised the sheet, not
+    # something to guess at here - so the email that asks is staged for review
+    # rather than the run quietly carrying on.
+    import date_query
+    backwards = date_query.raise_query(
+        orders, CONFIRMATION_EMAILS, f"Media sets week {week or '?'}")
+    if backwards:
+        print(f"\n  !! {len(backwards)} DELIVERY BEFORE COLLECTION - not bookable as they stand:")
+        for p in backwards:
+            print(f"       {p['ref']}  collect {p['collection']}  "
+                  f"deliver {p['delivery']}  ({p['back_by']} earlier)")
+        print("     An email asking them to confirm is ready for Review & send.")
+    if problems and not backwards:
         print(f"\n  !! {len(problems)} DATE ERROR(S) - the form would flag these:")
         for p in problems:
             print(f"       {p}")
@@ -285,7 +297,7 @@ def main():
                     what=f"week {week}")
     except Exception:
         pass
-    print(f"MEDIA_RESULT orders={len(orders)}")
+    print(f"MEDIA_RESULT orders={len(orders)} backwards={len(backwards)}")
     return 0
 
 

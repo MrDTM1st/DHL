@@ -478,20 +478,37 @@ def main():
                     before = snap_outbox()
                     out = run(["media_sets.py", raw])
                     push_new_files(before)
-                    n = 0
+                    n = back = 0
                     for line in out.splitlines():
-                        if line.startswith("MEDIA_RESULT orders="):
-                            try:
-                                n = int(line.split("=")[1].strip())
-                            except Exception:
-                                n = 0
-                    if n:
-                        # the run's own warnings (date errors, UNKNOWN regions,
-                        # over-capacity) are in the tail - show enough of it
+                        if line.startswith("MEDIA_RESULT"):
+                            for part in line.split():
+                                if part.startswith("orders="):
+                                    n = int(part.split("=")[1] or 0)
+                                elif part.startswith("backwards="):
+                                    back = int(part.split("=")[1] or 0)
+                    if not n:
+                        report("error", "Media sets NOT processed — see below.", tail(out, 24))
+                    elif back:
+                        # Dates running backwards need answering before any of it
+                        # is uploaded. media_sets staged the email that asks, so
+                        # hand it to the SAME Review & send panel every other
+                        # email goes through - read it, edit it, then send it.
+                        email = None
+                        try:
+                            with open(os.path.join(HERE, "_pending_email.json"), encoding="utf-8") as f:
+                                email = json.load(f)
+                        except Exception:
+                            email = None
+                        report("preview_ready",
+                               f"{back} run(s) have the delivery BEFORE the collection — "
+                               f"check the dates before uploading. The CSV is in Files, "
+                               f"but do not upload it until this is answered.",
+                               tail(out, 24), email=email)
+                    else:
+                        # the run's own warnings (UNKNOWN regions, over-capacity)
+                        # are in the tail - show enough of it
                         report("done", f"Media sets processed — {n} order(s), CSV is in Files.",
                                tail(out, 24))
-                    else:
-                        report("error", "Media sets NOT processed — see below.", tail(out, 24))
             elif action == "add_sites":
                 report("running", "Learning new sites & re-processing…")
                 sites = cmd.get("sites") or {}
