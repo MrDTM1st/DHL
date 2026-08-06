@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { I } from '../icons.jsx';
 import { ordLabel, isUrgent, within3, dateShort, recommendFor, parcelPassFor } from '../lib/orders.js';
 import { geoCache } from '../lib/geo.js';
@@ -17,42 +17,86 @@ import { command } from '../api.js';
 function OrderSearch({ status }) {
   const [order, setOrder] = useState('');
   const [asked, setAsked] = useState('');       // what we last searched for
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState('');   // '' | 'find' | 'pin'
+  const [since, setSince] = useState(0);
+  const [, tick] = useState(0);
   const state = (status && status.state) || '';
+  const online = !(status && status.agent_online === false);
   const found = asked && state === 'found';
   const missing = asked && state === 'error' && (status.detail || '').indexOf(asked) >= 0;
 
-  async function find(e) {
+  // A second-by-second re-render while we wait, so the elapsed count moves and
+  // it is obvious something IS happening.
+  useEffect(() => {
+    if (!pending) return undefined;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [pending]);
+
+  // Clear the wait when a result for THIS search lands. The command is only
+  // queued by the POST - the home PC polls for it, runs it, then reports back -
+  // so the honest end of "waiting" is the report arriving, not the POST
+  // returning. Clearing on the POST is what made it look like nothing happened.
+  useEffect(() => {
+    if (!pending) return;
+    const mine = (status && status.detail ? status.detail : '').indexOf(asked) >= 0;
+    if (state === 'found' || ((state === 'error' || state === 'done') && mine)) setPending('');
+  }, [state, status, pending, asked]);
+
+  const waited = pending ? Math.round((Date.now() - since) / 1000) : 0;
+
+  async function run(kind, body) {
+    setPending(kind);
+    setSince(Date.now());
+    try {
+      await command(body);
+    } catch (err) {
+      setPending('');
+      throw err;
+    }
+  }
+  const find = (e) => {
     e.preventDefault();
     const o = order.trim();
     if (!o) return;
-    setBusy(true); setAsked(o);
-    try { await command({ action: 'order_find', order: o }); } finally { setBusy(false); }
-  }
-  async function pin(track) {
-    setBusy(true);
-    try { await command({ action: 'order_pin', order: asked, track }); } finally { setBusy(false); }
-  }
+    setAsked(o);
+    return run('find', { action: 'order_find', order: o });
+  };
+  const pin = (track) => run('pin', { action: 'order_pin', order: asked, track });
 
   return (
     <div className="mapsearch">
       <form onSubmit={find}>
-        <input value={order} onChange={(e) => setOrder(e.target.value)}
+        <input value={order} onChange={(e) => setOrder(e.target.value)} disabled={!!pending}
           placeholder="Order number…" aria-label="Search an order to pin on the map" />
-        <button type="submit" disabled={busy || !order.trim()}>Find</button>
+        <button type="submit" disabled={!!pending || !order.trim()}>
+          {pending === 'find' ? 'Finding…' : 'Find'}
+        </button>
       </form>
-      {asked && state === 'running' && <div className="mapsearch-msg">Looking up {asked}…</div>}
-      {missing && <div className="mapsearch-msg">{status.detail}</div>}
-      {found && (
-        <div className="mapsearch-res">
-          <pre>{(status.output || '').slice(0, 1200)}</pre>
-          <div className="mapsearch-btns">
-            <button onClick={() => pin(false)} disabled={busy}>Pin only</button>
-            <button onClick={() => pin(true)} disabled={busy}>Pin + track</button>
+
+      {pending && (
+        <div className="mapsearch-wait" role="status" aria-live="polite">
+          <span className="spin" />
+          <div>
+            <span>{pending === 'find' ? 'Looking up ' : 'Pinning '}{asked}</span>
+            {waited > 1 && <span className="el"> · {waited}s</span>}
+            {!online && <div className="warn">Home PC is offline — this will run when it reconnects.</div>}
+            {online && waited > 25 && <div className="warn">Still nothing back. The home PC picks jobs up every couple of seconds, so this is slower than expected.</div>}
           </div>
         </div>
       )}
-      {asked && state === 'done' && (status.detail || '').indexOf('pinned') >= 0 && (
+
+      {!pending && missing && <div className="mapsearch-msg">{status.detail}</div>}
+      {!pending && found && (
+        <div className="mapsearch-res">
+          <pre>{(status.output || '').slice(0, 1200)}</pre>
+          <div className="mapsearch-btns">
+            <button onClick={() => pin(false)}>Pin only</button>
+            <button onClick={() => pin(true)}>Pin + track</button>
+          </div>
+        </div>
+      )}
+      {!pending && asked && state === 'done' && (status.detail || '').indexOf('pinned') >= 0 && (
         <div className="mapsearch-msg">{status.detail}</div>
       )}
     </div>

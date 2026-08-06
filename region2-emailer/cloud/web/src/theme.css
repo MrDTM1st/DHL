@@ -532,3 +532,14 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 
 /* "already asked" on a haulier in the brief - so the same one is not emailed twice */
 .htag.asked{ background:var(--ink); color:#fff; border-color:var(--ink); }
+
+/* Waiting on the home PC after Find/Pin. The POST only QUEUES the job - the
+   home PC polls for it, runs it, then reports back - so the wait is real and
+   has to be visible, or it reads as a dead button. */
+.mapsearch-wait{ display:flex; gap:9px; align-items:flex-start; margin-top:7px; padding:8px 10px;
+  border:1px solid var(--line); border-radius:8px; background:var(--card); font-size:.76rem; color:var(--ink2); }
+.mapsearch-wait .el{ color:var(--faint); }
+.mapsearch-wait .warn{ margin-top:4px; color:var(--red); font-size:.72rem; line-height:1.35; }
+.spin{ width:13px; height:13px; margin-top:2px; flex:none; border-radius:50%;
+  border:2px solid var(--line2); border-top-color:var(--red); animation:spin .7s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
