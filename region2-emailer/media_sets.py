@@ -275,8 +275,32 @@ def cover_request(orders, week, sheet_path):
     }
 
 
+def _only(args):
+    """Row numbers from --only 1  or  --only 1,4,9. The numbers are the # on the
+    sheet, which is what the order reference carries."""
+    for i, a in enumerate(args):
+        if a.lower() in ("--only", "--rows") and i + 1 < len(args):
+            return {int(x) for x in re.split(r"[\s,]+", args[i + 1]) if x.strip().isdigit()}
+        if a.lower().startswith("--only="):
+            return {int(x) for x in re.split(r"[\s,]+", a.split("=", 1)[1]) if x.strip().isdigit()}
+    return set()
+
+
 def main():
-    args = [a for a in sys.argv[1:]]
+    argv = [a for a in sys.argv[1:]]
+    only = _only(argv)
+    args = []
+    skip = False
+    for i, a in enumerate(argv):                      # strip the flag + its value
+        if skip:
+            skip = False
+            continue
+        if a.lower() in ("--only", "--rows"):
+            skip = True
+            continue
+        if a.lower().startswith("--only="):
+            continue
+        args.append(a)
     if not args or not os.path.exists(args[0]):
         print(__doc__)
         print("MEDIA_RESULT orders=0")
@@ -297,6 +321,25 @@ def main():
         print("     references will read 'MS//...'. Pass one: media_sets.py <file> 19")
 
     orders, problems = to_orders(rows, week)
+
+    # --only re-issues single runs, for when one order does not take in CTMS and
+    # the rest did. The orders are numbered from the WHOLE sheet first and only
+    # then filtered, so a re-issued row keeps the reference it was given the
+    # first time - renumbering a filtered set would produce MS19/1 for what CTMS
+    # already knows as MS19/7, and land a second, differently-named order.
+    if only:
+        picked = [o for n, o in enumerate(orders, start=1) if n in only]
+        missing = sorted(only - set(range(1, len(orders) + 1)))
+        if missing:
+            print(f"  !! no row {', '.join(str(m) for m in missing)} on this sheet "
+                  f"- it has {len(orders)}.")
+        if not picked:
+            print("Nothing selected - nothing written.")
+            print("MEDIA_RESULT orders=0")
+            return 1
+        print(f"  RE-ISSUE: row(s) {', '.join(str(n) for n in sorted(only))} only, "
+              f"of {len(orders)} on the sheet\n")
+        orders = picked
 
     import services
     for o in orders:
@@ -337,8 +380,16 @@ def main():
               f"The CSV below has all {len(rows)}.")
 
     stamp = datetime.now().strftime("%d%m%Y%H%M%S")
-    sheet_out = fill_sheet(rows, week, outbox.path(f"Media Sets Week {week or 'x'} {stamp}.xlsx"))
-    csv_out = outbox.path(f"NR_media_sets_wk{week or 'x'}_{stamp}.csv")
+    if only:
+        # A re-issue is the CSV only. The filled sheet is the record of the
+        # whole week and already exists; a one-row copy of it would just be
+        # another thing to mistake for the real one.
+        sheet_out = None
+        tag = "-".join(str(n) for n in sorted(only))
+        csv_out = outbox.path(f"NR_media_sets_wk{week or 'x'}_row{tag}_{stamp}.csv")
+    else:
+        sheet_out = fill_sheet(rows, week, outbox.path(f"Media Sets Week {week or 'x'} {stamp}.xlsx"))
+        csv_out = outbox.path(f"NR_media_sets_wk{week or 'x'}_{stamp}.csv")
     nr_csv.write_csv(nr_csv.transform(orders), csv_out)
 
     print()
@@ -349,7 +400,10 @@ def main():
     # A clean week can go straight to the courier. A week with backwards dates
     # cannot - the date query is already staged in _pending_email.json and must
     # not be overwritten by a cover request for runs nobody has confirmed yet.
-    if not backwards:
+    # A re-issue must NOT stage a cover request: Parcel Pass were already asked
+    # about this week, and a second email listing one postcode reads like a new
+    # job rather than a fix.
+    if not backwards and not only:
         import json as _json
         email = cover_request(orders, week or "?", sheet_out)
         with open(os.path.join(HERE, "_pending_email.json"), "w", encoding="utf-8") as f:
@@ -358,7 +412,7 @@ def main():
                    if str(o.get("Postcode") or "").strip()})
         print(f"\n  COVER: email to {PARCEL_PASS} ready for Review & send "
               f"- {len(orders)} run(s) from {pcs} collection postcode(s), sheet attached.")
-    print(f"  COVER_READY {0 if backwards else 1}")
+    print(f"  COVER_READY {1 if (not backwards and not only) else 0}")
     try:
         import metrics
         metrics.log("media_sets_built", orders=[o["Customer Order No"] for o in orders],
