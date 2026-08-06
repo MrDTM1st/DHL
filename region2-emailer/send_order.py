@@ -105,6 +105,23 @@ def _gkey(r, C):
     return (bd.email_of(r[C["dcon"]]), bd.clean(r[C["dpc"]]), bd.fdate(r[C["date"]]))
 
 
+def _rows_for(path, tok):
+    """(rows, C, base_rows) if this workbook really carries `tok`, else None.
+
+    A workbook with no "Customer Order No" column cannot answer for any order -
+    and indexing a row with C["order"]=None raises TypeError, which used to
+    surface as a crash rather than an honest miss.
+    """
+    if not path:
+        return None
+    rows, C = bd.load_rows(path)
+    if C.get("order") is None:
+        return None
+    target = tok.split("-")[0]
+    base = [r for r in rows if r[C["order"]] and bd.base_order(r[C["order"]]) == target]
+    return (rows, C, base) if base else None
+
+
 def resolve_orders(ns, order_string):
     """Look up every order number typed (space/comma/;/ / /+/& separated) and
     return their rows plus same-recipient siblings from each order's extract.
@@ -115,25 +132,24 @@ def resolve_orders(ns, order_string):
     collected, not_found = [], []
     tmp = os.path.join(bd.HERE, "_search.xlsx")
     for tok in tokens:
+        # The index is a FAST PATH, never the final word. Each entry points at
+        # ONE email's attachment, and that pointer goes stale: the same filename
+        # is re-sent with a different layout, or the copy it recorded is a
+        # summary sheet with no order column. 7115288 was indexed to an extract
+        # whose indexed copy loaded 22 rows and NO order column, while the same
+        # filename on another mail had the order in it - and the search said
+        # "not in any extract" for an order that was plainly there. So when the
+        # indexed copy does not actually yield the order, fall through to the
+        # deep scan of every spreadsheet in the mailbox rather than giving up.
         path, fn = order_index.lookup(ns, tok, tmp)
-        if not path:
+        got = _rows_for(path, tok)
+        if got is None:
             path, fn = find_extract(ns, tok)
-        if not path:
+            got = _rows_for(path, tok)
+        if got is None:
             not_found.append(tok)
             continue
-        rows, C = bd.load_rows(path)          # load now: tmp is reused next token
-        # find_extract matches on raw text anywhere in the workbook, so a typo'd
-        # or unknown order can land on a spreadsheet that has no order column at
-        # all. C["order"] is then None and indexing the row with it raises
-        # TypeError - a crash where the honest answer is "not found".
-        if C.get("order") is None:
-            not_found.append(tok)
-            continue
-        target = tok.split("-")[0]
-        base_rows = [r for r in rows if r[C["order"]] and bd.base_order(r[C["order"]]) == target]
-        if not base_rows:
-            not_found.append(tok)
-            continue
+        rows, C, base_rows = got
         keys = {_gkey(r, C) for r in base_rows}   # same contact+site+date -> one email
         for r in rows:
             if r[C["order"]] and _gkey(r, C) in keys:
