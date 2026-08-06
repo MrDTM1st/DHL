@@ -592,7 +592,43 @@ def main():
                 before = snap_outbox()
                 out = run(["process_dts.py", order])
                 push_new_files(before)
-                report("done", f"DTS {order} processed - files below and in the outbox.", tail(out, 10))
+                # process_dts prints NOT FOUND and exits 0 when the reference
+                # matches nothing, so a bare "done" claimed success for a run
+                # that produced no files at all.
+                if "NOT FOUND" in out or "Usage:" in out:
+                    report("error", f"DTS {order} not found - nothing produced.", tail(out, 10))
+                else:
+                    report("done", f"DTS {order} processed - files below and in the outbox.", tail(out, 10))
+            elif action == "dts_upload":
+                # The DTS itself, dropped on the dashboard. process_dts.py takes
+                # a path as readily as a reference, so this is the same job with
+                # the mailbox hunt skipped - which is the point when the DTS was
+                # forwarded to you, or never came to this mailbox at all.
+                report("running", "Processing dropped DTS…")
+                up = None
+                try:
+                    up = _req("/api/pull_upload")
+                except Exception:
+                    up = None
+                if not up or not up.get("data"):
+                    report("error", "No file received - pick the DTS and try again.")
+                else:
+                    import base64
+                    ext = os.path.splitext(up.get("name") or "")[1].lower()
+                    if ext not in (".pdf", ".xls", ".xlsx"):
+                        report("error", f"A DTS is a .pdf, .xls or .xlsx - got '{ext or 'no extension'}'.")
+                    else:
+                        raw = os.path.join(HERE, "_dts_dropped" + ext)
+                        with open(raw, "wb") as f:
+                            f.write(base64.b64decode(up["data"]))
+                        before = snap_outbox()
+                        out = run(["process_dts.py", raw])
+                        push_new_files(before)
+                        if "CSV  :" in out:
+                            report("done", f"DTS processed from {up.get('name') or 'the dropped file'}"
+                                   " - files below and in the outbox.", tail(out, 12))
+                        else:
+                            report("error", "Dropped DTS NOT processed - see below.", tail(out, 12))
             elif action == "form" and order:
                 report("running", f"Processing filled form ({order})…")
                 before = snap_outbox()

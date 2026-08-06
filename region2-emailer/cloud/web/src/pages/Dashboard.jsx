@@ -172,6 +172,44 @@ function AdhocFormCard({ onUpload, busy }) {
   );
 }
 
+// ---- DTS: by reference OR by dropping the file ----
+// process_dts.py already takes either an NN reference (which it hunts through
+// the whole mailbox for) or a direct path to the DTS itself, so both halves sit
+// in one card rather than two. Dropping wins when the DTS came to you some
+// other way - forwarded on, saved off, or never in this mailbox at all.
+function DtsCard({ onUpload, onCommand, busy }) {
+  const fileRef = useRef(null);
+  const [ref, setRef] = useState('');
+  const [name, setName] = useState('');
+  const [drag, setDrag] = useState(false);
+  const pick = (file) => { if (file) { setName(file.name); onUpload(file); } };
+  return (
+    <div className="cmd"
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}>
+      <div className="top"><div className="ci">{I.doc}</div><h3>Process DTS</h3></div>
+      <div className="desc">Type the NN reference, or drop the DTS itself.</div>
+      <div className="col" style={{ flexDirection: 'row', gap: 7 }}>
+        <input value={ref} placeholder="NN reference" onChange={(e) => setRef(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && ref.trim()) { onCommand({ action: 'dts', order: ref.trim() }); setRef(''); }
+          }} />
+        <button className="btn red" disabled={!ref.trim()}
+          onClick={() => { onCommand({ action: 'dts', order: ref.trim() }); setRef(''); }}>Process</button>
+      </div>
+      <input ref={fileRef} type="file" accept=".pdf,.xls,.xlsx" style={{ display: 'none' }}
+        onChange={(e) => pick(e.target.files[0])} />
+      <div className={'dropzone' + (drag ? ' drag' : '')} style={{ margin: '7px 0 0' }}
+        onClick={() => fileRef.current && fileRef.current.click()}>
+        <div className="di">{I.file}</div>
+        <div className="d1">{busy ? 'Uploading…' : name ? name : 'Drop the DTS here, or click'}</div>
+        <div className="d2">.pdf, .xls or .xlsx</div>
+      </div>
+    </div>
+  );
+}
+
 // ---- input-driven command card (send order / DTS) ----
 // ---- Generated files (upload CSVs, rail plans, Synergy sheets) ----
 // The agent pushes everything it writes to the outbox; this is where you
@@ -308,9 +346,8 @@ export default function Dashboard({
           <InputCard ic={I.send} title="Send order(s)" desc="Find specific order numbers and send."
             placeholder="Order no(s), space-separate to group" buttonLabel="Find &amp; preview" onSubmit={findOrder} />
 
-          <InputCard ic={I.doc} title="Process DTS" desc="Convert a DTS reference into a run."
-            placeholder="NN reference" kind="red" buttonLabel="Process"
-            onSubmit={(v) => { if (v.trim()) onCommand({ action: 'dts', order: v.trim() }); }} />
+          <DtsCard busy={uploadBusy} onCommand={onCommand}
+            onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'dts_upload' }); }} />
 
           <AdhocFormCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'form_upload' }); }} />
 
