@@ -319,6 +319,7 @@ def main():
     last_waitscan = 0         # capture far-ahead orders onto the wait list (soon, then every 12h)
     last_release = 0          # auto-send due wait-list emails (soon after start, then every 3h)
     last_asks = 0             # who has already been asked to cover each job (read-only)
+    last_adhocsweep = 0       # ad hocs whose manifest has come back leave the map
     while True:
         try:
             cmd = _req("/api/next")
@@ -706,6 +707,22 @@ def main():
         if time.time() - last_files > 1800:   # heal the Files list after a redeploy
             push_new_files({})
             last_files = time.time()
+        if IS_LOCAL and time.time() - last_adhocsweep > 1800:  # every 30 min: take ad hocs off the map once their manifest arrives
+            out = run(["adhoc_booked_sweep.py", "apply"])
+            n = 0
+            for line in out.splitlines():
+                if line.startswith("SWEEP_RESULT removed="):
+                    try:
+                        n = int(line.split("=")[1].strip())
+                    except Exception:
+                        n = 0
+            if n:
+                push_panel()
+                # say WHICH ones and why - a pin that vanishes with no
+                # explanation is worse than one that lingers
+                report("done", f"{n} ad hoc(s) booked in - removed from the map.",
+                       tail(out, 16))
+            last_adhocsweep = time.time()
         if IS_LOCAL and time.time() - last_asks > 1800:       # every 30 min: who has already been asked to cover each job (read-only sweep of Sent Items)
             try:
                 subprocess.Popen([sys.executable, "haulier_asks.py"],
