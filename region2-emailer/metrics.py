@@ -20,6 +20,8 @@ PATH = os.path.join(HERE, "_metrics.jsonl")
 MINUTES = {
     "email_sent": 5, "chase_sent": 4, "collection_sent": 5, "brief_drafted": 5,
     "waitlist_released": 5, "rail_plan_built": 30, "synergy_mapped": 15,
+    # a week of courier runs typed into the Input Sheet by hand, then checked
+    "media_sets_built": 20,
     "reply_parsed": 3, "booked_removed": 2, "order_recovered": 10,
     "dedup_skip": 3, "handover_sent": 10, "materials_repaired": 2,
     "date_corrected": 3,

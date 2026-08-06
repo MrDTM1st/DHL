@@ -444,6 +444,44 @@ def main():
                     else:
                         report("done", "Order upload processed — NR upload CSV is in Files.", tail(out, 20))
                     push_panel()   # surface any delivery-site decisions the mapping raised
+            elif action == "media_sets":
+                # A week of courier runs -> the NR upload CSV, through the Media
+                # Sets Input Sheet. Deliberately NOT reported as 'sites_needed'
+                # however it goes: that state's Save button posts add_sites,
+                # which re-runs the SYNERGY job on a stale _synergy_raw.xlsx.
+                report("running", "Processing media sets…")
+                up = None
+                try:
+                    up = _req("/api/pull_upload")
+                except Exception:
+                    up = None
+                if not up or not up.get("data"):
+                    report("error", "No file received — pick the weekly courier sheet and try again.")
+                else:
+                    import base64
+                    ext = os.path.splitext(up.get("name") or "")[1].lower()
+                    if ext not in (".xlsx", ".xlsm"):
+                        ext = ".xlsx"
+                    raw = os.path.join(HERE, "_media_raw" + ext)
+                    with open(raw, "wb") as f:
+                        f.write(base64.b64decode(up["data"]))
+                    before = snap_outbox()
+                    out = run(["media_sets.py", raw])
+                    push_new_files(before)
+                    n = 0
+                    for line in out.splitlines():
+                        if line.startswith("MEDIA_RESULT orders="):
+                            try:
+                                n = int(line.split("=")[1].strip())
+                            except Exception:
+                                n = 0
+                    if n:
+                        # the run's own warnings (date errors, UNKNOWN regions,
+                        # over-capacity) are in the tail - show enough of it
+                        report("done", f"Media sets processed — {n} order(s), CSV is in Files.",
+                               tail(out, 24))
+                    else:
+                        report("error", "Media sets NOT processed — see below.", tail(out, 24))
             elif action == "add_sites":
                 report("running", "Learning new sites & re-processing…")
                 sites = cmd.get("sites") or {}

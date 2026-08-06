@@ -92,6 +92,33 @@ function UploadCard({ onUpload, busy }) {
   );
 }
 
+// ---- Media sets card ----
+// Same shape as the Synergy upload, different form: a weekly courier sheet in,
+// the NR upload CSV out. The `if (await onUpload(file))` guard at the mount
+// site is what stops the agent pulling an empty or stale upload slot.
+function MediaSetsCard({ onUpload, busy }) {
+  const fileRef = useRef(null);
+  const [name, setName] = useState('');
+  const [drag, setDrag] = useState(false);
+  const pick = (file) => { if (file) { setName(file.name); onUpload(file); } };
+  return (
+    <div className="cmd"
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}>
+      <div className="top"><div className="ci">{I.up}</div><h3>Media sets</h3></div>
+      <div className="desc">Drop the weekly courier sheet (.xlsx) to build the media sets upload CSV.</div>
+      <input ref={fileRef} type="file" accept=".xlsx,.xlsm" style={{ display: 'none' }}
+        onChange={(e) => pick(e.target.files[0])} />
+      <div className={'dropzone' + (drag ? ' drag' : '')} style={{ margin: '6px 0 0' }} onClick={() => fileRef.current && fileRef.current.click()}>
+        <div className="di">{I.file}</div>
+        <div className="d1">{busy ? 'Uploading…' : name ? name : 'Drop .xlsx here, or click'}</div>
+        <div className="d2">Week NN Courier sheet</div>
+      </div>
+    </div>
+  );
+}
+
 // ---- Rail plan card ----
 function RailPlanCard({ onUpload, onCommand }) {
   const fileRef = useRef(null);
@@ -285,6 +312,7 @@ export default function Dashboard({
           <RailPlanCard onUpload={onUpload} onCommand={onCommand} />
 
           <UploadCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'order_upload' }); }} />
+          <MediaSetsCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'media_sets' }); }} />
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
