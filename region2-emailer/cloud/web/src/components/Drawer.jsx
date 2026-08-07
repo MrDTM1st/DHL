@@ -247,7 +247,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const journey = journeyFor(repo, leg);
 
-  const pp = parcelPassFor(r);   // Parcel Pass verdict - ad hoc records only
+  // Parcel Pass verdict - one-off jobs only (ad hoc and DTS). A tracked order
+  // is booked through the haulier list, not the courier.
+  const pp = parcelPassFor(r);
   const parcelH = (hauliers || []).find((h) => h.parcel) || null;
   // the materials team that owns this product - the alt-contact escalation.
   // When the product doesn't map to a team (blank/odd materials), EVERY team
