@@ -253,7 +253,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   // When the product doesn't map to a team (blank/odd materials), EVERY team
   // is offered instead - an unreachable contact still needs escalating.
   const mtype = materialsTypeFor(r);
-  const canEscalate = r.kind !== 'adhoc' && !!r.to;
+  // A DTS and an ad hoc are the same shape of job: a one-off with a CSV and no
+  // tracker record behind it. Everything that was keyed on 'adhoc' means "one
+  // of these", so it is named once here rather than repeated four times.
+  const oneOff = r.kind === 'adhoc' || r.kind === 'dts';
+  const canEscalate = !oneOff && !!r.to;
   const team = (canEscalate && mtype && matTeams) ? matTeams[mtype] : null;
   const teamChoices = canEscalate && !team
     ? Object.values(matTeams || {}).filter((t) => t && t.name && t.email) : [];
@@ -353,12 +357,12 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               was the last thing in a long scrolling body - past the haulier
               list, so it meant scrolling to the bottom every single time. It
               belongs where you can always reach it. */}
-          {onBookedCall && r.kind !== 'adhoc' && (
+          {onBookedCall && !oneOff && (
             <button className="btn block drawer-act" onClick={() => onBookedCall(r)}>
               Mark booked over the phone
             </button>
           )}
-          {onAdhocBooked && r.kind === 'adhoc' && (
+          {onAdhocBooked && oneOff && (
             <button className="btn block drawer-act" onClick={() => onAdhocBooked(r)}>
               Booked — remove from the map
             </button>
@@ -373,7 +377,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               </div>
             ))}
           </dl>
-          {r.kind === 'adhoc' && r.csv && (
+          {oneOff && r.csv && (
             <div className="csvrow">
               <span className="lbl" style={{ margin: 0, flex: 'none' }}>Upload CSV</span>
               <span className="mono csvname" title={r.csv}>{r.csv}</span>

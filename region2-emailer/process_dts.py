@@ -87,6 +87,16 @@ def main():
     import outbox
     csv_name = "NR_heavy_" + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv"
     csv_path = nr_csv.write_csv(records, outbox.path(csv_name))
+
+    # A DTS is a job like any other and belongs on the map - it was the only
+    # route that produced a CSV and pinned nothing, so a DTS run was invisible
+    # next to the ad hocs it sits alongside all week.
+    try:
+        import process_form
+        process_form.save_adhocs([row], csv_name, form_path=form_path, kind="dts")
+        print("MAP : job saved for the dashboard map (form kept for forwarding).")
+    except Exception as ex:      # the map extra must never cost the CSV
+        print(f"(map record not saved: {ex})")
     print(f"Reference : {data['ref']}  |  raised by {raiser}")
     print(f"Collection: {data['coll'].get('collection site')} {data['coll'].get('post code')}")
     print(f"Delivery  : {data['deliv'].get('delivery site')} {data['deliv'].get('post code')}")

@@ -136,6 +136,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
                 <div className="o mono">
                   {ordLabel(o)} <span style={{ color: 'var(--faint)', fontWeight: 600 }}>· {o.worksite || o.site || ''}</span>
                   {o.kind === 'adhoc' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>AD HOC</span>}
+                  {o.kind === 'dts' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>DTS</span>}
                   {o.kind === 'pinned' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>BY HAND</span>}
                 </div>
                 <div className="s">

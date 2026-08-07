@@ -224,6 +224,18 @@ def _dt_parts(v):
         return v.strftime("%d/%m/%Y"), v.strftime("%H:%M")
     if isinstance(v, _dt.time):
         return "", (v.strftime("%H:%M") if (v.hour or v.minute) else "")
+    # Already-formatted strings, which is what the transform shape carries
+    # (nr_csv.dts_row builds 'dd/mm/yyyy HH:MM'). These used to fall through to
+    # ("", "") - so a DTS pinned on the map with no dates on it at all.
+    for f in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+              "%Y-%m-%d %H:%M"):
+        try:
+            p = _dt.datetime.strptime(str(v).strip(), f)
+        except Exception:
+            continue
+        if p.year < 1990:
+            return "", (p.strftime("%H:%M") if (p.hour or p.minute) else "")
+        return p.strftime("%d/%m/%Y"), p.strftime("%H:%M")
     return "", ""
 
 
@@ -244,15 +256,25 @@ def _leg_dates(d):
     date-only window (midnight-to-midnight) shows BLANK on the brief - the
     CSV gets the 9-5 default, but the brief never claims a time the
     requester didn't give."""
+    # Two shapes reach this. The FORM shape has separate date columns and
+    # underscore time keys; the TRANSFORM shape (nr_csv.dts_row, and anything
+    # already through to_transform_row) has only the space-form keys, with the
+    # date baked into them. Accept either, or a DTS pins on the map with no
+    # dates at all.
+    ctk = d.get("collection_time", d.get("collection time"))
+    ctke = d.get("collection_time_end", d.get("collection time end"))
+    dtk = d.get("delivery_time", d.get("delivery time"))
+    dtke = d.get("delivery_time_end", d.get("delivery time end"))
+
     cdate, _ = _dt_parts(d.get("Collection Date"))
-    cd2, ct1 = _dt_parts(d.get("collection_time"))
-    _, ct2 = _dt_parts(d.get("collection_time_end"))
+    cd2, ct1 = _dt_parts(ctk)
+    _, ct2 = _dt_parts(ctke)
     ddate, _ = _dt_parts(d.get("Delivery Date"))
-    dd2, dt1 = _dt_parts(d.get("delivery_time"))
-    _, dt2 = _dt_parts(d.get("delivery_time_end"))
-    if _dateonly_window(d.get("collection_time"), d.get("collection_time_end")):
+    dd2, dt1 = _dt_parts(dtk)
+    _, dt2 = _dt_parts(dtke)
+    if _dateonly_window(ctk, ctke):
         ct1 = ct2 = ""
-    if _dateonly_window(d.get("delivery_time"), d.get("delivery_time_end")):
+    if _dateonly_window(dtk, dtke):
         dt1 = dt2 = ""
     return (cdate or cd2, {"earliest": ct1, "latest": ct2},
             ddate or dd2, {"earliest": dt1, "latest": dt2})
@@ -269,7 +291,7 @@ def _pair_return(rows):
     return [(r, None) for r in rows]
 
 
-def _adhoc_record(d, csv_name, ret=None, form_file=""):
+def _adhoc_record(d, csv_name, ret=None, form_file="", kind="adhoc"):
     s = lambda k: str(d.get(k) or "").strip()
 
     cdate, cwin, ddate, dwin = _leg_dates(d)
@@ -295,8 +317,8 @@ def _adhoc_record(d, csv_name, ret=None, form_file=""):
 
     off = "HIAB" if _flag(d, "HIAB") else ("MOFFETT" if _flag(d, "Moffett") else "")
     rec = {
-        "id": "adhoc|" + s("Customer Order No") + "|" + datetime.now().strftime("%Y%m%d%H%M%S"),
-        "kind": "adhoc",
+        "id": kind + "|" + s("Customer Order No") + "|" + datetime.now().strftime("%Y%m%d%H%M%S"),
+        "kind": kind,
         "orders": [s("Customer Order No")],
         "site": s("Delivery Point"), "worksite": s("Delivery Point"),
         "postcode": s("D Postcode"),
@@ -331,7 +353,7 @@ def _adhoc_record(d, csv_name, ret=None, form_file=""):
     return rec
 
 
-def save_adhocs(rows, csv_name, form_path="", keep=8):
+def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc"):
     """Newest first, capped - the map only ever needs the recent handful.
     Keeps a copy of the filled form so the cover-request email can forward it."""
     form_file = ""
@@ -362,7 +384,7 @@ def save_adhocs(rows, csv_name, form_path="", keep=8):
             except Exception:
                 pass
             old = []
-    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file)
+    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file, kind=kind)
             for d, ret in _pair_return(rows)]
     # Same order reprocessed - replace its previous record rather than stacking
     # duplicate pins. Keyed on the ORDER NUMBERS, not the id: the id carries a

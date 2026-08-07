@@ -65,6 +65,7 @@ export const STAGES = ['Drafted', 'Emailed', 'Reply in', 'Sent off'];
 
 export function statusLabel(r) {
   if (r.kind === 'adhoc') return 'Ad hoc — CSV ready';
+  if (r.kind === 'dts') return 'DTS — CSV ready';
   // pinned by hand: there is no tracker record behind it, so none of the
   // stage fields below mean anything for one of these
   if (r.kind === 'pinned') return r.booked ? 'By hand — booked in'
@@ -214,7 +215,9 @@ export function nightWeekendFor(r) {
 // bigger/special vehicle goes to the normal haulier ring-round instead.
 // Returns null for non-adhoc records; {ok, reasons, vehicle} otherwise.
 export function parcelPassFor(r) {
-  if (r.kind !== 'adhoc') return null;
+  // Parcel Pass is judged on the load, and a DTS is the same shape of job as an
+  // ad hoc - both arrive as a one-off with a CSV, neither is a tracked order.
+  if (r.kind !== 'adhoc' && r.kind !== 'dts') return null;
   const d = r.details || {};
   const off = (d.offloading || {}).value || '';
   const veh = ((d.vehicle || {}).value || '').trim();
