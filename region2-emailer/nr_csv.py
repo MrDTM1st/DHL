@@ -21,6 +21,14 @@ REGIONS = json.load(open(os.path.join(HERE, "postcode_regions.json"), encoding="
 def nc(v):
     if isinstance(v, float) and v.is_integer():
         v = int(v)   # Excel numerics: 4.0 -> 4, like Access Format()
+    # A datetime that reaches here raw would be stringified by str() as
+    # '2026-08-09 18:00:00', while every mapper that formats its own dates
+    # writes '09/08/2026 18:00'. Two date formats in one upload stream is the
+    # kind of difference an import mishandles without complaining, so normalise
+    # here as well - the mappers that already format theirs pass strings and
+    # are untouched by this.
+    if isinstance(v, datetime):
+        v = "" if v.year < 1990 else v.strftime("%d/%m/%Y %H:%M")
     return re.sub(r"[,]", " ", "" if v is None else str(v)).strip()
 
 

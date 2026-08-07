@@ -46,6 +46,10 @@ PRODUCT_CODE = "MEDIA_SETS"
 PRODUCT_DESC = "MEDIA_SETS"
 ACCOUNT = "NRADHOC"
 COST_CENTRE = "618294"
+# A media set is always one item at 50kg, whatever the sheet happens to say -
+# these are fixed for the product, not per-run figures somebody types in.
+QTY = 1
+WEIGHT_KG = 50
 CONFIRMATION_EMAILS = ("Sophie.Robinson@networkrail.co.uk; "
                        "David.Whiston@networkrail.co.uk; "
                        "Richard.Wilkinson-Ford@networkrail.co.uk")
@@ -104,10 +108,16 @@ def _as_time(v):
 
 
 def _stamp(d, t):
-    """Date + time -> one datetime, the way the form's L3+J5 arithmetic does."""
+    """Date + time -> 'dd/mm/yyyy HH:MM', the way every other upload writes it.
+
+    NOT a bare datetime. nr_csv stringifies whatever it is given, so a datetime
+    object goes into the CSV as '2026-08-09 18:00:00' while the ad hoc and
+    Synergy routes write '09/08/2026 18:00'. Two date formats in the same upload
+    stream is exactly the kind of difference an import silently mishandles.
+    """
     if d is None:
         return ""
-    return datetime.combine(d, t or time(0, 0))
+    return datetime.combine(d, t or time(0, 0)).strftime("%d/%m/%Y %H:%M")
 
 
 def week_of(path, sheet_name, override=None):
@@ -156,7 +166,7 @@ def to_orders(rows, week):
     out, problems = [], []
     for i, v in enumerate(rows, start=1):
         (csite, contact, phone, a1, a2, a3, pc, cdate, cstart, cend,
-         dsite, d1, d2, d3, dpc, ddate, dstart, dend, qty) = v
+         dsite, d1, d2, d3, dpc, ddate, dstart, dend, _sheet_qty) = v
 
         cd, dd = _as_date(cdate), _as_date(ddate)
         ct = _stamp(cd, _as_time(cstart))
@@ -190,7 +200,11 @@ def to_orders(rows, week):
             "delivery time": dt, "delivery time end": dte,
             "Product / Service Code": PRODUCT_CODE,
             "Product / Description": PRODUCT_DESC,
-            "Product Qty": qty,
+            "Product Qty": QTY,
+            # The NR upload has no weight column (nr_csv:182) - on the ad hoc
+            # route the weight rides in the delivery instructions, so it does
+            # the same here rather than being dropped on the floor.
+            "Delivery Instructions": f"{PRODUCT_DESC} Qty {QTY} Weight {WEIGHT_KG}kg",
             "Raised by": CONFIRMATION_EMAILS,
             "Account": ACCOUNT, "Order Type": "C",
             "Vehicle Escort": "N", "PTS": "N", "Banksman": "N", "Log Grab": "N",
