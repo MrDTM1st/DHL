@@ -17,12 +17,30 @@ import { RegionBadge } from './RegionBadge.jsx';
 function coverRequest(r) {
   const d = r.details || {};
   const win = (t) => (t && t.earliest ? (t.latest ? `${t.earliest} - ${t.latest}` : t.earliest) : '');
-  const when = [r.delivery_date, win(d.time)].filter(Boolean).join(' ');
+  // A date the site contact CORRECTED in their reply is the one the haulier
+  // should be quoted - the order's original date is only the fallback.
+  const when = [(d.date || {}).value || r.delivery_date, win(d.time)]
+    .filter(Boolean).join(' ');
   // ad hoc forms carry their own collection date (it can differ from the
   // delivery date); tracked orders only know the delivery date
   const collWhen = [r.collection_date || r.delivery_date, win(d.collection_time)]
     .filter(Boolean).join(' ');
   const off = (d.offloading || {}).value || '';
+  // Guarded with || {} throughout: ad hoc and DTS records build their details
+  // from the request form (process_form._adhoc_record) and simply have no
+  // date/artic_access/what3words/notes keys at all.
+  const artic = (d.artic_access || {}).value || '';
+  const rear = (d.rear_steer || {}).value || '';
+  const access = [
+    artic === 'yes' ? 'artics can access' : (artic === 'no' ? 'NO artics' : ''),
+    rear === 'yes' ? 'rear steer required' : '',
+  ].filter(Boolean).join(', ');
+  const contact = [(d.contact || {}).name, (d.contact || {}).phone]
+    .filter(Boolean).join(' ');
+  const w3w = (d.what3words || {}).value || '';
+  const ptsv = (d.pts || {}).value || '';
+  const pts = ptsv === 'yes' ? 'Yes - required' : (ptsv === 'no' ? 'Not required' : '');
+  const notes = (d.notes || {}).value || '';
   // some jobs load at more than one site - the haulier needs every pick-up
   const collLine = collectionsOf(r)
     .map((c) => [c.site, c.pc].filter(Boolean).join(' ')).join(' + ');
@@ -47,7 +65,18 @@ function coverRequest(r) {
       return vl && vl !== code.toLowerCase() ? `${vl} (${code})` : code;
     })()}`,
     `Offloading: ${off === 'SITE/NONE' ? 'site offloads' : off}`,
-  ].filter((x) => x !== null).join('\n');
+    // Everything below is what the SITE CONTACT answered. It was all being
+    // dropped: the cover request only ever carried times, vehicle and
+    // offloading, so the access answers, the site contact and the PTS answer
+    // had to be retyped from the reply every time a haulier was asked. The
+    // Outlook send-off brief (phase2.brief_lines) already prints all of these -
+    // this is the same brief, so it should say the same things.
+    access ? `Site access: ${access}` : null,
+    contact ? `Site contact: ${contact}` : null,
+    w3w ? `What3Words: ${w3w}` : null,
+    pts ? `PTS: ${pts}` : null,
+    notes ? `Notes: ${notes}` : null,
+  ].filter((x) => x !== null && x !== '').join('\n');
 }
 
 /* Edits to a cover request are remembered PER ORDER.

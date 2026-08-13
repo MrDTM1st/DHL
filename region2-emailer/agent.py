@@ -172,6 +172,87 @@ def _adhocs():
         return []
 
 
+def _orders_from_id(ident):
+    """The order numbers inside a record id, whatever store it came from.
+
+    Three id shapes exist and they do not overlap:
+        tracker   '5033691|15/08/2026'
+        pin       'pin|7115301|17/08/2026'
+        adhoc/dts 'adhoc|AH18/8/26MLML|20260813125159'
+    Matching on the id alone is brittle - the ad hoc id carries a timestamp
+    minted at write time, so reprocessing a form changes it and a dashboard
+    holding the old one matches nothing. The ORDER NUMBERS are stable, so they
+    are the fallback.
+    """
+    parts = [p for p in str(ident or "").split("|") if p.strip()]
+    if not parts:
+        return set()
+    body = parts[1] if parts[0] in ("pin", "adhoc", "dts") and len(parts) > 1 else parts[0]
+    return {o.strip() for o in body.split("-") if o.strip()}
+
+
+def _book_off(ident):
+    """Remove a booked job from wherever it lives. Returns (count, [stores]).
+
+    Tries every store rather than guessing from the id: a job can be a tracker
+    record, a map pin or an ad hoc/DTS record, and the button that was pressed
+    is not a reliable guide to which.
+    """
+    removed, where = 0, []
+    want = _orders_from_id(ident)
+
+    try:                                        # 1. the tracker
+        import tracker
+        n = tracker.book(ident)
+        if n:
+            removed += n
+            where.append("the tracker")
+    except Exception:
+        pass
+
+    try:                                        # 2. a by-hand map pin
+        import pins
+        n = pins.remove(ident)
+        if not n and want:                      # stale id - fall back to orders
+            keep = [p for p in pins.load()
+                    if not ({str(o).strip() for o in p.get("orders", [])} & want)]
+            n = len(pins.load()) - len(keep)
+            if n:
+                pins.save(keep)
+        if n:
+            removed += n
+            where.append("the map pins")
+    except Exception:
+        pass
+
+    try:                                        # 3. an ad hoc or DTS record
+        p = os.path.join(HERE, "_adhocs.json")
+        with open(p, encoding="utf-8") as f:
+            recs = json.load(f)
+        keep = [r for r in recs
+                if r.get("id") != ident
+                and not (want and ({str(o).strip() for o in r.get("orders", [])} & want))]
+        n = len(recs) - len(keep)
+        if n:
+            tmp = p + ".tmp"                    # atomic, like every other writer
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(keep, f, indent=1)
+            os.replace(tmp, p)
+            removed += n
+            where.append("the map")
+    except Exception:
+        pass
+
+    if removed and want:
+        # Remember it, so an enrol sweep or a reprocess cannot put it back.
+        try:
+            import tracker
+            tracker.remember_drops(sorted(want))
+        except Exception:
+            pass
+    return removed, where
+
+
 def _backwards_in(out):
     """How many backwards dates the run reported (0 if it said nothing)."""
     for line in (out or "").splitlines():
@@ -726,36 +807,31 @@ def main():
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])
                 report("done", "Replies checked - tracker updated, briefs drafted.", tail(out, 6))
-            elif action == "booked_call" and order:
-                report("running", "Marking booked via call…")
-                out = run(["tracker.py", "book", order])
+            elif action in ("booked_call", "adhoc_booked") and order:
+                # ONE path for "this job is booked, take it off", whatever kind
+                # of record it is. It used to be two, split by which button the
+                # drawer happened to render, and each only knew about its own
+                # store: booked_call only ever called tracker.book, so a map PIN
+                # (id 'pin|7115301|17/08/2026') was compared against tracker ids
+                # ('5033691|15/08/2026') and could never match. Both then
+                # reported "done" without looking, so the press produced a green
+                # toast and the job stayed put.
+                report("running", "Marking booked…")
+                removed, where = _book_off(order)
                 push_tracker()
-                report("done", "Booked via call - removed from the tracker.", tail(out, 4))
-            elif action == "adhoc_booked" and order:
-                # ad hocs live in _adhocs.json, not the tracker - booked means
-                # the job simply leaves the map
-                removed = 0
-                try:
-                    p = os.path.join(HERE, "_adhocs.json")
-                    with open(p, encoding="utf-8") as f:
-                        recs = json.load(f)
-                    keep = [r for r in recs if r.get("id") != order]
-                    removed = len(recs) - len(keep)
-                    if removed:
-                        with open(p, "w", encoding="utf-8") as f:
-                            json.dump(keep, f, indent=1)
-                except Exception:
-                    removed = 0
                 push_panel()
                 if removed:
                     try:
                         import metrics
-                        metrics.log("adhoc_booked", id=order)
+                        metrics.log("booked_removed", id=order, what=", ".join(where))
                     except Exception:
                         pass
-                    report("done", "Ad hoc booked - removed from the map.")
+                    report("done", f"Booked - removed from {' and '.join(where)}.")
                 else:
-                    report("done", "That ad hoc was already off the map.")
+                    report("error", "NOT removed - nothing on the tracker, the map or "
+                           "the pins has that id. If the job was reprocessed since this "
+                           "brief was opened the id will have changed: refresh the "
+                           "dashboard and press it again.")
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled

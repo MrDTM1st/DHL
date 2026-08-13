@@ -386,6 +386,23 @@ def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc"):
             old = []
     recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file, kind=kind)
             for d, ret in _pair_return(rows)]
+    # A job you have already booked off must not come back just because the form
+    # was reprocessed. _booked_drops.json guarded the TRACKER only; nothing on
+    # this path ever read it, so the same order was booked off three times in
+    # fifteen minutes on 10/08 and a booked DTS reappeared twice.
+    try:
+        import tracker
+        drops = tracker.booked_drops()
+        kept = []
+        for r in recs:
+            if {str(o).strip() for o in r.get("orders", [])} & drops:
+                print(f"SKIP: {'/'.join(r.get('orders', []))} is already booked in "
+                      f"- not putting it back on the map")
+            else:
+                kept.append(r)
+        recs = kept
+    except Exception:
+        pass
     # Same order reprocessed - replace its previous record rather than stacking
     # duplicate pins. Keyed on the ORDER NUMBERS, not the id: the id carries a
     # timestamp, so it is different on every run and never matched anything.

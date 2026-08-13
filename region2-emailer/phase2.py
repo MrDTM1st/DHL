@@ -592,6 +592,9 @@ def check(ns=None):
     enrol_collection(ns)          # track supplier collection emails before scanning for replies
     repaired = repair_materials()     # BS-file rows that stored the numeric code (fast, no COM)
     d = tracker.load()
+    # Which orders were ALREADY finished before this run. Anything that becomes
+    # finished DURING this run must survive to be saved - see the drop below.
+    was_done = {r["id"] for r in d["records"] if r.get("sendoff_ready")}
     replies = ooo = briefs = 0
     for r in d["records"]:
         if r.get("status") != "sent":
@@ -673,7 +676,21 @@ def check(ns=None):
         # churn of 24/07).
         tracker.remember_drops(dropped_orders)
         metrics.log("booked_removed", n=booked_removed, orders=dropped_orders[:20])
-    removed = tracker.drop_completed(d)   # completed orders leave the tracker
+    # Completed orders leave the tracker - but NOT in the same run that
+    # completed them. The reply is parsed onto the record (r["details"]), the
+    # brief is drafted, sendoff_ready is set, and drop_completed then deleted
+    # that record before the only save() below. So every parsed reply died in
+    # memory: 45 order groups had been parsed and NOT ONE tracker record carried
+    # a "details" key. That is why the haulier cover request was never prefilled
+    # with the site contact's answers, and why the same order could be re-enrolled
+    # and briefed twice.
+    #
+    # A record finished during THIS run now survives one cycle - long enough to
+    # be saved, pushed to the dashboard and used - and leaves on the next check.
+    before_n = len(d["records"])
+    d["records"] = [r for r in d["records"]
+                    if not (r.get("sendoff_ready") and r["id"] in was_done)]
+    removed = before_n - len(d["records"])
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
           f"{briefs} send-off draft(s) created, {booked_removed} booked-by-you removed, "
