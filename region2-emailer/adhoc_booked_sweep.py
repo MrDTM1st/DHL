@@ -52,6 +52,22 @@ def _load_adhocs():
         return []
 
 
+def _load_pins():
+    """By-hand pins are jobs too, and they get booked in exactly the same way.
+
+    The sweep only ever read _adhocs.json, so a pinned order stayed on the map
+    however long ago it was booked - five of them had built up, every one with a
+    MAN reference sitting in Sent Items, the oldest a week past its delivery
+    date. Nothing was going to take them off: pins have no 30-minute sweep of
+    their own and, until today, no working button either.
+    """
+    try:
+        import pins
+        return pins.load()
+    except Exception:
+        return []
+
+
 def _folders(ns):
     dhl = bd.dhl_store(ns)
     if dhl is None:
@@ -128,28 +144,33 @@ def find_bookings(ns, refs, days=DAYS):
 def main():
     apply = "apply" in [a.strip().lower() for a in sys.argv[1:]]
     recs = _load_adhocs()
-    if not recs:
-        print("No ad hocs on the map.")
+    pinned = _load_pins()
+    if not recs and not pinned:
+        print("Nothing on the map.")
         print("SWEEP_RESULT removed=0")
         return 0
 
     refs = []
-    for r in recs:
+    for r in recs + pinned:
         refs += [str(o).strip() for o in r.get("orders", []) if str(o).strip()]
-    print(f"Checking {len(recs)} ad hoc(s) against the mailbox...\n")
+    print(f"Checking {len(recs)} ad hoc(s) and {len(pinned)} pin(s) "
+          f"against the mailbox...\n")
 
     booked = find_bookings(bd.get_ns(), refs)
     hit = [r for r in recs
            if any(str(o).strip() in booked for o in r.get("orders", []))]
-    if not hit:
+    hit_pins = [r for r in pinned
+                if any(str(o).strip() in booked for o in r.get("orders", []))]
+    if not hit and not hit_pins:
         print("  none of them have a manifest yet - nothing to remove.")
         print("SWEEP_RESULT removed=0")
         return 0
 
-    for r in hit:
+    for r in hit + hit_pins:
         ref = next(str(o).strip() for o in r["orders"] if str(o).strip() in booked)
         b = booked[ref]
-        print(f"  {'REMOVE' if apply else 'would remove'}  {ref}")
+        kind = "pin" if r in hit_pins else r.get("kind", "adhoc")
+        print(f"  {'REMOVE' if apply else 'would remove'}  {ref}  [{kind}]")
         print(f"      {r.get('collection_site','?')} -> {r.get('site','?')}"
               f"  ({r.get('delivery_date','?')})")
         print(f"      manifest {b['man'] or '(booking phrase)'} · {b['when']}"
@@ -157,9 +178,17 @@ def main():
 
     if not apply:
         print(f"\nDRY RUN - nothing removed. Add 'apply' to take these "
-              f"{len(hit)} off the map.")
+              f"{len(hit) + len(hit_pins)} off the map.")
         print("SWEEP_RESULT removed=0")
         return 0
+
+    if hit_pins:
+        try:
+            import pins
+            gone = {r["id"] for r in hit_pins}
+            pins.save([p for p in pins.load() if p.get("id") not in gone])
+        except Exception as ex:
+            print(f"  (could not remove the pins: {ex})")
 
     keep_ids = {r["id"] for r in hit}
     left = [r for r in recs if r.get("id") not in keep_ids]
@@ -171,7 +200,7 @@ def main():
     # Remember them, so reprocessing the same form can never put a booked job
     # back on the map - the same guard the tracker's enrol sweeps rely on.
     dropped = []
-    for r in hit:
+    for r in hit + hit_pins:
         dropped += [str(o).strip() for o in r.get("orders", [])]
     try:
         tracker.remember_drops(dropped)
@@ -185,15 +214,17 @@ def main():
     except Exception:
         old = []
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for r in hit:
+    for r in hit + hit_pins:
         ref = next(str(o).strip() for o in r["orders"] if str(o).strip() in booked)
         old.insert(0, {"ref": ref, "removed_at": stamp, **booked[ref],
                        "site": r.get("site", ""), "csv": r.get("csv", "")})
     with open(LOG, "w", encoding="utf-8") as f:
         json.dump(old[:120], f, indent=1)
 
-    print(f"\nRemoved {len(hit)} from the map. {len(left)} left.")
-    print(f"SWEEP_RESULT removed={len(hit)}")
+    n = len(hit) + len(hit_pins)
+    print(f"\nRemoved {n} from the map ({len(hit)} ad hoc, {len(hit_pins)} pin). "
+          f"{len(left)} ad hoc(s) left.")
+    print(f"SWEEP_RESULT removed={n}")
     return 0
 
 
