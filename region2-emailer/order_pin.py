@@ -64,8 +64,24 @@ def main():
         # Deliberately no fallback hunt through Sent Items or the wait list: if
         # it is not in the extracts, say so plainly rather than half-inventing
         # an order from an email subject.
-        print(f"NOT FOUND: {' '.join(not_found) or order} is not in the order index "
-              f"or any extract in your mailbox.")
+        #
+        # But only say it when it has actually been proved. The whole-mailbox
+        # scan is capped now, and a scan that ran out of time has proved
+        # nothing - reporting that as "not in any extract" would be the same
+        # false negative that sent 7115288 missing, just with a new cause.
+        scan = so.LAST_SCAN
+        miss = " ".join(not_found) or order
+        if scan.get("cut_short"):
+            print(f"NOT FINISHED: searched {scan['files']} spreadsheet(s) in "
+                  f"{scan['seconds']}s without finding {miss}, and stopped there "
+                  f"so the desk was not blocked any longer.")
+            print("This does NOT mean the order is missing - the search was cut "
+                  "short. Run it again to carry on, or check the order number.")
+        else:
+            print(f"NOT FOUND: {miss} is not in the order index or any extract "
+                  f"in your mailbox"
+                  + (f" ({scan['files']} spreadsheet(s) searched)."
+                     if scan.get("files") else "."))
         print("Nothing pinned.")
         print("PIN_RESULT pinned=0")
         return 1

@@ -9,13 +9,43 @@ is a deliberate pick, so the region + supplier-rails filters are NOT applied her
     python send_order.py 6054999          # find + preview (never sends)
     python send_order.py 6054999 send     # actually send (only after you've okayed the preview)
 """
-import sys, os, re, zipfile
+import sys, os, re, time, zipfile
 from collections import OrderedDict
 import win32com.client
 import build_drafts as bd
 import metrics
 import order_index
 import tracker
+
+
+# How the last deep scan went. `cut_short` matters: a scan that ran out of
+# budget has NOT proved the order is missing, and must never be reported as if
+# it had.
+LAST_SCAN = {"files": 0, "cut_short": False, "seconds": 0}
+
+SCAN_BUDGET = 150          # seconds, per order, for the whole-mailbox scan
+
+
+def progress(msg):
+    """A line the agent relays straight to the dashboard while it works.
+
+    A search that takes minutes and says nothing is indistinguishable from a
+    search that is broken - which is how two of them ended up queued behind
+    each other. Anything printed with this prefix reaches the browser within a
+    couple of seconds, so the wait always shows what is actually happening.
+
+    Never let this be the thing that kills a search: it prints folder names,
+    and a console encoding that cannot represent one of them would otherwise
+    raise straight through the scan.
+    """
+    try:
+        print(f"PROGRESS {msg}", flush=True)
+    except Exception:
+        try:
+            print("PROGRESS " + str(msg).encode("ascii", "replace").decode(),
+                  flush=True)
+        except Exception:
+            pass
 
 
 def extract_contains(path, order):
@@ -31,15 +61,34 @@ def extract_contains(path, order):
     return False
 
 
-def find_extract(ns, order, limit=None):
+def find_extract(ns, order, limit=None, budget=None):
     # A pasted order is a deliberate pick: search EVERY spreadsheet attachment
     # in EVERY folder, whole history, newest first. Inbox tree first (that is
     # where extracts live), then the rest of the mailbox.
+    #
+    # `budget` caps that in seconds. Uncapped it is genuinely unbounded - an
+    # order that is in NO extract costs a walk of the entire mailbox, opening
+    # every spreadsheet in it, and the agent runs one job at a time so nothing
+    # else moves until it finishes. 5033691 spent five minutes to conclude
+    # nothing, twice over, because the second search was queued behind the
+    # first. Running out of budget is reported as "searched this far", never as
+    # "not in any extract" - a cut-short search must not be able to masquerade
+    # as a definitive miss.
     dhl = bd.dhl_store(ns)
     tmp = os.path.join(bd.HERE, "_search.xlsx")
     base = str(order).split("-")[0]
+    seen = {"files": 0, "said": 0.0, "cut": False}
+    started = time.time()
+
+    def out_of_time():
+        if budget is not None and time.time() - started > budget:
+            seen["cut"] = True
+            return True
+        return False
 
     def walk(folder):
+        if out_of_time():
+            return None
         try:
             items = folder.Items
         except Exception:
@@ -54,6 +103,8 @@ def find_extract(ns, order, limit=None):
                 n += 1
                 if limit and n > limit:
                     break
+                if n % 25 == 0 and out_of_time():
+                    return None
                 try:
                     for j in range(1, it.Attachments.Count + 1):
                         att = it.Attachments.Item(j)
@@ -61,6 +112,13 @@ def find_extract(ns, order, limit=None):
                         if not fn.lower().endswith((".xlsx", ".xlsm")):
                             continue
                         att.SaveAsFile(tmp)
+                        seen["files"] += 1
+                        # Every second or so, not every file: the point is to
+                        # show it is moving, not to flood the status endpoint.
+                        if time.time() - seen["said"] > 1.5:
+                            seen["said"] = time.time()
+                            progress(f"searching {folder.Name} — "
+                                     f"{seen['files']} spreadsheet(s) opened…")
                         if extract_contains(tmp, base):
                             return fn
                 except Exception:
@@ -76,14 +134,16 @@ def find_extract(ns, order, limit=None):
 
     inbox = bd.sub(dhl, "Inbox")
     fn = walk(inbox) if inbox is not None else None
-    if not fn:
+    if not fn and not seen["cut"]:
         for i in range(1, dhl.Folders.Count + 1):
             f = dhl.Folders.Item(i)
             if f.Name.strip().lower() == "inbox":
                 continue
             fn = walk(f)
-            if fn:
+            if fn or seen["cut"]:
                 break
+    LAST_SCAN.update(files=seen["files"], cut_short=seen["cut"],
+                     seconds=round(time.time() - started))
     return (tmp, fn) if fn else (None, None)
 
 
@@ -144,7 +204,26 @@ def resolve_orders(ns, order_string):
         path, fn = order_index.lookup(ns, tok, tmp)
         got = _rows_for(path, tok)
         if got is None:
-            path, fn = find_extract(ns, tok)
+            # Before paying for the deep scan: bring the index up to date. It is
+            # incremental - only mail newer than each folder's last scan is read
+            # - and the ordinary reason for a miss is an order that arrived
+            # since the last refresh, which is exactly what that picks up.
+            # Seconds against minutes: 5033840 was missing from the index and
+            # its search spent EIGHT MINUTES walking the whole mailbox, opening
+            # every spreadsheet in it, while the dashboard sat there saying
+            # nothing. Try the cheap answer before the expensive one.
+            progress(f"{tok} not in the index - refreshing it (a few seconds)…")
+            try:
+                order_index.refresh(ns=ns, budget=45, quiet=True,
+                                    max_items_per_folder=400)
+            except Exception:
+                pass
+            path, fn = order_index.lookup(ns, tok, tmp)
+            got = _rows_for(path, tok)
+        if got is None:
+            progress(f"{tok} still not indexed - searching every spreadsheet "
+                     f"in the mailbox. This is the slow path.")
+            path, fn = find_extract(ns, tok, budget=SCAN_BUDGET)
             got = _rows_for(path, tok)
         if got is None:
             not_found.append(tok)

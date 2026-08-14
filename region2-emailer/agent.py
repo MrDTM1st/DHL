@@ -361,6 +361,44 @@ def run(args):
     return (proc.stdout or "") + (proc.stderr or "")
 
 
+def run_live(args, on_progress, timeout=600):
+    """Same as run(), but PROGRESS lines are relayed while it is still working.
+
+    subprocess.run() hands back the output only once the process has exited, so
+    a search that takes minutes tells the dashboard nothing until it is over.
+    That silence is the whole complaint: it looks broken, so you press Find
+    again, and the second search queues behind the first one that is still
+    running. Reading the pipe line by line costs nothing and makes the wait
+    honest.
+    """
+    proc = subprocess.Popen([sys.executable] + args, cwd=HERE, text=True,
+                            encoding="utf-8", errors="replace",
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            bufsize=1)
+    # subprocess.run(timeout=) covered the whole call; iterating the pipe does
+    # not, so a child that hangs without printing would block the agent for
+    # ever. Kill it on a timer instead - the read then ends at EOF.
+    killer = threading.Timer(timeout, proc.kill)
+    killer.daemon = True
+    killer.start()
+    out = []
+    try:
+        for line in proc.stdout:
+            out.append(line)
+            if line.startswith("PROGRESS "):
+                try:
+                    on_progress(line[len("PROGRESS "):].strip())
+                except Exception:
+                    pass
+        proc.wait()
+    except Exception:
+        proc.kill()
+        raise
+    finally:
+        killer.cancel()
+    return "".join(out)
+
+
 def send_verdict(out):
     """(ok, n) from a send_order.py run - never guessed.
 
@@ -668,8 +706,14 @@ def main():
                 # Look an order up WITHOUT building or sending anything - for
                 # orders emailed by hand, which the toolkit never saw.
                 report("running", f"Looking up {order}…")
-                out = run(["order_pin.py", order])
-                if "NOT FOUND" in out:
+                out = run_live(["order_pin.py", order],
+                               lambda m: report("running", m))
+                if "NOT FINISHED" in out:
+                    # Cut short, not proved missing - the wording has to keep
+                    # those apart or a slow search reads as a wrong answer.
+                    report("error", f"Search for {order} was cut short - press "
+                           f"Find again to carry on.", tail(out, 6))
+                elif "NOT FOUND" in out:
                     report("error", f"{order} is not in the index or any extract.",
                            tail(out, 6))
                 else:
@@ -678,7 +722,7 @@ def main():
                 track = bool(cmd.get("track"))
                 report("running", f"Pinning {order}…")
                 args = ["order_pin.py", order, "pin"] + (["track"] if track else [])
-                out = run(args)
+                out = run_live(args, lambda m: report("running", m))
                 n = 0
                 for line in out.splitlines():
                     if line.startswith("PIN_RESULT pinned="):

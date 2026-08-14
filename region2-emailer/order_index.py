@@ -8,7 +8,7 @@ takes seconds. State lives in order_index.json next to this file.
 
     python order_index.py            # refresh (first run = full build)
 """
-import os, json, sys
+import os, json, sys, time
 import win32com.client
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -69,18 +69,41 @@ def _ts(item):
         return 0.0
 
 
-def refresh(max_items_per_folder=2000):
-    ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+def refresh(max_items_per_folder=2000, ns=None, budget=None, quiet=False):
+    """Bring the index up to date. Incremental: each folder remembers how far it
+    got, so only mail newer than that is read.
+
+    `ns` reuses a namespace the caller already has (a fresh Dispatch costs a
+    second or two). `budget` caps it at N seconds - for the refresh that runs
+    inside a search, where the point is to be quicker than the deep scan, not
+    to be exhaustive. Returns True if anything new was indexed.
+    """
+    if ns is None:
+        ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     dhl = None
     for i in range(1, ns.Folders.Count + 1):
         if ns.Folders.Item(i).Name.lower() == DHL_SMTP:
             dhl = ns.Folders.Item(i)
             break
     if dhl is None:
-        print("DHL store not found"); return
+        if not quiet:
+            print("DHL store not found")
+        return False
     d = load()
     tmp = os.path.join(HERE, "_index_scan.xlsx")
     scanned = added = 0
+    started = time.time()
+
+    # Heal marks that are already parked in the future. Clamping on write stops
+    # new ones, but a mark sitting ahead of now goes on skipping every mail
+    # that arrives before it catches up - which is mail that then never gets
+    # indexed at all. Pulling it back to now re-reads that window.
+    for fid, mark in list(d.get("folders", {}).items()):
+        if mark > started:
+            d["folders"][fid] = started
+
+    def spent():
+        return budget is not None and (time.time() - started) > budget
 
     def note(token, loc):
         locs = d["orders"].setdefault(token, [])
@@ -94,6 +117,8 @@ def refresh(max_items_per_folder=2000):
         name = folder.Name.strip().lower()
         if name in SKIP_FOLDERS:
             return
+        if spent():
+            return
         fid = f"{path}/{folder.Name}"
         last = d["folders"].get(fid, 0.0)
         newest = last
@@ -106,12 +131,18 @@ def refresh(max_items_per_folder=2000):
             n = 0
             for it in items:
                 n += 1
-                if n > max_items_per_folder:
+                if n > max_items_per_folder or spent():
                     break
                 ts = _ts(it)
                 if ts and ts <= last:
                     break                       # everything older is already indexed
-                newest = max(newest, ts)
+                # Never let a future-dated item become the high-water mark. One
+                # mail with a skewed clock parks the mark ahead of now, and
+                # every genuinely new mail that arrives before that time is then
+                # "already indexed" and silently skipped - so a real order goes
+                # missing from the index and its search pays for a full-mailbox
+                # scan instead. Four folders here were up to 54 minutes ahead.
+                newest = max(newest, min(ts, time.time()))
                 try:
                     store_id = folder.StoreID
                     for j in range(1, it.Attachments.Count + 1):
@@ -138,7 +169,10 @@ def refresh(max_items_per_folder=2000):
 
     walk(dhl, "")
     save(d)
-    print(f"index refresh: scanned {scanned} attachment(s), {len(d['orders'])} tokens known")
+    if not quiet:
+        print(f"index refresh: scanned {scanned} attachment(s), "
+              f"{len(d['orders'])} tokens known")
+    return added > 0
 
 
 def lookup(ns, order, out_path):

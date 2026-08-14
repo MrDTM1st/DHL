@@ -45,6 +45,16 @@ function OrderSearch({ status }) {
 
   const waited = pending ? Math.round((Date.now() - since) / 1000) : 0;
 
+  // What the wait actually says. The home PC relays a live line while it works
+  // ("refreshing the index", "searching Inbox - 120 spreadsheets opened"), and
+  // it runs one job at a time, so a search fired while another is still going
+  // is genuinely queued rather than slow. Saying which is which is the
+  // difference between waiting and pressing Find again.
+  const queued = state === 'queued';
+  const doing = pending === 'find' ? `Looking up ${asked}` : `Pinning ${asked}`;
+  const waitLine = queued ? 'Waiting for the home PC to finish another job…'
+    : (state === 'running' && status && status.detail) ? status.detail : `${doing}…`;
+
   async function run(kind, body) {
     setPending(kind);
     setSince(Date.now());
@@ -78,10 +88,12 @@ function OrderSearch({ status }) {
         <div className="mapsearch-wait" role="status" aria-live="polite">
           <span className="spin" />
           <div>
-            <span>{pending === 'find' ? 'Looking up ' : 'Pinning '}{asked}</span>
+            <span>{waitLine}</span>
             {waited > 1 && <span className="el"> · {waited}s</span>}
             {!online && <div className="warn">Home PC is offline — this will run when it reconnects.</div>}
-            {online && waited > 25 && <div className="warn">Still nothing back. The home PC picks jobs up every couple of seconds, so this is slower than expected.</div>}
+            {online && queued && waited > 6 && (
+              <div className="warn">The home PC runs one job at a time, so this starts as soon as the one in front finishes.</div>
+            )}
           </div>
         </div>
       )}
