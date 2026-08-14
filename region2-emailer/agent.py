@@ -371,8 +371,13 @@ def run_live(args, on_progress, timeout=600):
     running. Reading the pipe line by line costs nothing and makes the wait
     honest.
     """
+    # Force the child to write UTF-8 rather than the console codepage, or every
+    # non-ASCII character comes back as a replacement box: site names out of the
+    # spreadsheets are full of them, and "searching Tennant - 217 spreadsheets"
+    # arrived on the dashboard with the dashes and ellipses mangled.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     proc = subprocess.Popen([sys.executable] + args, cwd=HERE, text=True,
-                            encoding="utf-8", errors="replace",
+                            encoding="utf-8", errors="replace", env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             bufsize=1)
     # subprocess.run(timeout=) covered the whole call; iterating the pipe does

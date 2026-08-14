@@ -25,6 +25,25 @@ LAST_SCAN = {"files": 0, "cut_short": False, "seconds": 0}
 
 SCAN_BUDGET = 150          # seconds, per order, for the whole-mailbox scan
 
+# Which subfolder to walk first. Outlook hands them over in its own order, which
+# put a dozen people's name-folders ahead of everything useful: a real search
+# spent 124 of its 136 seconds in Tennant, Zoe, Alex, Dario, Eddy, Gulzar,
+# Kelly and a huge Completed archive before it ever reached Region 2, NR, Media
+# Sets and ADHOC - the four folders extracts actually arrive in. Same scan, same
+# files, just the likely ones first.
+FIRST = ("region", "synergy", "haulier", "extract", "upload", "nr", "adhoc",
+         "ad hoc", "media", "order")
+LAST = ("completed", "archive", "old", "done", "deleted")
+
+
+def _folder_rank(name):
+    n = str(name or "").strip().lower()
+    if any(k in n for k in LAST):
+        return 2
+    if any(k in n for k in FIRST):
+        return 0
+    return 1
+
 
 def progress(msg):
     """A line the agent relays straight to the dashboard while it works.
@@ -124,21 +143,37 @@ def find_extract(ns, order, limit=None, budget=None):
                 except Exception:
                     continue
         try:
-            for i in range(1, folder.Folders.Count + 1):
-                hit = walk(folder.Folders.Item(i))
-                if hit:
-                    return hit
+            kids = [folder.Folders.Item(i)
+                    for i in range(1, folder.Folders.Count + 1)]
+        except Exception:
+            kids = []
+        try:
+            kids.sort(key=lambda f: _folder_rank(f.Name))
         except Exception:
             pass
+        for kid in kids:
+            try:
+                hit = walk(kid)
+            except Exception:
+                continue
+            if hit or seen["cut"]:
+                return hit
         return None
 
     inbox = bd.sub(dhl, "Inbox")
     fn = walk(inbox) if inbox is not None else None
     if not fn and not seen["cut"]:
+        top = []
         for i in range(1, dhl.Folders.Count + 1):
             f = dhl.Folders.Item(i)
             if f.Name.strip().lower() == "inbox":
                 continue
+            top.append(f)
+        try:
+            top.sort(key=lambda f: _folder_rank(f.Name))
+        except Exception:
+            pass
+        for f in top:
             fn = walk(f)
             if fn or seen["cut"]:
                 break
