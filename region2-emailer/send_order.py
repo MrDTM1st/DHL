@@ -105,7 +105,8 @@ def find_extract(ns, order, limit=None, budget=None):
             return True
         return False
 
-    def walk(folder):
+    def scan(folder):
+        """This folder's own items only - the tree is walked flat, see below."""
         if out_of_time():
             return None
         try:
@@ -142,41 +143,50 @@ def find_extract(ns, order, limit=None, budget=None):
                             return fn
                 except Exception:
                     continue
-        try:
-            kids = [folder.Folders.Item(i)
-                    for i in range(1, folder.Folders.Count + 1)]
-        except Exception:
-            kids = []
-        try:
-            kids.sort(key=lambda f: _folder_rank(f.Name))
-        except Exception:
-            pass
-        for kid in kids:
-            try:
-                hit = walk(kid)
-            except Exception:
-                continue
-            if hit or seen["cut"]:
-                return hit
         return None
 
-    inbox = bd.sub(dhl, "Inbox")
-    fn = walk(inbox) if inbox is not None else None
-    if not fn and not seen["cut"]:
-        top = []
-        for i in range(1, dhl.Folders.Count + 1):
-            f = dhl.Folders.Item(i)
-            if f.Name.strip().lower() == "inbox":
-                continue
-            top.append(f)
+    # Flat, not depth-first. Ranking each folder against its own siblings looked
+    # right and did nothing: "Find Haulier" ranks first and CONTAINS the huge
+    # Completed archive, so descending into it went straight back to opening
+    # hundreds of archived spreadsheets before Region 2 was touched. Collecting
+    # every folder first and ordering the whole list means the likely folders
+    # really are searched first, wherever they sit in the tree.
+    def collect(folder, out, depth=0):
+        if depth > 6:
+            return
+        out.append(folder)
         try:
-            top.sort(key=lambda f: _folder_rank(f.Name))
+            for i in range(1, folder.Folders.Count + 1):
+                collect(folder.Folders.Item(i), out, depth + 1)
         except Exception:
             pass
-        for f in top:
-            fn = walk(f)
-            if fn or seen["cut"]:
-                break
+
+    everything = []
+    inbox = bd.sub(dhl, "Inbox")
+    if inbox is not None:
+        collect(inbox, everything)          # Inbox tree first...
+    try:
+        for i in range(1, dhl.Folders.Count + 1):
+            f = dhl.Folders.Item(i)
+            if f.Name.strip().lower() != "inbox":
+                collect(f, everything)      # ...then the rest of the mailbox
+    except Exception:
+        pass
+
+    # Stable, so within a rank the Inbox tree still comes first.
+    try:
+        everything.sort(key=lambda f: _folder_rank(f.Name))
+    except Exception:
+        pass
+
+    fn = None
+    for folder in everything:
+        try:
+            fn = scan(folder)
+        except Exception:
+            continue
+        if fn or seen["cut"]:
+            break
     LAST_SCAN.update(files=seen["files"], cut_short=seen["cut"],
                      seconds=round(time.time() - started))
     return (tmp, fn) if fn else (None, None)
