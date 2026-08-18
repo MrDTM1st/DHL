@@ -851,7 +851,21 @@ def main():
                         report("error", "Form NOT processed - see below (likely a missing order number).", tail(out, 10))
                     else:
                         push_panel()   # the new map record rides on the panel
-                        report("done", "Ad hoc form processed - CSV below; map shows the job.", tail(out, 10))
+                        # "map shows the job" used to be unconditional, so a
+                        # form refused by the booked-off guard reported exactly
+                        # like one that worked. The map is the whole reason for
+                        # this upload; claiming it when it did not happen is
+                        # worse than saying nothing.
+                        if "MAP : NOT on the map" in out or ("SKIP:" in out
+                                                             and "MAP : job saved" not in out):
+                            report("error",
+                                   "Ad hoc processed and the CSV is below - but it is NOT on "
+                                   "the map: this job was booked off earlier, so it was "
+                                   "refused. Tell me to put it back if that was wrong.",
+                                   tail(out, 12))
+                        else:
+                            report("done", "Ad hoc form processed - CSV below; map shows the job.",
+                                   tail(out, 10))
             elif action == "tracker_refresh":
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])

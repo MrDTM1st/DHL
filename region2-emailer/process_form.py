@@ -494,8 +494,17 @@ def main():
             + datetime.now().strftime("%d%m%Y%H%M%S") + ".csv")
     out = nr_csv.write_csv(records, outbox.path(name))
     try:
-        save_adhocs(rows, name, form_path=path)
-        print("MAP : job saved for the dashboard map (form kept for forwarding).")
+        # Say what actually happened. save_adhocs can skip every record - a job
+        # already booked off is refused, by design - and this printed "job
+        # saved" regardless, so an upload that reached the map and one that was
+        # silently refused produced identical output. AH19/8/26NESY was chased
+        # for a quarter of an hour on the strength of that line.
+        n_mapped = save_adhocs(rows, name, form_path=path)
+        if n_mapped:
+            print("MAP : job saved for the dashboard map (form kept for forwarding).")
+        else:
+            print("MAP : NOT on the map - every job in this form was refused, "
+                  "see the SKIP line(s) above.")
     except Exception as ex:   # the map extra must never cost the CSV
         print(f"(map record not saved: {ex})")
     for d in rows:
