@@ -355,13 +355,10 @@ def main():
               f"of {len(orders)} on the sheet\n")
         orders = picked
 
-    import services
     for o in orders:
-        svc = services.for_delivery(o.get("delivery time"))
         print(f"  {o['Customer Order No'] or '(no ref)':26} "
               f"{str(o['Site Name - Collection'])[:26]:26} {str(o['Postcode'] or ''):9}"
-              f" -> {str(o['Delivery Point'])[:12]:12} {str(o['D Postcode']):9}"
-              f" {('  ' + ', '.join(svc)) if svc else ''}")
+              f" -> {str(o['Delivery Point'])[:12]:12} {str(o['D Postcode']):9}")
 
     # An unrecognised outward code ships as the literal 'UNKNOWN' rather than
     # failing, so count them here instead of letting them through unremarked.
