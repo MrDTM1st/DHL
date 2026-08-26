@@ -41,9 +41,11 @@ TEMPLATE = os.path.join(HERE, "media_sets_template.xlsx")
 # Baked into every row by the form itself (RHPC Admin, columns Y/Z/AF/AG/AP).
 PRODUCT_CODE = "MEDIA_SETS"
 # nr_csv's ITEMS line takes the DESCRIPTION first and only falls back to the
-# code, so both carry MEDIA_SETS - otherwise the CSV would still read
-# "Media Sets" however the code was spelled.
-PRODUCT_DESC = "MEDIA_SETS"
+# code, so this is what actually lands in the CSV - the code above is only the
+# fallback. It reads "Media Sets", the product as it is named everywhere else:
+# on the input sheet, in the request emails and on the dashboard. The CSV used
+# to carry MEDIA_SETS here to match the code; it does not any more.
+PRODUCT_DESC = "Media Sets"
 ACCOUNT = "NRADHOC"
 COST_CENTRE = "618294"
 # A media set is always one item at 50kg, whatever the sheet happens to say -
