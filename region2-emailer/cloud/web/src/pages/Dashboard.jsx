@@ -330,6 +330,9 @@ export default function Dashboard({
     idle: 'var(--faint)', queued: 'var(--yellow-d)', running: 'var(--yellow-d)',
     done: 'var(--go)', error: 'var(--red)', preview_ready: 'var(--red)',
     batch_ready: 'var(--yellow-d)', sites_needed: 'var(--red)',
+    // wants something from you (a copy-paste), so it reads like the other
+    // waiting states rather than a finished-and-forget green
+    teams_ready: 'var(--red)',
   }[st.state] || 'var(--faint)';
 
   const findOrder = (raw) => {

@@ -166,11 +166,41 @@ function MatchPanel({ decisions, sites, onCommand }) {
   );
 }
 
+// ---- teams_ready: an internal allocation, so nothing to send ----
+// The seasonal route allocates some sites to DHL's own teams (NOC), who are
+// spoken to on Teams. There is no email and no Send button on purpose - the
+// deliverable is the text, so the panel's whole job is to hand it over
+// cleanly. It sits with the other flow panels because it is the same kind of
+// moment: the run finished and it wants something from you.
+function TeamsPanel({ status }) {
+  const blocks = status.email || [];
+  const [copied, setCopied] = useState(-1);
+  return (
+    <div className="card panelcard">
+      <div className="ph">Paste into Teams <span className="hint">· internal allocation — no email is sent</span></div>
+      {blocks.map((b, i) => (
+        <div className="formcol" key={i}>
+          <textarea rows={12} spellCheck={false} readOnly
+            style={{ lineHeight: 1.55, resize: 'vertical' }}
+            value={b.message || ''} />
+          <div>
+            <button className="btn go" onClick={async () => {
+              try { await navigator.clipboard.writeText(b.message || ''); setCopied(i); }
+              catch { setCopied(-1); }
+            }}>{copied === i ? 'Copied' : 'Copy message'}</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function FlowPanels({ status, panel, currentOrder, onCommand, agentOnline, ttlText }) {
   const decisions = (panel && panel.decisions) || [];
   return (
     <>
       {decisions.length > 0 && <MatchPanel decisions={decisions} sites={(panel && panel.sites) || []} onCommand={onCommand} />}
+      {status.state === 'teams_ready' && (status.email || []).length > 0 && <TeamsPanel status={status} />}
       {status.state === 'sites_needed' && (status.email || []).length > 0 && <SitesPanel status={status} onCommand={onCommand} />}
       {status.state === 'batch_ready' && (status.email || []).length > 0 && <BatchPanel status={status} onCommand={onCommand} agentOnline={agentOnline} ttlText={ttlText} />}
       {status.state === 'preview_ready' && (status.email || []).length > 0 && <ReviewSend status={status} currentOrder={currentOrder} onCommand={onCommand} agentOnline={agentOnline} ttlText={ttlText} />}

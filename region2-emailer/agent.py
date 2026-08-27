@@ -279,6 +279,49 @@ def _staged_email():
         return None
 
 
+def _teams_blocks(out):
+    """The Teams message(s) seasonal.py just wrote, as a panel payload.
+
+    seasonal.py prints "saved: <path>" for the .txt it drops in the outbox -
+    read that file back rather than scrape the console text, so what the panel
+    shows is byte-for-byte what was saved.
+
+    The file carries one "--- <HAULIER> - paste into Teams ---" header per
+    allocation. Those are separators for the saved file, NOT part of the
+    message - split on them so each haulier gets its own block and its own
+    Copy button, and nobody pastes a row of dashes into a Teams chat.
+    """
+    blocks = []
+    for line in out.splitlines():
+        s = line.strip()
+        if not (s.lower().startswith("saved:") and s.lower().endswith(".txt")):
+            continue
+        p = s.split(":", 1)[1].strip()
+        try:
+            with open(p, encoding="utf-8") as f:
+                body = f.read()
+        except OSError:
+            continue
+        who, buf = "", []
+
+        def flush():
+            if any(x.strip() for x in buf):
+                blocks.append({"to": "", "subject": who or os.path.basename(p),
+                               "message": "\n".join(buf).strip(), "teams": True})
+        for ln in body.splitlines():
+            t = ln.strip()
+            if t.startswith("---") and t.endswith("---"):
+                flush()
+                who = t.strip("-").strip()
+                if who.lower().endswith("- paste into teams"):
+                    who = who[:-len("- paste into teams")].strip()
+                buf = []
+            else:
+                buf.append(ln)
+        flush()
+    return blocks
+
+
 def _asks():
     """Which hauliers have already been asked about each order - worked out
     from Sent Items, so it counts the ones emailed by hand too."""
@@ -717,17 +760,22 @@ def main():
                                f"Cover request(s) to {hauliers_n} haulier(s) ready below.{extra}",
                                tail(out, 24), email=_staged_email())
                     elif "TEAMS:" in out:
-                        # An internal allocation (NOC). There is no email to
-                        # review - the deliverable is the block of text to
-                        # paste into Teams, which is in the output below and
-                        # saved to the outbox as a .txt. Say so plainly rather
-                        # than report "no cover request staged", which reads
-                        # like the run achieved nothing.
-                        report("done",
-                               f"Seasonal order processed — {n} order(s), CSV is in Files. "
+                        # An internal allocation (NOC): no email to review, the
+                        # deliverable is text to paste. It needs a state and a
+                        # panel of ITS OWN. FlowPanels only renders for
+                        # sites_needed / batch_ready / preview_ready, each
+                        # gated on a non-empty email list - so reporting this
+                        # as plain "done" with no email drew nothing at all,
+                        # and a run that had actually worked looked like a
+                        # dead card.
+                        blocks = _teams_blocks(out)
+                        msg = (f"Seasonal order processed — {n} order(s), CSV is in Files. "
                                f"This site is allocated to an internal team, so there is no "
-                               f"email — copy the Teams message below (also saved to Files).",
-                               tail(out, 30))
+                               f"email — copy the Teams message below (also saved to Files).")
+                        if blocks:
+                            report("teams_ready", msg, tail(out, 30), email=blocks)
+                        else:
+                            report("done", msg, tail(out, 30))
                     else:
                         report("done",
                                f"Seasonal order processed — {n} order(s), CSV is in Files. "
