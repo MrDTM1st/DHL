@@ -265,6 +265,48 @@ def cover_request(orders, code, haulier, source):
     }
 
 
+def is_internal(haulier):
+    """DHL's own people, who are spoken to on Teams rather than emailed.
+
+    Decided on the addresses, not the name: anyone whose every contact is
+    @dhl.com is a colleague, and "would you be able to cover, and what would
+    it cost" is the wrong thing to send a colleague. NOC is the one this
+    exists for, but the rule holds for any internal allocation.
+    """
+    emails = [str(e).strip().lower() for e in (haulier or {}).get("emails") or []]
+    return bool(emails) and all(e.endswith("@dhl.com") for e in emails)
+
+
+def teams_message(orders, haulier):
+    """The same ask, laid out to be pasted straight into a Teams chat.
+
+    No signature and no greeting block - a Teams message carries the sender
+    already, and the email footer pasted into a chat window is noise.
+    """
+    name = str((haulier or {}).get("name") or "").replace("DHL ", "")
+    lines = [f"Hi{' ' + name if name else ''}, can you cover "
+             f"{'these' if len(orders) != 1 else 'this'} seasonal treatment "
+             f"run{'s' if len(orders) != 1 else ''}?", ""]
+    for o in orders:
+        g = lambda k: str(o.get(k) or "").strip()          # noqa: E731
+        offload = g("HIAB")
+        lines += [
+            g("Customer Order No"),
+            f"Collect: {g('Site Name - Collection')}, {g('Postcode')} - "
+            f"{g('collection time')} to {g('collection time end')[-5:]}",
+            f"Deliver: {g('Delivery Point')}, {g('D Postcode')} - "
+            f"{g('delivery time')} to {g('delivery time end')[-5:]}",
+            f"{g('Product Qty')}x {g('Product / Service Code')}, {g('Vehicle Type')}"
+            + (f", offload {offload}" if offload and offload.upper() != "N"
+               else ", no offload"),
+            "",
+        ]
+    lines.append("Let me know if you can take "
+                 f"{'them' if len(orders) != 1 else 'it'} and I will get "
+                 f"{'them' if len(orders) != 1 else 'it'} raised.")
+    return "\n".join(lines)
+
+
 def main():
     args = [a for a in sys.argv[1:] if a.strip()]
     if args and args[0].lower() == "import":
@@ -350,10 +392,28 @@ def main():
     print(f"\n  CSV: {csv_out}")
 
     # ---- stage one cover request per haulier ----
-    staged = []
+    # Internal allocations (NOC) are spoken to on Teams, so they get a block of
+    # text to paste rather than a staged email. It goes in the outbox as a .txt
+    # so it lands on the Files card with everything else, and is printed here
+    # so a command-line run can be copied straight out of the console.
+    staged, teams = [], []
     for code, d in sorted(by_haulier.items()):
         src = ", ".join(sorted({o.get("_source", "") for o in d["orders"]}))
-        staged.append(cover_request(d["orders"], code, d["rec"], src))
+        if is_internal(d["rec"]):
+            teams.append((code, d["rec"], teams_message(d["orders"], d["rec"])))
+        else:
+            staged.append(cover_request(d["orders"], code, d["rec"], src))
+    if teams:
+        txt = outbox.path(f"Seasonal Teams message {stamp}.txt")
+        with open(txt, "w", encoding="utf-8") as f:
+            for code, rec, msg in teams:
+                f.write(f"--- {code} ({rec.get('name')}) - paste into Teams ---\n")
+                f.write(msg + "\n\n")
+        for code, rec, msg in teams:
+            print(f"\n  TEAMS: {code} ({rec.get('name')}) is internal - no email "
+                  f"staged. Paste this into Teams:\n")
+            print("    " + msg.replace("\n", "\n    "))
+        print(f"\n  saved: {txt}")
     if staged:
         # MERGE, do not replace. Seasonal orders arrive one file at a time, so
         # a straight overwrite would mean processing the second order silently
