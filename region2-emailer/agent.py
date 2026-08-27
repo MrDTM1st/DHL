@@ -282,43 +282,25 @@ def _staged_email():
 def _teams_blocks(out):
     """The Teams message(s) seasonal.py just wrote, as a panel payload.
 
-    seasonal.py prints "saved: <path>" for the .txt it drops in the outbox -
-    read that file back rather than scrape the console text, so what the panel
-    shows is byte-for-byte what was saved.
-
-    The file carries one "--- <HAULIER> - paste into Teams ---" header per
-    allocation. Those are separators for the saved file, NOT part of the
-    message - split on them so each haulier gets its own block and its own
-    Copy button, and nobody pastes a row of dashes into a Teams chat.
+    seasonal.py prints each message between TEAMS_BEGIN <who> and TEAMS_END.
+    Nothing is written to disk: the message is read off the dashboard once and
+    pasted into Teams, so a file would only clutter the Files card. The text
+    between the markers IS the message - no indent to strip, no header to
+    trim - and one block comes back per allocation, so each gets its own Copy
+    button.
     """
-    blocks = []
-    for line in out.splitlines():
-        s = line.strip()
-        if not (s.lower().startswith("saved:") and s.lower().endswith(".txt")):
-            continue
-        p = s.split(":", 1)[1].strip()
-        try:
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-        except OSError:
-            continue
-        who, buf = "", []
-
-        def flush():
+    blocks, who, buf = [], None, []
+    for ln in out.splitlines():
+        t = ln.strip()
+        if t.startswith("TEAMS_BEGIN"):
+            who, buf = t[len("TEAMS_BEGIN"):].strip(), []
+        elif t == "TEAMS_END" and who is not None:
             if any(x.strip() for x in buf):
-                blocks.append({"to": "", "subject": who or os.path.basename(p),
+                blocks.append({"to": "", "subject": who,
                                "message": "\n".join(buf).strip(), "teams": True})
-        for ln in body.splitlines():
-            t = ln.strip()
-            if t.startswith("---") and t.endswith("---"):
-                flush()
-                who = t.strip("-").strip()
-                if who.lower().endswith("- paste into teams"):
-                    who = who[:-len("- paste into teams")].strip()
-                buf = []
-            else:
-                buf.append(ln)
-        flush()
+            who, buf = None, []
+        elif who is not None:
+            buf.append(ln)
     return blocks
 
 
@@ -771,7 +753,7 @@ def main():
                         blocks = _teams_blocks(out)
                         msg = (f"Seasonal order processed — {n} order(s), CSV is in Files. "
                                f"This site is allocated to an internal team, so there is no "
-                               f"email — copy the Teams message below (also saved to Files).")
+                               f"email — copy the Teams message below.")
                         if blocks:
                             report("teams_ready", msg, tail(out, 30), email=blocks)
                         else:

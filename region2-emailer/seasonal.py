@@ -427,17 +427,18 @@ def main():
             teams.append((code, d["rec"], teams_message(d["orders"], d["rec"])))
         else:
             staged.append(cover_request(d["orders"], code, d["rec"], src))
-    if teams:
-        txt = outbox.path(f"Seasonal Teams message {stamp}.txt")
-        with open(txt, "w", encoding="utf-8") as f:
-            for code, rec, msg in teams:
-                f.write(f"--- {code} ({rec.get('name')}) - paste into Teams ---\n")
-                f.write(msg + "\n\n")
-        for code, rec, msg in teams:
-            print(f"\n  TEAMS: {code} ({rec.get('name')}) is internal - no email "
-                  f"staged. Paste this into Teams:\n")
-            print("    " + msg.replace("\n", "\n    "))
-        print(f"\n  saved: {txt}")
+    # Printed between markers, NOT written to a file. The message is something
+    # you copy off the screen once and paste into Teams - saving it to the
+    # outbox would put a throwaway .txt on the Files card next to the uploads
+    # that actually matter, and push a real one off the twelve it keeps.
+    # The markers are what the agent parses to fill the dashboard panel; the
+    # block between them is the message exactly, no indent to strip.
+    for code, rec, msg in teams:
+        print(f"\n  TEAMS: {code} ({rec.get('name')}) is internal - no email "
+              f"staged. Paste this into Teams:\n")
+        print(f"TEAMS_BEGIN {code} ({rec.get('name')})")
+        print(msg)
+        print("TEAMS_END")
     if staged:
         # MERGE, do not replace. Seasonal orders arrive one file at a time, so
         # a straight overwrite would mean processing the second order silently
