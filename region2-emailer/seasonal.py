@@ -39,6 +39,7 @@ import outbox
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITES = os.path.join(HERE, "_seasonal_sites.json")
+TRACKER = os.path.join(HERE, "_seasonal_tracker.xlsx")
 PENDING = os.path.join(HERE, "_pending_email.json")
 
 UPLOAD_SHEET = "RHPC Upload"
@@ -204,13 +205,18 @@ def read_order(path):
     for r in rows[1:]:
         if not any(c is not None and str(c).strip() for c in r):
             continue
-        o = {}
+        o, raw = {}, {}
         for i, h in enumerate(hdr):
             if not h:
                 continue
             v = r[i] if i < len(r) else None
             o[TIME_COLS.get(h, h)] = _fmt(v) if isinstance(
                 v, (datetime.datetime, datetime.date, datetime.time)) else v
+            # nr_csv wants the dates as text; the tracker wants them as real
+            # dates or they sort as strings and lose their formatting. Keep
+            # both rather than convert back and guess the original.
+            raw[h] = v
+        o["_raw"] = raw
         # a row with no order ref is a spare template row, not a job
         if str(o.get("Customer Order No") or "").strip():
             out.append(o)
@@ -290,6 +296,116 @@ def cover_request(orders, code, haulier, source):
     }
 
 
+# ---------- the WIP tracker ----------
+def import_tracker(path):
+    """Adopt a WIP Seasonal Tracker as the master this tool appends to.
+
+    Re-import whenever you have filled in Additional notes / Manifest no. by
+    hand, so the master carries your edits forward. The tool only ever ADDS
+    rows; it never touches a column you own.
+    """
+    import shutil
+    shutil.copy(path, TRACKER)
+    return TRACKER
+
+
+def _tracker_admin_names(wb):
+    try:
+        adm = wb["Admin"]
+    except KeyError:
+        return []
+    return [adm.cell(row=r, column=2).value
+            for r in range(2, adm.max_row + 1) if adm.cell(row=r, column=2).value]
+
+
+def _squash(s):
+    return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+def update_tracker(orders, alloc, stamp):
+    """Append each order to the tracker's Orders tab and drop a copy in the
+    outbox, so it downloads from the dashboard's Files card.
+
+    Only the Orders tab is written. The 2026 tab is formula-driven off it
+    (=IF(Orders!C2="","",Orders!C2) and friends), so it fills itself - except
+    Haulier, which is a manual column, and which we can fill because the
+    allocation sheet already told us who it is.
+
+    A row counts as free only if it is free on BOTH tabs. A 2026 row whose
+    column A holds a literal instead of a formula was typed in by hand and is
+    NOT driven by Orders - writing underneath one puts an order in the
+    workbook that the tracker will never display.
+    """
+    if not os.path.exists(TRACKER):
+        return None, "no tracker adopted yet"
+    import openpyxl
+    import warnings
+    warnings.filterwarnings("ignore")
+    # data_only=False: keep the formulas. Loading cached values and saving
+    # would freeze the whole 2026 sheet into static text.
+    wb = openpyxl.load_workbook(TRACKER)
+    if "Orders" not in wb.sheetnames:
+        wb.close()
+        return None, "tracker has no 'Orders' tab"
+    ows = wb["Orders"]
+    ws = wb["2026"] if "2026" in wb.sheetnames else None
+    thdr = {str(ows.cell(row=1, column=c).value).strip(): c
+            for c in range(1, ows.max_column + 1) if ows.cell(row=1, column=c).value}
+    if "Customer Order No" not in thdr:
+        wb.close()
+        return None, "tracker's Orders tab has no 'Customer Order No' column"
+
+    admin = _tracker_admin_names(wb)
+
+    def admin_name(code):
+        # the allocation sheet and the tracker's Admin list disagree on some
+        # spellings (Lawson/Lawsons, Tennants/Tennant) - match on letters
+        for a in admin:
+            if _squash(a).rstrip("s") == _squash(code).rstrip("s"):
+                return a
+        return None
+
+    def free(r):
+        if ows.cell(row=r, column=thdr["Customer Order No"]).value not in (None, ""):
+            return False
+        if ws is None:
+            return True
+        a = ws.cell(row=r, column=1).value
+        return not (isinstance(a, str) and a.strip() and not a.startswith("="))
+
+    seen = {str(ows.cell(row=r, column=thdr["Customer Order No"]).value).strip()
+            for r in range(2, ows.max_row + 1)
+            if ows.cell(row=r, column=thdr["Customer Order No"]).value}
+
+    row, added, skipped = 2, [], []
+    while not free(row):
+        row += 1
+    for o in orders:
+        ref = str(o.get("Customer Order No") or "").strip()
+        if ref in seen:                     # already tracked - never double-book
+            skipped.append(ref)
+            continue
+        src = o.get("_raw") or o
+        for h, c in thdr.items():
+            if h in src:
+                ows.cell(row=row, column=c).value = src[h]
+        code = (alloc.get(_norm_pc(o.get("D Postcode"))) or {}).get("haulier1", "")
+        name = admin_name(code) if code else None
+        if name and ws is not None:
+            ws.cell(row=row, column=11).value = name        # K - Haulier
+        added.append((row, ref, name or code or "-"))
+        seen.add(ref)
+        row += 1
+        while not free(row):
+            row += 1
+
+    out = outbox.path(f"Seasonal Tracker {stamp}.xlsx")
+    wb.save(TRACKER)
+    wb.save(out)
+    wb.close()
+    return out, {"added": added, "skipped": skipped}
+
+
 def is_internal(haulier):
     """DHL's own people, who are spoken to on Teams rather than emailed.
 
@@ -333,6 +449,17 @@ def teams_message(orders, haulier):
 
 def main():
     args = [a for a in sys.argv[1:] if a.strip()]
+    if args and args[0].lower() == "tracker":
+        if len(args) < 2 or not os.path.exists(args[1]):
+            print("Give me the tracker: "
+                  "python seasonal.py tracker \"<WIP Seasonal Tracker.xlsx>\"")
+            return 2
+        import_tracker(args[1])
+        print(f"Adopted {os.path.basename(args[1])} as the seasonal tracker.")
+        print(f"  cached: {TRACKER}")
+        print("  Re-run this whenever you have filled in Additional notes or "
+              "Manifest no. by hand, so the master keeps your edits.")
+        return 0
     if args and args[0].lower() == "import":
         if len(args) < 2 or not os.path.exists(args[1]):
             print("Give me the allocation sheet: "
@@ -415,11 +542,23 @@ def main():
     nr_csv.write_csv(records, csv_out)
     print(f"\n  CSV: {csv_out}")
 
+    # ---- the tracker ----
+    # Appended to and dropped in the outbox, so it downloads from the Files
+    # card like the CSV. Only the Orders tab is written; the 2026 tab is
+    # formula-driven off it and fills itself.
+    tpath, tinfo = update_tracker(orders, alloc, stamp)
+    if tpath:
+        for r, ref, who in tinfo["added"]:
+            print(f"  TRACKER row {r}: {ref} (haulier {who})")
+        if tinfo["skipped"]:
+            print("  TRACKER: already tracked, not added again - "
+                  + ", ".join(tinfo["skipped"]))
+        print(f"  TRACKER: {tpath}")
+    else:
+        print(f"  !! tracker not updated - {tinfo}. Adopt one with:"
+              f"\n     python seasonal.py tracker \"<WIP Seasonal Tracker.xlsx>\"")
+
     # ---- stage one cover request per haulier ----
-    # Internal allocations (NOC) are spoken to on Teams, so they get a block of
-    # text to paste rather than a staged email. It goes in the outbox as a .txt
-    # so it lands on the Files card with everything else, and is printed here
-    # so a command-line run can be copied straight out of the console.
     staged, teams = [], []
     for code, d in sorted(by_haulier.items()):
         src = ", ".join(sorted({o.get("_source", "") for o in d["orders"]}))

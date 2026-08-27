@@ -737,6 +737,8 @@ def main():
                         # rather than let a quiet success imply otherwise.
                         extra = (f" {unmatched} order(s) have no allocated haulier and "
                                  f"nobody has been emailed about them." if unmatched else "")
+                        if "TRACKER:" in out:
+                            extra += " The tracker is updated and in Files."
                         report("preview_ready",
                                f"Seasonal order processed — {n} order(s), CSV is in Files. "
                                f"Cover request(s) to {hauliers_n} haulier(s) ready below.{extra}",
@@ -753,7 +755,9 @@ def main():
                         blocks = _teams_blocks(out)
                         msg = (f"Seasonal order processed — {n} order(s), CSV is in Files. "
                                f"This site is allocated to an internal team, so there is no "
-                               f"email — copy the Teams message below.")
+                               f"email — copy the Teams message below."
+                               + (" The tracker is updated and in Files."
+                                  if "TRACKER:" in out else ""))
                         if blocks:
                             report("teams_ready", msg, tail(out, 30), email=blocks)
                         else:
