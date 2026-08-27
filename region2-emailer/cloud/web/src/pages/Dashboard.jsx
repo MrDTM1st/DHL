@@ -92,6 +92,35 @@ function UploadCard({ onUpload, busy }) {
   );
 }
 
+// ---- Seasonal treatments card ----
+// The autumn railhead-treatment and winter programmes. One Seasonal Treatment
+// Order per file, and one file per drop - /api/upload is a single slot, so
+// there is nowhere to put a second. Dropping them one after another is safe:
+// seasonal.py MERGES its cover requests into the pending list rather than
+// replacing it, so order 2 does not wipe out order 1's email.
+function SeasonalCard({ onUpload, busy }) {
+  const fileRef = useRef(null);
+  const [name, setName] = useState('');
+  const [drag, setDrag] = useState(false);
+  const pick = (file) => { if (file) { setName(file.name); onUpload(file); } };
+  return (
+    <div className="cmd"
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}>
+      <div className="top"><div className="ci">{I.up}</div><h3>Seasonal treatments</h3></div>
+      <div className="desc">Drop a Seasonal Treatment Order (.xlsx) to build the upload CSV and stage a cover request to that site&rsquo;s allocated haulier.</div>
+      <input ref={fileRef} type="file" accept=".xlsx,.xlsm" style={{ display: 'none' }}
+        onChange={(e) => pick(e.target.files[0])} />
+      <div className={'dropzone' + (drag ? ' drag' : '')} style={{ margin: '6px 0 0' }} onClick={() => fileRef.current && fileRef.current.click()}>
+        <div className="di">{I.file}</div>
+        <div className="d1">{busy ? 'Uploading…' : name ? name : 'Drop .xlsx here, or click'}</div>
+        <div className="d2">Seasonal Treatment Order</div>
+      </div>
+    </div>
+  );
+}
+
 // ---- Media sets card ----
 // Same shape as the Synergy upload, different form: a weekly courier sheet in,
 // the NR upload CSV out. The `if (await onUpload(file))` guard at the mount
@@ -342,6 +371,8 @@ export default function Dashboard({
           </div>
 
           <MediaSetsCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'media_sets' }); }} />
+
+          <SeasonalCard busy={uploadBusy} onUpload={async (file) => { if (await onUpload(file)) onCommand({ action: 'seasonal' }); }} />
 
           <InputCard ic={I.send} title="Send order(s)" desc="Find specific order numbers and send."
             placeholder="Order no(s), space-separate to group" buttonLabel="Find &amp; preview" onSubmit={findOrder} />

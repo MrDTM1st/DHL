@@ -670,6 +670,57 @@ def main():
                         # are in the tail - show enough of it
                         report("done", f"Media sets processed — {n} order(s), CSV is in Files.",
                                tail(out, 24))
+            elif action == "seasonal":
+                # A Seasonal Treatment Order -> the NR upload CSV, plus a cover
+                # request to whichever haulier that delivery site is allocated
+                # to on the season's allocation sheet. seasonal.py sends
+                # nothing; the email lands in the same Review & send panel as
+                # every other one.
+                report("running", "Processing seasonal treatment order…")
+                try:
+                    up = _req("/api/pull_upload")
+                except Exception:
+                    up = None
+                if not up or not up.get("data"):
+                    report("error", "No file received — pick the Seasonal Treatment Order and try again.")
+                else:
+                    import base64
+                    ext = os.path.splitext(up.get("name") or "")[1].lower()
+                    if ext not in (".xlsx", ".xlsm"):
+                        ext = ".xlsx"
+                    raw = os.path.join(HERE, "_seasonal_raw" + ext)
+                    with open(raw, "wb") as f:
+                        f.write(base64.b64decode(up["data"]))
+                    before = snap_outbox()
+                    out = run(["seasonal.py", raw])
+                    push_new_files(before)
+                    n = hauliers_n = unmatched = 0
+                    for line in out.splitlines():
+                        if line.startswith("SEASONAL_RESULT"):
+                            for part in line.split():
+                                if part.startswith("orders="):
+                                    n = int(part.split("=")[1] or 0)
+                                elif part.startswith("hauliers="):
+                                    hauliers_n = int(part.split("=")[1] or 0)
+                                elif part.startswith("unmatched="):
+                                    unmatched = int(part.split("=")[1] or 0)
+                    if not n:
+                        report("error", "Seasonal order NOT processed — see below.", tail(out, 24))
+                    elif "COVER_READY 1" in out:
+                        # Orders with no allocated haulier are ON the CSV but
+                        # nobody has been asked to cover them - say so here
+                        # rather than let a quiet success imply otherwise.
+                        extra = (f" {unmatched} order(s) have no allocated haulier and "
+                                 f"nobody has been emailed about them." if unmatched else "")
+                        report("preview_ready",
+                               f"Seasonal order processed — {n} order(s), CSV is in Files. "
+                               f"Cover request(s) to {hauliers_n} haulier(s) ready below.{extra}",
+                               tail(out, 24), email=_staged_email())
+                    else:
+                        report("done",
+                               f"Seasonal order processed — {n} order(s), CSV is in Files. "
+                               f"No cover request staged — check the allocation below.",
+                               tail(out, 24))
             elif action == "add_sites":
                 report("running", "Learning new sites & re-processing…")
                 sites = cmd.get("sites") or {}
