@@ -716,6 +716,18 @@ def main():
                                f"Seasonal order processed — {n} order(s), CSV is in Files. "
                                f"Cover request(s) to {hauliers_n} haulier(s) ready below.{extra}",
                                tail(out, 24), email=_staged_email())
+                    elif "TEAMS:" in out:
+                        # An internal allocation (NOC). There is no email to
+                        # review - the deliverable is the block of text to
+                        # paste into Teams, which is in the output below and
+                        # saved to the outbox as a .txt. Say so plainly rather
+                        # than report "no cover request staged", which reads
+                        # like the run achieved nothing.
+                        report("done",
+                               f"Seasonal order processed — {n} order(s), CSV is in Files. "
+                               f"This site is allocated to an internal team, so there is no "
+                               f"email — copy the Teams message below (also saved to Files).",
+                               tail(out, 30))
                     else:
                         report("done",
                                f"Seasonal order processed — {n} order(s), CSV is in Files. "

@@ -218,6 +218,31 @@ def read_order(path):
 
 
 # ---------- the cover request ----------
+def window(start, end):
+    """"05/09/2026 08:00 16:00" - the way the send-outs already read.
+
+    The date is written once. It reappears on the end only when the window
+    actually crosses midnight, which is the one case where dropping it would
+    turn a 22:30-00:30 night drop into something that looks like it finishes
+    22 hours early.
+    """
+    s, e = str(start or "").strip(), str(end or "").strip()
+    if not s:
+        return e
+    if not e:
+        return s
+    sd, _, st = s.partition(" ")
+    ed, _, et = e.partition(" ")
+    if sd == ed and st and et:
+        return f"{sd} {st} {et}"
+    return f"{s} {e}"
+
+
+def _offload(o):
+    v = str(o.get("HIAB") or "").strip()
+    return v if v and v.upper() != "N" else "none required"
+
+
 def cover_request(orders, code, haulier, source):
     """One "would you be able to cover" email for one haulier.
 
@@ -234,12 +259,12 @@ def cover_request(orders, code, haulier, source):
             "",
             f"Order: {g('Customer Order No')}",
             f"Collection: {g('Site Name - Collection')}, {g('Postcode')}",
-            f"Collection date/time: {g('collection time')} {g('collection time end')}",
+            f"Collection date/time: {window(g('collection time'), g('collection time end'))}",
             f"Delivery: {g('Delivery Point')}, {g('D Postcode')}",
-            f"Delivery date/time: {g('delivery time')} {g('delivery time end')}",
+            f"Delivery date/time: {window(g('delivery time'), g('delivery time end'))}",
             f"Materials: {qty}x {prod}" if qty or prod else "Materials:",
             f"Vehicle: {g('Vehicle Type')}",
-            f"Offloading: {g('HIAB') or 'N'}",
+            f"Offloading: {_offload(o)}",
         ]
     lines += ["", "Let me know if you can cover and what the cost would be."]
 
@@ -289,16 +314,15 @@ def teams_message(orders, haulier):
              f"run{'s' if len(orders) != 1 else ''}?", ""]
     for o in orders:
         g = lambda k: str(o.get(k) or "").strip()          # noqa: E731
-        offload = g("HIAB")
+        off = _offload(o)
         lines += [
             g("Customer Order No"),
             f"Collect: {g('Site Name - Collection')}, {g('Postcode')} - "
-            f"{g('collection time')} to {g('collection time end')[-5:]}",
+            f"{window(g('collection time'), g('collection time end'))}",
             f"Deliver: {g('Delivery Point')}, {g('D Postcode')} - "
-            f"{g('delivery time')} to {g('delivery time end')[-5:]}",
+            f"{window(g('delivery time'), g('delivery time end'))}",
             f"{g('Product Qty')}x {g('Product / Service Code')}, {g('Vehicle Type')}"
-            + (f", offload {offload}" if offload and offload.upper() != "N"
-               else ", no offload"),
+            + (", no offload" if off == "none required" else f", offload {off}"),
             "",
         ]
     lines.append("Let me know if you can take "
