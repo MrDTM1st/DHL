@@ -152,7 +152,16 @@ export function needsFor(r) {
   const need = [], d = r.details || {};
   const mats = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toLowerCase();
   if (/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
-  if (/ballast|bag/.test(mats)) need.push('bags');
+  // LOOSE ballast is tipped, not bagged, so it needs a TIPPER - and only the
+  // 20 hauliers carrying one can physically take it. Asking for 'bags' here
+  // would rank the bagged-ballast fleet, none of whom can tip a load, and the
+  // ring-round would start with people guaranteed to say no. 'tipper'
+  // substring-matches Rigid Tipper and Artic Tipper both, so it filters to
+  // the right fleet without narrowing to one axle count the job never stated.
+  // Mirrors is_loose_ballast() in build_drafts.py: ballast AND loose.
+  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats));
+  if (loose) need.push('tipper');
+  else if (/ballast|bag/.test(mats)) need.push('bags');
   // a stated vehicle type is a requirement too - an artic-curtain job only
   // fits hauliers who run artic curtains (need names mirror the caps sheet)
   const vi = vehicleInfo((d.vehicle || {}).value || '');

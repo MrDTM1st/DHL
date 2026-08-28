@@ -908,7 +908,10 @@ function needsFor(r){
   const need=[], d=r.details||{};
   const mats=((r.materials||'')+' '+(r.product_codes||[]).join(' ')).toLowerCase();
   if(/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
-  if(/ballast|bag/.test(mats)) need.push('bags');
+  // loose ballast is tipped, not bagged - it needs a tipper (see orders.js)
+  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats));
+  if(loose) need.push('tipper');
+  else if(/ballast|bag/.test(mats)) need.push('bags');
   const off=(d.offloading||{}).value||'';
   if(off==='MOFFETT') need.push('moffett');
   else if(off==='HIAB') need.push(((d.artic_access||{}).value==='no') ? 'rigid hiab' : 'artic hiab');
