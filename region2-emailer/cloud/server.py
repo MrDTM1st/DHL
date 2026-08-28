@@ -909,7 +909,9 @@ function needsFor(r){
   const mats=((r.materials||'')+' '+(r.product_codes||[]).join(' ')).toLowerCase();
   if(/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
   // loose ballast is tipped, not bagged - it needs a tipper (see orders.js)
-  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats));
+  // 0057/100500/001 = loose, /002 = 1 tonne bags (see orders.js)
+  const looseCode=(r.product_codes||[]).some(c=>String(c).trim().endsWith('100500/001'));
+  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats)) || looseCode;
   if(loose) need.push('tipper');
   else if(/ballast|bag/.test(mats)) need.push('bags');
   const off=(d.offloading||{}).value||'';

@@ -159,7 +159,17 @@ export function needsFor(r) {
   // substring-matches Rigid Tipper and Artic Tipper both, so it filters to
   // the right fleet without narrowing to one axle count the job never stated.
   // Mirrors is_loose_ballast() in build_drafts.py: ballast AND loose.
-  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats));
+  // The stock code is the last resort and the only one that works on records
+  // written before the summary kept the word: the tracker keeps
+  // product_codes even when materials has collapsed to "80x ballast".
+  // Verified against Synergy_DHL_Haulier_Extract_260826a:
+  //     0057/100500/001 = Track ballast (50mm) - Loose
+  //     0057/100500/002 = Track ballast (50mm) - 1 tonne bags
+  const looseCode = (r.product_codes || []).some(
+    (c) => String(c).trim().endsWith('100500/001'));
+  const loose = !!r.loose_ballast
+    || (/ballast/.test(mats) && /loose/.test(mats))
+    || looseCode;
   if (loose) need.push('tipper');
   else if (/ballast|bag/.test(mats)) need.push('bags');
   // a stated vehicle type is a requirement too - an artic-curtain job only

@@ -338,6 +338,12 @@ def is_loose_ballast(*descs):
 
 def product_type(desc):
     d = (desc or "").upper()
+    # Loose is its OWN type, not a flavour of ballast. It rides in a tipper and
+    # bagged ballast does not, so a summary that reads "80x ballast" for both
+    # loses the one fact that decides who can carry it - and materials is what
+    # the tracker keeps, so everything downstream inherits the loss.
+    if is_loose_ballast(d):
+        return "loose ballast"
     for key, label in (("SLEEPER", "sleepers"), ("BALLAST", "ballast"), ("RAIL", "rails"),
                        ("SWITCH", "S&C"), ("CROSSING", "S&C"), ("PAD", "pads")):
         if key in d:
@@ -386,6 +392,9 @@ def consolidation_candidates(groups):
         # Trucks: small=10 bags, large=20 - so any ballast qty that's a multiple
         # of 10 (10/20/30/40...) fills whole trucks exactly. Non-multiples leave a
         # part-truck with room, so they stay eligible.
+        # a tipped load never shares a vehicle - the tipper is the load
+        if e.get("loose_ballast"):
+            continue
         if e.get("only_ballast") and e.get("ballast", 0) > 0 and e.get("ballast", 0) % 10 == 0:
             continue
         ow = _outward(e.get("postcode"))
@@ -1011,7 +1020,9 @@ def build_emails_multi(files):
                     r[C["prod_code"]] if C.get("prod_code") is not None else ""))
                  for r, C, _ in bundle]
         ptypes = {product_type(d) for _, d in items}
-        ballast_bags = sum(_qty(q) for q, d in items if product_type(d) == "ballast")
+        # both ballast types count toward the full-truck test below
+        ballast_bags = sum(_qty(q) for q, d in items
+                           if product_type(d) in ("ballast", "loose ballast"))
         nm = firstname(r0[C0['dcon']])
         text, html, message = _bodies(nm, items, dd)
         pcodes = sorted({clean(r[C['prod_code']]) for r, C, _ in bundle
@@ -1021,7 +1032,8 @@ def build_emails_multi(files):
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, orders=orders,
                            product_codes=pcodes, materials=product_summary(items),
-                           ballast=ballast_bags, only_ballast=(ptypes == {"ballast"}),
+                           ballast=ballast_bags,
+                           only_ballast=bool(ptypes) and ptypes <= {"ballast", "loose ballast"},
                            loose_ballast=any(is_loose_ballast(d) for _, d in items),
                            site=clean(r0[C0['daddr']]), worksite=worksite_of(wsite),
                            postcode=dpc, source=sources,
