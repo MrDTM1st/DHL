@@ -239,6 +239,13 @@ def window(start, end):
         return s
     sd, _, st = s.partition(" ")
     ed, _, et = e.partition(" ")
+    # 00:00 to 00:00 is the order form's way of saying "no window was given" -
+    # the same time(0,0) = "not set" the ad hoc forms use. The Rutherglen G73
+    # orders arrive that way, and printing it verbatim tells a haulier the
+    # delivery is at midnight, which nobody asked for. The date on its own is
+    # the honest answer; the haulier asks, rather than turning up at 00:00.
+    if sd == ed and st == et == "00:00":
+        return sd
     if sd == ed and st and et:
         return f"{sd} {st} {et}"
     return f"{s} {e}"
