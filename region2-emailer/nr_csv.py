@@ -138,6 +138,53 @@ def transform(rows):
     return [r for _, _, r in out]
 
 
+# The window an upload carries when nobody has confirmed the times. Nine to
+# five with a minute on each end: the odd minute is the marker, so a glance at
+# CTMS says "these times are still ours, not the site's". A confirmed nine-to-
+# five stays 09:00-17:00 and reads differently on purpose.
+UNCONFIRMED_START = "09:01"
+UNCONFIRMED_END = "17:01"
+
+
+def _hhmm(v):
+    """(hour, minute) from a datetime or a "dd/mm/YYYY HH:MM" string, else None."""
+    if v is None or v == "":
+        return None
+    if hasattr(v, "hour") and hasattr(v, "minute"):
+        return (v.hour, v.minute)
+    m = re.search(r"(\d{1,2}):(\d{2})", str(v))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def unstated_window(a, b):
+    """True when a leg's times were never actually given.
+
+    Blank is the easy case. The one that bit us is midnight: a spreadsheet with
+    a date and no time exports as 00:00, and an unset delivery reaches us as a
+    minute past. Taken literally that is a delivery at 00:01 sitting BEFORE its
+    own 07:00 collection - not bookable, and it fired a "why is this backwards?"
+    query at the raiser for a time nobody had set.
+
+    A genuine midnight job always carries a real window (00:00-02:00), so only a
+    zero- or one-minute window at midnight counts as unstated. Never widen this
+    past a minute: 00:00-00:30 is somebody's night shift.
+    """
+    ha, hb = _hhmm(a), _hhmm(b)
+    if ha is None:
+        return True
+    if ha[0] != 0 or ha[1] > 1:
+        return False
+    if hb is None:
+        return True
+    return hb[0] == 0 and hb[1] - ha[1] <= 1
+
+
+def unconfirmed_window(datestr):
+    """("<date> 09:01", "<date> 17:01") - the default pair for a given date."""
+    d = str(datestr or "").strip()
+    return ((d + " " + UNCONFIRMED_START).strip(), (d + " " + UNCONFIRMED_END).strip())
+
+
 # CTMS product codes for the three types that have one. Exactly as CTMS spells
 # them - LOOSE_BALLAS and LOOSE_STONEB really are twelve characters, not
 # truncations to be tidied up. Same lesson as SUN_BANK_HOL, which CTMS rejected

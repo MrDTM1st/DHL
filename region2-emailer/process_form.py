@@ -183,20 +183,20 @@ def to_transform_row(d):
             if ds:
                 return ds
         return ""
+    # 09:01-17:01, not 09:00-17:00: the odd minute is how CTMS shows at a glance
+    # that these times are still ours and nobody has confirmed them.
     if not r["collection time"]:
         base = _date_of("Collection Date", "collection_time", "Delivery Date", "delivery_time")
         if base:
-            r["collection time"] = base + " 09:00"
-            r["collection time end"] = base + " 17:00"
+            r["collection time"], r["collection time end"] = nr_csv.unconfirmed_window(base)
     if not r["delivery time"]:
         base = _date_of("Delivery Date", "delivery_time", "Collection Date", "collection_time")
         if base:
-            r["delivery time"] = base + " 09:00"
-            r["delivery time end"] = base + " 17:00"
-    # a window with a start but no end closes at 17:00
+            r["delivery time"], r["delivery time end"] = nr_csv.unconfirmed_window(base)
+    # a window with a start but no end closes at the unconfirmed hour
     for a, b in (("collection time", "collection time end"), ("delivery time", "delivery time end")):
         if r[a] and not r[b]:
-            r[b] = r[a][:10] + " 17:00"
+            r[b] = r[a][:10] + " " + nr_csv.UNCONFIRMED_END
     r["Account"] = account_for(d)   # preset account wins; else NRADHOC
     return r
 

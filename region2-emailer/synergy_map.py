@@ -197,6 +197,16 @@ def map_orders(path):
                 return v.strftime("%d/%m/%Y %H:%M")
             return str(v or "").strip()
         dt, dte = dfmt(g(r, "dtime")), dfmt(g(r, "dtimee"))
+        # An extract that carries no delivery time reaches us as midnight, which
+        # taken literally is a delivery BEFORE its own 07:00 collection - not
+        # bookable, and it fired a "why is this backwards?" query at the raiser
+        # about a time nobody had set. Default it instead, with the marker
+        # minute so CTMS shows the times are unconfirmed. A real night window
+        # (00:00-02:00) is left exactly as the extract stated it.
+        if nr_csv.unstated_window(g(r, "dtime"), g(r, "dtimee")):
+            dday = _as_dt(g(r, "ddate")) or _as_dt(g(r, "dtime"))
+            if dday:
+                dt, dte = nr_csv.unconfirmed_window(dday.strftime("%d/%m/%Y"))
 
         ship = str(g(r, "ship")).strip()   # leave blank if the extract has none (no junk derivation)
         serial = g(r, "serial")
