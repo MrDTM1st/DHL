@@ -53,6 +53,18 @@ def site_codes():
     return sorted(SITES, key=lambda s: s.lower())
 
 
+def site_options():
+    """[{code, pc, town}] - what the dropdown shows. The code alone is not
+    enough to choose between sites that share an address."""
+    out = []
+    for c in sorted(SITES, key=lambda s: s.lower()):
+        d = SITES.get(c) or {}
+        out.append({"code": c,
+                    "pc": str(d.get("postcode", "") or "").strip(),
+                    "town": str(d.get("town", "") or "").strip()})
+    return out
+
+
 def _hours(s):
     try:
         h, m, sec = str(s).split(":")
@@ -85,6 +97,11 @@ def add_site(code, details):
         "start_hours": details.get("start_hours", "") or "07:00:00",
         "close_hours": details.get("close_hours", "") or "17:00:00",
         "email": details.get("email", ""), "notes": details.get("notes", ""),
+        # town rides along so the dashboard dropdown can tell four sites at one
+        # postcode apart - ST6 4NU alone carries L13-Mossend LDC-, Land Recovery
+        # Ltd and Land Recovery Ltd - ALSAGER, and the code names do not say which
+        # is which.
+        "town": details.get("town", ""), "address": details.get("address", ""),
     }
     with open(os.path.join(HERE, "_synergy_sites.json"), "w", encoding="utf-8") as f:
         json.dump(STORE, f, indent=1)

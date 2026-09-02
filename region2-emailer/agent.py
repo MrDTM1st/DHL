@@ -321,7 +321,7 @@ def _synergy_sites():
     near-duplicate of a site that was there all along."""
     try:
         import synergy_map
-        return synergy_map.site_codes()
+        return synergy_map.site_options()
     except Exception:
         return []
 

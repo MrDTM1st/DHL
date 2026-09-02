@@ -140,12 +140,30 @@ function SitesPanel({ status, panel, onCommand }) {
             <div style={{ margin: '6px 0 2px' }}>
               <select value={picked} onChange={pair(s)} style={{ width: '100%', maxWidth: 520 }}>
                 <option value="">— this is an existing site… (pick from Supplier Details) —</option>
-                {known.map((k) => <option key={k} value={k}>{k}</option>)}
+                {known.map((k) => {
+                  // tolerate both shapes: older agents publish plain strings
+                  const code = typeof k === 'string' ? k : k.code;
+                  const bits = typeof k === 'string' ? [] : [k.pc, k.town].filter(Boolean);
+                  return <option key={code} value={code}>{bits.length ? code + ' — ' + bits.join(', ') : code}</option>;
+                })}
               </select>
             </div>
             {picked ? (
               <div className="hint" style={{ marginTop: 6 }}>
                 Will be remembered as <b>{picked}</b> — its contact, postcode, phone and loading hours come from the sheet.
+                {(() => {
+                  // Several sites can share a postcode AND a town - ST6 4NU carries
+                  // three - so the label alone cannot separate them. Say so rather
+                  // than let a wrong pick look confirmed.
+                  const me = known.find((k) => (typeof k === 'string' ? k : k.code) === picked);
+                  const pc = me && typeof me !== 'string' ? me.pc : '';
+                  if (!pc) return null;
+                  const sibs = known.filter((k) => typeof k !== 'string' && k.pc === pc && k.code !== picked);
+                  if (!sibs.length) return null;
+                  return <div style={{ marginTop: 4 }}>
+                    Note: {sibs.length + 1} sites share {pc} — {sibs.map((x) => x.code).join(', ')}. Make sure this is the right one.
+                  </div>;
+                })()}
               </div>
             ) : (
               <>
