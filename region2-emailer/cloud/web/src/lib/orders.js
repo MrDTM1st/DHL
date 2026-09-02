@@ -146,6 +146,17 @@ export function vehicleInfo(code) {
   return { label, need, weight };
 }
 
+// Bagged ballast goes on any normal flatbed - rigid or artic - and that is all
+// it needs. It used to demand the 'bags' capability, which only 29 of the 55
+// hauliers are flagged with, so the ring-round left out two dozen firms who
+// could carry the job perfectly well. Loose is the one with a real constraint:
+// it is tipped, so it still requires a tipper.
+//
+// An entry that is an ARRAY means "any of these", unlike the plain strings
+// which must all match. 'flat' is in the list because a rigid flatbed is
+// spelled "short flat" in the capability sheet and contains neither word.
+const BAGS_NEED = ['artic', 'rigid', 'flat'];
+
 // What a job needs, from its materials + parsed customer details. Drives the
 // haulier capability match. Ported verbatim from the original browser logic.
 export function needsFor(r) {
@@ -171,7 +182,7 @@ export function needsFor(r) {
     || (/ballast/.test(mats) && /loose/.test(mats))
     || looseCode;
   if (loose) need.push('tipper');
-  else if (/ballast|bag/.test(mats)) need.push('bags');
+  else if (/ballast|bag/.test(mats)) need.push(BAGS_NEED);
   // a stated vehicle type is a requirement too - an artic-curtain job only
   // fits hauliers who run artic curtains (need names mirror the caps sheet)
   const vi = vehicleInfo((d.vehicle || {}).value || '');
@@ -296,7 +307,10 @@ export function recommendFor(r, hauliers, geo) {
     if (h.parcel) return false;   // Parcel Pass is a booking service, never ranked
     if (outsideCoverage(h)) return false;
     const caps = (h.caps || []).map((c) => c.toLowerCase());
-    return need.every((n) => caps.some((c) => c.includes(n)));
+    // a plain need must match; an array of alternatives needs any one of them
+    return need.every((n) => (Array.isArray(n)
+      ? n.some((alt) => caps.some((c) => c.includes(alt)))
+      : caps.some((c) => c.includes(n))));
   }).map((h) => {
     const g = geo[pcNorm(h.pc || '')];
     // nearest of the collection points - the run starts wherever suits them
