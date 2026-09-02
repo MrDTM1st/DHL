@@ -192,11 +192,16 @@ def to_transform_row(d):
     if not r["delivery time"]:
         base = _date_of("Delivery Date", "delivery_time", "Collection Date", "collection_time")
         if base:
-            r["delivery time"], r["delivery time end"] = nr_csv.unconfirmed_window(base)
-    # a window with a start but no end closes at the unconfirmed hour
+            # Default the delivery off THIS job's collection window (+1h01m),
+            # which is what the real database does - not off a fixed pair.
+            r["delivery time"], r["delivery time end"] = nr_csv.unconfirmed_window(
+                base, (r["collection time"], r["collection time end"]))
+    # A window with a start but no end used to be closed at the fixed 17:01,
+    # which put the delivery marker on collection windows and turned a 22:00
+    # start into an end earlier than itself. See nr_csv.close_window.
     for a, b in (("collection time", "collection time end"), ("delivery time", "delivery time end")):
         if r[a] and not r[b]:
-            r[b] = r[a][:10] + " " + nr_csv.UNCONFIRMED_END
+            r[b] = nr_csv.close_window(r[a])
     r["Account"] = account_for(d)   # preset account wins; else NRADHOC
     return r
 

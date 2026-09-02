@@ -17,6 +17,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = json.load(open(os.path.join(HERE, "postcode_regions.json"), encoding="utf-8"))
 
 
+class Keep(str):
+    """A string whose leading/trailing spaces are load-bearing.
+
+    Only the transform's own computed fields wear this - the two halves of the
+    Access name split and the seven-character site short codes. Everything else
+    is raw source text and gets trimmed. See nc().
+    """
+
+
 def nc(v):
     if isinstance(v, float) and v.is_integer():
         v = int(v)   # Excel numerics: 4.0 -> 4, like Access Format()
@@ -28,7 +37,16 @@ def nc(v):
     # are untouched by this.
     if isinstance(v, datetime):
         v = "" if v.year < 1990 else v.strftime("%d/%m/%Y %H:%M")
-    return re.sub(r"[,]", " ", "" if v is None else str(v)).strip()
+    s = re.sub(r"[,]", " ", "" if v is None else str(v))
+    # Raw source values ARE trimmed - the extract's " Chemical Lane" and
+    # " 07802890451" go in with their leading space and come out without it,
+    # and 0 of 216 genuine address-2 or phone fields start with a space.
+    # Values the transform COMPUTED are not: the Access name split writes
+    # "Daniel " and " Smith" as two columns whose shared space is the join,
+    # and Left(name,7) keeps whatever trailing space the cut lands on (109 of
+    # 216 genuine delivery short codes end in one). Stripping everything
+    # deleted the second kind; stripping nothing invented the first.
+    return s if isinstance(v, Keep) else s.strip()
 
 
 def region_of(pc):
@@ -46,24 +64,36 @@ def region_of(pc):
 def first_name(name):
     # IIf(null," TBA", IIf(Left(name,InStr(name," "))=" "," TBA", Left(name,InStr(name," "))))
     if not name:
-        return " TBA"
+        return Keep(" TBA")
     i = str(name).find(" ")
     first = str(name)[: i + 1] if i >= 0 else ""
-    return " TBA" if first == " " else first
+    # A one-word contact ("Tina", "Shunter") has no space, so InStr returns 0
+    # and Left(name,0) is "". Jet compares strings ignoring TRAILING spaces, so
+    # in Access that "" tests EQUAL to " " and the expression falls to the TBA
+    # branch. Python's == does not, so this returned an empty forename and left
+    # the whole name in the surname column - and last_name(), which offsets by
+    # len(first_name), then started from the wrong character.
+    return Keep(" TBA") if first.strip() == "" else Keep(first)
 
 
 def last_name(name):
     # Mid(name, Len(First), 100) - 1-based start at the last char of First
     name = "" if name is None else str(name)
     fl = len(first_name(name))
-    return name[fl - 1: fl - 1 + 100] if fl >= 1 else name
+    return Keep(name[fl - 1: fl - 1 + 100] if fl >= 1 else name)
 
 
 def dp_short(dp):
     # Mid(Left(dp, InStr(dp," ")), 1, 7)
     dp = "" if dp is None else str(dp)
     i = dp.find(" ")
-    return (dp[: i + 1] if i >= 0 else "")[:7]
+    return Keep((dp[: i + 1] if i >= 0 else "")[:7])
+
+
+# Every spelling of "no, don't send one" seen on the forms and extracts. A
+# task is a chargeable extra, so it is ordered only by an affirmative value -
+# anything in here, blank included, means no task row.
+NOT_ORDERED = ("", "N", "NO", "0", "-", "--", "N/A", "NA", "NONE", "FALSE", "NIL")
 
 
 def transform(rows):
@@ -84,7 +114,7 @@ def transform(rows):
         acct = (o.get("Account") or "").strip()
         # ORDER row (SEQ 1) - Final's column order
         rec(1, ordno, {
-            0: "ORDER", 1: ordno, 2: site[:7], 3: site,
+            0: "ORDER", 1: ordno, 2: Keep(site[:7]), 3: site,
             4: first_name(o.get("Contact Name")), 5: last_name(o.get("Contact Name")),
             6: o.get("Notes for Collection Location Comments"),
             7: o.get("Address 1"), 8: o.get("Address 2"),
@@ -95,9 +125,20 @@ def transform(rows):
             17: first_name(o.get("D Contact Name")), 18: last_name(o.get("D Contact Name")),
             19: o.get("D Address 1"), 20: o.get("D Address 2"), 21: o.get("D Address 3"),
             22: region_of(o.get("D Postcode")), 23: o.get("D Postcode"),
-            24: o.get("D Telephone No") or str(o.get("D Contact Name") or "")[-12:],
+            # The [-12:] fallback is our own slice, so any space it starts with
+            # is an artefact of where the cut landed, not something the source
+            # wrote - and 0 of 216 genuine phone numbers begin with a space.
+            # Strip THIS value only; the general no-strip rule still holds.
+            24: o.get("D Telephone No") or str(o.get("D Contact Name") or "")[-12:].strip(),
             25: o.get("delivery time"), 26: o.get("delivery time end"),
-            27: o.get("Delivery Instructions"),
+            # 255 is the Access Short Text ceiling and the database really does
+            # cut at it: 12 genuine ORDER rows sit at exactly 255, every one
+            # chopped mid-word, and none of the 216 exceeds it. Two rows sharing
+            # one note but differing in prefix length run different distances
+            # into the identical tail, which proves the cut happens HERE, on the
+            # assembled string, not upstream. We were sending 361 characters on
+            # every Synergy upload.
+            27: str(o.get("Delivery Instructions") or "")[:255],
             28: "NRHEAVY" if acct.upper() == "HEAVY" else acct,
             29: "", 30: o.get("Vehicle Type"),
             31: str(o.get("Est Cost") if o.get("Est Cost") is not None else 0),
@@ -110,7 +151,13 @@ def transform(rows):
                                   ("PTS", "PTS", 6), ("Rear Steer", "REAR STEER", 7),
                                   ("Vehicle Escort", "ESCORTS", 8)):
             v = o.get(field)
-            if v is not None and str(v).strip().upper() != "N":
+            # The test used to be "anything that is not the single string N",
+            # which made an EMPTY cell order the service: a form that left HIAB
+            # blank got a HIAB task, and a HIAB is a chargeable extra. Only an
+            # affirmative value asks for the task now. Every genuine ORD_TASKS
+            # row carries a real code and the value 1; 117 of 216 genuine orders
+            # (54%) carry no task row at all, so "absent" is the normal case.
+            if str("" if v is None else v).strip().upper() not in NOT_ORDERED:
                 rec(seq, ordno, {0: "ORD_TASKS", 1: label, 2: "1"})
         # No NIGHT / SATURDAY / SUN_BANK_HOL rows. This used to derive them from
         # the delivery time and add one to every upload; it does not any more,
@@ -120,8 +167,13 @@ def transform(rows):
         # ORD_SUB_REFS 1002 (SEQ 9): col1=1002, col2=Raised by
         rec(9, ordno, {0: "ORD_SUB_REFS", 1: "1002", 2: o.get("Raised by")})
         # ORD_SUB_REFS 1003 (SEQ 10): col1=1003, col2=Cost Centre or "0"
+        # A cost centre of "   " is not a cost centre. The old test only caught
+        # None and "", so a whitespace-only cell wrote an EMPTY 1003; the
+        # genuine database never emits an empty sub-ref - 1003 falls back to the
+        # literal "0" (510 of 510 genuine 1003 rows are non-empty).
         cc = o.get("Cost Centre")
-        rec(10, ordno, {0: "ORD_SUB_REFS", 1: "1003", 2: cc if cc not in (None, "") else "0"})
+        rec(10, ordno, {0: "ORD_SUB_REFS", 1: "1003",
+                        2: cc if str(cc or "").strip() else "0"})
         # ORD_LINES (SEQ 12): col2=class, col3=qty, col4=Serial Number
         rec(12, ordno, {0: "ORD_LINES",
                         2: "CHRG_PALLET" if acct == "NRNONHEAVY" else "HEAVY",
@@ -187,10 +239,65 @@ def unstated_window(a, b):
     return hb[0] == 23 and hb[1] >= 58   # 00:01-23:59: "any time that day"
 
 
-def unconfirmed_window(datestr):
-    """("<date> 09:01", "<date> 17:01") - the default pair for a given date."""
+MARKER = timedelta(hours=1, minutes=1)
+# The window assumed when the collection end is not known either. 08:00-16:00
+# is what most supplier yards keep, and plus the marker it comes out as the
+# familiar 09:01-17:01 - which is where that pair came from in the first place.
+DEFAULT_BASE = ("08:00", "16:00")
+
+
+def _shift(hhmm, delta):
+    t = (hhmm[0] * 60 + hhmm[1] + int(delta.total_seconds() // 60)) % (24 * 60)
+    return f"{t // 60:02d}:{t % 60:02d}"
+
+
+def close_window(startstr):
+    """Close a window that has a start and no end, on the start's own date.
+
+    This used to stamp on the fixed 17:01. That is the DELIVERY marker, and it
+    was being written onto collection windows too; worse, a 22:00 start closed
+    at 17:01 - an end four hours before its own beginning, which is not
+    bookable. A working day plus the marker minute keeps the familiar
+    09:00 -> 17:01 and can never invert. It clamps at 23:59 rather than rolling
+    onto the next date, because inventing a second date is the bigger sin.
+    """
+    d, _, t = str(startstr or "").strip().partition(" ")
+    hm = _hhmm(startstr)
+    if not d or hm is None:
+        return ""
+    mins = min(hm[0] * 60 + hm[1] + 8 * 60 + 1, 23 * 60 + 59)
+    return f"{d} {mins // 60:02d}:{mins % 60:02d}"
+
+
+def unconfirmed_window(datestr, base=None):
+    """The delivery window to use when nobody has confirmed one.
+
+    It is NOT a fixed 09:01-17:01. Measured across the reference corpus, the
+    real database takes the order's own COLLECTION window and adds exactly one
+    hour and one minute to both ends - 47 of 47 defaulted windows, 0 of 166
+    confirmed ones. The odd minute everyone recognises is the tail of that
+    61-minute shift, not a flag bolted onto a fixed pair:
+
+        Land Recovery        07:00-17:00  ->  08:01-18:01   (x3)
+        Trackwork Doncaster  07:30-15:00  ->  08:31-16:01   (x12)
+        British Steel        08:00-16:00  ->  09:01-17:01   (x10)
+        Sicut Doncaster      08:30-15:00  ->  09:31-16:01   (x4)
+
+    Hard-coding 09:01-17:01 was right only for the yards that open 08:00-16:00
+    - 23 of the 47. For Land Recovery we were an hour late at the front and an
+    hour early at the back, on a window the site never agreed to.
+
+    `base` is the collection window, either end as a datetime or a
+    "dd/mm/YYYY HH:MM" / "HH:MM" string. With nothing usable it falls back to
+    DEFAULT_BASE, which reproduces the old pair exactly.
+    """
     d = str(datestr or "").strip()
-    return ((d + " " + UNCONFIRMED_START).strip(), (d + " " + UNCONFIRMED_END).strip())
+    a = _hhmm(base[0]) if base and len(base) > 0 else None
+    b = _hhmm(base[1]) if base and len(base) > 1 else None
+    if a is None or b is None:
+        a, b = _hhmm(DEFAULT_BASE[0]), _hhmm(DEFAULT_BASE[1])
+    return ((d + " " + _shift(a, MARKER)).strip(),
+            (d + " " + _shift(b, MARKER)).strip())
 
 
 # CTMS product codes for the three types that have one. Exactly as CTMS spells
@@ -233,15 +340,48 @@ def item_product(desc, code):
 def _csv_safe(v):
     """Final guarantee before the field is written: no commas (they'd shift
     every following column and the upload rejects the row) and no embedded
-    line breaks/tabs (same effect). Idempotent - already-clean fields pass
-    through unchanged."""
-    return re.sub(r"\s+", " ", str("" if v is None else v).replace(",", " ")).strip()
+    line breaks (same effect). Idempotent - already-clean fields pass through
+    unchanged.
+
+    It used to also collapse every whitespace run and .strip() the result.
+    Both were wrong, measured against 47 CSVs the real Access database
+    produced. That database preserves whitespace verbatim: "Contact  45
+    minutes" keeps its double space, and - the part that actually matters -
+    the Access name split emits "Daniel " and " Smith" as two fields whose
+    SHARED SPACE is what rejoins them. Stripping deleted the join. Same for
+    the seven-character site short code: Left(name,7) of "Doncaster AHD" is
+    "Doncast" but of "Tower Lane" it is "Tower L" and of "BGF-Bag" the code
+    keeps its trailing space. 109 of 216 genuine delivery short codes end in
+    a space. Tabs pass through untouched because the genuine files contain
+    literal tabs and Network Rail accepted them.
+
+    Only commas and line breaks are removed, because only those two can shift
+    a column: the genuine export is a naive ",".join of 35 fields with no
+    quoting anywhere, so a comma in a value silently becomes a new column.
+    """
+    return re.sub(r"[\r\n]+", " ", str("" if v is None else v).replace(",", " "))
 
 
 def write_csv(records, out_path):
-    with open(out_path, "w", encoding="utf-8", newline="") as f:
+    """Write the upload exactly as the Access database writes it.
+
+    Two byte-level details, both measured over the 47-file reference corpus in
+    _nr_truth/ and both wrong here until 02/09/2026:
+
+    CRLF, never bare LF. 2687 CRLF and 0 bare LF across the corpus; 47/47
+    files end terminated, and CRLF-CRLF never appears, so there is no trailing
+    blank line. Every file we had produced up to this point used bare LF.
+
+    cp1252, never UTF-8. The corpus carries bytes that are not valid UTF-8 at
+    all - 0xFB in a What3Words note, 0xE1 used as an address-line separator -
+    and decodes cleanly only as single-byte ANSI. An accented character in a
+    site note would have gone out as two bytes where the database sends one.
+    Anything cp1252 cannot represent is replaced rather than raising, because
+    failing to write the upload is worse than losing one exotic glyph.
+    """
+    with open(out_path, "w", encoding="cp1252", errors="replace", newline="") as f:
         for r in records:
-            f.write(",".join(_csv_safe(x) for x in r) + "\n")
+            f.write(",".join(_csv_safe(x) for x in r) + "\r\n")
     return out_path
 
 

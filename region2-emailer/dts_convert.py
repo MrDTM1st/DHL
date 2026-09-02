@@ -251,9 +251,16 @@ def build_rows(data):
     ]
     rows = [
         order,
-        ["ORD_TASKS", "", ""],                   # kept but blank (no HIAB for DTS)
+        # No ORD_TASKS row at all. There used to be a blank one here - a task
+        # ordering no task, carrying no quantity - and nothing like it exists
+        # in the 431 genuine task rows, every one of which names a real code
+        # and carries the literal "1". The genuine database simply omits the
+        # record: 117 of its 216 orders (54%) have no task row. A DTS job has
+        # no HIAB, so it gets none.
         ["ORD_SUB_REFS", "1002", nc(data.get("raiser_email", ""))],
-        ["ORD_SUB_REFS", "1003", ""],
+        # 1003 defaults to the literal "0", never empty (510 of 510 genuine
+        # 1003 rows are non-empty).
+        ["ORD_SUB_REFS", "1003", "0"],
         ["ORD_LINES", "", LOAD_CLASS, pallets],
         ["ITEMS", "PALLETS", pallets],
     ]
@@ -269,9 +276,11 @@ def main():
     rows = build_rows(data)
     out = os.path.join(os.path.dirname(os.path.abspath(path)),
                        f"NR_NH_{datetime.now().strftime('%d%m%Y%H%M%S')}.csv")
-    with open(out, "w", encoding="utf-8", newline="") as f:
+    # CRLF and cp1252, matching the real database - see nr_csv.write_csv for
+    # the counts. This standalone path had its own writer and its own bug.
+    with open(out, "w", encoding="cp1252", errors="replace", newline="") as f:
         for r in rows:
-            f.write(",".join(r) + "\n")
+            f.write(",".join(r) + "\r\n")
     print("Reference   :", data["ref"])
     print("Pallets     :", data["pallets"])
     print("Del notes   :", data["del_notes"])

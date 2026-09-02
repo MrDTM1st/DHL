@@ -206,7 +206,14 @@ def map_orders(path):
         if nr_csv.unstated_window(g(r, "dtime"), g(r, "dtimee")):
             dday = _as_dt(g(r, "ddate")) or _as_dt(g(r, "dtime"))
             if dday:
-                dt, dte = nr_csv.unconfirmed_window(dday.strftime("%d/%m/%Y"))
+                # Hand it THIS order's collection window. The real database
+                # defaults the delivery to the collection window plus 1h01m, so
+                # a 07:00-17:00 yard defaults to 08:01-18:01, not to a fixed
+                # 09:01-17:01. ct/cte are the supplier's own opening hours,
+                # already worked out above; with neither, unconfirmed_window
+                # falls back to 08:00-16:00 and the old pair comes back out.
+                dt, dte = nr_csv.unconfirmed_window(dday.strftime("%d/%m/%Y"),
+                                                    (ct, cte))
 
         ship = str(g(r, "ship")).strip()   # leave blank if the extract has none (no junk derivation)
         serial = g(r, "serial")

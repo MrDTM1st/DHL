@@ -544,6 +544,19 @@ def main():
             o["_haulier2"] = site["haulier2"]
 
     # ---- the CSV ----
+    # A Seasonal Treatment Order that states no delivery window exports both
+    # ends as 00:00 - the form's way of saying "not set", the same time(0,0)
+    # the ad hoc forms use. Sent on untouched that is a delivery at midnight,
+    # BEFORE its own 07:30 collection, which is not bookable and reads as a
+    # night rate nobody ordered. The M7926/M10926 Rutherglen pair arrived that
+    # way. Every other route already defaulted these; this one went straight to
+    # transform() and skipped the check.
+    for o in orders:
+        if nr_csv.unstated_window(o.get("delivery time"), o.get("delivery time end")):
+            day = str(o.get("delivery time") or o.get("Delivery Date") or "")[:10]
+            if day.strip():
+                o["delivery time"], o["delivery time end"] = nr_csv.unconfirmed_window(
+                    day, (o.get("collection time"), o.get("collection time end")))
     records = nr_csv.transform(orders)
     csv_out = outbox.path(f"NR_seasonal_{stamp}.csv")
     nr_csv.write_csv(records, csv_out)
