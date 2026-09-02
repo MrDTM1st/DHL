@@ -24,6 +24,33 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STORE = json.load(open(os.path.join(HERE, "_synergy_sites.json"), encoding="utf-8"))
 SITES = STORE.get("sites", {})
 OVERRIDES = STORE.get("postcode_overrides", {})
+# raw extract name -> an EXISTING Supplier Details site code. The pop-up used to
+# offer only blank boxes, so pairing "Land Recovery Limited" with the site
+# already in the sheet meant retyping its address, hours and phone by hand - and
+# created a second near-duplicate site rather than resolving the first.
+ALIASES = STORE.get("aliases", {})
+
+
+def _akey(s):
+    return str(s).strip().rstrip("-").strip().lower()
+
+
+def add_alias(raw, code):
+    """Remember that this extract name means an existing site. No new site is
+    created, so the Supplier Details list stays the single source of truth."""
+    raw, code = str(raw).strip(), str(code).strip()
+    if not raw or not code:
+        return ""
+    STORE.setdefault("aliases", {})[_akey(raw)] = code
+    with open(os.path.join(HERE, "_synergy_sites.json"), "w", encoding="utf-8") as f:
+        json.dump(STORE, f, indent=1)
+    globals()["ALIASES"] = STORE["aliases"]
+    return code
+
+
+def site_codes():
+    """Every known collection site, for the dashboard dropdown."""
+    return sorted(SITES, key=lambda s: s.lower())
 
 
 def _hours(s):
@@ -115,6 +142,10 @@ def map_orders(path):
             continue
         site = str(g(r, "site")).strip()
         sd = SITES.get(site) or norm.get(nsite(site))
+        if sd is None and site:                       # paired by hand previously?
+            aliased = ALIASES.get(_akey(site))
+            if aliased:
+                sd = SITES.get(aliased) or norm.get(nsite(aliased))
         if sd is None and site:
             unmatched[site] = unmatched.get(site, 0) + 1
         sd = sd or {}
@@ -308,9 +339,23 @@ def main():
             sites = json.load(open(NEWSITES_FILE, encoding="utf-8"))
         except Exception:
             sites = {}
+        learned, paired = [], []
         for code, det in sites.items():
-            add_site(code, det)
-        print(f"Learned {len(sites)} new site(s): {', '.join(sites)}")
+            # {"pair_with": "<existing site code>"} means "this extract name IS
+            # that site" - an alias, not a new entry.
+            existing = str((det or {}).get("pair_with") or "").strip()
+            if existing:
+                add_alias(code, existing)
+                paired.append(f"{code} -> {existing}")
+            else:
+                add_site(code, det)
+                learned.append(code)
+        if learned:
+            print(f"Learned {len(learned)} new site(s): {', '.join(learned)}")
+        if paired:
+            print(f"Paired {len(paired)} name(s) to existing sites: {'; '.join(paired)}")
+        if not learned and not paired:
+            print("Nothing to learn.")
         return
     if not args or not os.path.exists(args[0]):
         print("Usage: python synergy_map.py <raw extract .xlsx>  |  synergy_map.py addsites"); return

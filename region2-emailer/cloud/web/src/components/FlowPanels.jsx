@@ -97,35 +97,67 @@ const SITE_FIELDS = [
   ['contact', 'Contact name'], ['postcode', 'Postcode'], ['telephone', 'Telephone'],
   ['email', 'Email'], ['start_hours', 'Start hrs 07:00:00'], ['close_hours', 'Close hrs 17:00:00'],
 ];
-function SitesPanel({ status, onCommand }) {
+// Unknown collection site: nearly always a name the extract spells differently,
+// for a site ALREADY on the template's Supplier Details tab. So offer that list
+// first as a dropdown - "Land Recovery Limited" pairs to "Land Recovery Ltd -
+// ALSAGER" in one click. Typing the six fields by hand is still there for a
+// genuinely new site, but it is no longer the only option: it made you retype
+// an address, phone and hours that were already in the sheet, and left a second
+// near-duplicate site behind.
+function SitesPanel({ status, panel, onCommand }) {
   const list = status.email || [];
+  const known = (panel || {}).synergy_sites || (status.panel || {}).synergy_sites || [];
   const [vals, setVals] = useState({});
-  useEffect(() => { setVals({}); }, [status.at]);
+  const [pairs, setPairs] = useState({});
+  useEffect(() => { setVals({}); setPairs({}); }, [status.at]);
   const set = (site, k) => (e) => setVals((v) => ({ ...v, [site]: { ...(v[site] || {}), [k]: e.target.value } }));
+  const pair = (site) => (e) => setPairs((p) => ({ ...p, [site]: e.target.value }));
   const save = () => {
     const sites = {};
+    // a pairing wins over anything typed in that row
+    Object.entries(pairs).forEach(([s, code]) => { if (code) sites[s] = { pair_with: code }; });
     Object.entries(vals).forEach(([s, o]) => {
+      if (sites[s]) return;
       const clean = {};
       Object.entries(o).forEach(([k, val]) => { if (val && val.trim()) clean[k] = val.trim(); });
       if (Object.keys(clean).length) sites[s] = clean;
     });
-    if (!Object.keys(sites).length) return;
+    if (!Object.keys(sites).length) {
+      window.alert('Nothing to save - pick an existing site from the dropdown, or fill in the details for a new one.');
+      return;
+    }
     onCommand({ action: 'add_sites', sites });
   };
   return (
     <div className="card panelcard">
-      <div className="ph">Unknown collection sites <span className="hint">· add details, then re-process</span></div>
+      <div className="ph">Unknown collection sites <span className="hint">· pair with an existing site, or add a new one</span></div>
       {list.map((u, i) => {
         const s = (u && u.site) || u; const n = (u && u.count) || 0;
+        const picked = pairs[s] || '';
         return (
           <div className="siterow" key={i}>
             <div className="ord" style={{ fontWeight: 700 }}>{s}{n ? <span className="hint"> ({n} order{n > 1 ? 's' : ''})</span> : ''}</div>
-            <div className="sitegrid">
-              {SITE_FIELDS.map(([k, ph]) => (
-                <input key={k} placeholder={ph} onChange={set(s, k)} />
-              ))}
+            <div style={{ margin: '6px 0 2px' }}>
+              <select value={picked} onChange={pair(s)} style={{ width: '100%', maxWidth: 520 }}>
+                <option value="">— this is an existing site… (pick from Supplier Details) —</option>
+                {known.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
             </div>
-            <div style={{ marginTop: 8 }}><input placeholder="Notes (optional)" onChange={set(s, 'notes')} /></div>
+            {picked ? (
+              <div className="hint" style={{ marginTop: 6 }}>
+                Will be remembered as <b>{picked}</b> — its contact, postcode, phone and loading hours come from the sheet.
+              </div>
+            ) : (
+              <>
+                <div className="hint" style={{ margin: '6px 0 4px' }}>…or it is genuinely new — add its details:</div>
+                <div className="sitegrid">
+                  {SITE_FIELDS.map(([k, ph]) => (
+                    <input key={k} placeholder={ph} onChange={set(s, k)} />
+                  ))}
+                </div>
+                <div style={{ marginTop: 8 }}><input placeholder="Notes (optional)" onChange={set(s, 'notes')} /></div>
+              </>
+            )}
           </div>
         );
       })}
@@ -201,7 +233,7 @@ export default function FlowPanels({ status, panel, currentOrder, onCommand, age
     <>
       {decisions.length > 0 && <MatchPanel decisions={decisions} sites={(panel && panel.sites) || []} onCommand={onCommand} />}
       {status.state === 'teams_ready' && (status.email || []).length > 0 && <TeamsPanel status={status} />}
-      {status.state === 'sites_needed' && (status.email || []).length > 0 && <SitesPanel status={status} onCommand={onCommand} />}
+      {status.state === 'sites_needed' && (status.email || []).length > 0 && <SitesPanel status={status} panel={panel} onCommand={onCommand} />}
       {status.state === 'batch_ready' && (status.email || []).length > 0 && <BatchPanel status={status} onCommand={onCommand} agentOnline={agentOnline} ttlText={ttlText} />}
       {status.state === 'preview_ready' && (status.email || []).length > 0 && <ReviewSend status={status} currentOrder={currentOrder} onCommand={onCommand} agentOnline={agentOnline} ttlText={ttlText} />}
     </>

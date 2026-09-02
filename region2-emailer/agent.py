@@ -314,6 +314,18 @@ def _asks():
         return {}
 
 
+def _synergy_sites():
+    """Collection sites from the template's Supplier Details tab, so the unknown
+    -site pop-up can offer them as a dropdown instead of six blank boxes. The
+    details are already in the sheet; retyping them by hand only ever created a
+    near-duplicate of a site that was there all along."""
+    try:
+        import synergy_map
+        return synergy_map.site_codes()
+    except Exception:
+        return []
+
+
 def _pins():
     """Orders emailed BY HAND and pinned on the map (order_pin.py). The tool
     never saw the email, so they are in neither the tracker nor the ad hocs."""
@@ -372,6 +384,7 @@ def push_panel():
             "hauliers": _slim_hauliers(),
             "auto_chase": auto_chase_on(),
             "adhocs": _adhocs(),
+            "synergy_sites": _synergy_sites(),
             "pins": _pins(),
             "asks": _asks(),
             "mat_teams": _mat_teams(),
