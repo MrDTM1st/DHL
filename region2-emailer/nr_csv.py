@@ -95,6 +95,45 @@ def dp_short(dp):
 # anything in here, blank included, means no task row.
 NOT_ORDERED = ("", "N", "NO", "0", "-", "--", "N/A", "NA", "NONE", "FALSE", "NIL")
 
+# The accounts the Haulage Request Form raises under. The pick-list below is
+# keyed on that form's Material options, so it is applied only to these - a
+# Synergy or seasonal product must never be rewritten by it.
+ADHOC_ACCOUNTS = ("NRADHOC", "NRADHOC_NH", "NR_OTHER")
+
+# The ad hoc Material -> ITEMS pick-list, read off the 47 genuine Access
+# exports in _nr_truth/. 19 of their orders carry the Haulage Request Form
+# shape in the delivery instructions ("Material X Dimension ..."), which pairs
+# each form Material with the ITEMS value the database actually wrote.
+#
+# Only the pairs the corpus agrees on are here. Three Materials pass straight
+# through and are deliberately absent rather than mapped to themselves - Track
+# Materials (4 rows), Timbers (1) and Cable Drums (1).
+#
+# Box is ALSO absent, and that is a judgement, not an oversight. The corpus
+# contradicts itself on it: "Box" became "Box." twice and "Box." became "BOX"
+# once. One of those adds a stray full stop and the other uppercases; there is
+# no reading where both are a rule. Passing Box through unchanged is the only
+# option that invents nothing. If CTMS wants BOX, say so and it is one line.
+ADHOC_ITEMS = {
+    "parcel": "PARCEL",
+    "rail": "ADHOC RAIL",
+    "pallet": "PALLET",
+    "pallets (van)": "PALLETS_VAN",
+    "pallets (larger than van)": "PALLET",
+    "composite sleepers": "Composite Sleeper",
+}
+
+
+def adhoc_item(prod, acct):
+    """The ITEMS product for an ad hoc, mapped through the form's pick-list.
+
+    Anything not on the list - and everything that is not an ad hoc - comes
+    back exactly as it went in.
+    """
+    if str(acct or "").strip().upper() not in ADHOC_ACCOUNTS:
+        return prod
+    return ADHOC_ITEMS.get(str(prod or "").strip().lower(), prod)
+
 
 def transform(rows):
     """rows: list of dicts in Imported_Orders column shape. Returns list of
@@ -194,6 +233,11 @@ def transform(rows):
         # The codes moved to ctms_codes.product_code().
         prod = str(o.get("Product / Description") or "").strip() \
             or str(o.get("Product / Service Code") or "").strip()
+        # An ad hoc's Material goes through the form's own pick-list: the
+        # genuine database writes PARCEL for "Parcel" and ADHOC RAIL for
+        # "Rail". Only ad hoc accounts, and only the entries the corpus agrees
+        # on - everything else passes through. See ADHOC_ITEMS.
+        prod = adhoc_item(prod, acct)
         rec(13, ordno, {0: "ITEMS", 1: prod, 2: o.get("Product Qty")})
     out.sort(key=lambda t: (t[0], t[1]))
     return [r for _, _, r in out]

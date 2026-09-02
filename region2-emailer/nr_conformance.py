@@ -19,6 +19,7 @@ write these with csv.writer and never read them with csv.reader.
 
     python nr_conformance.py <file.csv> [more.csv ...]
     python nr_conformance.py --truth        # re-check the reference corpus
+    python nr_conformance.py --pairs        # replay the ad hoc Material pick-list
 """
 import os
 import re
@@ -143,8 +144,53 @@ def _block(seq, n):
     return out
 
 
+def pairs():
+    """Replay the ad hoc Material -> ITEMS pairs the corpus proves.
+
+    19 genuine orders carry the Haulage Request Form shape in their delivery
+    instructions, which pairs each form Material with the ITEMS value the real
+    database wrote. This runs our mapping over those same Materials and reports
+    what still differs, so nr_csv.ADHOC_ITEMS cannot drift without saying so.
+
+    Three Box rows are expected to differ: the corpus contradicts itself there
+    ("Box" -> "Box." twice, "Box." -> "BOX" once) and we pass Box through
+    rather than pick one. Anything ELSE differing is a regression.
+    """
+    import nr_csv
+    pat = re.compile(r"^Material\s+(.*?)\s+Dimension", re.I)
+    rows = []
+    for p in sorted(glob.glob(os.path.join(TRUTH, "*.csv"))):
+        cur = None
+        for line in open(p, "rb").read().decode("cp1252", "replace").split("\r\n"):
+            f = line.split(",")
+            if len(f) != WIDTH:
+                continue
+            if f[0] == "ORDER":
+                m = pat.match(f[27] or "")
+                cur = (m.group(1).strip() if m else None, f[28])
+            elif f[0] == "ITEMS" and cur and cur[0] is not None:
+                rows.append((cur[0], f[1], cur[1]))
+                cur = None
+    if not rows:
+        print(f"No reference corpus at {TRUTH}")
+        return 2
+    diff = [(m, g, nr_csv.adhoc_item(m, a)) for m, g, a in rows
+            if nr_csv.adhoc_item(m, a) != g]
+    for m, g, o in diff:
+        print(f"  differs  Material {m!r}: genuine {g!r}, ours {o!r}")
+    print(f"\n  {len(rows) - len(diff)}/{len(rows)} ad hoc Materials reproduce "
+          f"the genuine ITEMS value")
+    unexpected = [d for d in diff if d[0].strip().lower().rstrip(".") != "box"]
+    if unexpected:
+        print(f"  {len(unexpected)} UNEXPECTED - only the Box rows should differ")
+        return 1
+    return 0
+
+
 def main():
     args = [a for a in sys.argv[1:] if a.strip()]
+    if args and args[0] == "--pairs":
+        return pairs()
     if args and args[0] == "--truth":
         args = sorted(glob.glob(os.path.join(TRUTH, "*.csv")))
         if not args:
