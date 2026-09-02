@@ -97,24 +97,30 @@ const SITE_FIELDS = [
   ['contact', 'Contact name'], ['postcode', 'Postcode'], ['telephone', 'Telephone'],
   ['email', 'Email'], ['start_hours', 'Start hrs 07:00:00'], ['close_hours', 'Close hrs 17:00:00'],
 ];
-// Unknown collection site: nearly always a name the extract spells differently,
-// for a site ALREADY on the template's Supplier Details tab. So offer that list
-// first as a dropdown - "Land Recovery Limited" pairs to "Land Recovery Ltd -
-// ALSAGER" in one click. Typing the six fields by hand is still there for a
-// genuinely new site, but it is no longer the only option: it made you retype
-// an address, phone and hours that were already in the sheet, and left a second
-// near-duplicate site behind.
+// Unknown collection site. Nearly always a name the extract spells differently
+// for a site ALREADY on the template's Supplier Details tab, so the dropdown is
+// the whole interaction: pick the real site, done. The six-field form is for a
+// genuinely new site and stays hidden until asked for - shown alongside the
+// dropdown it read as "fill in this form", which is exactly what it should not
+// be. Typing details that are already in the sheet only ever produced a second
+// near-duplicate of a site that was there all along.
 function SitesPanel({ status, panel, onCommand }) {
   const list = status.email || [];
   const known = (panel || {}).synergy_sites || (status.panel || {}).synergy_sites || [];
   const [vals, setVals] = useState({});
   const [pairs, setPairs] = useState({});
-  useEffect(() => { setVals({}); setPairs({}); }, [status.at]);
+  const [newFor, setNewFor] = useState({});      // which rows opted into the form
+  useEffect(() => { setVals({}); setPairs({}); setNewFor({}); }, [status.at]);
   const set = (site, k) => (e) => setVals((v) => ({ ...v, [site]: { ...(v[site] || {}), [k]: e.target.value } }));
   const pair = (site) => (e) => setPairs((p) => ({ ...p, [site]: e.target.value }));
+  const label = (k) => {
+    const code = typeof k === 'string' ? k : k.code;
+    const bits = typeof k === 'string' ? [] : [k.pc, k.town].filter(Boolean);
+    return bits.length ? code + ' — ' + bits.join(', ') : code;
+  };
+  const codeOf = (k) => (typeof k === 'string' ? k : k.code);
   const save = () => {
     const sites = {};
-    // a pairing wins over anything typed in that row
     Object.entries(pairs).forEach(([s, code]) => { if (code) sites[s] = { pair_with: code }; });
     Object.entries(vals).forEach(([s, o]) => {
       if (sites[s]) return;
@@ -123,51 +129,61 @@ function SitesPanel({ status, panel, onCommand }) {
       if (Object.keys(clean).length) sites[s] = clean;
     });
     if (!Object.keys(sites).length) {
-      window.alert('Nothing to save - pick an existing site from the dropdown, or fill in the details for a new one.');
+      window.alert('Pick the matching site from the dropdown first.');
       return;
     }
     onCommand({ action: 'add_sites', sites });
   };
   return (
     <div className="card panelcard">
-      <div className="ph">Unknown collection sites <span className="hint">· pair with an existing site, or add a new one</span></div>
+      <div className="ph">Unknown collection site{list.length > 1 ? 's' : ''} <span className="hint">· which site is this? pick it and the upload carries on</span></div>
+      {!known.length && (
+        <div className="hint" style={{ color: 'var(--red)', marginBottom: 8 }}>
+          The site list has not loaded from the home PC — reload the page. Without it there is nothing to pick from.
+        </div>
+      )}
       {list.map((u, i) => {
         const s = (u && u.site) || u; const n = (u && u.count) || 0;
         const picked = pairs[s] || '';
+        const showForm = !!newFor[s];
+        const me = known.find((k) => codeOf(k) === picked);
+        const pc = me && typeof me !== 'string' ? me.pc : '';
+        const sibs = pc ? known.filter((k) => typeof k !== 'string' && k.pc === pc && k.code !== picked) : [];
         return (
           <div className="siterow" key={i}>
-            <div className="ord" style={{ fontWeight: 700 }}>{s}{n ? <span className="hint"> ({n} order{n > 1 ? 's' : ''})</span> : ''}</div>
-            <div style={{ margin: '6px 0 2px' }}>
-              <select value={picked} onChange={pair(s)} style={{ width: '100%', maxWidth: 520 }}>
-                <option value="">— this is an existing site… (pick from Supplier Details) —</option>
-                {known.map((k) => {
-                  // tolerate both shapes: older agents publish plain strings
-                  const code = typeof k === 'string' ? k : k.code;
-                  const bits = typeof k === 'string' ? [] : [k.pc, k.town].filter(Boolean);
-                  return <option key={code} value={code}>{bits.length ? code + ' — ' + bits.join(', ') : code}</option>;
-                })}
-              </select>
+            <div className="ord" style={{ fontWeight: 700 }}>
+              {s}{n ? <span className="hint"> ({n} order{n > 1 ? 's' : ''})</span> : ''}
             </div>
-            {picked ? (
+            <select value={picked} onChange={pair(s)}
+              style={{ width: '100%', marginTop: 6, padding: '7px 8px', fontSize: 13 }}>
+              <option value="">— pick the matching site —</option>
+              {known.map((k) => <option key={codeOf(k)} value={codeOf(k)}>{label(k)}</option>)}
+            </select>
+            {picked && (
               <div className="hint" style={{ marginTop: 6 }}>
-                Will be remembered as <b>{picked}</b> — its contact, postcode, phone and loading hours come from the sheet.
-                {(() => {
-                  // Several sites can share a postcode AND a town - ST6 4NU carries
-                  // three - so the label alone cannot separate them. Say so rather
-                  // than let a wrong pick look confirmed.
-                  const me = known.find((k) => (typeof k === 'string' ? k : k.code) === picked);
-                  const pc = me && typeof me !== 'string' ? me.pc : '';
-                  if (!pc) return null;
-                  const sibs = known.filter((k) => typeof k !== 'string' && k.pc === pc && k.code !== picked);
-                  if (!sibs.length) return null;
-                  return <div style={{ marginTop: 4 }}>
+                Remembered as <b>{picked}</b> — contact, postcode, phone and loading hours come from the sheet.
+                {sibs.length > 0 && (
+                  <div style={{ marginTop: 4 }}>
                     Note: {sibs.length + 1} sites share {pc} — {sibs.map((x) => x.code).join(', ')}. Make sure this is the right one.
-                  </div>;
-                })()}
+                  </div>
+                )}
               </div>
-            ) : (
+            )}
+            {!picked && !showForm && (
+              <div style={{ marginTop: 6 }}>
+                <button className="btn" style={{ padding: '3px 9px', fontSize: 12 }}
+                  onClick={() => setNewFor((f) => ({ ...f, [s]: true }))}>
+                  Not in the list — add it as a new site
+                </button>
+              </div>
+            )}
+            {!picked && showForm && (
               <>
-                <div className="hint" style={{ margin: '6px 0 4px' }}>…or it is genuinely new — add its details:</div>
+                <div className="hint" style={{ margin: '8px 0 4px' }}>
+                  New site — these get saved to the store.
+                  <button className="btn" style={{ padding: '2px 8px', fontSize: 11, marginLeft: 8 }}
+                    onClick={() => setNewFor((f) => ({ ...f, [s]: false }))}>cancel</button>
+                </div>
                 <div className="sitegrid">
                   {SITE_FIELDS.map(([k, ph]) => (
                     <input key={k} placeholder={ph} onChange={set(s, k)} />
