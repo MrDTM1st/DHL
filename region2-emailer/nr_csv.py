@@ -181,10 +181,19 @@ def transform(rows):
         # ITEMS (SEQ 13): col1=Product/Description, col2=qty.
         # If the form states a product, follow it - fall back to the service
         # code, never leave the ITEMS product blank for the upload to default.
+        #
+        # The product goes out EXACTLY as the order stated it. There used to be
+        # a re-code here turning ballast and stoneblowers into their CTMS codes,
+        # and it corrupted the upload: BAG_BALLAST, LOOSE_BALLAS and
+        # LOOSE_STONEB appear in 0 of 510 ITEMS rows across the 47 genuine
+        # Access exports in _nr_truth/. The real database sends the NR stock
+        # code untouched - 0057/100500/002 is the corpus's commonest ITEMS
+        # value, on ballast orders from the same suppliers as ours - or plain
+        # English like "Spent Ballast". CTMS wanting one code per type is still
+        # true; it just belongs on the booking, not on Network Rail's upload.
+        # The codes moved to ctms_codes.product_code().
         prod = str(o.get("Product / Description") or "").strip() \
             or str(o.get("Product / Service Code") or "").strip()
-        prod = item_product(o.get("Product / Description"),
-                            o.get("Product / Service Code")) or prod
         rec(13, ordno, {0: "ITEMS", 1: prod, 2: o.get("Product Qty")})
     out.sort(key=lambda t: (t[0], t[1]))
     return [r for _, _, r in out]
@@ -298,43 +307,6 @@ def unconfirmed_window(datestr, base=None):
         a, b = _hhmm(DEFAULT_BASE[0]), _hhmm(DEFAULT_BASE[1])
     return ((d + " " + _shift(a, MARKER)).strip(),
             (d + " " + _shift(b, MARKER)).strip())
-
-
-# CTMS product codes for the three types that have one. Exactly as CTMS spells
-# them - LOOSE_BALLAS and LOOSE_STONEB really are twelve characters, not
-# truncations to be tidied up. Same lesson as SUN_BANK_HOL, which CTMS rejected
-# when it went as SUN/BANK_HOL.
-BAG_BALLAST = "BAG_BALLAST"
-LOOSE_BALLAST = "LOOSE_BALLAS"
-LOOSE_STONEBLOWER = "LOOSE_STONEB"
-
-
-def _is_stoneblower(blob):
-    """Letters-only compare, so 'stone blower' and 'stone-blower' both match -
-    the same test build_drafts uses to keep stoneblowers out of the emailer."""
-    s = "".join(ch for ch in blob.lower() if ch.isalpha())
-    return "stoneblow" in s
-
-
-def item_product(desc, code):
-    """The product CTMS receives on the ITEMS row.
-
-    Ballast is described a dozen ways ("BALLAST 1 TONNE BAGS", "Ballast -
-    Loose") and CTMS wants one code per type. Loose is not a flavour of bagged:
-    it rides in a tipper and bagged does not, so the two must never collapse
-    together. Stoneblower is tested first - a stoneblower line can mention
-    ballast and would otherwise be coded as one.
-
-    Anything that is neither ballast nor a stoneblower passes through
-    untouched, so MEDIA_SETS, TG60, sleepers and rails are unaffected.
-    """
-    desc, code = str(desc or "").strip(), str(code or "").strip()
-    blob = (desc + " " + code).lower()
-    if _is_stoneblower(blob):
-        return LOOSE_STONEBLOWER
-    if "ballast" in blob:
-        return LOOSE_BALLAST if "loose" in blob else BAG_BALLAST
-    return desc or code
 
 
 def _csv_safe(v):

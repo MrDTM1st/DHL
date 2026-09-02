@@ -76,7 +76,7 @@ the walkthrough fills it in.
 | | `delivery_date` | `dd/mm/yyyy` everywhere |
 | | `site` / `worksite`, `postcode` | delivery end |
 | | `collection_site`, `collection_pc`, `collections[]` | a job can load at several sites |
-| | `product_codes[]`, `materials` | BS extracts have these columns swapped |
+| | `product_codes[]`, `materials` | BS extracts have these columns swapped. Pass them through **`ctms_codes.product_code()`** — CTMS wants one code per type (`BAG_BALLAST`, `LOOSE_BALLAS`, `LOOSE_STONEB`) where the extracts spell ballast a dozen ways. `None` back means CTMS has no special code and the product books under its own description. **This is the only place that mapping belongs** — it was briefly applied to the NR upload's ITEMS row instead, where it corrupted the file: those codes appear in 0 of 510 ITEMS rows across the 47 genuine Access exports, which send the NR stock code (`0057/100500/002`) untouched |
 | | `details.date.value` | the date confirmed in the reply, if it moved |
 | | `details.time.earliest` / `.latest` | **CTMS needs two.** A single time is expanded by +2h (73% of replies give one) |
 | | `details.offloading.value` | **"Yes" means HIAB** — policy, not inference |
