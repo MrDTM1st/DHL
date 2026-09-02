@@ -165,18 +165,26 @@ def unstated_window(a, b):
     own 07:00 collection - not bookable, and it fired a "why is this backwards?"
     query at the raiser for a time nobody had set.
 
-    A genuine midnight job always carries a real window (00:00-02:00), so only a
-    zero- or one-minute window at midnight counts as unstated. Never widen this
-    past a minute: 00:00-00:30 is somebody's night shift.
+    Synergy spells it a third way, and this is the one seen in the wild: a
+    whole-day window, 00:01 to 23:59. Taken literally that is a delivery
+    starting a minute past midnight - before its own 07:00 collection - which
+    is what fired the backwards-date query at the raiser.
+
+    A genuine midnight job always carries a REAL window (00:00-02:00), so only
+    a window that is zero-length at midnight, or that spans essentially the
+    whole day, counts as unstated. Never widen the zero-length case past a
+    minute: 00:00-00:30 is somebody's night shift.
     """
     ha, hb = _hhmm(a), _hhmm(b)
     if ha is None:
         return True
-    if ha[0] != 0 or ha[1] > 1:
+    if ha[0] != 0 or ha[1] > 1:     # a real start time - nothing to guess
         return False
     if hb is None:
         return True
-    return hb[0] == 0 and hb[1] - ha[1] <= 1
+    if hb[0] == 0 and hb[1] - ha[1] <= 1:
+        return True                 # zero-length at midnight: a date with no time
+    return hb[0] == 23 and hb[1] >= 58   # 00:01-23:59: "any time that day"
 
 
 def unconfirmed_window(datestr):

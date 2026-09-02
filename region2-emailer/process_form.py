@@ -168,9 +168,9 @@ def to_transform_row(d):
     r["delivery time end"] = fmt_dt(d.get("delivery_time_end"))
     # a date-only window (midnight-to-midnight) means the requester never set
     # a time - blank it so the 09:00-17:00 default below takes over
-    if _dateonly_window(d.get("collection_time"), d.get("collection_time_end")):
+    if nr_csv.unstated_window(d.get("collection_time"), d.get("collection_time_end")):
         r["collection time"] = r["collection time end"] = ""
-    if _dateonly_window(d.get("delivery_time"), d.get("delivery_time_end")):
+    if nr_csv.unstated_window(d.get("delivery_time"), d.get("delivery_time_end")):
         r["delivery time"] = r["delivery time end"] = ""
     # Delali (24/07): "if you ever get one where there is no delivery time,
     # just put nine to five so when I upload it the system recognizes it."
