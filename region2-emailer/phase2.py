@@ -732,6 +732,22 @@ def _chase_in_thread(ns, record):
         return False
     try:
         reply = item.Reply()
+        # Reply() on an item in SENT ITEMS addresses the reply to the SENDER,
+        # and the sender of something we sent is us. Outlook is being literal.
+        # Left alone this chases Delali himself while reporting success, and the
+        # contact never hears from us. Proved on 03/09 building the in-thread
+        # reply for 5033944: To came back as 'Delali Opoku (DHL Supply Chain)'.
+        # Reply() has already established the thread (RE: subject,
+        # ConversationIndex, quoted original), so overwriting To keeps the chain
+        # and just fixes where it goes.
+        to = str(record.get("to") or "").strip() \
+            or str(getattr(item, "To", "") or "").strip().strip("'\"")
+        if not to:
+            return False          # nobody to chase - never send to ourselves
+        reply.To = to
+        orig_cc = str(getattr(item, "CC", "") or "").strip()
+        if orig_cc:
+            reply.CC = orig_cc
         what = ("collection details" if record.get("kind") == "collection"
                 else "delivery details")
         note = ("Hi,\n\nJust following up on the below - could I please get the "
