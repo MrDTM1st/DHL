@@ -433,6 +433,24 @@ def main():
         print("  all collection sites matched.")
     print(f"  CSV: {out}")
 
+    # The upload is only half the job - the other half is telling the materials
+    # team it is done and telling another region's planner when one of THEIR
+    # orders is running out of time. Staged for Review & send, never sent.
+    try:
+        import upload_notice
+        email, urgent = upload_notice.stage(mapped, os.path.basename(args[0]))
+        print("\n  NOTICE ready for Review & send:")
+        print(f"    To: {email['to']}")
+        print(f"    Cc: {email['cc'] or '(no materials team for these products)'}")
+        print(f"    Subject: {email['subject']}")
+        for line in email["message"].splitlines():
+            print(f"    {line}")
+        print(f"  URGENT_FLAGGED {len(urgent)}")
+    except Exception as e:
+        # A missing rota or an unreachable Outlook must not lose the upload
+        # itself - the CSV above is the thing that matters.
+        print(f"  (notice not built: {type(e).__name__}: {e})")
+
 
 if __name__ == "__main__":
     main()
