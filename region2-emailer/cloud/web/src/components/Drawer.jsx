@@ -23,8 +23,16 @@ function coverRequest(r) {
     .filter(Boolean).join(' ');
   // ad hoc forms carry their own collection date (it can differ from the
   // delivery date); tracked orders only know the delivery date
-  const collWhen = [r.collection_date || r.delivery_date, win(d.collection_time)]
-    .filter(Boolean).join(' ');
+  // Collection window, in order of authority: what the site said in their
+  // reply, then the pick-up site's own loading hours off Supplier Details.
+  // The hours were in the sheet all along and never reached the haulier, so
+  // this line printed a bare date and every haulier had to ask for times we
+  // already held.
+  const c0 = (collectionsOf(r) || [])[0] || {};
+  const collHours = (c0.from && c0.to) ? (c0.from + ' - ' + c0.to)
+    : (c0.from ? 'from ' + c0.from : '');
+  const collWhen = [c0.date || r.collection_date || r.delivery_date,
+    win(d.collection_time) || collHours].filter(Boolean).join(' ');
   const off = (d.offloading || {}).value || '';
   // Guarded with || {} throughout: ad hoc and DTS records build their details
   // from the request form (process_form._adhoc_record) and simply have no
@@ -43,7 +51,9 @@ function coverRequest(r) {
   const notes = (d.notes || {}).value || '';
   // some jobs load at more than one site - the haulier needs every pick-up
   const collLine = collectionsOf(r)
-    .map((c) => [c.site, c.pc].filter(Boolean).join(' ')).join(' + ');
+    .map((c) => [c.site, c.pc].filter(Boolean).join(' ')
+      + ((c.from && c.to) ? ' (' + c.from + ' - ' + c.to + ')' : ''))
+    .join(' + ');
   const rl = r.return_leg;
   const returnLine = rl ? 'Return leg: collect '
     + [rl.collection_date, win(rl.collection_time)].filter(Boolean).join(' ')

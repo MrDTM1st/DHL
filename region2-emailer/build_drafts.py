@@ -254,6 +254,35 @@ def readable_product(prod, prod_code):
         return b
     return a or b   # both or neither look like words - keep the primary column
 
+_SITE_HOURS = None
+
+
+def site_hours(site):
+    """(open, close) loading hours for a collection site, from the Supplier
+    Details store.
+
+    The window is in the sheet - Cod Beck loads 08:00 to 16:30 - but nothing
+    ever carried it as far as the haulier email, so "Collection date/time"
+    printed a bare date and every haulier had to ask for the times we already
+    held. The extract's own collection_time columns are no substitute: Synergy
+    writes an unset window as 00:01-23:59, which says "any time that day"
+    whatever the site's real hours are.
+    """
+    global _SITE_HOURS
+    if _SITE_HOURS is None:
+        try:
+            with open(os.path.join(HERE, "_synergy_sites.json"), encoding="utf-8") as f:
+                sites = json.load(f).get("sites", {})
+        except Exception:
+            sites = {}
+        _SITE_HOURS = {}
+        for code, d in sites.items():
+            k = str(code).strip().rstrip("-").strip().lower()
+            _SITE_HOURS[k] = (str(d.get("start_hours") or "")[:5],
+                              str(d.get("close_hours") or "")[:5])
+    return _SITE_HOURS.get(str(site).strip().rstrip("-").strip().lower(), ("", ""))
+
+
 def collections_of(bundle):
     """EVERY distinct collection point in an email group, as
     [{"site","pc"},...]. A group is one contact+delivery+date, but its rows can
@@ -270,7 +299,14 @@ def collections_of(bundle):
         if key in seen:
             continue
         seen.add(key)
-        out.append({"site": cs, "pc": cp})
+        # date from the extract, hours from Supplier Details - so the haulier
+        # email can state WHEN the pick-up can happen, not just where.
+        cd = ""
+        if C.get("cdate") is not None:
+            cd = fdate(r[C["cdate"]]) or ""
+        opens, closes = site_hours(cs)
+        out.append({"site": cs, "pc": cp, "date": cd,
+                    "from": opens, "to": closes})
     return out
 
 
@@ -920,6 +956,7 @@ def load_rows(path):
         # the collection end (unprefixed columns) - needed to show the run on
         # the map and to recommend a haulier near the pick-up
         cpc=ci("postcode"), caddr=ci("address1", "address 1"),
+        cdate=ci("collection date"),
         instr=ci("shipping instructions", "delivery instructions"),
     )
     return rows[1:], C
