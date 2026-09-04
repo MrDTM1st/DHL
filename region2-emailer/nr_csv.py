@@ -16,6 +16,11 @@ import postcodes   # the ONE outward-code implementation - never write a sixth
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = json.load(open(os.path.join(HERE, "postcode_regions.json"), encoding="utf-8"))
 
+# What nr_conformance said about the most recent write_csv - [] means it
+# matched the accepted format. Callers read this to surface the problem in
+# their own output rather than each re-running the check.
+LAST_COMPLAINTS = []
+
 
 class Keep(str):
     """A string whose leading/trailing spaces are load-bearing.
@@ -398,6 +403,34 @@ def write_csv(records, out_path):
     with open(out_path, "w", encoding="cp1252", errors="replace", newline="") as f:
         for r in records:
             f.write(",".join(_csv_safe(x) for x in r) + "\r\n")
+
+    # Check what we just wrote against the 47 files Network Rail actually
+    # accepted, and say so loudly when it does not match.
+    #
+    # 04/09/2026: three orders went up with an empty ORD_SUB_REFS 1002 and
+    # simply did not appear in CTMS. Nothing failed, nothing was reported - the
+    # run said "CSV: <path>" exactly as it does on a good day, and the orders
+    # were only missed because somebody went looking for them. nr_conformance
+    # had caught it the whole time; it was just never pointed at our own
+    # output. Every producer goes through this one writer, so the check belongs
+    # here rather than in any one of them.
+    #
+    # It reports, it does not delete: a CSV that is 95% right is still the
+    # fastest route to a fixed one, and refusing to write it would leave the
+    # planner with nothing at all.
+    global LAST_COMPLAINTS
+    LAST_COMPLAINTS = []
+    try:
+        import nr_conformance
+        LAST_COMPLAINTS = nr_conformance.check(out_path)
+    except Exception:
+        pass
+    if LAST_COMPLAINTS:
+        print(f"  !! CSV DOES NOT MATCH THE ACCEPTED FORMAT "
+              f"({len(LAST_COMPLAINTS)} problem(s)) - CTMS may drop these silently:")
+        for c in LAST_COMPLAINTS:
+            print(f"       {c}")
+    print(f"  CONFORMANT {0 if LAST_COMPLAINTS else 1}")
     return out_path
 
 
