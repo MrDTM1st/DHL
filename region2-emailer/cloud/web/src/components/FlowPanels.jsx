@@ -20,30 +20,55 @@ function priBadges(e) {
 
 // ---- single-order Review & send ----
 function ReviewSend({ status, currentOrder, onCommand, agentOnline, ttlText }) {
-  const first = (status.email && status.email[0]) || {};
+  // Staged emails are a QUEUE, not one email. This showed status.email[0] and
+  // the agent sent the whole file, so a seasonal cover request staged behind an
+  // ad hoc query and a synergy notice was invisible at index 2, and one click
+  // on "Send this email" would have sent all three. Show every one, send the
+  // one being looked at, and let the rest be worked through.
+  const list = (status.email && status.email.length) ? status.email : [];
+  const [pick, setPick] = useState(0);
   const [form, setForm] = useState({ to: '', cc: '', subject: '', message: '' });
-  // Repopulate whenever a fresh preview arrives (status.at changes).
+  // A fresh run appends, so the newest is last - that is the one just produced.
+  useEffect(() => { setPick(Math.max(0, list.length - 1)); /* eslint-disable-next-line */ }, [status.at]);
   useEffect(() => {
-    setForm({ to: first.to || '', cc: first.cc || '', subject: first.subject || '', message: first.message || '' });
+    const e = list[pick] || {};
+    setForm({ to: e.to || '', cc: e.cc || '', subject: e.subject || '', message: e.message || '' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status.at]);
+  }, [status.at, pick]);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const send = () => {
+    const others = list.length - 1;
     const q = agentOnline
-      ? 'Send this email (with any edits you made)?'
-      : 'The home PC is OFFLINE — nothing can send right now.\n\nQueue it anyway? It sends if the home PC reconnects within ' + ttlText + ', otherwise it is discarded.';
+      ? 'Send this one email to ' + (form.to || '?') + '?'
+        + (others > 0 ? '\n\n' + others + ' other staged email(s) stay put.' : '')
+      : 'The home PC is OFFLINE so nothing can send right now.\n\nQueue it anyway? It sends if the home PC reconnects within ' + ttlText + ', otherwise it is discarded.';
     if (!window.confirm(q)) return;
-    onCommand({ action: 'order_send_edited', order: currentOrder, email: form });
+    onCommand({ action: 'order_send_edited', order: currentOrder, index: pick, email: form });
   };
   return (
     <div className="card panelcard">
       <div className="ph">Review &amp; send <span className="hint">· edit anything; signature &amp; QR are added automatically</span></div>
+      {list.length > 1 && (
+        <div style={{ margin: '2px 0 8px' }}>
+          <div className="hint" style={{ marginBottom: 4 }}>
+            {list.length} emails are staged. Only the one shown is sent.
+          </div>
+          <select value={pick} onChange={(e) => setPick(Number(e.target.value))}
+            style={{ width: '100%', padding: '6px 8px', fontSize: 12.5 }}>
+            {list.map((e, i) => (
+              <option key={i} value={i}>
+                {(i + 1) + '/' + list.length + '  ' + (e.subject || '(no subject)') + '  ->  ' + (e.to || '?')}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="formcol">
         <input placeholder="To" value={form.to} onChange={set('to')} />
         <input placeholder="Cc (optional)" value={form.cc} onChange={set('cc')} />
         <input placeholder="Subject" value={form.subject} onChange={set('subject')} />
         <textarea rows={13} spellCheck={false} style={{ lineHeight: 1.55, resize: 'vertical' }} value={form.message} onChange={set('message')} />
-        <div><button className="btn go" onClick={send}>Send email</button></div>
+        <div><button className="btn go" onClick={send}>Send this email</button></div>
       </div>
     </div>
   );

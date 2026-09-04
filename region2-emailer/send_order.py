@@ -395,15 +395,44 @@ def save_pending(emails):
         json.dump(slim, f, indent=1, default=str)
 
 
-def send_pending(ns):
-    """Send whatever is in _pending_email.json (possibly edited): the HTML is
-    rebuilt from the message text, signature and QR appended untouched."""
+def send_pending(ns, only=None):
+    """Send from _pending_email.json (possibly edited). `only` is the index of
+    the ONE staged email to send; None keeps the send-everything behaviour.
+
+    Two things this got wrong, both found on 04/09/2026.
+
+    It sent the whole file. Review & send shows ONE email and asks "Send this
+    email?", so a queue that had quietly grown to three would have sent an ad
+    hoc date query, a synergy notice to seven colleagues and a haulier cover
+    request on a single click, having displayed only the first of them.
+
+    Nothing was removed once sent, which is how the queue grew in the first
+    place. A sent email is now dropped from the file, so the same one cannot go
+    twice and the panel empties as it is worked through.
+    """
     import json
     emails = json.load(open(PENDING, encoding="utf-8"))
-    for e in emails:
+    if only is not None and str(only).strip() != "":
+        try:
+            idx = int(only)
+            picked = [emails[idx]]
+        except (ValueError, IndexError):
+            print(f"ABORT: staged email {only} does not exist ({len(emails)} staged) - nothing sent.")
+            print("SEND_RESULT sent=0")
+            return 0
+    else:
+        picked = list(emails)
+    for e in picked:
         e["html"] = bd.html_from_message(e.get("message", ""))
         e["body"] = e.get("message", "") + "\n\n\n" + bd.SIGNATURE
-    return send_emails(ns, emails)
+    n = send_emails(ns, picked)
+    if n:
+        keep = [e for e in emails if not any(e is p for p in picked)]
+        with open(PENDING, "w", encoding="utf-8") as f:
+            json.dump(keep, f, indent=1)
+        if keep:
+            print(f"  {len(keep)} email(s) still staged for Review & send.")
+    return n
 
 
 def send_batch_pending(ns, sel="all"):
@@ -568,7 +597,8 @@ def main():
     mode = sys.argv[2] if len(sys.argv) > 2 else "preview"
     ns = bd.get_ns()
     if order == "sendjson":
-        n = send_pending(ns)
+        only = sys.argv[2] if len(sys.argv) > 2 else None   # send just that one
+        n = send_pending(ns, only)
         print(f"Sent {n} email(s) from your DHL account (edited version).")
         print(f"SEND_RESULT sent={n}")
         return

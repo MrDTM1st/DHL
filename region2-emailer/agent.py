@@ -867,13 +867,24 @@ def main():
                     pend = os.path.join(HERE, "_pending_email.json")
                     emails = json.load(open(pend, encoding="utf-8"))
                     edits = cmd.get("email") or {}
+                    # WHICH staged email. This wrote the edits into emails[0]
+                    # and sent the whole file, while the panel showed one email
+                    # and asked "Send this email?" - so three staged emails went
+                    # out on one click, two of them never displayed.
+                    try:
+                        idx = int(cmd.get("index", 0))
+                    except Exception:
+                        idx = 0
+                    if not (0 <= idx < len(emails)):
+                        idx = 0
                     if emails and edits:
-                        emails[0]["to"] = edits.get("to", emails[0]["to"])
-                        emails[0]["cc"] = edits.get("cc", emails[0].get("cc", ""))
-                        emails[0]["subject"] = edits.get("subject", emails[0]["subject"])
-                        emails[0]["message"] = edits.get("message", emails[0]["message"])
+                        e = emails[idx]
+                        e["to"] = edits.get("to", e["to"])
+                        e["cc"] = edits.get("cc", e.get("cc", ""))
+                        e["subject"] = edits.get("subject", e["subject"])
+                        e["message"] = edits.get("message", e["message"])
                         json.dump(emails, open(pend, "w", encoding="utf-8"), indent=1)
-                    out = run(["send_order.py", "sendjson"])
+                    out = run(["send_order.py", "sendjson", str(idx)])
                     ok, n = send_verdict(out)
                     if ok:
                         report("done", "Email sent (with your edits).", tail(out))
