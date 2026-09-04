@@ -14,7 +14,7 @@ every one of those districts agrees with its own area's region. No area is
 split across two NR regions, so there is nothing finer to encode.
 
     nr_regions.region_of("DN16 1BP")   -> "R2"
-    nr_regions.region_of("BS119DE")    -> "R4"
+    nr_regions.region_of("BS119DE")    -> "R3"
     nr_regions.is_region("S60 1BX", "R2") -> True
 """
 import json
