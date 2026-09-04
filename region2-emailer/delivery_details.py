@@ -304,14 +304,32 @@ def parse_access(text):
 def parse_pts(text, whole_reply=""):
     """PTS shows up on non-rail loads too and leaks into other fields
     ('moffet (no pts this time)'), so scan the whole reply as a fallback."""
-    for src in (text, whole_reply):
+    # First, the answer typed against OUR question, wherever it sits in the
+    # thread. Anchoring on the question is the only reliable read: a reply
+    # answers eight of them, and a bare "yes" belonging to one of the others is
+    # not about PTS. Measured over 95 replies that answered explicitly, the
+    # whole-reply fallback got 7 wrong, every one a "no" read as "yes" because
+    # the \byes\b below matched the artic-access or rear-steer answer above it.
+    anchored = re.search(r"(?:needs?|requires?)\s*pts[^?\n]*\??[ \t]*([^\n]{0,40})",
+                         _clean(whole_reply or text).lower())
+    if anchored:
+        stated = anchored.group(1).strip(" \t:.-")
+        if re.match(r"^(no\b|n/a\b|n\b|not\b|none\b)", stated):
+            return "no", HIGH
+        if re.match(r"^(yes\b|y\b)", stated):
+            return "yes", HIGH
+
+    for i, src in enumerate((text, whole_reply)):
         s = _clean(src).lower()
         if not s:
             continue
         if re.search(r"\bno\s*pts|pts\s*not\s*(?:required|needed)|^\s*no\b", s):
             return "no", HIGH
         if re.search(r"\bpts\b", s):
-            if re.search(r"pts\s*(?:is\s*)?(?:required|needed)|require\s*pts|\byes\b", s):
+            # a loose "yes" counts only in the PTS field's OWN text, never in
+            # the whole reply - that is where those seven wrong answers came from
+            loose = r"|\byes\b" if i == 0 else ""
+            if re.search(r"pts\s*(?:is\s*)?(?:required|needed)|require\s*pts" + loose, s):
                 return "yes", HIGH
             return "yes", AMBER
         if re.match(r"^\s*(yes)\b", s):
