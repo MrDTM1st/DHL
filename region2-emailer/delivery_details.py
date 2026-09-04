@@ -103,7 +103,14 @@ def _strip_dates(s):
 
 # ---------------------------------------------------------------- times
 _TIME_PATS = [
-    re.compile(r"\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(am|pm)?\b", re.I),   # 22:00, 23.30
+    # 22:00, 23.30, and 22:30hrs. The trailing \b used to sit between "0" and
+    # "h", which are both word characters, so "22:30hrs" matched nothing at all
+    # and the time was lost - while pattern 3 below already honoured an "hrs"
+    # suffix on the bare form. The two guards replace what \b was really doing:
+    # (?!\.?\d) keeps rail dimensions out (18.288m, 22.710m read as 18:28,
+    # 22:71 without it) and (?![a-z]) keeps other unit letters out.
+    re.compile(r"\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(am|pm)?(?:\s*(?:hrs?|hours))?"
+               r"(?!\.?\d)(?![a-z])", re.I),
     re.compile(r"\b(\d{1,2})\s*(am|pm)\b", re.I),                      # 10am, 12am
     re.compile(r"(?<![\d/\-.])(\d{4})(?:\s*hrs)?(?![\d/\-])", re.I),   # 2200, 0400
 ]
@@ -229,6 +236,18 @@ def parse_offloading(text, product_type=None):
     if "?" in raw and raw.rsplit("?", 1)[-1].strip():
         raw = raw.rsplit("?", 1)[-1].strip()
     s = raw.lower()
+    # Delete OUR OWN menu before any keyword test. The split above only helps
+    # when the menu precedes the last "?", and in the template it does not - the
+    # line reads "...offloading? (HIAB or Moffet) yes moffet please", so the
+    # menu survives and both keywords are found. That did not merely invent a
+    # value where the contact left the line blank: it OVERRODE real answers.
+    # "(HIAB or Moffet) yes moffet please" came back BOTH instead of MOFFETT,
+    # and "(HIAB or Moffet) No - Loose ballast being Tipped" came back BOTH
+    # instead of SITE/NONE, on a load that is tipped and needs neither.
+    s = re.sub(r"[\(\[]?\s*hiab\s*(?:/|or|,|&|and)\s*moff\w*\s*[\)\]]?\s*\??", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not re.search(r"[a-z0-9]", s):
+        return None, AMBER          # nothing but our own menu - they never answered
     flat = re.sub(r"[^a-z]", "", s)
     moff = "moff" in flat
     hiab = "hiab" in flat or any(_lev1(t, "hiab") for t in re.findall(r"[a-z]{3,5}", flat))
@@ -433,7 +452,11 @@ def _prose(body):
             out.setdefault("rear", l)
         if re.search(r"\bpts\b", low):
             out.setdefault("pts", l)
-        if "what3words" in low or "w3w" in low or "///" in low:
+        # "what three words" and "what 3 words" contain none of the three
+        # literals this used to test, so those lines were never handed to
+        # parse_w3w at all - it only ever saw them when the writer also typed
+        # ///. parse_w3w itself reads them fine.
+        if re.search(r"what\s*(?:3|three)\s*words?|\bw\s*3\s*w\b|///", low):
             out.setdefault("w3w", l)
         if _PHONE.search(l):
             key = "altcontact" if re.search(r"alternat|\balt\b|second|backup", low) else "contact"
