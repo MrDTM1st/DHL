@@ -145,6 +145,7 @@ def transform(rows):
     35-field records, ordered like the Final query (OrdSort, SEQ)."""
     out = []
     W = 35
+    fellback = []
 
     def rec(seq, ordsort, vals):
         r = [""] * W
@@ -208,8 +209,13 @@ def transform(rows):
         # on any route. A job that needs one gets it put on by hand, so nothing
         # is charged for a service nobody chose. Do not add it back here or in a
         # mapper.
-        # ORD_SUB_REFS 1002 (SEQ 9): col1=1002, col2=Raised by
-        rec(9, ordno, {0: "ORD_SUB_REFS", 1: "1002", 2: o.get("Raised by")})
+        # ORD_SUB_REFS 1002 (SEQ 9): col1=1002, col2=Raised by. Never blank -
+        # CTMS drops an order with an empty 1002 without saying so.
+        raised = str(o.get("Raised by") or "").strip()
+        if not raised:
+            raised = raised_by_fallback()
+            fellback.append(str(ordno))
+        rec(9, ordno, {0: "ORD_SUB_REFS", 1: "1002", 2: raised})
         # ORD_SUB_REFS 1003 (SEQ 10): col1=1003, col2=Cost Centre or "0"
         # A cost centre of "   " is not a cost centre. The old test only caught
         # None and "", so a whitespace-only cell wrote an EMPTY 1003; the
@@ -245,7 +251,45 @@ def transform(rows):
         prod = adhoc_item(prod, acct)
         rec(13, ordno, {0: "ITEMS", 1: prod, 2: o.get("Product Qty")})
     out.sort(key=lambda t: (t[0], t[1]))
+    global LAST_RAISED_BY_FALLBACK
+    LAST_RAISED_BY_FALLBACK = fellback
+    if fellback:
+        # Say it plainly. The CSV is now loadable, but the site still has no
+        # address on file and the next upload will fall back again.
+        print(f"  NOTE: {len(fellback)} order(s) had no 'Raised by' and no site "
+              f"email. 1002 set to {raised_by_fallback()} so CTMS does not drop "
+              f"them silently: {', '.join(fellback)}")
+        print(f"  RAISED_BY_FALLBACK {len(fellback)}")
     return [r for _, _, r in out]
+
+
+# Who ORD_SUB_REFS 1002 names when the upload cannot work it out.
+#
+# 1002 is "Raised by". Synergy fills it from the extract's own Raised By column,
+# falling back to the collection site's email. When an extract arrives with the
+# column empty AND the site has no email on file, both are blank and 1002 goes
+# out empty - and an empty 1002 is the one defect CTMS does not report. It
+# accepts the file and silently drops the order. That has already cost three
+# orders on 04/09/2026, found only because somebody went looking for them, and
+# it was about to cost two more: East Brothers (Timber) Ltd - SALISBURY has no
+# email, and 80 of the 121 stored sites are in the same position.
+#
+# So the field is never left empty. The person running the upload raised it, so
+# they are the honest answer, and it points CTMS at somebody real. Every
+# substitution is reported, because the underlying gap is still a gap: the site
+# wants its real address adding.
+LAST_RAISED_BY_FALLBACK = []
+
+
+def raised_by_fallback():
+    try:
+        with open(os.path.join(HERE, "config", "team.json"), encoding="utf-8") as f:
+            me = str(json.load(f).get("me") or "").strip()
+        if me:
+            return me
+    except Exception:
+        pass
+    return "delali.opoku@dhl.com"
 
 
 # The window an upload carries when nobody has confirmed the times. Nine to
