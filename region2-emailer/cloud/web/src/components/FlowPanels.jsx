@@ -45,6 +45,16 @@ function ReviewSend({ status, currentOrder, onCommand, agentOnline, ttlText }) {
     if (!window.confirm(q)) return;
     onCommand({ action: 'order_send_edited', order: currentOrder, index: pick, email: form });
   };
+  // Take one off the queue without sending it. The only ways out used to be to
+  // send it or edit the json by hand, so unwanted drafts stayed for days.
+  const discard = () => {
+    const e = list[pick] || {};
+    if (!window.confirm('Discard this email without sending?'
+      + String.fromCharCode(10, 10) + (e.subject || '(no subject)')
+      + String.fromCharCode(10) + 'to ' + (e.to || '?')
+      + String.fromCharCode(10, 10) + 'It is kept in case you want it back.')) return;
+    onCommand({ action: 'discard_pending', index: pick });
+  };
   return (
     <div className="card panelcard">
       <div className="ph">Review &amp; send <span className="hint">· edit anything; signature &amp; QR are added automatically</span></div>
@@ -68,7 +78,12 @@ function ReviewSend({ status, currentOrder, onCommand, agentOnline, ttlText }) {
         <input placeholder="Cc (optional)" value={form.cc} onChange={set('cc')} />
         <input placeholder="Subject" value={form.subject} onChange={set('subject')} />
         <textarea rows={13} spellCheck={false} style={{ lineHeight: 1.55, resize: 'vertical' }} value={form.message} onChange={set('message')} />
-        <div><button className="btn go" onClick={send}>Send this email</button></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn go" onClick={send}>Send this email</button>
+          <button className="btn" title="Discard this one without sending"
+            onClick={discard}>&#10005; Discard</button>
+          <span className="hint">Discarded emails are kept, not destroyed.</span>
+        </div>
       </div>
     </div>
   );

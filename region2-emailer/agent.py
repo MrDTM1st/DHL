@@ -892,6 +892,41 @@ def main():
                         report("error", "NOT SENT - see below.", tail(out, 10))
                 except Exception as e:
                     report("error", f"Edited send failed: {e}")
+            elif action == "discard_pending":
+                # Drop a staged email nobody intends to send. Without this the
+                # only ways out of the queue were to send it or to edit the
+                # json by hand, so unwanted drafts sat there for days and made
+                # the panel harder to read than it needed to be.
+                pend = os.path.join(HERE, "_pending_email.json")
+                try:
+                    emails = json.load(open(pend, encoding="utf-8"))
+                except Exception:
+                    emails = []
+                try:
+                    idx = int(cmd.get("index", -1))
+                except Exception:
+                    idx = -1
+                if not (0 <= idx < len(emails)):
+                    report("error", "That staged email is no longer there - "
+                                    "the list has moved on. Reload and try again.")
+                else:
+                    gone = emails.pop(idx)
+                    # Keep a copy. Discarding is one click and an email that
+                    # took a whole upload to build should not be unrecoverable.
+                    try:
+                        binp = os.path.join(HERE, "_pending_discarded.json")
+                        old = json.load(open(binp, encoding="utf-8")) if os.path.exists(binp) else []
+                        gone["discarded_at"] = time.strftime("%Y-%m-%d %H:%M")
+                        old.insert(0, gone)
+                        json.dump(old[:40], open(binp, "w", encoding="utf-8"), indent=1)
+                    except Exception:
+                        pass
+                    json.dump(emails, open(pend, "w", encoding="utf-8"), indent=1)
+                    left = (f" {len(emails)} still staged." if emails
+                            else " Nothing staged now.")
+                    report("preview_ready" if emails else "done",
+                           f"Discarded: {str(gone.get('subject'))[:60]}.{left}",
+                           "", email=emails)
             elif action == "dts" and order:
                 report("running", f"Processing DTS {order}…")
                 before = snap_outbox()
