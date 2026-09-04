@@ -190,18 +190,41 @@ def team_emails():
 
 
 # ---------- products ----------
-def material_of(desc):
-    """The product family, using the one classifier the toolkit already has."""
+def material_of(order):
+    """The product family, using the one classifier the toolkit already has.
+
+    Takes the WHOLE row, not a description, because the column named
+    "Product / Description" does not reliably hold the description. In the
+    Synergy extract the readable wording sits in Product/Service Code and the
+    numeric ref sits in Product/Description; BS batch files are the other way
+    round. Reading the obvious-looking column gave "0057/100500/002 done" as
+    the subject line and no materials team on Cc, because a code classifies as
+    nothing. readable_product picks whichever of the two reads as words.
+    """
     try:
         import build_drafts as bd
+        desc = bd.readable_product(order.get("Product / Description"),
+                                   order.get("Product / Service Code"))
         return bd.product_type(desc)
     except Exception:
-        d = str(desc or "").upper()
+        d = " ".join(str(order.get(k) or "") for k in
+                     ("Product / Description", "Product / Service Code")).upper()
         for key, label in (("SLEEPER", "sleepers"), ("BALLAST", "ballast"),
                            ("RAIL", "rails")):
             if key in d:
                 return label
         return ""
+
+
+def readable_of(order):
+    """The product wording a person can read, for the urgent call-outs."""
+    try:
+        import build_drafts as bd
+        return bd.readable_product(order.get("Product / Description"),
+                                   order.get("Product / Service Code"))
+    except Exception:
+        return str(order.get("Product / Service Code")
+                   or order.get("Product / Description") or "").strip()
 
 
 def _summary(kinds):
@@ -296,7 +319,7 @@ def build_notice(mapped, extract_name, today=None, rota_path=None):
 
     kinds, urgent = [], []
     for o in mapped:
-        kind = material_of(o.get("Product / Description"))
+        kind = material_of(o)
         if kind and kind not in kinds:
             kinds.append(kind)
         u = urgency(o, today)
@@ -329,7 +352,7 @@ def build_notice(mapped, extract_name, today=None, rota_path=None):
             "ref": str(o.get("Customer Order No") or "").strip(),
             "region": region, "phrase": phrase, "days": days,
             "when": when.strftime("%d/%m/%Y %H:%M") if when else "",
-            "product": kind or str(o.get("Product / Description") or "").strip(),
+            "product": kind or readable_of(o),
             "to_site": str(o.get("Delivery Point") or "").strip(),
             "to_pc": str(o.get("D Postcode") or "").strip(),
             "from_site": str(o.get("Site Name - Collection") or "").strip(),
