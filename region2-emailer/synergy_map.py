@@ -439,7 +439,9 @@ def main():
     try:
         import upload_notice
         email, urgent = upload_notice.stage(mapped, os.path.basename(args[0]))
-        print("\n  NOTICE ready for Review & send:")
+        where = ("Outlook Drafts + Review & send" if email.get("drafted")
+                 else "Review & send only (no Outlook draft - is Outlook open?)")
+        print(f"\n  NOTICE ready - {where}:")
         print(f"    To: {email['to']}")
         print(f"    Cc: {email['cc'] or '(no materials team for these products)'}")
         print(f"    Subject: {email['subject']}")

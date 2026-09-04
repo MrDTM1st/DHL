@@ -382,6 +382,14 @@ def build_notice(mapped, extract_name, today=None, rota_path=None):
 
     done = _summary(kinds)
     lines = [f"{done} done.", ""]
+    if not urgent:
+        # Say so rather than saying nothing. A notice that is silent about
+        # urgency is ambiguous - the reader cannot tell whether it was checked
+        # and came back clear, or whether the check simply did not run. "Or
+        # not" was the whole point of asking for it (Delali, 04/09).
+        lines += ["Nothing on this upload is urgent outside my region - "
+                  "everything else is more than "
+                  f"{URGENT_DAYS} days out.", ""]
     if urgent:
         # Don't name the region number here - the active region lives in
         # config.json and a hardcoded "not Region 2" goes quietly wrong the
@@ -413,6 +421,106 @@ def build_notice(mapped, extract_name, today=None, rota_path=None):
     }, urgent
 
 
+def _find_by_attachment(folder, want, depth=0):
+    """The mail carrying this attachment, searching a folder tree.
+
+    Recursive, because the extract does not sit in the Inbox root: a rule
+    files it into Inbox/ADHOC/Synergy Upload, two levels down. Searching the
+    root found nothing, and a one-level search found nothing either - the
+    draft came out correct in every respect except the attachment, which is
+    the one part the recipients actually need.
+    """
+    if depth > 3:
+        return None
+    try:
+        items = folder.Items
+        items.Sort("[ReceivedTime]", True)
+        for n, m in enumerate(items):
+            if n > 150:
+                break
+            try:
+                for k in range(1, m.Attachments.Count + 1):
+                    if str(m.Attachments.Item(k).FileName or "").lower() == want:
+                        return m
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        for i in range(1, folder.Folders.Count + 1):
+            hit = _find_by_attachment(folder.Folders.Item(i), want, depth + 1)
+            if hit is not None:
+                return hit
+    except Exception:
+        pass
+    return None
+
+
+def draft(email, extract_name):
+    """Put the notice in Outlook Drafts, ready to send.
+
+    Built as a FORWARD of the extract mail rather than a fresh message,
+    because that is what these actually are: the real sends are all
+    "FW: Synergy_DHL_Haulier_Extract_....xlsx" carrying the extract itself.
+    A fresh draft would have the right words and no attachment, and the
+    recipients need the sheet, not the sentence about it.
+
+    Falls back to a plain draft when the original cannot be found - late is
+    better than nothing, and the subject still names the extract.
+
+    Never sends. Returns the subject on success, "" when Outlook is not there.
+    """
+    try:
+        import win32com.client
+        import build_drafts as bd
+    except Exception:
+        return ""
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        ns = outlook.GetNamespace("MAPI")
+        acct = None
+        for i in range(1, ns.Accounts.Count + 1):
+            a = ns.Accounts.Item(i)
+            if str(getattr(a, "SmtpAddress", "")).lower() == bd.DHL_SMTP.lower():
+                acct = a
+                break
+        if acct is None:
+            return ""
+        # Find the mail the extract arrived on, by its attachment name.
+        #
+        # Inbox AND its subfolders: the extract does not stay in the root. It
+        # gets filed (there is a rule putting it away), and searching only the
+        # root found nothing at all - the draft came out correct in every
+        # respect except the one that matters, with no sheet attached.
+        want = str(extract_name).lower()
+        src = _find_by_attachment(acct.DeliveryStore.GetDefaultFolder(6), want)
+
+        body_html = "".join(
+            f"<p style='font-family:Calibri,sans-serif;font-size:11pt'>{ln}</p>"
+            if ln.strip() else "<p></p>"
+            for ln in email["message"].split("\n\n"))
+        body_html = body_html.replace("\n", "<br>")
+
+        m = src.Forward() if src is not None else outlook.CreateItem(0)
+        m.To = email["to"]
+        if email.get("cc"):
+            m.CC = email["cc"]
+        m.Subject = email["subject"]
+        m.HTMLBody = body_html + str(getattr(m, "HTMLBody", "") or "")
+        try:
+            m._oleobj_.Invoke(64209, 0, 8, 0, acct)   # SendUsingAccount
+        except Exception:
+            pass
+        m.Save()
+        try:
+            m.Move(acct.DeliveryStore.GetDefaultFolder(16))   # 16 = Drafts
+        except Exception:
+            pass
+        return email["subject"]
+    except Exception:
+        return ""
+
+
 def stage(mapped, extract_name, today=None, refresh=True):
     """Build the notice and put it in front of a human. Sends nothing."""
     if refresh:
@@ -433,6 +541,9 @@ def stage(mapped, extract_name, today=None, refresh=True):
     existing.append(email)
     with open(PENDING, "w", encoding="utf-8") as f:
         json.dump(existing, f, indent=1)
+    # ...and put it in Outlook Drafts too, so it can go straight out from the
+    # mailbox without the dashboard being open. Both surfaces, one email.
+    email["drafted"] = bool(draft(email, extract_name))
     return email, urgent
 
 
