@@ -132,8 +132,26 @@ def raise_query(orders, to, what, cc=""):
     save(problems, what)
     email = build_email(problems, to, what, cc)
     pending = os.path.join(HERE, "_pending_email.json")
+    # MERGE, do not replace - the same lesson seasonal.py already learned. This
+    # wrote [email] over the whole file, so processing one upload silently
+    # destroyed every email already waiting on Review & send: a cover request
+    # to a haulier, another route's date query, anything. The email was gone
+    # and nothing said so. Caught on 07/09 with three staged, one of them a
+    # seasonal cover request.
+    #
+    # A re-run of the SAME query replaces its own earlier copy rather than
+    # stacking duplicates; everything else is left exactly where it was.
+    try:
+        existing = json.load(open(pending, encoding="utf-8"))
+        if not isinstance(existing, list):
+            existing = []
+    except Exception:
+        existing = []
+    mine = (email.get("source"), tuple(sorted(email.get("orders") or [])))
+    kept = [e for e in existing
+            if (e.get("source"), tuple(sorted(e.get("orders") or []))) != mine]
     with open(pending, "w", encoding="utf-8") as f:
-        json.dump([email], f, indent=1)
+        json.dump(kept + [email], f, indent=1)
     return problems
 
 
