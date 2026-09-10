@@ -251,9 +251,33 @@ def window(start, end):
     return f"{s} {e}"
 
 
+# The kit that actually does the offloading. Escorts, banksman, PTS and rear
+# steer are not offloading and stay off this line - they belong to the vehicle
+# or the site, not to getting the load down.
+OFFLOAD_FIELDS = (("HIAB", "HIAB"), ("Moffett", "Moffett"), ("Log Grab", "log grab"))
+
+
 def _offload(o):
-    v = str(o.get("HIAB") or "").strip()
-    return v if v and v.upper() != "N" else "none required"
+    """What the haulier has to bring to get the load off.
+
+    This read the HIAB column and nothing else, so an order with Moffett Y and
+    HIAB N was sent to the haulier as "Offloading: none required". Six live
+    seasonal orders went out that way before it was spotted - a Moffett is a
+    truck-mounted forklift, so that is not a detail, it is a different vehicle
+    and a different price, and the haulier had quoted without it.
+
+    Every offloading column is read now, and more than one can be true.
+    A value that is not a plain yes is passed through as the requester wrote
+    it rather than reduced to the label.
+    """
+    want = []
+    for field, label in OFFLOAD_FIELDS:
+        v = str(o.get(field) or "").strip()
+        if not v or v.upper() in nr_csv.NOT_ORDERED:
+            continue
+        want.append(label if v.upper() in ("Y", "YES", "TRUE", "1")
+                    else f"{label} ({v})")
+    return ", ".join(want) if want else "none required"
 
 
 def cover_request(orders, code, haulier, source):
