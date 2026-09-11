@@ -190,8 +190,15 @@ def main():
         except Exception as ex:
             print(f"  (could not remove the pins: {ex})")
 
-    keep_ids = {r["id"] for r in hit}
-    left = [r for r in recs if r.get("id") not in keep_ids]
+    # Re-read the ad hocs RIGHT BEFORE writing, and remove only the ids found
+    # booked. `recs` was loaded before the mailbox scan, which takes seconds,
+    # and writing `recs` back minus the booked ones deleted anything added in
+    # between - a form processed during the scan vanished from the map without
+    # a word. The cloud agent processes dropped forms while the local agent
+    # runs this sweep, so the two genuinely overlap, and once the sweep went
+    # from every 30 minutes to every 5 the window stopped being rare.
+    booked_ids = {r["id"] for r in hit}
+    left = [r for r in _load_adhocs() if r.get("id") not in booked_ids]
     tmp = ADHOCS + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(left, f, indent=1)

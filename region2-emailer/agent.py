@@ -123,6 +123,20 @@ def push_new_files(before):
             pass
 
 
+# States that hold a review panel open on the dashboard. A "done" report
+# replaces the state, and with it the panel: a batch waiting to be ticked or an
+# email waiting to be sent simply disappears. Background jobs must not do that.
+REVIEW_STATES = ("preview_ready", "batch_ready", "sites_needed", "found")
+
+
+def _review_pending():
+    """True when the dashboard is showing something that is waiting on you."""
+    try:
+        return (_req("/api/status") or {}).get("state") in REVIEW_STATES
+    except Exception:
+        return True          # cannot tell - do not risk wiping someone's review
+
+
 def report(state, detail, output="", email=None):
     try:
         _req("/api/status", {"state": state, "detail": detail, "output": output,
@@ -1155,7 +1169,13 @@ def main():
         if time.time() - last_files > 1800:   # heal the Files list after a redeploy
             push_new_files({})
             last_files = time.time()
-        if IS_LOCAL and time.time() - last_adhocsweep > 1800:  # every 30 min: take ad hocs off the map once their manifest arrives
+        # Every 5 minutes (was 30): take ad hocs and pins off the map once
+        # they are booked in. The tracker already clears within a minute or
+        # two of the email that books it - monitor_tick runs its check on
+        # any new sent mail - but ad hocs and pins waited half an hour for
+        # this, so a job you had just booked sat there looking unbooked.
+        # The sweep costs about a second, so 5 minutes is nothing.
+        if IS_LOCAL and time.time() - last_adhocsweep > 300:
             out = run(["adhoc_booked_sweep.py", "apply"])
             n = 0
             for line in out.splitlines():
@@ -1167,9 +1187,13 @@ def main():
             if n:
                 push_panel()
                 # say WHICH ones and why - a pin that vanishes with no
-                # explanation is worse than one that lingers
-                report("done", f"{n} ad hoc(s) booked in - removed from the map.",
-                       tail(out, 16))
+                # explanation is worse than one that lingers. But not over a
+                # review that is waiting on you: at a 5-minute cadence this
+                # would otherwise wipe a pending batch or email off the
+                # dashboard. _adhoc_booked.json still records every removal.
+                if not _review_pending():
+                    report("done", f"{n} ad hoc(s)/pin(s) booked in - removed from the map.",
+                           tail(out, 16))
             last_adhocsweep = time.time()
         if IS_LOCAL and time.time() - last_asks > 1800:       # every 30 min: who has already been asked to cover each job (read-only sweep of Sent Items)
             try:
