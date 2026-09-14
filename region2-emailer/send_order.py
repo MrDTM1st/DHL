@@ -336,26 +336,18 @@ def send_haulier(ns):
         print("SEND_RESULT sent=0")
         return 0
 
-    # Every cover request - dashboard, CLI, or staged by hand - passes through
-    # here, so this is the one place worth checking the text against the order
-    # it names. 6055488 went to two hauliers on 11/09 with a collection date
-    # and a tonnage the order does not carry, and Gundel quoted against them.
-    # "verified": true in the pending file is the deliberate way past it, for
-    # details agreed with the site rather than read off the order.
+    # Every cover request passes through here, so this is where the ask and the
+    # order record get held up against each other. It only ever PRINTS. The
+    # 7115316 ask on 14/09 read "15x aggregate" and looked doubled against a
+    # database that had dropped one of the order's three lines - the ask was
+    # right - so a check like this refusing a send would have cost more than
+    # it saved. It says what differs; the desk knows which side is right.
     try:
         import ask_check
-        findings = ask_check.check(str(e.get("message") or ""), e.get("orders", []))
+        for lvl, text in ask_check.check(str(e.get("message") or ""), e.get("orders", [])):
+            print(f"  ~~ {text}")
     except Exception as ex:
-        findings = []
         print(f"(the ask check did not run: {ex})")
-    for lvl, text in findings:
-        print(f"  {'!!' if lvl == 'stop' else '~~'} {text}")
-    if ask_check.stops(findings) and not e.get("verified"):
-        print("ABORT: this cover request does not match the order record - nothing sent.")
-        print('   Correct the ask, or set "verified": true in _pending_haulier.json if you '
-              'agreed these details yourself.')
-        print("SEND_RESULT sent=0")
-        return 0
 
     import win32com.client
     outlook = win32com.client.Dispatch("Outlook.Application")

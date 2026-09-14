@@ -1,30 +1,29 @@
-"""Does a cover request agree with the order it names?
+"""Does a cover request agree with what we hold for the order? ADVISORY ONLY.
 
-THE INCIDENT (11/09). Order 6055488 went to DE O'Reilly at 15:05 and to
-Gundel at 15:22 as "Collection date/time: Wednesday 16/09/2026 08:30 - 15:00
-... Weight: 14 tonnes in total". The order says neither. Its only source row,
-6055488-1-1 on the Synergy extract of 19/08, reads collection 17/09/2026,
-delivery 17/09/2026 - both carrying Synergy's "no time given" 00:01-23:59
-marker - 100 sleepers, and no weight at all. The tool's own brief, drafted
-03/09 and sitting in Send Out, had it right: "collection date/time:
-17/09/2026 ... materials: 100x sleepers".
+This started as a gate that refused to send, on the belief that 6055488 had
+gone to two hauliers with a collection date and a tonnage the order never
+carried. That was wrong, and the way it was wrong is the point.
 
-The wrong numbers were typed into the ask by hand, over the top of that
-brief, and nothing between the keyboard and the haulier compared them with
-the order. Kev quoted GBP 1084 against them. A haulier prices off these
-lines, so a figure that is in the email but not in the order is not a detail
-- it is a guess wearing a detail's clothes.
+What actually happened (7115316, Handsacre, 14/09). The ask read "Materials:
+15x aggregate, 8x ballast" and "Collection date/time: 17/09/2026". Read
+against the database it looked like a doubling with a date out of nowhere,
+because the upload into the database had dropped a line. The extract of 17/08
+holds THREE lines: 8x 14mm pipe bedding from Bagforce, 8x track ballast from
+Land Recovery, and 7x MOT Type 1 from Land Recovery, every one collecting
+17/09. 8 + 7 is the 15x aggregate, and the date is the order's own. The ask
+was right; the record it was being judged against was short of a line.
 
-So every fact a cover request states gets checked against what we actually
-hold for that order: the dates, the postcodes, the quantity. Tonnage is the
-sharpest case and has its own rule - a weight is only sayable if the record
-carries one, because nothing else in this toolkit knows what a sleeper
-weighs.
+So nothing in here may block a send. A summary is not proof: the tracker and
+the pins hold one line's worth of a multi-line order, a database can be
+missing a line someone forgot to upload, and a collection date or a window is
+often something the desk arranged by phone and no file will ever show. Any of
+those would have this refusing correct asks - which is exactly the failure it
+was built to prevent, pointed the other way.
 
-Findings come back as (level, text). "stop" means do not send; "warn" means
-say so and carry on - that is what an order with no record at all gets,
-because seasonal and by-hand jobs legitimately live outside these stores and
-blocking them would cost more than it saves.
+What it does instead: print, at send time, every place the ask and the record
+disagree, so the difference is seen by someone who knows which of the two is
+right. A weight is always reported, because no store here knows what a
+sleeper or a bag weighs, so a tonnage in an ask never came from the order.
 """
 import json
 import os
@@ -118,7 +117,7 @@ def facts(order):
 
 
 def check(message, orders):
-    """[(level, text)] - "stop" findings must block the send."""
+    """[(level, text)] - differences to show a human. Nothing here blocks."""
     message = str(message or "")
     out = []
     known = {}
@@ -145,40 +144,40 @@ def check(message, orders):
             continue
         for d in _days(_line(message, label)):
             if d not in allowed:
-                out.append(("stop", f"\"{label}\" says {_show(d)}, but the {what} on "
+                out.append(("differs", f"\"{label}\" says {_show(d)}, but the {what} on "
                                     f"{refs} is {' / '.join(sorted(map(_show, allowed)))}"))
 
     if all_days:
         said = {d for _, t in out for d in _days(t)}      # already reported above
         for d in sorted(_days(message) - all_days - said):
             if not any(d in f["collection_days"] | f["delivery_days"] for f in known.values()):
-                out.append(("stop", f"the ask states {_show(d)}, which is not a date held for "
+                out.append(("differs", f"the ask states {_show(d)}, which is not a date held for "
                                     f"{refs} ({' / '.join(sorted(map(_show, all_days)))})"))
 
     if pcs:
         for pc in sorted(_pcs(message) - pcs):
-            out.append(("stop", f"the ask states postcode {pc}, which is not a postcode held "
+            out.append(("differs", f"the ask states postcode {pc}, which is not a postcode held "
                                 f"for {refs} ({', '.join(sorted(pcs))})"))
 
     if qtys:
         for q in _qtys(_line(message, "Materials")):
             if q not in qtys:
-                out.append(("stop", f"\"Materials\" says {q}x, but the record for {refs} says "
+                out.append(("differs", f"\"Materials\" says {q}x, but the record for {refs} says "
                                     f"{' / '.join(str(x) + 'x' for x in sorted(qtys))}"))
 
     for t in TONNES_RE.findall(message):
         held = " ".join(f["weight"] for f in known.values()).strip()
         if not held:
-            out.append(("stop", f"the ask states {t} tonnes, and no record for {refs} carries a "
+            out.append(("differs", f"the ask states {t} tonnes, and no record for {refs} carries a "
                                 f"weight - a haulier prices off that number, so it has to come "
                                 f"from the order or from whoever you agreed it with"))
         elif t not in held:
-            out.append(("stop", f"the ask states {t} tonnes; the record for {refs} says {held!r}"))
+            out.append(("differs", f"the ask states {t} tonnes; the record for {refs} says {held!r}"))
     return out
 
 
-def stops(findings):
-    return [t for lvl, t in findings if lvl == "stop"]
+def differences(findings):
+    return [t for lvl, t in findings if lvl == "differs"]
 
 
 if __name__ == "__main__":
