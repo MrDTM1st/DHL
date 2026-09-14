@@ -1,9 +1,15 @@
-"""Ad hocs: take them off the map once the manifest comes back.
+"""The map's booked-in check: take a job off once the manifest comes back.
 
     python adhoc_booked_sweep.py           DRY RUN - what it would remove
     python adhoc_booked_sweep.py apply     remove them
 
-An ad hoc sits on the map until someone presses "Booked - remove from the map".
+Covers everything the map screen lists: ad hocs, by-hand pins AND tracker
+deliveries. It used to read the ad hocs and the pins only, which is 8 of the 21
+rows on that list, so "check whether these are booked" could not answer for the
+other 13 however long you stared at it - and the answer for a tracker delivery
+is in exactly the same place, the manifest number in its own thread.
+
+A job sits on the map until someone presses "Booked - remove from the map".
 But the moment it is actually booked is already in the mailbox: the haulier
 replies in the thread with a manifest number - "it's for this current run:
 260804-man-01567080" - or you reply with one yourself after booking by phone.
@@ -39,7 +45,13 @@ import tracker                 # noqa: E402
 ADHOCS = os.path.join(HERE, "_adhocs.json")
 LOG = os.path.join(HERE, "_adhoc_booked.json")     # what was removed and why
 DAYS = 30
-PER_FOLDER = 150
+# A backstop, not the window. This was 150, and the loop counted items BEFORE
+# checking the date, so whichever limit bit first won: on a live Inbox 150 items
+# is a couple of days, not thirty. The jobs that linger on the map are precisely
+# the old ones, whose confirmation sits far below item 150 - so the sweep could
+# never see the mail that would have cleared them. Outlook does the date filter
+# now (find_bookings), and this only stops a runaway folder.
+PER_FOLDER = 2000
 FOLDERS = ("ADHOC", "Inbox", "Sent Items")
 
 
@@ -66,6 +78,25 @@ def _load_pins():
         return pins.load()
     except Exception:
         return []
+
+
+def _load_tracker():
+    """Tracker deliveries are on the map list too, and they get booked by phone
+    exactly like the rest. Left out, the check answered for 8 rows of 21."""
+    try:
+        import tracker
+        return [r for r in (tracker.load().get("records") or []) if r.get("orders")]
+    except Exception:
+        return []
+
+
+def self_booked(rec):
+    """The record already says so. order_pin sets booked=True when it proves a
+    manifest in Sent Items at pin time, then pins the job map-only so nothing
+    chases it - and the sweep used to ignore that flag and re-derive the answer
+    from mail that may have scrolled out of the window, so 6055488 sat on the
+    map with its own record saying booked."""
+    return rec.get("booked") is True
 
 
 def _folders(ns):
@@ -96,12 +127,20 @@ def find_bookings(ns, refs, days=DAYS):
         return {}
     cutoff = datetime.now() - timedelta(days=days)
     booked = {}
+    # Outlook does the date filter, in ISO via DASL so it does not depend on the
+    # machine's date format. The item cap below is only a runaway guard now.
+    flt = ('@SQL="urn:schemas:httpmail:datereceived" >= \''
+           + cutoff.strftime("%Y-%m-%d %H:%M") + "'")
     for folder in _folders(ns):
         try:
-            items = folder.Items
+            items = folder.Items.Restrict(flt)
             items.Sort("[ReceivedTime]", True)
         except Exception:
-            continue
+            try:                                  # a store that refuses the
+                items = folder.Items              # restrict still gets swept
+                items.Sort("[ReceivedTime]", True)
+            except Exception:
+                continue
         n = 0
         for it in items:
             n += 1
@@ -141,44 +180,63 @@ def find_bookings(ns, refs, days=DAYS):
     return booked
 
 
+def reason(rec, booked):
+    """(ref, why) if this job is booked, else (None, None).
+
+    Two ways of knowing, and the second one used to be thrown away: the mailbox
+    says so, or the record itself already says so.
+    """
+    refs = [str(o).strip() for o in rec.get("orders", []) if str(o).strip()]
+    for r in refs:
+        if r in booked:
+            return r, booked[r]
+    if self_booked(rec):
+        return (refs[0] if refs else str(rec.get("id", "?"))), {
+            "man": "", "when": "", "who": "recorded as booked when it was pinned",
+            "folder": "", "subject": ""}
+    return None, None
+
+
 def main():
     apply = "apply" in [a.strip().lower() for a in sys.argv[1:]]
     recs = _load_adhocs()
     pinned = _load_pins()
-    if not recs and not pinned:
+    tracked = _load_tracker()
+    if not recs and not pinned and not tracked:
         print("Nothing on the map.")
         print("SWEEP_RESULT removed=0")
         return 0
 
     refs = []
-    for r in recs + pinned:
+    for r in recs + pinned + tracked:
         refs += [str(o).strip() for o in r.get("orders", []) if str(o).strip()]
-    print(f"Checking {len(recs)} ad hoc(s) and {len(pinned)} pin(s) "
-          f"against the mailbox...\n")
+    print(f"Checking {len(recs)} ad hoc(s), {len(pinned)} pin(s) and "
+          f"{len(tracked)} tracker delivery(ies) against the mailbox...\n")
 
     booked = find_bookings(bd.get_ns(), refs)
-    hit = [r for r in recs
-           if any(str(o).strip() in booked for o in r.get("orders", []))]
-    hit_pins = [r for r in pinned
-                if any(str(o).strip() in booked for o in r.get("orders", []))]
-    if not hit and not hit_pins:
+    hit = [r for r in recs if reason(r, booked)[0]]
+    hit_pins = [r for r in pinned if reason(r, booked)[0]]
+    hit_track = [r for r in tracked if reason(r, booked)[0]]
+    if not hit and not hit_pins and not hit_track:
         print("  none of them have a manifest yet - nothing to remove.")
         print("SWEEP_RESULT removed=0")
         return 0
 
-    for r in hit + hit_pins:
-        ref = next(str(o).strip() for o in r["orders"] if str(o).strip() in booked)
-        b = booked[ref]
-        kind = "pin" if r in hit_pins else r.get("kind", "adhoc")
+    for r in hit + hit_pins + hit_track:
+        ref, b = reason(r, booked)
+        kind = ("pin" if r in hit_pins
+                else "tracker" if r in hit_track
+                else r.get("kind", "adhoc"))
         print(f"  {'REMOVE' if apply else 'would remove'}  {ref}  [{kind}]")
         print(f"      {r.get('collection_site','?')} -> {r.get('site','?')}"
               f"  ({r.get('delivery_date','?')})")
-        print(f"      manifest {b['man'] or '(booking phrase)'} · {b['when']}"
-              f" · {b['who'] or '?'} · [{b['folder']}]")
+        print(f"      manifest {b['man'] or '(booking phrase)'}"
+              f" · {b['when'] or 'already on the record'}"
+              f" · {b['who'] or '?'} · [{b['folder'] or 'the record itself'}]")
 
     if not apply:
         print(f"\nDRY RUN - nothing removed. Add 'apply' to take these "
-              f"{len(hit) + len(hit_pins)} off the map.")
+              f"{len(hit) + len(hit_pins) + len(hit_track)} off the map.")
         print("SWEEP_RESULT removed=0")
         return 0
 
@@ -199,15 +257,28 @@ def main():
     # from every 30 minutes to every 5 the window stopped being rare.
     booked_ids = {r["id"] for r in hit}
     left = [r for r in _load_adhocs() if r.get("id") not in booked_ids]
-    tmp = ADHOCS + ".tmp"
+    # The temp file carries this process's pid. Two agents run on this PC
+    # against the same mailbox - the local one on its 5-minute timer, the cloud
+    # one when the map's button is pressed - and with a single fixed ".tmp" the
+    # loser of that race raises at os.replace AFTER the pins have already been
+    # deleted and BEFORE the removal log is written: a job vanishing with no
+    # record of why, which is the thing this script exists to avoid.
+    tmp = f"{ADHOCS}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(left, f, indent=1)
     os.replace(tmp, ADHOCS)
 
+    for r in hit_track:                      # tracker deliveries: drop by id
+        try:
+            import tracker as _tracker
+            _tracker.book(r.get("id"))
+        except Exception as ex:
+            print(f"  (could not drop tracker record {r.get('id')}: {ex})")
+
     # Remember them, so reprocessing the same form can never put a booked job
     # back on the map - the same guard the tracker's enrol sweeps rely on.
     dropped = []
-    for r in hit + hit_pins:
+    for r in hit + hit_pins + hit_track:
         dropped += [str(o).strip() for o in r.get("orders", [])]
     try:
         tracker.remember_drops(dropped)
@@ -221,16 +292,18 @@ def main():
     except Exception:
         old = []
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for r in hit + hit_pins:
-        ref = next(str(o).strip() for o in r["orders"] if str(o).strip() in booked)
-        old.insert(0, {"ref": ref, "removed_at": stamp, **booked[ref],
+    for r in hit + hit_pins + hit_track:
+        # reason(), not booked[ref] - a record removed on its own booked flag
+        # has no mailbox entry, and looking one up raised StopIteration.
+        ref, b = reason(r, booked)
+        old.insert(0, {"ref": ref, "removed_at": stamp, **b,
                        "site": r.get("site", ""), "csv": r.get("csv", "")})
     with open(LOG, "w", encoding="utf-8") as f:
         json.dump(old[:120], f, indent=1)
 
-    n = len(hit) + len(hit_pins)
-    print(f"\nRemoved {n} from the map ({len(hit)} ad hoc, {len(hit_pins)} pin). "
-          f"{len(left)} ad hoc(s) left.")
+    n = len(hit) + len(hit_pins) + len(hit_track)
+    print(f"\nRemoved {n} from the map ({len(hit)} ad hoc, {len(hit_pins)} pin, "
+          f"{len(hit_track)} tracker). {len(left)} ad hoc(s) left.")
     print(f"SWEEP_RESULT removed={n}")
     return 0
 

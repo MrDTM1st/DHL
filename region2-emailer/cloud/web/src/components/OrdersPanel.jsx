@@ -118,6 +118,39 @@ function OrderSearch({ status }) {
 // Left-hand panel on the map: every tracked order with its recommended haulier.
 // Tap a row to open the full brief. Recommendations use the same real ranking
 // as the drawer.
+/* "Check booked in" - hold every job on this list up against the mailbox and
+   take off the ones that are already booked.
+
+   A job only leaves this list when somebody presses Booked on it, and half the
+   time the booking was made over the phone, so the proof is sitting in Sent
+   Items as a manifest number and nobody ever told the map. The agent sweeps for
+   that every 5 minutes, but silently: it says nothing when it removes nothing,
+   and nothing at all while a review is open. So there was no way to ASK.
+
+   This asks, and it always answers - including "none of them", which is the
+   answer that tells you the list is genuinely live rather than stale. */
+function BookedCheck({ status }) {
+  const [pending, setPending] = useState(false);
+  const state = (status && status.state) || '';
+  useEffect(() => {
+    if (pending && (state === 'done' || state === 'error')) setPending(false);
+  }, [state, pending]);
+  const press = async () => {
+    setPending(true);
+    try {
+      await command({ action: 'booked_sweep' });
+    } catch {
+      setPending(false);           // never leave it stuck on "Checking"
+    }
+  };
+  return (
+    <button className="btn mini" style={{ marginTop: 8 }} onClick={press} disabled={pending}
+      title="Check every job on this list against your sent mail, and take off the ones already booked in">
+      {pending ? 'Checking…' : 'Check booked in'}
+    </button>
+  );
+}
+
 export default function OrdersPanel({ records, hauliers, onSelect, selectedId, status }) {
   const geo = geoCache();
   const list = [...records].sort((a, b) => (isUrgent(b) - isUrgent(a)) || 0);
@@ -127,6 +160,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
       <div className="up-head">
         <div className="t">{I.track}Orders &amp; hauliers</div>
         <div className="s">{records.length} tracked · {urgent} urgent. Tap an order for the full brief.</div>
+        <BookedCheck status={status} />
       </div>
       <OrderSearch status={status} />
       <div className="parsed" style={{ maxHeight: '62vh', padding: '6px 8px 8px' }}>

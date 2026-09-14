@@ -1065,6 +1065,35 @@ def main():
                            "the pins has that id. If the job was reprocessed since this "
                            "brief was opened the id will have changed: refresh the "
                            "dashboard and press it again.")
+            elif action == "booked_sweep":
+                # The map's "Check booked in". Same sweep as the 5-minute timer,
+                # but the timer is deliberately quiet - it says nothing when it
+                # removes nothing, and nothing at all while a review is waiting
+                # on the dashboard - so there was no way to ASK the question and
+                # get an answer. This always answers, including "none of them".
+                report("running", "Checking the map against your sent mail…")
+                out = run(["adhoc_booked_sweep.py", "apply"])
+                n, answered = 0, False
+                for line in out.splitlines():
+                    if line.startswith("SWEEP_RESULT removed="):
+                        answered = True
+                        try:
+                            n = int(line.split("=")[1].strip())
+                        except Exception:
+                            n = 0
+                if not answered:
+                    # n starts at 0, so a sweep that died - Outlook closed, a COM
+                    # error, the run timeout - used to come back as a confident
+                    # "nothing to remove". A button whose whole purpose is to
+                    # answer a question must never answer it by failing.
+                    report("error", "The booked-in check did not finish - is Outlook running "
+                           "on the home PC?", tail(out, 16))
+                elif n:
+                    push_panel()
+                    report("done", f"{n} booked in - taken off the map.", tail(out, 16))
+                else:
+                    report("done", "Checked every job on the map: none of them has a "
+                           "manifest in the mailbox yet.", tail(out, 16))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled
