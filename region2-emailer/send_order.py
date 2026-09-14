@@ -335,6 +335,28 @@ def send_haulier(ns):
         print("No recipient - nothing sent.")
         print("SEND_RESULT sent=0")
         return 0
+
+    # Every cover request - dashboard, CLI, or staged by hand - passes through
+    # here, so this is the one place worth checking the text against the order
+    # it names. 6055488 went to two hauliers on 11/09 with a collection date
+    # and a tonnage the order does not carry, and Gundel quoted against them.
+    # "verified": true in the pending file is the deliberate way past it, for
+    # details agreed with the site rather than read off the order.
+    try:
+        import ask_check
+        findings = ask_check.check(str(e.get("message") or ""), e.get("orders", []))
+    except Exception as ex:
+        findings = []
+        print(f"(the ask check did not run: {ex})")
+    for lvl, text in findings:
+        print(f"  {'!!' if lvl == 'stop' else '~~'} {text}")
+    if ask_check.stops(findings) and not e.get("verified"):
+        print("ABORT: this cover request does not match the order record - nothing sent.")
+        print('   Correct the ask, or set "verified": true in _pending_haulier.json if you '
+              'agreed these details yourself.')
+        print("SEND_RESULT sent=0")
+        return 0
+
     import win32com.client
     outlook = win32com.client.Dispatch("Outlook.Application")
     acct = dhl_account(ns)
