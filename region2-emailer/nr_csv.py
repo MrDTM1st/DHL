@@ -98,7 +98,16 @@ def dp_short(dp):
 # Every spelling of "no, don't send one" seen on the forms and extracts. A
 # task is a chargeable extra, so it is ordered only by an affirmative value -
 # anything in here, blank included, means no task row.
-NOT_ORDERED = ("", "N", "NO", "0", "-", "--", "N/A", "NA", "NONE", "FALSE", "NIL")
+#
+# "PLEASE SELECT" is in here because a dropdown nobody touched is not a yes.
+# Folglade sent the Cadder form (14/09) with Rear Steer, Banksman, Escort and
+# PTS all left on "Please select", and every one of them would have gone onto
+# the order as an ordered extra - the same mistake as the blank cell that used
+# to order a HIAB, wearing the form's own placeholder text. process_form has
+# always read the Account placeholder this way (UNSET_ACCOUNTS); the service
+# columns simply never learned it.
+NOT_ORDERED = ("", "N", "NO", "0", "-", "--", "N/A", "NA", "NONE", "FALSE",
+               "NIL", "PLEASE SELECT", "SELECT")
 
 # The accounts the Haulage Request Form raises under. The pick-list below is
 # keyed on that form's Material options, so it is applied only to these - a
@@ -221,9 +230,16 @@ def transform(rows):
         # None and "", so a whitespace-only cell wrote an EMPTY 1003; the
         # genuine database never emits an empty sub-ref - 1003 falls back to the
         # literal "0" (510 of 510 genuine 1003 rows are non-empty).
-        cc = o.get("Cost Centre")
-        rec(10, ordno, {0: "ORD_SUB_REFS", 1: "1003",
-                        2: cc if str(cc or "").strip() else "0"})
+        # A cost centre of nothing but separators is still nothing. The
+        # Haulage Request Form joins its three boxes - cost centre, project
+        # code, task number - with slashes, so a requester who has none (the
+        # Folglade Cadder job on 14/09: "I don't have the cost centre code as
+        # this will be billed to Folglade") produces the literal "//", which
+        # is not a cost centre and is not the "0" the genuine files carry.
+        cc = str(o.get("Cost Centre") or "").strip()
+        if not cc.strip("/-. "):
+            cc = ""
+        rec(10, ordno, {0: "ORD_SUB_REFS", 1: "1003", 2: cc or "0"})
         # ORD_LINES (SEQ 12): col2=class, col3=qty, col4=Serial Number
         rec(12, ordno, {0: "ORD_LINES",
                         2: "CHRG_PALLET" if acct == "NRNONHEAVY" else "HEAVY",
