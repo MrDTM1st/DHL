@@ -907,7 +907,10 @@ function milesBetween(a,b){
 function needsFor(r){
   const need=[], d=r.details||{};
   const mats=((r.materials||'')+' '+(r.product_codes||[]).join(' ')).toLowerCase();
-  if(/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
+  // sleepers are not rails and not S&C - they go on a rigid or artic hiab
+  if(/rail|bearer|s&c|switch|crossing/.test(mats)) need.push('rail / s&c');
+  if(/sleeper/.test(mats) && !((r.details&&r.details.offloading&&r.details.offloading.value)||''))
+    need.push(['rigid hiab','artic hiab']);
   // loose ballast is tipped, not bagged - it needs a tipper (see orders.js)
   // 0057/100500/001 = loose, /002 = 1 tonne bags (see orders.js)
   const looseCode=(r.product_codes||[]).some(c=>String(c).trim().endsWith('100500/001'));

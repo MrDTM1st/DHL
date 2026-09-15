@@ -157,12 +157,24 @@ export function vehicleInfo(code) {
 // spelled "short flat" in the capability sheet and contains neither word.
 const BAGS_NEED = ['artic', 'rigid', 'flat'];
 
+// Sleepers are not rails and they are not S&C. They travel on a flatbed with a
+// hiab - rigid or artic - so asking for "Rail / S&C" filtered every sleeper job
+// down to the 21 hauliers carrying that flag and left out the 35 with a Rigid
+// Hiab and the 32 with an Artic Hiab, which is who actually runs them. Delali
+// (15/09): "sleepers go on rigids and artics, rigid hiabs and artic hiabs".
+// Either axle count will do, so like BAGS_NEED this is an "any of these".
+const SLEEPER_NEED = ['rigid hiab', 'artic hiab'];
+
 // What a job needs, from its materials + parsed customer details. Drives the
 // haulier capability match. Ported verbatim from the original browser logic.
 export function needsFor(r) {
   const need = [], d = r.details || {};
   const mats = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toLowerCase();
-  if (/rail|sleeper|bearer|s&c|switch/.test(mats)) need.push('rail / s&c');
+  // Bearers stay with rail / S&C deliberately: a bearer is an S&C component.
+  // A job carrying rails AND sleepers still needs a rail-capable haulier, so
+  // the two tests below are not an either/or.
+  const sleepers = /sleeper/.test(mats);
+  if (/rail|bearer|s&c|switch|crossing/.test(mats)) need.push('rail / s&c');
   // LOOSE ballast is tipped, not bagged, so it needs a TIPPER - and only the
   // 20 hauliers carrying one can physically take it. Asking for 'bags' here
   // would rank the bagged-ballast fleet, none of whom can tip a load, and the
@@ -194,6 +206,10 @@ export function needsFor(r) {
     const rigid = !!vi.weight || ((d.artic_access || {}).value === 'no');
     need.push(rigid ? 'rigid hiab' : 'artic hiab');
   }
+  // Sleepers with no offloading stated still need lifting gear on the vehicle.
+  // Where the reply DOES state it, the HIAB branch above has already picked the
+  // precise one and the MOFFETT branch means no hiab is wanted at all.
+  if (sleepers && !off) need.push(SLEEPER_NEED);
   if (((d.rear_steer || {}).value) === 'yes') need.push('rear steer');
   if (((d.pts || {}).value) === 'yes') need.push('pts');
   if (vi.need && !need.includes(vi.need)) need.push(vi.need);
