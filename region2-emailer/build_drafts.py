@@ -743,7 +743,20 @@ def enrol_by_hand(skipped_sent):
                     site=e.get("site", ""), postcode=e.get("postcode", ""),
                     delivery_date=e["date"], source="by hand", status="sent",
                     emailed_at=_to_tracker_dt(ev.get("when")), only_if_new=True,
-                    kind="delivery", orig_entryid=ev.get("entryid"))
+                    kind="delivery", orig_entryid=ev.get("entryid"),
+                    # The collection end was on `e` the whole time - it comes
+                    # off the extract row exactly like site and postcode above -
+                    # and leaving it out put by-hand orders on the map as a
+                    # delivery pin with nothing to join them to. 7115774 on
+                    # 15/09 is what that looks like from the map: Hardy
+                    # Aggregates Boroughbridge YO51 9JH to Network Rail March,
+                    # and the map knew only the March end. order_pin has always
+                    # passed these three; this path never did, so every order
+                    # emailed by hand arrived half-imported.
+                    worksite=e.get("worksite", ""),
+                    collection_site=e.get("collection_site", ""),
+                    collection_pc=e.get("collection_pc", ""),
+                    collections=e.get("collections"))
         existing.add(rid)
         n += 1
     return n

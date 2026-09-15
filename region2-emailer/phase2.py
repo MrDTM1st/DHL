@@ -590,6 +590,14 @@ def enrol_collection(ns):
 def check(ns=None):
     ns = ns or bd.get_ns()
     enrol_collection(ns)          # track supplier collection emails before scanning for replies
+    # A record with no collection cannot be drawn as a run on the map, and this
+    # backfill only ever ran from the daily `recover` sweep - so an order
+    # emailed at 10:38 sat there as an unjoined delivery pin until tomorrow.
+    # It runs here too now. In the steady state it costs nothing: it only looks
+    # anything up for records that are actually missing a collection, and
+    # usually there are none. Before tracker.load() below, deliberately - it
+    # saves the tracker itself, and a copy loaded first would overwrite it.
+    collfilled = backfill_collections(ns, cap=6)
     repaired = repair_materials()     # BS-file rows that stored the numeric code (fast, no COM)
     d = tracker.load()
     # Which orders were ALREADY finished before this run. Anything that becomes
@@ -694,7 +702,8 @@ def check(ns=None):
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
           f"{briefs} send-off draft(s) created, {booked_removed} booked-by-you removed, "
-          f"{removed} completed order(s) removed, {repaired} product wording(s) repaired.")
+          f"{removed} completed order(s) removed, {repaired} product wording(s) repaired, "
+          f"{collfilled} collection(s) filled in.")
     return replies, ooo, briefs
 
 
