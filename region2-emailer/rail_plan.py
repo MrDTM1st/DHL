@@ -17,7 +17,7 @@ the real finished plans:
     DN6 0AA  (Askern)     -> Inframat / VAS   (Inf + VAS + the BS172943 code)
     SO40 4UT (Marchwood)  -> Arcelor Mittal
 """
-import sys, os, csv, re, json
+import sys, os, csv, re, json, io, codecs
 from datetime import datetime, date
 from openpyxl.styles import PatternFill, Font, Alignment
 import outbox
@@ -138,9 +138,35 @@ def week_commencing(dates):
     return monday
 
 
+def _cp1252_fallback(err):
+    """Decode one stray Windows-1252 byte inside an otherwise UTF-8 file."""
+    return err.object[err.start:err.end].decode("cp1252", "replace"), err.end
+
+
+codecs.register_error("cp1252_fallback", _cp1252_fallback)
+
+
 def load_raw(path):
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.reader(f))
+    """The raw Short Rail Report, whatever CTMS encoded it as.
+
+    The export is not consistently encoded, and reading it as UTF-8 meant one
+    byte could stop the whole plan being built. The 15/09 report (63 orders,
+    schedules 260914-260925) died on byte 0x96 at offset 4920 - a Windows-1252
+    en dash in a delivery instruction - while the SAME file carried en dashes
+    written properly as UTF-8 (e2 80 93) elsewhere. So it is genuinely mixed,
+    and neither decoder alone can read it: UTF-8 raises on the 0x96, cp1252
+    turns every real UTF-8 dash into "a-euro-quote" mojibake that would then be
+    printed on a supplier's plan.
+
+    Decoding as UTF-8 with a per-byte cp1252 fallback is the one reading that
+    gets both right, because the error handler only ever sees the bytes UTF-8
+    could not explain.
+    """
+    raw = open(path, "rb").read()
+    if raw.startswith(codecs.BOM_UTF8):
+        raw = raw[len(codecs.BOM_UTF8):]
+    text = raw.decode("utf-8", "cp1252_fallback")
+    rows = list(csv.reader(io.StringIO(text, newline="")))
     hdr = [h.strip() for h in rows[0]]
     return hdr, rows[1:]
 
