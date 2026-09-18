@@ -34,7 +34,11 @@ STORES = ("_adhocs.json", "_pins.json")
 
 DATE_RE = re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b")
 QTY_RE = re.compile(r"\b(\d[\d,]*)\s*x\b", re.I)
-TONNES_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:t|te|tonnes?|tons?)\b", re.I)
+# "1 tonne bags" and "1 tonne in 25kg bags" name the BAG, not the load - every
+# bagged-ballast ask carries that wording, so without the lookahead the check
+# reported "1 tonnes" on all of them and taught the desk to ignore it.
+TONNES_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:t|te|tonnes?|tons?)\b"
+                       r"(?!\s+(?:in\s+[\w.]+\s+)?bags?\b)", re.I)
 PC_RE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b", re.I)
 
 
