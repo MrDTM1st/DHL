@@ -195,8 +195,28 @@ def area(pc):
 # never leading, so a quoted 'name@site.co.uk' still yields the bare address.
 _EMAIL = r"[\w.\-+]+(?:['’][\w.\-+]+)*@[\w.\-]+"
 
+# The same failure with a SPACE where the dot belongs. The BS file of 17/09 had
+# "Thomas O'Callaghan email: Thomas O'Callaghan@networkrail.co.uk" on 5034003;
+# the pattern cannot cross the space, so it matched the tail and returned
+# O'Callaghan@networkrail.co.uk - an address that looks fine and goes nowhere.
+# Worse, this value is the job's grouping key (contact + site + date), so the
+# one misread order split off from his other two and was emailed and tracked on
+# its own. When the email: value is exactly the contact's name, spaced, in front
+# of @domain, that name is the local part, and the dots go back in. Requiring
+# it to match the name written before "email:" is what keeps free text like
+# "email: please call john@x.com" from being glued into an address.
+_SPACED_EMAIL = re.compile(r"^(.*?)\s+email:\s*((?:[^\s@]+\s+){1,2}[^\s@]+)@([\w.\-]+)",
+                           re.I | re.S)
+
+
 def email_of(s):
-    m = re.search(_EMAIL, str(s or ""))
+    s = str(s or "")
+    m = _SPACED_EMAIL.search(s)
+    if m:
+        name, local, domain = m.group(1).strip(), m.group(2), m.group(3)
+        if " ".join(local.split()).lower() == " ".join(name.split()).lower():
+            return ".".join(local.split()) + "@" + domain
+    m = re.search(_EMAIL, s)
     return m.group(0) if m else None
 
 # leading words that are never a real first name - free-text notes ("This order
