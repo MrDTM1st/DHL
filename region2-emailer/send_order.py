@@ -562,8 +562,20 @@ def send_emails(ns, emails):
         # Optional attachments, by absolute path. send_haulier could already do
         # this; the reviewed-email path could not, so anything that needed a
         # sheet attaching had to go out by hand.
-        for p in (e.get("attach") or []):
-            if p and os.path.exists(p):
+        # A single filename is a list of ONE, not a list of characters. When
+        # attach arrived as a bare string this loop walked it letter by
+        # letter, and "." is a folder, so Outlook refused the whole send -
+        # the seasonal cover request never left, and the failure read like
+        # Outlook being broken rather than one wrong key in the queue.
+        att = e.get("attach") or []
+        if isinstance(att, str):
+            att = [att]
+        for p in att:
+            if p and not os.path.isabs(p):
+                p = os.path.join(bd.HERE, p)
+            # isfile, not exists: a directory "exists" and Outlook throws on
+            # it, taking the email with it.
+            if p and os.path.isfile(p):
                 m.Attachments.Add(p)
                 print(f"   attached: {os.path.basename(p)}")
             else:

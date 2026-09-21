@@ -885,12 +885,44 @@ def main():
                     # and sent the whole file, while the panel showed one email
                     # and asked "Send this email?" - so three staged emails went
                     # out on one click, two of them never displayed.
+                    # ...and clamping a missing or stale index to 0 was not a
+                    # safe default either. A browser on an older bundle sends
+                    # no index at all, so the edits were written onto whatever
+                    # happened to sit at the top of the queue: a seasonal cover
+                    # request landed on a three-day-old Synergy notice and went
+                    # out under the wrong order carrying the wrong sheet.
+                    # Cross-check the index against the order and refuse when
+                    # they disagree - guessing sends the wrong email to real
+                    # hauliers, and the panel says it succeeded.
+                    want = str(cmd.get("order") or "").strip()
                     try:
-                        idx = int(cmd.get("index", 0))
-                    except Exception:
-                        idx = 0
-                    if not (0 <= idx < len(emails)):
-                        idx = 0
+                        idx = int(cmd.get("index"))
+                    except (TypeError, ValueError):
+                        idx = None
+
+                    def _holds(entry):
+                        return bool(want) and want in [
+                            str(o).strip() for o in (entry.get("orders") or [])]
+
+                    match = [i for i, en in enumerate(emails) if _holds(en)]
+                    agreed = (idx is not None and 0 <= idx < len(emails)
+                              and (not want or _holds(emails[idx])))
+                    if not agreed:
+                        # One unambiguous match by order is as good as an
+                        # index; anything else is a guess, so stop.
+                        if len(match) == 1:
+                            idx = match[0]
+                        elif len(emails) == 1:
+                            # One staged email is not a guess. An older bundle
+                            # sends no index at all, and refusing THAT would
+                            # break the everyday case to fix the rare one.
+                            idx = 0
+                        else:
+                            raise ValueError(
+                                "could not tell WHICH staged email you meant"
+                                + (f" for {want}" if want else "")
+                                + f" ({len(emails)} staged, {len(match)} matching)."
+                                " Nothing was sent. Reload the page and send it again.")
                     if emails and edits:
                         e = emails[idx]
                         e["to"] = edits.get("to", e["to"])

@@ -302,6 +302,20 @@ def urgency(order, today=None):
 
 
 # ---------- the notice ----------
+def attach_list(name):
+    """The extract as a one-item list of real paths - never a bare string.
+
+    send_emails iterates whatever attach holds. Handed a string it iterates
+    the CHARACTERS, tries to attach ".", and Outlook refuses the entire
+    send. Every other producer writes a list; this one did not.
+    """
+    n = str(name or "").strip()
+    if not n:
+        return []
+    f = n if os.path.isabs(n) else os.path.join(HERE, n)
+    return [f] if os.path.isfile(f) else []
+
+
 def build_notice(mapped, extract_name, today=None, rota_path=None):
     """The post-upload email, in the _pending_email.json shape.
 
@@ -413,7 +427,7 @@ def build_notice(mapped, extract_name, today=None, rota_path=None):
         "date": "", "area": "",
         "orders": [str(o.get("Customer Order No") or "").strip() for o in mapped],
         "product_codes": [], "materials": done, "site": "", "postcode": "",
-        "source": f"Synergy upload {extract_name}", "attach": extract_name,
+        "source": f"Synergy upload {extract_name}", "attach": attach_list(extract_name),
         # Marks this entry as OURS. date_query stages into the same file with a
         # source that also starts "Synergy upload", so the prefix cannot tell
         # the two apart and clearing on it would bin the date query.
