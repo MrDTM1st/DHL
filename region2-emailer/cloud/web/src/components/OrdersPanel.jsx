@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { I } from '../icons.jsx';
 import { ordLabel, isUrgent, within3, dateShort, recommendFor, parcelPassFor } from '../lib/orders.js';
 import { geoCache } from '../lib/geo.js';
@@ -131,23 +131,66 @@ function OrderSearch({ status }) {
    answer that tells you the list is genuinely live rather than stale. */
 function BookedCheck({ status }) {
   const [pending, setPending] = useState(false);
+  const [result, setResult] = useState('');
+  const pressedAt = useRef('');
   const state = (status && status.state) || '';
+  const at = (status && status.at) || '';
+  const detail = (status && status.detail) || '';
+
+  // Only a status stamped AFTER the press can end the wait. Clearing on
+  // state === 'done' alone is what made this button look like it did nothing:
+  // the panel is nearly always ALREADY showing "done" from whatever ran last,
+  // so the wait ended in the same tick as the press, "Checking" never showed,
+  // and on the map page nothing else reports a result. The home PC answers in
+  // about two seconds, and the usual answer is that nothing has a manifest
+  // yet, so without printing that answer the press is invisible.
   useEffect(() => {
-    if (pending && (state === 'done' || state === 'error')) setPending(false);
-  }, [state, pending]);
+    if (!pending) return undefined;
+    if (at && at !== pressedAt.current && (state === 'done' || state === 'error')) {
+      setPending(false);
+      setResult(detail || (state === 'error' ? 'The check did not finish.' : 'Checked.'));
+    }
+    return undefined;
+  }, [at, state, detail, pending]);
+
+  // and never sit on "Checking" for ever if the home PC is off
+  useEffect(() => {
+    if (!pending) return undefined;
+    const t = setTimeout(() => {
+      setPending(false);
+      setResult('No answer from the home PC - it may be offline.');
+    }, 90000);
+    return () => clearTimeout(t);
+  }, [pending]);
+
   const press = async () => {
+    pressedAt.current = at;        // the stamp to beat before we believe a result
+    setResult('');
     setPending(true);
     try {
       await command({ action: 'booked_sweep' });
     } catch {
-      setPending(false);           // never leave it stuck on "Checking"
+      setPending(false);
+      setResult('Could not reach the home PC.');
     }
   };
+
+  const waiting = pending && state === 'queued';
   return (
-    <button className="btn mini" style={{ marginTop: 8 }} onClick={press} disabled={pending}
-      title="Check every job on this list against your sent mail, and take off the ones already booked in">
-      {pending ? 'Checking…' : 'Check booked in'}
-    </button>
+    <div style={{ marginTop: 8 }}>
+      <button className="btn mini" onClick={press} disabled={pending}
+        title="Check every job on this list against your sent mail, and take off the ones already booked in">
+        {pending ? 'Checking…' : 'Check booked in'}
+      </button>
+      {(pending || result) && (
+        <div className="s" style={{ marginTop: 6 }}>
+          {pending
+            ? (waiting ? 'Waiting for the home PC to finish another job…'
+                       : 'Reading your sent mail for manifest numbers…')
+            : result}
+        </div>
+      )}
+    </div>
   );
 }
 
