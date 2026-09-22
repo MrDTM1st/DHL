@@ -78,6 +78,13 @@ _OVERRIDES = {
     # job flags them and drops them below the external hauliers so the first
     # call is someone who'll actually take it.
     "dhl": {"avoid_night_weekend": True},
+    # KMS Transport is DO NOT USE on the contact sheet, and the sheet says so
+    # in CELL COLOUR - so a re-import paints them red again however many times
+    # the JSON is edited. Delali approved them on 22/09/2026, so the approval
+    # lives here, where a re-import cannot undo it. Their tier cell still reads
+    # "do_not_use", which rank_of treats as the tier-2 band: fine, and not a
+    # tier anyone here has actually given them.
+    "kms": {"do_not_use": False},
 }
 
 
@@ -356,8 +363,13 @@ def recommend(from_pc, needs=(), to_pc="", limit=None, include_couriers=False):
     # Delali's order of approach: our own fleet, then tier 1, then tier 2.
     # Distance (and a haulier we've used on this lane) only breaks ties inside
     # a band - a closer tier-2 must never outrank a tier-1.
+    # `h["miles"] or 9e9` looked harmless and buried the best answer: 0.0 is
+    # falsy, so a haulier whose depot IS the collection postcode scored 9e9 and
+    # sorted LAST in its band. KMS sat 0.0 miles from a Barnsley collection and
+    # came back 13th of 13. Distance is only missing when it is None.
     ok.sort(key=lambda h: (h["rank"], h["miles"] is None,
-                           h["miles"] or 9e9, not h["used_before"]))
+                           9e9 if h["miles"] is None else h["miles"],
+                           not h["used_before"]))
     return (ok[:limit] if limit else ok), est
 
 
