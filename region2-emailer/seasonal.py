@@ -40,6 +40,11 @@ import outbox
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITES = os.path.join(HERE, "_seasonal_sites.json")
 TRACKER = os.path.join(HERE, "_seasonal_tracker.xlsx")
+# The order sheets, kept per run so a cover request can still attach the one
+# it was built from. Uploads land under a fixed name (_seasonal_raw.xlsx) and
+# the next upload overwrites it, so attaching by that path at SEND time - which
+# can be hours later, via Review & send - would attach a different job's sheet.
+SHEETS = os.path.join(HERE, "_seasonal_sheets")
 PENDING = os.path.join(HERE, "_pending_email.json")
 
 UPLOAD_SHEET = "RHPC Upload"
@@ -280,7 +285,27 @@ def _offload(o):
     return ", ".join(want) if want else "none required"
 
 
-def cover_request(orders, code, haulier, source):
+def keep_sheet(path):
+    """Copy an order sheet somewhere stable and return that path.
+
+    Named for its content, not the run, so re-processing the same sheet does
+    not pile up copies. Returns "" if it cannot be kept - an email with no
+    attachment still goes, which is what happened before this existed.
+    """
+    import shutil
+    try:
+        os.makedirs(SHEETS, exist_ok=True)
+        dest = os.path.join(SHEETS, os.path.basename(path))
+        if os.path.abspath(dest) != os.path.abspath(path):
+            shutil.copy(path, dest)
+        return dest
+    except Exception as e:
+        print(f"  !! could not keep a copy of {os.path.basename(path)} to "
+              f"attach ({e}) - the cover request will go without it.")
+        return ""
+
+
+def cover_request(orders, code, haulier, source, attach=()):
     """One "would you be able to cover" email for one haulier.
 
     Laid out exactly like the send-outs already in Sent Items - Order /
@@ -321,7 +346,11 @@ def cover_request(orders, code, haulier, source):
                                for o in orders),
         "site": str(orders[0].get("Delivery Point") or ""),
         "postcode": str(orders[0].get("D Postcode") or ""),
-        "source": source, "attach": [],
+        "source": source,
+        # The sheet this was built from, so the haulier gets the plan and not
+        # just the summary in the body. send_emails skips a path that is not
+        # there rather than failing the send.
+        "attach": [a for a in dict.fromkeys(attach) if a],
         # a haulier cover request, NOT a delivery contact - see send_emails
         "no_track": True, "haulier": code.upper(), "_metric": "haulier_request",
     }
@@ -522,8 +551,10 @@ def main():
         if not got:
             warnings_.append(f"{os.path.basename(p)}: no rows on the "
                              f"'{UPLOAD_SHEET}' sheet")
+        kept = keep_sheet(p)
         for o in got:
             o["_source"] = os.path.basename(p)
+            o["_source_path"] = kept
         orders.extend(got)
     if not orders:
         for w in warnings_:
@@ -606,10 +637,12 @@ def main():
     staged, teams = [], []
     for code, d in sorted(by_haulier.items()):
         src = ", ".join(sorted({o.get("_source", "") for o in d["orders"]}))
+        sheets = [o.get("_source_path", "") for o in d["orders"]]
         if is_internal(d["rec"]):
             teams.append((code, d["rec"], teams_message(d["orders"], d["rec"])))
         else:
-            staged.append(cover_request(d["orders"], code, d["rec"], src))
+            staged.append(cover_request(d["orders"], code, d["rec"], src,
+                                        attach=sheets))
     # Printed between markers, NOT written to a file. The message is something
     # you copy off the screen once and paste into Teams - saving it to the
     # outbox would put a throwaway .txt on the Files card next to the uploads

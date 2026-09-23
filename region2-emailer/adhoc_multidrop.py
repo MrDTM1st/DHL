@@ -86,7 +86,7 @@ def _pc_ok(pc):
     return len(parts) == 2 and re.fullmatch(r"\d[A-Z]{2}", parts[1]) is not None
 
 
-def legs(order, rec, base, day=None, start=None):
+def legs(order, rec, base, day=None, start=None, weight=""):
     """One RHPC-shaped row per drop: base ref first, then _1, _2, ..."""
     drops = rec.get("drops") or []
     if not drops:
@@ -101,6 +101,7 @@ def legs(order, rec, base, day=None, start=None):
     h, m = (int(x) for x in hhmm.split(":")) if ":" in hhmm else (0, 0)
 
     product = str(rec.get("product") or "").strip()
+    weight = str(weight or rec.get("weight") or "").strip()
     out = []
     for i, dr in enumerate(drops):
         d = dict(base)
@@ -126,9 +127,14 @@ def legs(order, rec, base, day=None, start=None):
         # The form's account reads "Please select"; account_for treats any
         # preset as authoritative, so that string would land in the upload.
         d["Account"] = "NRADHOC"
+        # The form's own Delivery Instructions carry the weight, and this
+        # rebuilds that field from scratch - so AH23/9/26FKEH went out with
+        # "5 TONNE" on the request and no weight anywhere in the upload. A
+        # haulier prices off that number and picks a vehicle with it.
         instr = " - ".join(x for x in (
             ("Material " + product) if product else "",
             dr.get("qty") or "",
+            ("Weight " + weight) if weight else "",
             ("what3words " + dr["w3w"]) if dr.get("w3w") else "",
         ) if x)
         if not _pc_ok(d["D Postcode"]):
@@ -150,7 +156,9 @@ def build(order, day=None, start=None, stamp=None, out_name=None):
     if not rows:
         raise ValueError("The form for %s has no RHPC Admin row." % order)
 
-    built = legs(order, rec, dict(rows[0]), day=day, start=start)
+    # Read off the form, because the record on the map does not carry it.
+    built = legs(order, rec, dict(rows[0]), day=day, start=start,
+                 weight=process_form.sheet_weight(path))
     warn = [("%s: postcode %r is not a full postcode"
              % (r["Customer Order No"], r["D Postcode"]))
             for r in built if not _pc_ok(r["D Postcode"])]

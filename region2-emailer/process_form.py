@@ -98,6 +98,7 @@ def read_rhpc_rows(path):
         if d.get("Customer Order No") not in (None, ""):
             out.append(d)
     repair_quantities(out, path)
+    repair_weights(out, path)
     return out
 
 
@@ -628,6 +629,76 @@ def main():
             print(f"!! {d.get('Customer Order No')}: {' & '.join(missing)} has NO DATE on the form "
                   f"at all - times are BLANK in the CSV; fill in before uploading.")
     print(f"CSV : {out}")
+
+
+_WEIGHT_LABEL = re.compile(r"(approximate|total\s*pallet|gross)\s*weight", re.I)
+
+
+def sheet_weight(path):
+    """The weight the requester actually typed, or "".
+
+    Looks RIGHT of the label first (a row label, "Approximate Weight: | 32 kg")
+    then DOWN (a column header over a materials table). A candidate has to
+    contain a digit, which is what stops the Project Shoot sheets reading
+    their neighbouring "Part Pallet Count" header as a weight.
+    """
+    try:
+        import openpyxl, warnings
+        warnings.filterwarnings("ignore")
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return ""
+
+    def usable(v):
+        return v not in (None, "") and re.search(r"\d", str(v))             and not is_excel_error(v)
+
+    for ws in wb.worksheets:
+        if ws.max_row > 200:
+            continue                       # address/reference tabs
+        top = min(ws.max_row, 80)
+        for row in ws.iter_rows(min_row=1, max_row=top):
+            for cell in row:
+                if not _WEIGHT_LABEL.search(str(cell.value or "")):
+                    continue
+                for nxt in row[cell.column:]:          # rest of the row
+                    if usable(nxt.value):
+                        return str(nxt.value).strip()
+                for r in range(cell.row + 1, top + 1):  # down the column
+                    v = ws.cell(row=r, column=cell.column).value
+                    if usable(v):
+                        return str(v).strip()
+    return ""
+
+
+def repair_weights(rows, path):
+    """Make sure a stated weight actually reaches the upload.
+
+    There is NO weight column in the NRADHOC format. The five record types
+    carry no slot for one, and across the 47 genuine Access exports in
+    _nr_truth/ (2685 rows) not one populates a weight field - the only
+    numeric-looking extra, ORD_LINES col4, holds 18.288 and 13.716, which are
+    60ft and 45ft in metres: rail lengths in Serial Number, not weights.
+    Every genuine file that states a weight states it as text inside Delivery
+    Instructions, so that is the only correct destination.
+
+    The forms concatenate it there themselves, so this is a backstop and
+    usually a no-op: it only fires when the instructions mention no weight at
+    all. It stays because a haulier prices off that number, and the one place
+    the weight HAS been lost was code that rebuilt the instructions from
+    scratch (see adhoc_multidrop.legs) rather than a form that failed to
+    state it.
+    """
+    for d in rows:
+        instr = str(d.get("Delivery Instructions") or "")
+        if re.search(r"weight", instr, re.I):
+            continue                       # the form already carried it
+        w = sheet_weight(path)
+        if not w:
+            continue                       # nobody stated one - invent nothing
+        d["Delivery Instructions"] = (instr.strip() + " / Weight " + w).strip(" /")
+        ref = str(d.get("Customer Order No") or "").strip()
+        print(f"   {ref}: weight {w!r} was on the form but missing from the "
+              f"upload - added to Delivery Instructions.")
 
 
 if __name__ == "__main__":
