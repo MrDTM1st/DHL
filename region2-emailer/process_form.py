@@ -97,7 +97,102 @@ def read_rhpc_rows(path):
         d = {headers[i]: r[i] for i in range(len(headers)) if headers[i]}
         if d.get("Customer Order No") not in (None, ""):
             out.append(d)
+    repair_quantities(out, path)
     return out
+
+
+# Excel's error values, in BOTH shapes this pipeline meets them. openpyxl
+# (data_only) hands back the text "#VALUE!"; Excel COM hands back the raw
+# CVErr code, a large negative int. read_rhpc_rows prefers COM, so the code
+# is what actually reached the upload.
+_XL_ERR_TEXT = ("#VALUE!", "#REF!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#DIV/0!")
+_XL_ERR_LO, _XL_ERR_HI = -2146826300, -2146826200
+
+
+def is_excel_error(v):
+    """True for a cell that holds an Excel error rather than a value.
+
+    A PROJECT SHOOT LOAD sheet computes Product Qty arithmetically from its
+    "Total Pallet QTY" box, and requesters fill that in as text - "1 Box".
+    Arithmetic on text is #VALUE!, which COM reports as -2146826273, and that
+    went through every check untouched: it is an int, it is not blank, so an
+    upload went out with a quantity of minus two billion. The corpus shows
+    the other face of the same fault, quantities written as 0 or left empty.
+    """
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int) and _XL_ERR_LO <= v <= _XL_ERR_HI:
+        return True
+    return str(v).strip().upper() in _XL_ERR_TEXT
+
+
+def _leading_number(v):
+    """The count at the front of a free-text quantity: "1 Box" -> 1."""
+    m = re.match(r"\s*(\d+(?:\.\d+)?)", str(v or ""))
+    if not m:
+        return None
+    n = float(m.group(1))
+    return int(n) if n == int(n) else n
+
+
+def shoot_load_qty(path):
+    """(count, unit_text) recovered from the input sheet, or (None, "").
+
+    Read straight off the "Total Pallet QTY" box the requester typed into,
+    which is the only place the real figure survives - the RHPC tab holds
+    the result of arithmetic on it, and that arithmetic is what failed.
+    """
+    try:
+        import openpyxl, warnings
+        warnings.filterwarnings("ignore")
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None, ""
+    for ws in wb.worksheets:
+        if ws.max_row > 200:
+            continue                      # address/reference tabs
+        for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 80)):
+            for i, cell in enumerate(row):
+                if not re.search(r"total\s*pallet\s*qty",
+                                 str(cell.value or ""), re.I):
+                    continue
+                for nxt in row[i + 1:]:
+                    if nxt.value in (None, ""):
+                        continue
+                    n = _leading_number(nxt.value)
+                    if n is not None:
+                        return n, str(nxt.value).strip()
+                    break
+    return None, ""
+
+
+def repair_quantities(rows, path):
+    """Replace an error-valued Product Qty with the figure the requester gave.
+
+    Never invents one: if the input sheet cannot be read the quantity is left
+    BLANK, which is visibly missing, rather than a number nobody wrote.
+    """
+    for d in rows:
+        q = d.get("Product Qty")
+        if not is_excel_error(q):
+            continue
+        n, unit = shoot_load_qty(path)
+        ref = str(d.get("Customer Order No") or "").strip()
+        if n is None:
+            d["Product Qty"] = ""
+            print(f"!! {ref}: Product Qty is an Excel error ({q}) and the input "
+                  f"sheet has no readable quantity - left BLANK, fill it by hand.")
+            continue
+        d["Product Qty"] = n
+        # "1 Box" only ever existed to be multiplied, so the words are lost
+        # once the number is taken. Against a Pallet_NDC line a bare 1 reads
+        # as a pallet; this load is a 10kg box, which is a different vehicle.
+        if unit and re.search(r"[a-z]", unit, re.I):
+            instr = str(d.get("Delivery Instructions") or "").strip()
+            if unit.lower() not in instr.lower():
+                d["Delivery Instructions"] = (instr + " / " + unit).strip(" /")
+        print(f"   {ref}: Product Qty was an Excel error ({q}); recovered "
+              f"{n!r} from the input sheet ({unit!r}).")
 
 
 def fmt_dt(v):
