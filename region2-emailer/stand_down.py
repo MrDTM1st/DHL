@@ -121,23 +121,37 @@ def replies(ns, order, asked, days=10):
     return out
 
 
-def notes():
-    """Per-haulier greeting/extra line, keyed by the address they were asked at.
+def notes(order):
+    """Per-haulier greeting/extra line for THIS order.
 
     The generic wording is deliberately bland because it has to fit everyone.
     Anyone who asked a question or made an offer is owed a sentence that
     answers it, and that sentence cannot be guessed from their text.
+
+    Keyed by ORDER first, then by the address the haulier was asked at. It
+    used to be keyed by address alone, and that leaked: the line written for
+    Allelys on HO15/9/YO/WS - "please do not progress the abnormal load
+    notification" - queued itself to go out again on 7115569, a ballast job
+    with no abnormal load anywhere near it. A note belongs to one order and
+    is spent once that order is stood down.
     """
     try:
         with open(NOTES, encoding="utf-8") as f:
-            return {k.lower(): v for k, v in json.load(f).items()}
+            d = json.load(f)
     except Exception:
         return {}
+    if d and all("@" in str(k) for k in d):
+        print("  !! _stand_down_notes.json is still address-keyed, so it could "
+              "put another order's note in these emails. Ignored - re-file it "
+              "under the order it belongs to.")
+        return {}
+    got = d.get(str(order)) or {}
+    return {k.lower(): v for k, v in got.items() if isinstance(v, dict)}
 
 
 def build(order, asked, got, winner):
     """One message per haulier still owed an answer, winner excluded."""
-    extra = notes()
+    extra = notes(order)
     win = str(winner or "").lower()
     out = []
     for a in asked:
