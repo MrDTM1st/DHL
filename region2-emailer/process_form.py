@@ -295,9 +295,16 @@ def to_transform_row(d):
     # A window with a start but no end used to be closed at the fixed 17:01,
     # which put the delivery marker on collection windows and turned a 22:00
     # start into an end earlier than itself. See nr_csv.close_window.
-    for a, b in (("collection time", "collection time end"), ("delivery time", "delivery time end")):
-        if r[a] and not r[b]:
-            r[b] = nr_csv.close_window(r[a])
+    #
+    # The two legs are closed differently on purpose. A collection start with
+    # no end is opening hours, so it gets a working day. A DELIVERY start with
+    # no end is a slot the site named, so it gets +2h - the same rule
+    # delivery_details already applies to the identical answer when it arrives
+    # by email. See nr_csv.slot_window_end.
+    if r["collection time"] and not r["collection time end"]:
+        r["collection time end"] = nr_csv.close_window(r["collection time"])
+    if r["delivery time"] and not r["delivery time end"]:
+        r["delivery time end"] = nr_csv.slot_window_end(r["delivery time"])
     r["Account"] = account_for(d)   # preset account wins; else NRADHOC
     return r
 

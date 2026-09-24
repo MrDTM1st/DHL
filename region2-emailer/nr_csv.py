@@ -387,6 +387,35 @@ def close_window(startstr):
     return f"{d} {mins // 60:02d}:{mins % 60:02d}"
 
 
+def slot_window_end(startstr, hours=2):
+    """Close a stated DELIVERY slot: the start plus two hours.
+
+    A site that answers "23:00" is naming a slot, not opening hours. An email
+    reply saying that has always produced 23:00-01:00, because
+    delivery_details.parse_time_window expands a lone time by +2h - Delali's
+    rule, and the commonest case in the replies. The FORM path did not: it
+    sent a single delivery time through close_window, a working day, so the
+    same 23:00 came out as 23:59 and an 11:00 came out as 19:01. The same
+    question got two different answers depending on how the site sent it.
+
+    The date has to roll with it. plus_hours() wraps the clock only, so a
+    23:00 start would close at 01:00 the SAME morning - an end before its own
+    beginning, which is the backwards-window fault this pipeline keeps
+    having to guard against. Returns "" rather than guessing when the start
+    has no usable date.
+    """
+    d, _, _t = str(startstr or "").strip().partition(" ")
+    hm = _hhmm(startstr)
+    if not d or hm is None:
+        return ""
+    try:
+        base = datetime.strptime(d, "%d/%m/%Y")
+    except ValueError:
+        return ""
+    end = base.replace(hour=hm[0], minute=hm[1]) + timedelta(hours=hours)
+    return end.strftime("%d/%m/%Y %H:%M")
+
+
 def unconfirmed_window(datestr, base=None):
     """The delivery window to use when nobody has confirmed one.
 
