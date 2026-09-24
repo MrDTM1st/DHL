@@ -30,6 +30,7 @@ Sends nothing. Writes the CSV into the outbox and stages the cover requests
 for Review & send, the same as every other route here.
 """
 import os
+import re
 import sys
 import json
 import datetime
@@ -305,6 +306,35 @@ def keep_sheet(path):
         return ""
 
 
+_WEIGHT_LEG = re.compile(r"leg\s*(\d+)\s*-\s*([\d,.]+)\s*kgs?", re.I)
+
+
+def order_weight(o):
+    """The planned weight for one order, as text for the email, or "".
+
+    The 47-column upload contract has no weight field, so the seasonal sheets
+    carry it inside Delivery Instructions, written as
+    "Planned Weight Leg 1 -23152KgsLeg 2 -Kgs". 20 of the 21 orders on the
+    tracker are written exactly that way.
+
+    An empty leg is skipped rather than reported as zero - "Leg 2 -Kgs" means
+    there is no second leg, not that it weighs nothing. Nothing is invented:
+    an order with no planned weight gets no weight line, because a haulier
+    prices off this number and a made-up one is worse than an absent one.
+    """
+    legs = []
+    for leg, val in _WEIGHT_LEG.findall(str(o.get("Delivery Instructions") or "")):
+        n = str(val).replace(",", "").rstrip(".")
+        if not n or not n.strip("0."):
+            continue                       # "Leg 2 -Kgs" and plain zeroes
+        legs.append((leg, n))
+    if not legs:
+        return ""
+    if len(legs) == 1:
+        return legs[0][1] + "kg"
+    return ", ".join(f"leg {leg} {n}kg" for leg, n in legs)
+
+
 def cover_request(orders, code, haulier, source, attach=()):
     """One "would you be able to cover" email for one haulier.
 
@@ -325,6 +355,12 @@ def cover_request(orders, code, haulier, source, attach=()):
             f"Delivery: {g('Delivery Point')}, {g('D Postcode')}",
             f"Delivery date/time: {window(g('delivery time'), g('delivery time end'))}",
             f"Materials: {qty}x {prod}" if qty or prod else "Materials:",
+        ]
+        # Between Materials and Vehicle, where the ring-round emails put it.
+        w = order_weight(o)
+        if w:
+            lines.append(f"Weight: {w}")
+        lines += [
             f"Vehicle: {g('Vehicle Type')}",
             f"Offloading: {_offload(o)}",
         ]
