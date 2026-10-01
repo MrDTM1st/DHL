@@ -118,9 +118,14 @@ def is_past(dd):
     return n is not None and n < 0
 
 
-def _bodies(name, items, dd):
+def _bodies(name, items, dd, pos=None):
     greet = f"Hi {name}," if name else "Hi,"
     greet_h = f"Hi {_html.escape(name)}," if name else "Hi,"
+    # the customer's PO, straight under the greeting, when they need it quoted
+    po_t = _po_block(pos)
+    top_t = f"{po_t}\n\n" if po_t else ""
+    top_h = (_html.escape(po_t).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
+             + "<br><br>") if po_t else ""
 
     if is_past(dd):
         # The delivery date has gone. Asking someone to arrange a delivery that
@@ -134,10 +139,10 @@ def _bodies(name, items, dd):
                "if anything is still outstanding?")
         line_t = f"I'm following up on {what_t}, which was due with you on {dd}. {ask}"
         line_h = f"I'm following up on {what_h}, which was due with you on {dd}. {ask}"
-        message = f"{greet}\n\n{line_t}"
+        message = f"{greet}\n\n{top_t}{line_t}"
         text = f"{message}\n\n\n{SIGNATURE}"
         html = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
-                f"{greet_h}<br><br>{line_h}<br><br>{SIGNATURE_HTML}</div>")
+                f"{greet_h}<br><br>{top_h}{line_h}<br><br>{SIGNATURE_HTML}</div>")
         return text, html, message
 
     ask = "Can you please help with the details below and I can get the delivery arranged for you?"
@@ -151,11 +156,11 @@ def _bodies(name, items, dd):
         line_h = (f"I've got the following available on {dd}:<br><br>"
                   + "".join(f"&nbsp;&nbsp;&nbsp;&nbsp;{q}x {_html.escape(pr)}<br>" for q, pr in items)
                   + f"<br>{ask}")
-    message = f"{greet}\n\n{line_t}\n\n{QUESTIONS}"
+    message = f"{greet}\n\n{top_t}{line_t}\n\n{QUESTIONS}"
     text = f"{message}\n\n\n{SIGNATURE}"
     q_html = _html.escape(QUESTIONS).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
     html = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
-            f"{greet_h}<br><br>{line_h}<br><br>{q_html}<br><br>{SIGNATURE_HTML}</div>")
+            f"{greet_h}<br><br>{top_h}{line_h}<br><br>{q_html}<br><br>{SIGNATURE_HTML}</div>")
     return text, html, message
 
 
@@ -337,14 +342,19 @@ def worksite_of(raw):
     return re.sub(r"\s*\d{5,}\s*$", "", clean(raw)).strip()
 
 
-def subject_for(orders, worksite, daddr, dpc):
+def subject_for(orders, worksite, daddr, dpc, pos=None):
     """Email subject: orders + WORKSITE + address + postcode. The worksite is
     skipped when blank or when it just repeats the address line (e.g. 'Hinkley
-    Station' / 'Hinkley Station')."""
+    Station' / 'Hinkley Station'). pos ({order: PO reference}) puts the
+    customer's PO number beside its order - '6055664 (PO180090)' - for the
+    customers who file by PO rather than by our order number."""
     ws, da = worksite_of(worksite), clean(daddr)
+    pos = pos or {}
+    refs = " / ".join(f"{o} ({pos[o].split(' - ')[0]})" if pos.get(o) else str(o)
+                      for o in orders)
     if ws and ws.lower() not in da.lower() and da.lower() not in ws.lower():
-        return f"{' / '.join(orders)} {ws} - {da} {dpc}"
-    return f"{' / '.join(orders)} {da or ws} {dpc}"
+        return f"{refs} {ws} - {da} {dpc}"
+    return f"{refs} {da or ws} {dpc}"
 
 
 def base_order(o):
@@ -680,7 +690,8 @@ def save_pending_batch(emails):
     slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date",
                                    "orders", "product_codes", "materials", "site",
                                    "worksite", "postcode", "source", "loose_ballast",
-                                   "collection_site", "collection_pc", "collections")} for e in emails]
+                                   "collection_site", "collection_pc", "collections",
+                                   "po")} for e in emails]
     with open(PENDING_BATCH, "w", encoding="utf-8") as f:
         json.dump(slim, f, indent=1, default=str)
     return slim
@@ -763,7 +774,7 @@ def enrol_by_hand(skipped_sent):
                     site=e.get("site", ""), postcode=e.get("postcode", ""),
                     delivery_date=e["date"], source="by hand", status="sent",
                     emailed_at=_to_tracker_dt(ev.get("when")), only_if_new=True,
-                    kind="delivery", orig_entryid=ev.get("entryid"),
+                    kind="delivery", orig_entryid=ev.get("entryid"), po=e.get("po"),
                     # The collection end was on `e` the whole time - it comes
                     # off the extract row exactly like site and postcode above -
                     # and leaving it out put by-hand orders on the map as a
@@ -1022,6 +1033,66 @@ def _hs_number(instr):
     return m.group(1) if m else ""
 
 
+# Progress Rail (Ian Langham, Beeston) cannot find an order without THEIR PO.
+# It rides in the Shipping Instructions - "PLEASE QUOTE PO180090 - Z057344/003
+# HUDDERSFIELD VIADUCT 7833AB PTS ON ALL CORRESPONDENCE AND DELIVERY PAPERWORK" -
+# and the three wait-list emails of 28/09 went out without it, so he had to write
+# back for it on all of them. Whoever's instructions ask for a PO to be quoted
+# now gets it in the subject and at the top of the email. The text is typed by
+# hand ("PLEAE QUOTE", "CORRESPONDENE", "O LL CORESPONDENCE" on 6055690, "ON
+# ALLCORRESPONDENCE" on 6055663), so match on QUOTE PO and stop at anything
+# shaped like "ON/IN/FOR ALL" - even run into the next word - at the word
+# correspondence however it is spelt, or at the "Site:" suffix. The word break
+# after ALL stays: without it the "OL" of "OLD OAK COMMON" reads as the stop.
+_PO_RE = re.compile(r"QUOTE\s*(PO\s*\d+)(?:\s*-\s*(.*?))?"
+                    r"(?=\s+(?:O|IN|FOR)\w{0,2}\s*A?LL?(?:\b|(?=CORR?))"
+                    r"|\s*CORR?\d?ESP|\s+Site:|\s*$)",
+                    re.I | re.S)
+_PO_BARE = re.compile(r"QUOTE\s+(PO\s*\d+)", re.I)
+
+
+def po_ref(instr):
+    """The customer's PO to quote, e.g. 'PO180090 - Z057344/003 HUDDERSFIELD
+    VIADUCT 7833AB PTS', or '' when the instructions don't ask for one."""
+    s = str(instr or "")
+    m = _PO_RE.search(s)
+    if m:
+        # ".Z067617/001 DALREOCH 385 PTS" (6055689) - a stray lead-in dot
+        po, ref = m.group(1), clean(m.group(2)).lstrip(".,;:- ")[:80]
+    else:
+        m = _PO_BARE.search(s)       # "QUOTE PO181671, thanks" - no tail to keep
+        if not m:
+            return ""
+        po, ref = m.group(1), ""
+    po = re.sub(r"\s+", "", po).upper()
+    return f"{po} - {ref}" if ref else po
+
+
+def pos_of(bundle):
+    """{order: PO reference} for every order in a bundle that carries one."""
+    out = OrderedDict()
+    for r, C, _ in bundle:
+        if C.get("instr") is None:
+            continue
+        o = base_order(r[C["order"]])
+        if o not in out:
+            ref = po_ref(r[C["instr"]])
+            if ref:
+                out[o] = ref
+    return out
+
+
+def _po_block(pos):
+    """The PO lines that open the email, plain text ('' when there are none).
+    One PO across the whole email is one line; several are listed per order."""
+    refs = list(dict.fromkeys(v for v in (pos or {}).values() if v))
+    if not refs:
+        return ""
+    if len(refs) == 1:
+        return f"Your PO: {refs[0]}"
+    return "Your PO numbers:\n" + "\n".join(f"    {o}: {v}" for o, v in pos.items() if v)
+
+
 def _collection_body(lines):
     """Collection-request body for a supplier: the details we need to book
     transport, then each order line with its product code + release/HS number."""
@@ -1084,7 +1155,8 @@ def build_emails_multi(files):
         r0, C0, _ = bundle[0]
         orders = sorted(set(base_order(r[C["order"]]) for r, C, _ in bundle))
         wsite = r0[C0["dpoint"]] if C0.get("dpoint") is not None else ""
-        subject = subject_for(orders, wsite, r0[C0["daddr"]], dpc)
+        pos = pos_of(bundle)
+        subject = subject_for(orders, wsite, r0[C0["daddr"]], dpc, pos)
         items = [(r[C["qty"]], readable_product(
                     r[C["prod"]],
                     r[C["prod_code"]] if C.get("prod_code") is not None else ""))
@@ -1094,13 +1166,14 @@ def build_emails_multi(files):
         ballast_bags = sum(_qty(q) for q, d in items
                            if product_type(d) in ("ballast", "loose ballast"))
         nm = firstname(r0[C0['dcon']])
-        text, html, message = _bodies(nm, items, dd)
+        text, html, message = _bodies(nm, items, dd, pos)
         pcodes = sorted({clean(r[C['prod_code']]) for r, C, _ in bundle
                          if C['prod_code'] is not None and r[C['prod_code']]})
         sources = " + ".join(sorted({s for _, _, s in bundle if s}))
         colls = collections_of(bundle)
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, orders=orders,
+                           po=dict(pos),
                            product_codes=pcodes, materials=product_summary(items),
                            ballast=ballast_bags,
                            only_ballast=bool(ptypes) and ptypes <= {"ballast", "loose ballast"},
@@ -1183,7 +1256,7 @@ def create_drafts(ns, emails):
                     worksite=e.get("worksite", ""),
                     collection_site=e.get("collection_site", ""),
                     collection_pc=e.get("collection_pc", ""),
-                    collections=e.get("collections"))
+                    collections=e.get("collections"), po=e.get("po"))
         made += 1
     return made
 

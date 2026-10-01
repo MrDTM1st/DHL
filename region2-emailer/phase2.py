@@ -377,7 +377,7 @@ def enrol_untracked(ns, limit=600):
                     only_if_new=True, kind="delivery", orig_entryid=eid,
                     worksite=w.get("worksite", ""), collections=w.get("collections"),
                     collection_site=w.get("collection_site", ""),
-                    collection_pc=w.get("collection_pc", ""))
+                    collection_pc=w.get("collection_pc", ""), po=w.get("po"))
         metrics.log("order_recovered", orders=[o], via="wait-list")
         tracked.add(o)
         added += 1
@@ -409,7 +409,7 @@ def enrol_untracked(ns, limit=600):
                     only_if_new=True, kind="delivery", orig_entryid=eid,
                     worksite=e.get("worksite", ""), collections=e.get("collections"),
                     collection_site=e.get("collection_site", ""),
-                    collection_pc=e.get("collection_pc", ""))
+                    collection_pc=e.get("collection_pc", ""), po=e.get("po"))
         metrics.log("order_recovered", orders=ords, via="extract")
         tracked.update(ords)
         added += 1
@@ -761,6 +761,10 @@ def _chase_in_thread(ns, record):
                 else "delivery details")
         note = ("Hi,\n\nJust following up on the below - could I please get the "
                 f"{what} when you have a moment?\n\n")
+        # the original may predate the PO rule, so quote it on the chase itself
+        po = "; ".join(dict.fromkeys(v for v in (record.get("po") or {}).values() if v))
+        if po:
+            note = note.replace("Hi,\n\n", f"Hi,\n\nYour PO: {po}\n\n", 1)
         try:
             reply.Body = note + reply.Body
         except Exception:

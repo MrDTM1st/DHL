@@ -299,16 +299,17 @@ def build_from_collected(collected):
         r0, C0, _ = bundle[0]
         orders = sorted(set(bd.base_order(r[C["order"]]) for r, C, _ in bundle))
         wsite = r0[C0["dpoint"]] if C0.get("dpoint") is not None else ""
-        subject = bd.subject_for(orders, wsite, r0[C0["daddr"]], dpc)
+        pos = bd.pos_of(bundle)
+        subject = bd.subject_for(orders, wsite, r0[C0["daddr"]], dpc, pos)
         picked = [pick_product(r, C) for r, C, _ in bundle]
         items = [(r[C["qty"]], p[0]) for (r, C, _), p in zip(bundle, picked)]
         nm = bd.firstname(r0[C0['dcon']])
-        text, html, message = bd._bodies(nm, items, dd)
+        text, html, message = bd._bodies(nm, items, dd, pos)
         pcodes = sorted({p[1] for p in picked if p[1]})
         source = " + ".join(sorted({fn for _, _, fn in bundle if fn}))
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, area=bd.area(dpc),
-                           orders=orders, product_codes=pcodes,
+                           orders=orders, po=dict(pos), product_codes=pcodes,
                            materials=bd.product_summary(items),
                            site=bd.clean(r0[C0['daddr']]), postcode=dpc, source=source,
                            worksite=bd.worksite_of(wsite),
@@ -404,7 +405,7 @@ def save_pending(emails):
     import json
     slim = [{k: e.get(k) for k in ("to", "cc", "name", "subject", "message", "date", "area",
                                    "orders", "product_codes", "materials", "site",
-                                   "postcode", "source")} for e in emails]
+                                   "postcode", "source", "po")} for e in emails]
     with open(PENDING, "w", encoding="utf-8") as f:
         json.dump(slim, f, indent=1, default=str)
 
@@ -597,7 +598,8 @@ def send_emails(ns, emails):
                         worksite=e.get("worksite", ""),
                         collection_site=e.get("collection_site", ""),
                         collection_pc=e.get("collection_pc", ""),
-                        collections=e.get("collections"))
+                        collections=e.get("collections"),
+                        po=e.get("po"))
         else:
             try:    # but DO remember we asked, so the brief shows it
                 import haulier_asks

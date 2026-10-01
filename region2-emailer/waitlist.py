@@ -80,6 +80,7 @@ def add(email):
     d["entries"].append({
         "id": k,
         "orders": email.get("orders", []),
+        "po": email.get("po", {}),               # customer PO, carried to the tracker on release
         "to": email.get("to", ""),
         "cc": email.get("cc", ""),
         "name": email.get("name", ""),

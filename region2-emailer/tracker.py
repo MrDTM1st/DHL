@@ -61,7 +61,7 @@ def remember_drops(orders):
 
 def log(orders, to, name, product_codes, materials, site, postcode, delivery_date, source,
         status="drafted", emailed_at=None, only_if_new=False, kind="delivery", orig_entryid=None,
-        worksite="", collection_site="", collection_pc="", collections=None):
+        worksite="", collection_site="", collection_pc="", collections=None, po=None):
     """Record an email. If the same order+date is already tracked it counts as a
     re-send (chase) - UNLESS only_if_new, when the existing record is left
     untouched (used when enrolling emails you sent by hand, so they don't get a
@@ -76,6 +76,9 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
     k = _key(orders, delivery_date)
     for r in d["records"]:
         if r["id"] == k:
+            if po and not r.get("po"):
+                r["po"] = dict(po)    # a later send or rebuild learnt the customer PO
+                save(d)
             if only_if_new:
                 return
             r["chases"] = r.get("chases", 0) + 1
@@ -91,6 +94,7 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
         "collections": collections or ([{"site": collection_site, "pc": collection_pc}]
                                        if (collection_site or collection_pc) else []),
         "delivery_date": delivery_date, "source": source, "kind": kind, "orig_entryid": orig_entryid,
+        "po": dict(po or {}),     # {order: customer PO} - quoted again on every chase
         "emailed_at": when, "last_emailed_at": when, "status": status,
         "chases": 0, "reply_at": None, "sendoff_ready": False,
     })
