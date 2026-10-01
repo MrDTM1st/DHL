@@ -258,7 +258,14 @@ def firstname(s):
             return local.capitalize()
     return ""
 
-_NUMERIC_CODE = re.compile(r"^[\d/\-.\s]+$")   # e.g. 0057/063740/0035 - internal ref, no words
+# e.g. 0057/063740/0035, and S057/069197/001 - internal refs, not words.
+# The leading letters matter: ballast codes are all-digit (0057/...) so the
+# original pattern caught them, but sleeper codes carry an S prefix and slipped
+# through as "words". readable_product then kept the primary column, and order
+# 8005274 came out described to its recipient as "S057/069197/001" instead of
+# "sleepers" - with no materials team on the Cc, because a code classifies as
+# nothing. Two letters is enough for every prefix seen in the wild.
+_NUMERIC_CODE = re.compile(r"^[A-Za-z]{0,2}[\d/\-.\s]+$")
 
 def _has_words(v):
     """True if the value reads as words a recipient can understand (has letters
