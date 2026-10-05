@@ -154,6 +154,16 @@ def find_extract(ns, order, limit=None, budget=None):
     def collect(folder, out, depth=0):
         if depth > 6:
             return
+        # Never the Outbox. Reading a queued email's attachments there takes it
+        # out of the send queue - it sits in the Outbox, "not submitted", and
+        # never goes (two ring-round asks stuck exactly like that on
+        # 02/10/2026). The background reply check reaches this search, so it
+        # was quietly un-sending mail. order_index already skips it.
+        try:
+            if str(folder.Name).strip().lower() == "outbox":
+                return
+        except Exception:
+            return
         out.append(folder)
         try:
             for i in range(1, folder.Folders.Count + 1):

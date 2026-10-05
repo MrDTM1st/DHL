@@ -45,3 +45,6 @@ region2-emailer/work_pc/ctms_workpc_report.txt
 region2-emailer/work_pc/ctms_capture/
 region2-emailer/work_pc/engine_preflight_report.txt
 region2-emailer/work_pc/_win_ca_bundle.pem
+
+# monitor_tick -> agent: "new mail, run the reply check"
+region2-emailer/_phase2_due

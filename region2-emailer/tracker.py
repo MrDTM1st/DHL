@@ -29,8 +29,12 @@ def load():
 
 
 def save(d):
-    with open(PATH, "w", encoding="utf-8") as f:
+    # write-then-swap: a reader that catches a half-written file used to see
+    # an empty tracker, and a save after that wiped it
+    tmp = PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2)
+    os.replace(tmp, PATH)
 
 
 def _key(orders, date):

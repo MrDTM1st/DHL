@@ -62,6 +62,34 @@ def cloud_config():
     return None
 
 
+TICK_MAX_AGE = 25 * 60     # a tick still alive after this is stuck on a COM call
+
+
+def tick(job, running):
+    """Start `job` unless its previous run is still going.
+
+    It used to be fired every 60s regardless, and a tick that took longer
+    than 60s - easily done when Outlook is busy - overlapped the next. On
+    02/10/2026 ten monitor ticks were running at once, Outlook froze and
+    stopped syncing mail. A tick that has been alive TICK_MAX_AGE is stuck
+    (it holds the one background-Outlook slot) and is killed so the rest of
+    the toolkit is not locked out behind it."""
+    prev = running.get(job)
+    if alive(prev):
+        if time.time() - prev.started < TICK_MAX_AGE:
+            return
+        # The whole tree: killing only the tick left the build / reply check
+        # it had started still running, with the tick's slot already freed.
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(prev.pid)],
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+        log(f"killed stuck {job} (alive {int(time.time() - prev.started)}s)")
+    p = subprocess.Popen([sys.executable, os.path.join(HERE, job)],
+                         cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=CREATE_NO_WINDOW)
+    p.started = time.time()
+    running[job] = p
+
+
 def main():
     # single-instance lock: if another supervisor already holds 8786, exit
     lock = socket.socket()
@@ -72,6 +100,7 @@ def main():
     log("supervisor started")
     cp = agent = cloud_agent = None
     last_tick = 0.0
+    ticks = {}
     while True:
         try:
             if not port_up():
@@ -89,9 +118,7 @@ def main():
                 log(f"started cloud agent -> {cc['url']}")
             if time.time() - last_tick > 60:   # self-update + handover + live Outlook monitor (COM)
                 for job in ("home_tick.py", "monitor_tick.py"):
-                    subprocess.Popen([sys.executable, os.path.join(HERE, job)],
-                                     cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     creationflags=CREATE_NO_WINDOW)
+                    tick(job, ticks)
                 last_tick = time.time()
         except Exception as e:
             log(f"error: {e}")

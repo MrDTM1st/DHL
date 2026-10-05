@@ -1,6 +1,6 @@
 """Periodic home-PC maintenance (the COM side of self-update + handover).
 
-Run every ~60s by the supervisor (which is single-instance, so this runs once):
+Run every ~60s by the supervisor; outlook_gate keeps it to one copy at a time:
   1. apply any "R2 UPDATE" emails to the site store / team / settings
   2. while a handover is active, forward tracked-order replies to the cover
      person; auto-end on the return date.
@@ -127,6 +127,19 @@ def do_handover(ns):
 
 
 def main():
+    # The supervisor being single-instance never made THIS single-instance: it
+    # fires every 60s whether or not the last tick finished. One copy at a
+    # time, nothing while Outlook is Not Responding, and it takes its turn in
+    # the one background-Outlook slot (see outlook_gate).
+    import outlook_gate as gate
+    if not gate.single_instance("home_tick"):
+        return
+    gate.self_destruct(25 * 60)           # stuck on a COM call -> kill this tick
+    if gate.outlook_hung():
+        return
+    # longer than the agent's jobs queue (30s) so this gets its turn between them
+    if gate.background_slot(wait=40) is None:
+        return
     try:
         import win32com.client
         ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
