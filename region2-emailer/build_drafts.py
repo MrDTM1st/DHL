@@ -219,8 +219,16 @@ def email_of(s):
     m = _SPACED_EMAIL.search(s)
     if m:
         name, local, domain = m.group(1).strip(), m.group(2), m.group(3)
-        if " ".join(local.split()).lower() == " ".join(name.split()).lower():
-            return ".".join(local.split()) + "@" + domain
+        lw, nw = local.split(), name.split()
+        # Network Rail numbers people who share a name - David.Johnson8@,
+        # Louis.Singleton-Knott2@ - and the digit is on the address, never on
+        # the name typed before "email:". Comparing the words exactly refused
+        # the rejoin for 7116157 (05/10): the tail "Singleton-Knott2@..." went
+        # out instead, bounced, and Soham never got the delivery-details ask.
+        if (len(lw) == len(nw)
+                and [w.lower() for w in lw[:-1]] == [w.lower() for w in nw[:-1]]
+                and re.sub(r"\d+$", "", lw[-1]).lower() == nw[-1].lower()):
+            return ".".join(lw) + "@" + domain
     m = re.search(_EMAIL, s)
     return m.group(0) if m else None
 
