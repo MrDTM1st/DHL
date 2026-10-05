@@ -352,7 +352,8 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
                                "email": data.get("email"), "sites": data.get("sites"),
-                               "week": data.get("week"), "mode": data.get("mode")})
+                               "week": data.get("week"), "mode": data.get("mode"),
+                               "on": data.get("on")})
                 _status.update(state="queued", detail=f"{data.get('action')} queued",
                               at=datetime.now().strftime("%H:%M:%S"), output="")
             self._json(200, {"ok": True})

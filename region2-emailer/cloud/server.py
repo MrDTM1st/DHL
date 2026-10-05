@@ -1252,6 +1252,9 @@ class Handler(BaseHTTPRequestHandler):
                                "email": data.get("email"), "sel": data.get("sel"),
                                "mode": data.get("mode"), "week": data.get("week"),
                                "sites": data.get("sites"), "data": data.get("data"),
+                               # the Auto follow-ups switch's on/off - it was
+                               # left out, so every click arrived as "off"
+                               "on": data.get("on"),
                                "queued_at": time.time()})
                 det = f"{data.get('action')} queued"
                 if not _agent_online():
