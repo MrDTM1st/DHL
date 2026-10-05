@@ -149,14 +149,38 @@ def notes(order):
     return {k.lower(): v for k, v in got.items() if isinstance(v, dict)}
 
 
+def _do_not_use():
+    """Names and addresses of hauliers marked DO NOT USE.
+
+    A stand-down works from who was ASKED, and the asks are rebuilt from Sent
+    Items - so a haulier asked before they were barred is still on the list,
+    and would be written to again. "Don't send any more emails to them" means
+    this email too (A. Rhodes, 02/10/2026).
+    """
+    try:
+        import hauliers
+        d = hauliers.load()
+    except Exception:
+        return set()
+    out = set()
+    for h in d.get("hauliers", []) + d.get("couriers", []):
+        if h.get("do_not_use"):
+            out.add(str(h.get("name", "")).strip().lower())
+            out.update(str(e).strip().lower() for e in (h.get("emails") or []) if e)
+    return out
+
+
 def build(order, asked, got, winner):
     """One message per haulier still owed an answer, winner excluded."""
     extra = notes(order)
     win = str(winner or "").lower()
+    barred = _do_not_use()
     out = []
     for a in asked:
         mail = a["email"].lower()
         if win and (win in mail or win in a["name"].lower()):
+            continue
+        if mail in barred or a["name"].strip().lower() in barred:
             continue
         r = got.get(a["email"])
         over = extra.get(mail, {})

@@ -85,6 +85,13 @@ _OVERRIDES = {
     # "do_not_use", which rank_of treats as the tier-2 band: fine, and not a
     # tier anyone here has actually given them.
     "kms": {"do_not_use": False},
+    # "A. Rhodes... we can't send any jobs to them. So just ignore their emails
+    # and don't send any more emails to them" - Delali, 02/10/2026. They are
+    # live on the contact sheet, so without this they kept surfacing as the
+    # nearest Tier 2 out of York and were asked on five jobs that afternoon.
+    # do_not_use takes them out of recommend() and off the dashboard, and
+    # stand_down skips them, so they are not even told a job went elsewhere.
+    "a. rhodes": {"do_not_use": True},
 }
 
 
