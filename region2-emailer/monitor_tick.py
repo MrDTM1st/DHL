@@ -8,10 +8,14 @@ Synergy Upload folder and reacts the moment something relevant lands:
   * new mail in or out                -> flag _phase2_due so the local agent runs
     the reply/booking check now (at most every 5 min after the last one
     ended), not on its 20-minute cycle,
-  * a new ad-hoc Haulage Request / DTS form -> flag it on the dashboard.
+  * a new ad-hoc Haulage Request / DTS form -> flag it on the dashboard,
+  * a bounce on a delivery-details email -> bounce_escalate asks the materials
+    team for an alternative contact straight away (the one thing this sends -
+    Delali, 05/10/2026: "if something bounces, just immediately escalate it").
 
-Seeds silently on the first run so it never floods on startup. Nothing is ever
-sent - it only builds/notifies. State + watermark live in _monitor_seen.json.
+Seeds silently on the first run so it never floods on startup. Apart from the
+bounce escalation it only builds/notifies. State + watermark live in
+_monitor_seen.json.
 """
 import os, sys, json, time, subprocess
 from datetime import datetime, timedelta
@@ -280,11 +284,57 @@ def main():
             open(PHASE2_DUE, "w").close()
         except OSError:
             pass
+        # A bounce is new mail too. Escalate it while the contact's silence still
+        # costs something - 7115888's bounce sat unnoticed for three days.
+        if os.path.exists(os.path.join(HERE, "bounce_escalate.enabled")):
+            _bounces(ns)
     if new_extracts:
         _build(state, new_extracts)
     if new_adhocs:
         report("done", "New ad-hoc form arrived: " + ", ".join(new_adhocs[:3])
                + " - process it from the DTS / Ad-hoc box.")
+
+
+REVIEW_STATES = ("preview_ready", "batch_ready", "sites_needed", "found")
+
+
+def _review_open():
+    """True if EITHER dashboard is showing something waiting on Delali (or we
+    cannot tell) - a monitor notice must never wipe a review he is in."""
+    import urllib.request
+    for url, key in _cps():
+        try:
+            req = urllib.request.Request(url + "/api/status", headers={"X-Auth": key})
+            st = json.loads(urllib.request.urlopen(req, timeout=8).read() or b"{}")
+            if st.get("state") in REVIEW_STATES:
+                return True
+        except Exception:
+            if key:                      # the cloud one matters; the local CP may simply be down
+                return True
+    return False
+
+
+def _bounces(ns):
+    """Escalate new bounces, then post what is waiting - one combined notice,
+    and only when no review is open (notices keep in the state file till then)."""
+    try:
+        import bounce_escalate
+        bounce_escalate.run(ns, send=True)
+    except Exception as e:
+        try:
+            st = bounce_escalate._load() or {}
+            bounce_escalate._note(st, f"Bounce check failed: {e}")
+            bounce_escalate._save(st)
+        except Exception:
+            pass
+    try:
+        import bounce_escalate
+        lines = bounce_escalate.take_unreported(clear=False)
+        if lines and not _review_open():
+            report("done", f"{len(lines)} bounce update(s) - {lines[-1][12:150]}", "\n".join(lines))
+            bounce_escalate.take_unreported(clear=True)
+    except Exception:
+        pass
 
 
 def _build(state, new_extracts):
