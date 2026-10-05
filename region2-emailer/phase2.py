@@ -29,8 +29,8 @@ import send_order
 import tracker
 
 DHL_SMTP = "delali.opoku@dhl.com"
-CHASE_AFTER_BDAYS = 2
-MAX_CHASES = 3
+# Chase timing and limits live with the reply rules (modules/chase_rules.py).
+from modules.chase_rules import CHASE_AFTER_BDAYS, MAX_CHASES   # noqa: E402,F401
 
 # England & Wales bank holidays - ONE list, in services.py, which also uses it
 # to decide SUN/BANK_HOL. Two copies would eventually disagree about whether a
@@ -92,6 +92,24 @@ def _sendout_folder(ns, create=True):
         except Exception:
             folder = None
     return folder
+
+
+def _sendout_exists(ns, orders):
+    """Is there already a 'SEND OUT: <these orders>' draft in Region 2 > Send Out?"""
+    folder = _sendout_folder(ns, create=False)
+    nums = [re.sub(r"\D", "", str(o)) for o in orders if re.sub(r"\D", "", str(o))]
+    if folder is None or not nums:
+        return False
+    try:
+        found = folder.Items.Restrict(
+            "@SQL=(\"urn:schemas:httpmail:subject\" LIKE '%SEND OUT%" + nums[0] + "%')")
+        for it in found:
+            subj = str(it.Subject or "")
+            if all(n in subj for n in nums):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _rt_naive(rt):
@@ -604,13 +622,19 @@ def check(ns=None):
     # finished DURING this run must survive to be saved - see the drop below.
     was_done = {r["id"] for r in d["records"] if r.get("sendoff_ready")}
     replies = ooo = briefs = 0
+    finder = _reply_finder(ns, [r for r in d["records"] if r.get("status") == "sent"
+                                and not r.get("reply_at") and not r.get("ooo_at")])
     for r in d["records"]:
         if r.get("status") != "sent":
             continue
-        if r.get("reply_at") or r.get("ooo_at"):
+        if r.get("reply_at"):
             continue
-        item = find_reply(ns, r)
+        item = finder(r) if finder else find_reply(ns, r)
         if not item:
+            continue
+        # An out-of-office used to end the search for good - the real reply that
+        # followed it was never looked for. Keep looking; note the OOO once.
+        if r.get("ooo_at") and is_auto_reply(item):
             continue
         if is_auto_reply(item):
             r["ooo_at"] = tracker._now()
@@ -631,7 +655,13 @@ def check(ns=None):
             if r.get("kind") == "collection":
                 continue   # supplier replied with collection details - no delivery send-off brief
             try:
-                if build_brief(ns, r, item):
+                if _sendout_exists(ns, r.get("orders", [])):
+                    # Already drafted - by an earlier check, or by hand. The reply
+                    # finder now sees replies filed in Completed that the old one
+                    # never did, and many of those jobs were handled long ago;
+                    # a second SEND OUT for them is clutter, not help.
+                    r["sendoff_ready"] = True
+                elif build_brief(ns, r, item):
                     r["sendoff_ready"] = True
                     briefs += 1
                     metrics.log("brief_drafted", orders=r.get("orders", []))
@@ -708,21 +738,46 @@ def check(ns=None):
 
 
 def _due_for_chase(r):
-    if r.get("status") != "sent":
-        return False
-    if r.get("ooo_at"):
-        return False
-    # a reply only closes it if it actually answered everything - a PARTIAL
-    # reply still gets chased, but only for the fields it left blank
-    if r.get("reply_at") and not r.get("missing"):
-        return False
-    if r.get("chases", 0) >= MAX_CHASES:
-        return False
-    if business_days_since(r.get("emailed_at")) < CHASE_AFTER_BDAYS:
-        return False
-    if r.get("last_chased_at") == date.today().isoformat():
-        return False
-    return True
+    """Cheap pre-filter only. Whether a record is actually chased is decided by
+    modules/chase_rules.assess against the whole mailbox."""
+    return r.get("status") == "sent"
+
+
+def _reply_finder(ns, records):
+    """Find a record's reply anywhere in the mailbox, by the chaser's own rules.
+
+    find_reply looked at the top of the Inbox only, by subject only, so a reply
+    already filed in Region 2/Completed was never seen (33 of the 34 replies
+    the old chaser chased over were filed there), and a haulier's quote with
+    the order in the subject counted as the site answering. Returns None - and
+    the caller falls back to find_reply - if the mailbox cannot be indexed."""
+    if not records:
+        return None
+    try:
+        import chase_guard as guard
+        from modules import chase_rules as cr
+        idx = guard.MailIndex(ns, guard.window_start(records))
+        ctx = guard.context()
+        addrs, doms = guard.relevant([guard.with_mailbox_facts(ns, r) for r in records], idx, ctx)
+        idx.mark_auto(addrs, doms)
+    except Exception as e:
+        print(f"(reply index unavailable - Inbox-only search this run: {e})")
+        return None
+    now = datetime.now()
+
+    def find(r):
+        got = cr.reply_mails(guard.with_mailbox_facts(ns, r), idx.mails, ctx, idx.text_of, now)
+        if got is None:
+            return find_reply(ns, r)             # the rules cannot judge it: old search
+        replies, ooo = got
+        m = (replies or ooo or [None])[-1]       # the newest, as find_reply returned
+        if m is None:
+            return None
+        try:
+            return ns.GetItemFromID(m["eid"], idx.store_id)
+        except Exception:
+            return None
+    return find
 
 
 def _chase_in_thread(ns, record):
@@ -791,15 +846,22 @@ def _send_chase(ns, record):
     if not emails:
         return _chase_in_thread(ns, record)
     e = emails[0]
+    # The rules decided about THESE people; rebuilding from the extract can
+    # bring back a different contact (the extract changed, or the record was
+    # recovered from an email to someone else). Send to the record's contact.
+    from modules import chase_rules as cr
+    rec_to = cr.contacts_of(record, {"me": {DHL_SMTP}, "internal_domains": ("dhl.com",)})
+    if not rec_to:
+        return False
+    if set(cr.emails_in(e.get("to"))) != set(rec_to):
+        e["to"] = "; ".join(rec_to)
+        e["name"] = record.get("name") or ""
     original = e["message"].split("\n\n", 1)[-1]
     greet = f"Hi {e['name']}," if e.get("name") else "Hi,"
-    # if they replied but left gaps, ask for EXACTLY those - not "any update?"
-    miss = record.get("missing") or []
-    if miss and record.get("reply_at"):
-        need = miss[0] if len(miss) == 1 else ", ".join(miss[:-1]) + " and " + miss[-1]
-        ask = f"Thanks for coming back to me - I just need the {need} and I can get this booked."
-    else:
-        ask = "Can I please get a reply to the below?"
+    # Only someone who has NOT replied is ever chased now (chase_rules), so
+    # there is no "thanks, I just need the X" variant: a part-answer is
+    # Delali's to follow up, not the robot's.
+    ask = "Can I please get a reply to the below?"
     e["message"] = f"{greet}\n\n{ask}\n\n{original}"
     e["html"] = bd.html_from_message(e["message"])
     e["cc"] = ""
@@ -841,38 +903,203 @@ def _claim(rid):
     return False
 
 
-def run_chasers(ns=None, send=False):
-    if send and not _chase_lock():
+def _auto_mode():
+    """'off' | 'shadow' | 'live' for the automatic (timer) run. Shadow decides
+    and logs exactly as live would, and reports who it WOULD have chased, but
+    sends nothing - the way to watch it for a few days before trusting it."""
+    flag = os.path.join(bd.HERE, "auto_chase.enabled")
+    if not os.path.exists(flag):
+        return "off"
+    head = ""
+    try:
+        raw = open(flag, "rb").read(400)
+        for enc in ("utf-8-sig", "utf-16"):
+            try:
+                head = raw.decode(enc).upper()
+                break
+            except Exception:
+                continue
+    except Exception:
+        head = ""
+    # LIVE only when the file says so - an empty, unreadable or odd file runs
+    # in shadow, never sends.
+    return "live" if "LIVE" in head and "SHADOW" not in head else "shadow"
+
+
+def run_chasers(ns=None, send=False, only=None):
+    """Chase the contacts who have not replied - and NOBODY who has.
+
+    Every record is judged by modules/chase_rules against every email in the
+    DHL mailbox since the ask (chase_guard.MailIndex): a reply anywhere -
+    filed in Completed, on another thread, from a colleague on the thread,
+    a question back, "I'll come back to you" - stops it for good; out-of-office,
+    "emailed you about something else" and "someone else wrote about it" are
+    held for Delali; booked, ring-round sent, delivery date reached, bounced
+    and two chases already are stopped. One chaser per contact per run, never
+    two days running, working hours only for the automatic run, and the
+    mailbox is read again right before each send - five of the old wrong
+    chasers went out within three minutes of the reply.
+
+    Fails closed: if the mailbox cannot be read completely, nothing is sent."""
+    from modules import chase_rules as cr
+    import chase_guard as guard
+    auto = os.environ.get("R2_AUTO_CHASE") == "1"
+    shadow = False
+    if send and auto:
+        mode = _auto_mode()
+        if mode == "off":
+            print("SKIP chasers: automatic follow-ups are off.")
+            return []
+        shadow = mode == "shadow"
+        if not cr.in_working_hours(datetime.now(), guard.context(state={})["holidays"]):
+            print("SKIP chasers: outside working hours (Mon-Fri 08:00-16:30).")
+            return []
+    really_send = send and not shadow
+    if really_send and not _chase_lock():
         print("chasers: another chase run is already in progress - skipping.")
         return []
     ns = ns or bd.get_ns()
     d = tracker.load()
-    due = [r for r in d["records"] if _due_for_chase(r)]
-    out = []
-    chased_ids = []
-    for r in due:
-        bd_n = business_days_since(r.get("emailed_at"))
-        if not send:
-            out.append(f"  DUE  {' / '.join(r['orders'])} -> {r['to']} "
-                       f"(bday {bd_n}, would be chase #{r.get('chases', 0) + 1})")
+    recs = [r for r in d["records"] if _due_for_chase(r)]
+    if only:
+        # "chase these orders" - nothing else goes, whatever else is due
+        recs = [r for r in recs if set(str(o) for o in r.get("orders", [])) & set(only)]
+    if not recs:
+        print("chasers: nothing tracked.")
+        return []
+    try:
+        decs, idx, ctx = guard.assess_all(ns, recs)
+    except Exception as e:
+        print(f"ABORT chasers: could not read the mailbox to check for replies - nothing sent. ({e})")
+        return []
+    if idx.errors and really_send:
+        print("ABORT chasers: part of the mailbox could not be read, so a reply could be "
+              "missed - nothing sent. " + "; ".join(idx.errors[:3]))
+        really_send = False
+    if len(idx.item_errors) > 5 and really_send:
+        print(f"ABORT chasers: {len(idx.item_errors)} emails could not be read - nothing sent.")
+        really_send = False
+    if really_send:
+        ok, why = guard.mailbox_fresh(ns, idx)
+        if not ok:
+            print(f"ABORT chasers: {why} - nothing sent.")
+            really_send = False
+    state = ctx["state"]
+    now = datetime.now()
+    for r, dec in decs:
+        if dec["action"] == cr.BLOCK and dec.get("evidence") and "replied earlier" not in dec["reason"]:
+            guard.remember_block(state, r, dec, now)
+    picked = cr.one_per_contact(decs, ctx)
+    picked_ids = {id(r) for r, _ in picked}
+
+    out, chased_ids = [], []
+    label = {cr.SEND: "DUE ", cr.WAIT: "WAIT", cr.BLOCK: "REPLIED", cr.HOLD: "HOLD", cr.STOP: "STOP"}
+    for r, dec in decs:
+        if id(r) in picked_ids:
             continue
+        guard.log_decision(r, dec)
+        ev = dec.get("evidence") or {}
+        out.append(f"  {label[dec['action']]:<7} {' / '.join(r['orders'])} -> {r['to']}: {dec['reason']}"
+                   + (f"  [{ev.get('folder')}]" if ev.get("folder") else ""))
+    for r, dec in picked:
+        if not really_send:
+            guard.log_decision(r, dec, sent=False)
+            out.append(f"  {'WOULD CHASE' if shadow else 'DUE '} {' / '.join(r['orders'])} -> "
+                       f"{r['to']}: {dec['reason']}")
+            continue
+        # the last look: read the newest mail again and re-judge, right now
+        try:
+            n_err = len(idx.errors)
+            idx.refresh()
+            if len(idx.errors) > n_err:
+                raise RuntimeError("; ".join(idx.errors[n_err:n_err + 2]))
+            full = guard.with_mailbox_facts(ns, r)
+            idx.mark_auto(*guard.relevant([full], idx, ctx))
+            dec = cr.assess(full, idx.mails, ctx, idx.text_of, datetime.now())
+        except Exception as e:
+            out.append(f"  ABORT  re-check could not read everything - nothing more sent this run ({e})")
+            break
+        if dec["action"] != cr.SEND:
+            if dec["action"] == cr.BLOCK and dec.get("evidence"):
+                guard.remember_block(state, r, dec, datetime.now())
+            guard.log_decision(r, dec)
+            out.append(f"  {label[dec['action']]:<7} {' / '.join(r['orders'])} -> {r['to']}: "
+                       f"{dec['reason']} (seen in the last-second re-check)")
+            continue
+        if auto and _auto_mode() != "live":
+            out.append("  STOP   automatic follow-ups were switched off mid-run - nothing more sent")
+            break
         if not _claim(r["id"]):
-            out.append(f"  SKIP {' / '.join(r['orders'])} -> already chased today")
+            out.append(f"  SKIP    {' / '.join(r['orders'])} -> already chased today")
             continue
         ok = _send_chase(ns, r)
-        out.append(f"  {'SENT' if ok else 'FAIL'} {' / '.join(r['orders'])} -> {r['to']}")
+        guard.log_decision(r, dec, sent=bool(ok))
+        out.append(f"  {'SENT' if ok else 'FAIL':<7} {' / '.join(r['orders'])} -> {r['to']}: {dec['reason']}")
         if ok:
             chased_ids.append(r["id"])
-    if send and chased_ids:
-        d2 = tracker.load()
-        for r in d2["records"]:
-            if r["id"] in chased_ids and r.get("kind") == "collection":
-                r["chases"] = r.get("chases", 0) + 1   # in-thread chase skips tracker.log's bump
+    try:
+        guard.save_state(state)
+    except Exception as e:
+        print(f"(could not save chase state: {e})")
+    # what each record got, for the dashboard - merged into a FRESH tracker so
+    # nothing written meanwhile is lost
+    status = {r["id"]: dec for r, dec in decs}
+    d2 = tracker.load()
+    if not d2.get("records") and d.get("records"):
+        print("(tracker could not be re-read - chase status not saved this run)")
+        d2 = None
+    for r in (d2 or {}).get("records", []):
+        dec = status.get(r.get("id"))
+        if dec:
+            r["chase_status"] = {"action": dec["action"], "reason": dec["reason"][:200],
+                                 "at": now.strftime("%Y-%m-%d %H:%M")}
+        if r.get("id") in chased_ids and r.get("kind") == "collection":
+            r["chases"] = r.get("chases", 0) + 1     # in-thread chase skips tracker.log's bump
+            r["last_emailed_at"] = now.strftime("%Y-%m-%d %H:%M")
+    if d2:
         tracker.save(d2)
-    verb = "sent" if send else "due"
-    print(f"chasers: {len(chased_ids) if send else len(due)} {verb}.")
+    n = {a: sum(1 for _, x in decs if x["action"] == a) for a in label}
+    head = ("chasers (SHADOW - nothing sent): " if shadow else "chasers: ")
+    # details first, the one-line summary LAST - the dashboard shows the tail,
+    # so the lines that need Delali (HOLD, then what went / would go) come last
+    rank = {"REPLIED": 0, "STOP": 1, "WAIT": 2, "SKIP": 3, "HOLD": 4}
+    out.sort(key=lambda line: rank.get(line.split()[0] if line.split() else "", 5))
     print("\n".join(out) if out else "  (none)")
+    print(head + f"{len(chased_ids) if really_send else len(picked)} "
+          f"{'sent' if really_send else 'would be chased'}, {n[cr.BLOCK]} already replied, "
+          f"{n[cr.HOLD]} held for you, {n[cr.STOP]} stopped, {n[cr.WAIT]} not due yet.")
     return out
+
+
+def set_auto_mode(mode):
+    """off / shadow / live for the automatic chaser (the dashboard switch writes
+    'live'). Shadow is the safe way back in: it runs every 3h, decides, logs
+    and reports who it WOULD chase - and sends nothing."""
+    flag = os.path.join(bd.HERE, "auto_chase.enabled")
+    if mode == "off":
+        try:
+            os.remove(flag)
+        except FileNotFoundError:
+            pass
+        return "Automatic follow-ups OFF."
+    with open(flag, "w", encoding="utf-8") as f:
+        if mode == "shadow":
+            f.write("SHADOW\nAutomatic follow-ups in SHADOW mode: every 3h the agent decides who "
+                    "it would chase and reports it, but sends nothing.\n"
+                    "`python phase2.py chase live` to let it send; `... chase off` to stop.\n")
+        else:
+            f.write("LIVE\nAutomatic follow-ups ON. The local agent runs `phase2.py chase send` every 3h.\n"
+                    "Delete this file (or use the dashboard switch) to turn them off.\n")
+    return f"Automatic follow-ups: {mode.upper()}."
+
+
+def rearm_chase(order):
+    """Resume automatic chasing for an order that replied - from now."""
+    import chase_guard as guard
+    n = guard.rearm(order)
+    print(f"re-armed {n} contact(s) for {order}: chased again only if they stay quiet "
+          f"for 2 business days from now.")
+    return n
 
 
 def learn_detail(rec_id, field, value):
@@ -904,10 +1131,47 @@ def learn_detail(rec_id, field, value):
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
+    sub = sys.argv[2] if len(sys.argv) > 2 else ""
+    if cmd == "chase" and sub == "rearm":       # resume chasing an order that replied
+        if len(sys.argv) < 4:
+            print("usage: phase2.py chase rearm <order>"); return
+        rearm_chase(sys.argv[3])
+        return
+    if cmd == "chase" and sub in ("shadow", "live", "off"):
+        print(set_auto_mode(sub))
+        return
     if cmd == "learn":                     # no Outlook needed - pure tracker edit
         if len(sys.argv) < 5:
             print("usage: phase2.py learn <record id> <field> <value>"); return
         print(learn_detail(sys.argv[2], sys.argv[3], " ".join(sys.argv[4:])))
+        return
+    # check / chase / recover each load the whole tracker, work for minutes,
+    # then save the whole thing back - so two at once lose each other's
+    # writes, and each one is thousands of Outlook reads. They were launched
+    # from four places (agent timer, monitor tick, both dashboards) with
+    # nothing stopping them overlapping. One at a time.
+    #
+    # How long to wait for the one already running: R2_PHASE2_WAIT seconds.
+    # Background runs pass 0 - they just exit 75 ("did not run") and the agent
+    # retries in two minutes, so no time is lost waiting inside a job timeout.
+    # Anything else (a dashboard button, the command line) waits 30s - always
+    # far below the dashboard's 600s, so the agent is never frozen behind a
+    # long background check and the button gets a clear answer.
+    import outlook_gate as gate
+    try:
+        lock_wait = float(os.environ.get("R2_PHASE2_WAIT", "30"))
+    except ValueError:
+        lock_wait = 30.0
+    if gate.named_lock("phase2_tracker", wait=lock_wait) is None:
+        print(f"SKIP phase2 {cmd}: a reply check / chase is already running - "
+              "it will update the tracker when it finishes.")
+        sys.exit(gate.SKIPPED)
+    # Automatic chasers are opt-in, and the agent may have queued this run
+    # before the switch was turned off - so ask again now we hold the lock,
+    # right before anything could be sent.
+    if (cmd == "chase" and os.environ.get("R2_AUTO_CHASE") == "1"
+            and not os.path.exists(os.path.join(bd.HERE, "auto_chase.enabled"))):
+        print("SKIP phase2 chase: automatic follow-ups were turned off.")
         return
     ns = bd.get_ns()
     if cmd == "recover":
@@ -918,12 +1182,16 @@ def main():
     elif cmd == "check":
         check(ns)
     elif cmd == "chase":
-        run_chasers(ns, send=(len(sys.argv) > 2 and sys.argv[2] == "send"))
+        # phase2.py chase send [order ...] - with orders, only those are chased
+        send = len(sys.argv) > 2 and sys.argv[2] == "send"
+        only = {a.strip() for a in sys.argv[3:] if a.strip()} if send else None
+        run_chasers(ns, send=send, only=only or None)
     elif cmd == "all":
         check(ns)
         run_chasers(ns, send=False)
     else:
-        print("usage: phase2.py check | chase [send] | all | learn <id> <field> <value>")
+        print("usage: phase2.py check | chase [send] | chase shadow|live|off | "
+              "chase rearm <order> | all | learn <id> <field> <value>")
 
 
 if __name__ == "__main__":

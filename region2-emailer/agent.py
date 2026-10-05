@@ -372,7 +372,7 @@ def set_auto_chase(on):
     without restarting anything."""
     if on:
         with open(AUTO_CHASE_FLAG, "w", encoding="utf-8") as f:
-            f.write("Automatic follow-ups ON. The local agent runs "
+            f.write("LIVE\nAutomatic follow-ups ON. The local agent runs "
                     "`phase2.py chase send` every 3h.\nDelete this file (or use the "
                     "dashboard switch) to turn them off.\n")
     else:
@@ -497,6 +497,228 @@ def single_instance():
     return s
 
 
+# --- Background Outlook jobs (local agent only) ------------------------------
+# These used to be fired straight from the loop: some with run(), which blocked
+# the agent and sat outside its try/except, so when Outlook was slow the 5-min
+# ad-hoc sweep hit its 600s timeout and KILLED the agent (69 times in
+# agent.log, 151 restarts in supervisor.log - every ~10 minutes on 30/09). The
+# rest were Popen'd with no handle, so a copy stuck on a busy Outlook was
+# joined by another every cycle. Every restart also reset all the timers to
+# zero and fired the sweep, reply check, wait-list scan, haulier-asks sweep
+# and wait-list send together. Outlook answers COM on one thread, so it froze,
+# stopped syncing mail, and sends queued behind it.
+#
+# Now: each job goes through outlook_gate (one background Outlook job at a
+# time, none while Outlook is Not Responding), runs detached so the agent
+# keeps answering the dashboard, is never started again while its last run
+# is alive, retries in BG_RETRY when the gate skipped it, and its timer
+# survives an agent restart (_agent_timers.json). Nothing here can raise into
+# the loop.
+BG_TIMERS = os.path.join(HERE, "_agent_timers.json")
+BG_RETRY = 120          # the gate said busy / Outlook hung: try again this soon
+BG_FAIL_RETRY = 600     # a SENDING job died or was killed: report it, retry this soon
+BG_GATE_WAIT = 30       # seconds a job queues for the slot before giving way
+GATE_SKIPPED = 75       # outlook_gate / phase2 "did not run" exit code
+PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # monitor_tick: new mail, check replies
+PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
+SEND_JOBS = ("waitlist_release", "chase")
+
+
+def _bg_jobs():
+    """(key, args, every, timeout, enabled) for each timer job, in PRIORITY
+    order: when several are due, the first one listed runs first."""
+    recover_on = lambda: os.path.exists(os.path.join(HERE, "auto_recover.enabled"))  # noqa: E731
+    return [
+        # auto-SEND any wait-list order now within its window
+        ("waitlist_release", ["waitlist_release.py", "send"], 10800, 600, lambda: True),
+        # auto-chasers: OPT-IN via auto_chase.enabled (re-checked inside
+        # phase2 right before sending, in case it is switched off meanwhile)
+        ("chase", ["phase2.py", "chase", "send"], 10800, 1800, auto_chase_on),
+        # ad hocs whose manifest has come back leave the map
+        ("adhoc_sweep", ["adhoc_booked_sweep.py", "apply"], 300, 600, lambda: True),
+        # Phase 2: replies + OOO + send-off drafts. Also run when monitor_tick
+        # flags new mail (_phase2_due). A check after a backlog took 803s on
+        # 02/10/2026, so it gets 30 minutes - a killed check saves nothing.
+        ("phase2_check", ["phase2.py", "check"], 1200, 1800, lambda: True),
+        # who has already been asked to cover each job (read-only, Sent Items)
+        ("haulier_asks", ["haulier_asks.py"], 1800, 600, lambda: True),
+        # keep the order index fresh
+        ("order_index", ["order_index.py"], 900, 900, lambda: True),
+        # capture far-ahead orders onto the wait list (no drafts, no sends)
+        ("waitscan", ["build_drafts.py", "waitscan"], 43200, 900, lambda: True),
+        # daily safety net: re-enrol emailed-but-untracked orders. OPT-IN via
+        # auto_recover.enabled - it writes to the tracker. Slow.
+        ("recover", ["phase2.py", "recover"], 86400, 1800, recover_on),
+    ]
+
+
+class BackgroundJobs:
+    """Runs the local agent's timer jobs ONE AT A TIME, highest priority first,
+    each through outlook_gate so it also takes turns with monitor_tick and
+    home_tick. One agent job at a time means at most one agent job is ever
+    queued on the slot, so the per-minute ticks are not starved behind a pile
+    of long waiters (they were, for 14 minutes, on 02/10/2026)."""
+
+    # First start with no saved timers: the jobs that used to run "soon after
+    # start" are spread a minute apart instead of all firing at once; the rest
+    # wait a full interval, as before.
+    SOON = ("adhoc_sweep", "phase2_check", "haulier_asks", "waitlist_release",
+            "waitscan", "recover")
+    LOG_MAX = 256 * 1024
+
+    def __init__(self):
+        now = time.time()
+        try:
+            saved = json.load(open(BG_TIMERS, encoding="utf-8"))
+        except Exception:
+            saved = {}
+        if not isinstance(saved, dict):
+            saved = {}
+        self.jobs = _bg_jobs()
+        self.last, self.retry_at, self.logs = {}, {}, {}
+        self.running = None      # (key, Popen, launched_at, log_offset)
+        for i, (key, _args, every, *_rest) in enumerate(self.jobs):
+            v = saved.get(key)
+            if isinstance(v, (int, float)):
+                self.last[key] = min(float(v), now)          # a clock that ran ahead
+            elif key in self.SOON:
+                self.last[key] = now - every + 60 * (i + 1)
+            else:
+                self.last[key] = now
+            self.logs[key] = os.path.join(HERE, f"_bg_{key}.log")
+
+    def _save(self):
+        try:
+            tmp = BG_TIMERS + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.last, f, indent=1)
+            os.replace(tmp, BG_TIMERS)
+        except Exception:
+            pass
+
+    def _due(self, key, every, now):
+        if now < self.retry_at.get(key, 0):
+            return False
+        if now >= self.last[key] + every:
+            return True
+        return (key == "phase2_check" and os.path.exists(PHASE2_DUE)
+                and now >= self.last[key] + PHASE2_MIN_GAP)
+
+    def tick(self):
+        now = time.time()
+        if self.running is not None:
+            key, p, launched, offset = self.running
+            if p.poll() is None:
+                return                                   # one at a time
+            self.running = None
+            self._done(key, p.returncode, launched, offset, now)
+            return
+        for key, args, every, timeout, enabled in self.jobs:
+            if not self._due(key, every, now) or not enabled():
+                continue
+            self._launch(key, args, timeout, now)
+            return
+
+    def _launch(self, key, args, timeout, now):
+        log = self.logs[key]
+        try:
+            if os.path.exists(log) and os.path.getsize(log) > self.LOG_MAX:
+                os.remove(log)
+        except OSError:
+            pass
+        try:
+            # append, and read back only this run's part: an orphaned run left
+            # by an agent restart may still be writing the same file
+            out = open(log, "a", encoding="utf-8", errors="replace")
+            out.write(f"\n=== {time.strftime('%d/%m %H:%M:%S')} {' '.join(args)}\n")
+            out.flush()
+            offset = out.tell()
+            env = dict(os.environ, PYTHONIOENCODING="utf-8",
+                       R2_PHASE2_WAIT="0",               # never wait inside the job timeout
+                       R2_AUTO_CHASE="1" if key == "chase" else "")
+            try:
+                p = subprocess.Popen(
+                    [sys.executable, "outlook_gate.py", "run", "--wait", str(BG_GATE_WAIT),
+                     "--timeout", str(timeout)] + args,
+                    cwd=HERE, stdout=out, stderr=subprocess.STDOUT, env=env,
+                    creationflags=0x08000000)
+            finally:
+                out.close()                              # the child holds its own handle
+            self.running = (key, p, now, offset)
+        except Exception as e:
+            self.retry_at[key] = now + BG_RETRY
+            print(f"background job {key} could not start: {e}")
+
+    def _output(self, key, offset=0):
+        try:
+            with open(self.logs[key], encoding="utf-8", errors="replace") as f:
+                f.seek(offset)
+                return f.read()
+        except Exception:
+            return ""
+
+    def _done(self, key, rc, launched, offset, now):
+        out = self._output(key, offset)
+        if rc == GATE_SKIPPED:                           # busy / Outlook hung: did not run
+            self.retry_at[key] = now + BG_RETRY
+            return
+        if rc != 0 and key in SEND_JOBS:
+            # A sending job that crashed or was killed has NOT finished its
+            # sends. Say so, and try again soon - waiting the full 3 hours is
+            # how due wait-list emails went out late. Already-sent entries are
+            # recorded, so a retry does not send them twice.
+            self.retry_at[key] = now + BG_FAIL_RETRY
+            what = "Wait-list auto-send" if key == "waitlist_release" else "Automatic chasers"
+            report("error", f"{what} did not finish - trying again in "
+                   f"{BG_FAIL_RETRY // 60} minutes.", tail(out, 14))
+            return
+        self.last[key] = now
+        self._save()
+        if key == "phase2_check":
+            # the monitor's "new mail" flag is answered - unless more mail
+            # arrived (and re-flagged) while this check was running
+            try:
+                if rc == 0 and os.path.getmtime(PHASE2_DUE) <= launched:
+                    os.remove(PHASE2_DUE)
+            except OSError:
+                pass
+            if rc == 0:
+                push_tracker()
+        elif key == "adhoc_sweep":
+            n = 0
+            for line in out.splitlines():
+                if line.startswith("SWEEP_RESULT removed="):
+                    try:
+                        n = int(line.split("=")[1].strip())
+                    except Exception:
+                        n = 0
+            if n:
+                push_panel()
+                # say WHICH ones and why - a pin that vanishes with no
+                # explanation is worse than one that lingers. But not over a
+                # review that is waiting on you: at a 5-minute cadence this
+                # would otherwise wipe a pending batch or email off the
+                # dashboard. _adhoc_booked.json still records every removal.
+                if not _review_pending():
+                    report("done", f"{n} ad hoc(s)/pin(s) booked in - removed from the map.",
+                           tail(out, 16))
+        elif key == "waitlist_release":
+            push_waitlist()
+            low = out.lower()
+            if any(k in low for k in ("sent:", "missed", "failed")):
+                report("error" if ("missed" in low or "failed" in low) else "done",
+                       "Wait-list auto-send ran.", tail(out, 14))
+        elif key == "chase":
+            # say what the automatic chaser did - or, in shadow mode, what it
+            # WOULD have done - whenever it touched anyone
+            if "SKIP chasers" not in out and any(k in out for k in ("SENT", "WOULD CHASE", "HOLD",
+                                                                    "ABORT", "FAIL")):
+                bad = "ABORT" in out or "FAIL" in out
+                report("error" if bad else "done",
+                       "Automatic chasers (shadow - nothing sent)." if "SHADOW" in out
+                       else "Automatic chasers ran.", tail(out, 18))
+
+
 def main():
     _lock = single_instance()   # noqa: F841 - held for process lifetime
     print(f"Agent polling {BASE} every {POLL_SECONDS}s. Ctrl+C to stop.")
@@ -514,14 +736,12 @@ def main():
     last_files = time.time()
     last_push = time.time()
     last_panel = time.time()
-    last_index = time.time()
-    last_check = 0            # reply check runs soon after start, then every 20 min
-    last_chase = time.time()  # auto-chase (opt-in) only after the first interval
-    last_recover = 0.0        # daily untracked-order recovery (runs on first tick)
-    last_waitscan = 0         # capture far-ahead orders onto the wait list (soon, then every 12h)
-    last_release = 0          # auto-send due wait-list emails (soon after start, then every 3h)
-    last_asks = 0             # who has already been asked to cover each job (read-only)
-    last_adhocsweep = 0       # ad hocs whose manifest has come back leave the map
+    bg = None
+    if IS_LOCAL:                    # the cloud agent runs no timer jobs
+        try:
+            bg = BackgroundJobs()
+        except Exception as e:
+            print(f"background jobs disabled: {e}")
     while True:
         try:
             cmd = _req("/api/next")
@@ -1071,7 +1291,12 @@ def main():
             elif action == "tracker_refresh":
                 report("running", "Checking replies & building send-off drafts…")
                 out = run(["phase2.py", "check"])
-                report("done", "Replies checked - tracker updated, briefs drafted.", tail(out, 6))
+                if "SKIP phase2" in out:
+                    # phase2 waits 30s for a check already running, then says so
+                    report("done", "A reply check is already running in the background - "
+                           "the tracker will update when it finishes.", tail(out, 4))
+                else:
+                    report("done", "Replies checked - tracker updated, briefs drafted.", tail(out, 6))
             elif action in ("booked_call", "adhoc_booked") and order:
                 # ONE path for "this job is booked, take it off", whatever kind
                 # of record it is. It used to be two, split by which button the
@@ -1176,14 +1401,27 @@ def main():
                 # not, and used to read identically on the dashboard.
                 if "ABORT" in out or "not found in Outlook" in out:
                     report("error", "Chasers could NOT send - see below.", tail(out, 10))
+                elif "SKIP phase2" in out or "another chase run is already in progress" in out:
+                    # it did NOT run - must not read as "Chasers run."
+                    report("error", "Chasers did NOT run - a reply check or chase is already "
+                           "running. Try again in a few minutes.", tail(out, 4))
                 else:
                     report("done", "Chasers run.", tail(out, 10))
+            elif action == "set_auto_chase" and cmd.get("on") is None:
+                # The switch's on/off never arrived (the cloud server used to
+                # drop it). Guessing "off" made the switch look broken - it
+                # turned follow-ups OFF on every click. Say so and change nothing.
+                push_panel()
+                report("error", "The Auto follow-ups switch did not say ON or OFF - nothing "
+                       "changed. Refresh the page and try again.")
             elif action == "set_auto_chase":
                 on = bool(cmd.get("on"))
                 now = set_auto_chase(on)
                 push_panel()
                 report("done", "Automatic follow-ups are now "
-                       + ("ON — chasers send every 3h for orders 2+ business days overdue."
+                       + ("ON — every 3h (working hours), anyone quiet for 2+ business days "
+                          "is chased, at most twice; anyone who has replied anywhere in the "
+                          "mailbox is never chased."
                           if now else
                           "OFF — nothing is chased unless you press Run chasers."))
             elif action == "waitlist_release":
@@ -1191,8 +1429,13 @@ def main():
                 out = run(["waitlist_release.py", "send"])
                 push_waitlist()
                 low = out.lower()
-                state = "error" if ("missed" in low or "failed" in low) else "done"
-                report(state, "Wait-list release run.", tail(out, 14))
+                if "another wait-list release is already running" in low:
+                    # the automatic one is mid-send; this click did NOT run
+                    report("done", "The automatic wait-list release is running right now - "
+                           "check the wait list again in a minute.", tail(out, 4))
+                else:
+                    state = "error" if ("missed" in low or "failed" in low) else "done"
+                    report(state, "Wait-list release run.", tail(out, 14))
             elif action == "waitlist_scan":
                 report("running", "Scanning for far-ahead orders to hold…")
                 out = run(["build_drafts.py", "waitscan"])
@@ -1238,95 +1481,13 @@ def main():
         if time.time() - last_files > 1800:   # heal the Files list after a redeploy
             push_new_files({})
             last_files = time.time()
-        # Every 5 minutes (was 30): take ad hocs and pins off the map once
-        # they are booked in. The tracker already clears within a minute or
-        # two of the email that books it - monitor_tick runs its check on
-        # any new sent mail - but ad hocs and pins waited half an hour for
-        # this, so a job you had just booked sat there looking unbooked.
-        # The sweep costs about a second, so 5 minutes is nothing.
-        if IS_LOCAL and time.time() - last_adhocsweep > 300:
-            out = run(["adhoc_booked_sweep.py", "apply"])
-            n = 0
-            for line in out.splitlines():
-                if line.startswith("SWEEP_RESULT removed="):
-                    try:
-                        n = int(line.split("=")[1].strip())
-                    except Exception:
-                        n = 0
-            if n:
-                push_panel()
-                # say WHICH ones and why - a pin that vanishes with no
-                # explanation is worse than one that lingers. But not over a
-                # review that is waiting on you: at a 5-minute cadence this
-                # would otherwise wipe a pending batch or email off the
-                # dashboard. _adhoc_booked.json still records every removal.
-                if not _review_pending():
-                    report("done", f"{n} ad hoc(s)/pin(s) booked in - removed from the map.",
-                           tail(out, 16))
-            last_adhocsweep = time.time()
-        if IS_LOCAL and time.time() - last_asks > 1800:       # every 30 min: who has already been asked to cover each job (read-only sweep of Sent Items)
+        # Background Outlook jobs - see BackgroundJobs. Guarded so that nothing
+        # a timer job does can ever take the agent (and the dashboard) down.
+        if bg is not None:
             try:
-                subprocess.Popen([sys.executable, "haulier_asks.py"],
-                                 cwd=HERE, creationflags=0x08000000)
-            except Exception:
-                pass
-            last_asks = time.time()
-        if IS_LOCAL and time.time() - last_waitscan > 43200:   # every 12h: capture far-ahead orders onto the wait list (no drafts, no sends)
-            try:
-                subprocess.Popen([sys.executable, "build_drafts.py", "waitscan"],
-                                 cwd=HERE, creationflags=0x08000000)
-            except Exception:
-                pass
-            last_waitscan = time.time()
-        if IS_LOCAL and time.time() - last_release > 10800:   # every 3h: auto-SEND any wait-list order now within its window
-            out = run(["waitlist_release.py", "send"])
-            push_waitlist()
-            low = out.lower()
-            if any(k in low for k in ("sent:", "missed", "failed")):
-                report("error" if ("missed" in low or "failed" in low) else "done",
-                       "Wait-list auto-send ran.", tail(out, 14))
-            last_release = time.time()
-        if IS_LOCAL and time.time() - last_index > 900:      # keep the order index fresh
-            try:
-                subprocess.Popen([sys.executable, os.path.join(HERE, "order_index.py")],
-                                 cwd=HERE, creationflags=0x08000000)
-            except Exception:
-                pass
-            last_index = time.time()
-        if IS_LOCAL and time.time() - last_check > 1200:     # Phase 2: replies + OOO + send-off drafts, every 20 min
-            try:                                 # background so it never blocks command handling
-                subprocess.Popen([sys.executable, "phase2.py", "check"],
-                                 cwd=HERE, creationflags=0x08000000)
-            except Exception:
-                pass
-            last_check = time.time()
-        # Auto-chasers are OPT-IN: only run when auto_chase.enabled exists.
-        # ONLY the local agent chases (phase2 also holds a lock, but don't even
-        # start the second one).
-        if (IS_LOCAL
-                and auto_chase_on()
-                and time.time() - last_chase > 10800):     # every 3h
-            try:
-                subprocess.Popen([sys.executable, "phase2.py", "chase", "send"],
-                                 cwd=HERE, creationflags=0x08000000)
-            except Exception:
-                pass
-            last_chase = time.time()
-        # Daily safety net: re-enrol anything emailed but missing from the
-        # tracker (wait-list sends, orders emailed by hand). Slow, so it runs
-        # detached on the local agent only and never blocks a check.
-        # OPT-IN via auto_recover.enabled until it's proven on real data - it
-        # writes to the tracker, and a bad enrolment means chasing the wrong
-        # person. Run `phase2.py recover` by hand to try it first.
-        if (IS_LOCAL
-                and os.path.exists(os.path.join(HERE, "auto_recover.enabled"))
-                and time.time() - last_recover > 86400):
-            try:
-                subprocess.Popen([sys.executable, "phase2.py", "recover"],
-                                 cwd=HERE, creationflags=0x08000000)
-            except Exception:
-                pass
-            last_recover = time.time()
+                bg.tick()
+            except Exception as e:
+                print(f"background jobs: {e}")
         time.sleep(POLL_SECONDS)
 
 
