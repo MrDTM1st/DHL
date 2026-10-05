@@ -322,6 +322,21 @@ OPTS = {
     "raised-by": "requester's email - ORD_SUB_REFS 1002",
     "collection-phone": "collection site telephone",
     "delivery-phone": "delivery site telephone",
+    "tasks": 'lifting/access tasks the requester asked for, comma separated, '
+             'e.g. "HIAB" or "HIAB,Rear Steer"',
+}
+
+# --tasks writes these Y/N columns. A typed request states its lifting
+# requirement in prose ("HIAB will be required") and the parsers deliberately
+# refuse to read a task flag out of prose - a task is a charge, and inferring
+# one from a weight is how a job gets quoted wrong. But refusing to infer it
+# left no way to record it either, so AH6/10/26YOLS went to CSV with no HIAB
+# line against three 3-tonne bogies. This is the desk saying so explicitly.
+TASK_COLUMNS = {
+    "hiab": "HIAB", "moffett": "Moffett", "pts": "PTS", "banksman": "Banksman",
+    "log grab": "Log Grab", "loggrab": "Log Grab", "rear steer": "Rear Steer",
+    "rearsteer": "Rear Steer", "vehicle escort": "Vehicle Escort",
+    "escort": "Vehicle Escort",
 }
 
 
@@ -370,6 +385,16 @@ def apply_overrides(row, opts):
         if opts.get(flag):
             row[key] = opts[flag]
             used.append(f"{label} {opts[flag]}")
+    if opts.get("tasks"):
+        for want in str(opts["tasks"]).split(","):
+            key = want.strip().lower()
+            col = TASK_COLUMNS.get(key)
+            if col is None:
+                print(f"!! --tasks {want.strip()!r} is not a task column - ignored. "
+                      f"Known: {', '.join(sorted(set(TASK_COLUMNS.values())))}")
+                continue
+            row[col] = "Y"
+            used.append(f"task {col} = Y")
     # 1002 is a semicolon-separated LIST. Every upload that has ever been
     # accepted carries the separator - two addresses joined by it, or a lone
     # address terminated by it ("NRFleetspares@dhl.com;") - and the one CTMS
