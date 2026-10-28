@@ -12,6 +12,7 @@ Run:  python region2-emailer/tests/test_ctms_bridge.py
 import base64
 import array
 import contextlib
+import ctypes
 import io
 import json
 import os
@@ -929,8 +930,8 @@ def test_ctms_act_guards_every_key_before_any_is_sent():
         A.press(1, "f10", commit=True)                           # ...and goes through once he has said go
         assert sent and sent[-1] == 2                            # one key: down + up
         sent.clear()
-        A.type_text(1, "HS123456")                               # typed as one batch of down/up pairs
-        assert sent[-1] == len("HS123456") * 2
+        A.type_text(1, "HS123456")                               # one batch: down/up per key (+ Shift for capitals)
+        assert len(sent) == 1 and sent[-1] >= len("HS123456") * 2
         A.to_front = lambda hwnd: False                          # if CTMS will not come to the front, nothing is sent
         n = len(sent)
         try:
@@ -941,6 +942,12 @@ def test_ctms_act_guards_every_key_before_any_is_sent():
         assert len(sent) == n
     finally:
         A.to_front, A._send = keep
+
+
+def test_the_input_record_is_the_size_windows_checks_for():
+    # SendInput refuses everything unless told sizeof(INPUT) exactly as Windows defines
+    # it: 32 bytes instead of 40 refused every key on the work PC (28/10)
+    assert ctypes.sizeof(A.INPUT) == (40 if struct.calcsize("P") == 8 else 28)
 
 
 def test_in_the_window_the_bridge_types_and_presses_but_save_waits_for_go_ahead():
@@ -959,7 +966,7 @@ def test_in_the_window_the_bridge_types_and_presses_but_save_waits_for_go_ahead(
         b.armed = True
         b.handle({"id": 2, "action": "type", "text": "HS123456"})
         body = desk.sent[-1][1]
-        assert body["ok"] and body["payload"]["kind"] == "window" and sent[-1] == len("HS123456") * 2
+        assert body["ok"] and body["payload"]["kind"] == "window" and sent[-1] >= len("HS123456") * 2
         b.handle({"id": 3, "action": "key", "key": "tab"})       # move between fields
         assert desk.sent[-1][1]["ok"]
         b.handle({"id": 4, "action": "key", "key": "f10"})       # save waits for his go-ahead

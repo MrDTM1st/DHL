@@ -55,8 +55,18 @@ if IS_WIN:
         _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
                     ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
 
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+
     class _INPUTunion(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT)]
+        # All three, though only keys are sent: Windows checks INPUT is the size
+        # of its largest member. With only the keyboard one here it came out 32
+        # bytes, not 40, and SendInput refused every key (error 87, 28/10).
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
 
     class INPUT(ctypes.Structure):
         _fields_ = [("type", wintypes.DWORD), ("u", _INPUTunion)]
@@ -73,6 +83,14 @@ if IS_WIN:
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, wintypes.LPDWORD]
     user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
+    user32.GetKeyboardLayout.restype = wintypes.HKL
+    user32.VkKeyScanExW.argtypes = [wintypes.WCHAR, wintypes.HKL]
+    user32.VkKeyScanExW.restype = ctypes.c_short
+    user32.MapVirtualKeyExW.argtypes = [wintypes.UINT, wintypes.UINT, wintypes.HKL]
+    user32.MapVirtualKeyExW.restype = wintypes.UINT
+    user32.GetKeyState.argtypes = [ctypes.c_int]
+    user32.GetKeyState.restype = ctypes.c_short
 
 # name -> (virtual-key code, is it an "extended" key)
 VK = {
@@ -98,7 +116,8 @@ def _send(inputs):
     arr = (INPUT * len(inputs))(*inputs)
     sent = user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
     if sent != len(inputs):
-        raise Refused("Windows did not accept the keystrokes - try again, or bring CTMS to the front yourself.")
+        raise Refused(f"Windows did not accept the keystrokes (error {ctypes.get_last_error()}) - try again, "
+                      f"or bring CTMS to the front yourself.")
 
 
 def _key_event(vk, scan, flags):
@@ -198,16 +217,33 @@ def type_text(hwnd, text, enter=False, commit=False):
     if "\n" in text or "\r" in text:
         raise Refused("No line breaks in typed text - use enter to press Enter afterwards.")
     _require_front(hwnd)
-    units = []
-    for ch in text:
-        for u in text_units_for(ch):
-            units += _unit(u)
-    if units:
-        _send(units)
+    hkl = user32.GetKeyboardLayout(_thread(int(hwnd)))      # CTMS's own keyboard layout
+    caps = bool(user32.GetKeyState(0x14) & 1)               # Caps Lock
+    events = [e for ch in text for e in _typed(ch, hkl, caps)]
+    if events:
+        _send(events)
     detail = f"Typed {text!r} into CTMS"
     if enter:
         detail += "; then " + press(hwnd, "enter", commit=commit)
     return detail
+
+
+def _typed(ch, hkl, caps):
+    """The key presses that type one character the way his keyboard would - Java
+    takes those as typing like any other. A Unicode packet only for a character
+    his keyboard layout has no key for (or only an AltGr one)."""
+    r = user32.VkKeyScanExW(ch, hkl) if hkl and len(ch) == 1 else -1
+    if r == -1 or (r >> 8) & ~1:
+        return [e for u in text_units_for(ch) for e in _unit(u)]
+    vk, shift = r & 0xFF, bool((r >> 8) & 1)
+    if caps and ch.isalpha():
+        shift = not shift                       # Caps Lock on: Shift gives lower case
+    scan = user32.MapVirtualKeyExW(vk, 0, hkl)
+    ev = [_key_event(vk, scan, 0), _key_event(vk, scan, KEYEVENTF_KEYUP)]
+    if shift:
+        s = user32.MapVirtualKeyExW(0x10, 0, hkl)
+        ev = [_key_event(0x10, s, 0)] + ev + [_key_event(0x10, s, KEYEVENTF_KEYUP)]
+    return ev
 
 
 def text_units_for(ch):
