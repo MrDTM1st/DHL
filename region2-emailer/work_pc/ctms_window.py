@@ -402,6 +402,22 @@ def picture(win):
     return data, w, h, how
 
 
+def content_area(win):
+    """The screen rectangle the picture covers - what a click's fraction is taken of.
+
+    The same choice picture() makes: for CTMS in Edge it is the Internet Explorer
+    content only (not the tab strip or the address bar); for a Java window of its
+    own it is the whole frame.
+    """
+    whole = win.get("kind") not in ("edge", "ie")
+    if whole:
+        return win.get("frame") or win["rect"]
+    if not win.get("content"):
+        raise RuntimeError("CTMS is not the selected tab in its window - select the CTMS tab (it can sit "
+                           "behind other windows), then try again.")
+    return win["content"]
+
+
 # ---- Java, and its Access Bridge -------------------------------------------------------
 def _java_homes():
     """Every Java on this PC, from the registry and the usual folders."""

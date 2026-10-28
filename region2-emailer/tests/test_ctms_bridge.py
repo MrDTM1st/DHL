@@ -894,8 +894,8 @@ def test_with_ctms_s_window_found_the_bridge_watches_it_ahead_of_any_tab():
         path, body = desk.sent[-1]
         assert body["ok"] and body["payload"]["kind"] == "window" and body["payload"]["mime"] == "image/png"
         assert base64.b64decode(body["payload"]["img"])[:4] == b"\x89PNG"
-        b.armed = True                          # clicking in the window is the next increment...
-        b.handle({"id": 2, "action": "click", "ref": 1})
+        b.armed = True                          # scrolling in the window is still the next increment...
+        b.handle({"id": 2, "action": "scroll"})
         assert desk.sent[-1][1]["ok"] is False and "next increment" in desk.sent[-1][1]["detail"]
         b.watched = True                        # ...and the live view sends CTMS's window, as a PNG
         b.send_shot(force=True)
@@ -979,6 +979,59 @@ def test_in_the_window_the_bridge_types_and_presses_but_save_waits_for_go_ahead(
         assert desk.sent[-1][1]["ok"]
     finally:
         W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
+
+
+def test_the_click_area_is_the_ie_content_for_edge_and_the_frame_for_a_java_window():
+    assert W.content_area(dict(FAKE_WIN)) == FAKE_WIN["content"]        # Edge: the IE content only
+    jwin = dict(FAKE_WIN, kind="java", content=None, frame=[0, 0, 500, 400])
+    assert W.content_area(jwin) == [0, 0, 500, 400]                     # a Java window: its whole frame
+
+
+def test_in_the_window_a_click_lands_on_ctms_by_a_point_on_its_picture():
+    pt = {}
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    sent = []
+    A.to_front = lambda hwnd: True
+    A._send = lambda inputs: sent.append(len(inputs))
+    A._absolute = lambda x, y: (pt.update(xy=(x, y)) or (1, 2))
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.scan_window(force=True)
+        b.handle({"id": 1, "action": "click", "at": [0.5, 0.5]})        # acting off: not even attempted
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.armed = True
+        # the middle of the picture -> the middle of CTMS's content rect [8,120,992,692]
+        b.handle({"id": 2, "action": "click", "at": [0.5, 0.5], "double": True})
+        body = desk.sent[-1][1]
+        assert body["ok"] and body["payload"]["kind"] == "window"
+        assert pt["xy"] == (8 + round(0.5 * (992 - 8)), 120 + round(0.5 * (692 - 120)))   # (500, 406)
+        assert sent[-1] == 5                       # move + down/up + down/up for the double-click
+        n = len(sent)
+        b.handle({"id": 3, "action": "click", "at": [1.4, 0.5]})        # off the picture: refused, nothing sent
+        assert desk.sent[-1][1]["ok"] is False and len(sent) == n
+        b.handle({"id": 4, "action": "click", "ref": 1})               # no point: says how to click here
+        assert desk.sent[-1][1]["ok"] is False and "point on the picture" in desk.sent[-1][1]["detail"]
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute = keep
+
+
+def test_the_home_side_sends_a_window_click_as_a_fraction_of_the_picture():
+    import types
+    seen = {}
+    keep = (R.load_state, R.ask, R.trace)
+    R.load_state = lambda: {"kind": "window", "img_w": 1000, "img_h": 500}
+    R.ask = lambda action, **a: (seen.update(action=action, args=a) or ({"ok": True, "detail": "Clicked"}, None))
+    R.trace = lambda *a, **k: None
+    try:
+        R.run(types.SimpleNamespace(cmd="click", at="250,400", ref=None, double=True, commit=False))
+    finally:
+        R.load_state, R.ask, R.trace = keep
+    assert seen["action"] == "click" and seen["args"]["double"] is True
+    assert seen["args"]["at"] == [0.25, 0.8]                            # 250/1000 across, 400/500 down
 
 
 def test_the_probe_and_png_pictures_reach_the_dashboard_and_claude():

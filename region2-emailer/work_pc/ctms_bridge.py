@@ -35,9 +35,10 @@ Leave it running in its Command Prompt while you work. What it does:
     says "launch_browser": true - CTMS cannot run there), Claude also gets a
     numbered list of everything clickable, and "Record what CTMS sends" logs
     the page's requests.
-  - LETS CLAUDE ACT - in CTMS's own window, keys and typing so far
-    (ctms_act.py): only once CTMS is confirmed as the window in front, and
-    F10 / Ctrl+S (save) only after you have said go. Clicking there is next.
+  - LETS CLAUDE ACT - in CTMS's own window, typing, keys and left-clicks
+    (ctms_act.py): only once CTMS is confirmed as the window in front, a click
+    only ever landing on CTMS itself, and F10 / Ctrl+S (save) only after you
+    have said go. Right-click and drag are still to come.
     In a web page: click, type, choose, scroll. Either way the way you tell it
     to in the chat, and only while BOTH are true: this PC allows it
     (--allow-control, asked once at setup) and "Claude can act" is switched on
@@ -644,8 +645,8 @@ class Bridge:
         return {"kind": "window", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
                 "mime": "image/png", "img_w": w, "img_h": h, "title": win["title"], "how": how,
                 "window": {k: win[k] for k in ("kind", "process", "java", "ie_showing", "foreground", "minimized")},
-                "note": "CTMS's own window: a picture, no numbered list yet - fields reads its fields by "
-                        "name. Typing (type --focused) and keys work here; clicking is next."}
+                "note": "CTMS's own window: a picture, read by eye - no numbered list. Click a point on it "
+                        "with click --at X,Y (--double to open an order); type --focused and keys also work."}
 
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""
@@ -762,10 +763,19 @@ class Bridge:
             if action == "fields_setup":
                 return done(True, ctms_jab.setup())
             if self.win:
-                # CTMS's own window (Oracle Forms in IE mode): keys and typing go
-                # to it through ctms_act; clicking and the rest are the next increment.
+                # CTMS's own window (Oracle Forms in IE mode): keys, typing and
+                # clicks go to it through ctms_act; right-click/drag are still to come.
                 if action == "see":
                     return done(True, "Looked at CTMS's window.", self.window_look())
+                if action == "click":
+                    at = cmd.get("at")
+                    if not (isinstance(at, (list, tuple)) and len(at) == 2):
+                        raise RuntimeError("In CTMS's window, click a point on the picture: click --at X,Y. "
+                                           "There are no numbered things to click here.")
+                    area = ctms_window.content_area(self.win)
+                    detail = ctms_act.click(self.win["hwnd"], at[0], at[1], area, double=bool(cmd.get("double")))
+                    time.sleep(0.4)
+                    return done(True, detail, self.window_look())
                 if action == "key":
                     detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
                                             commit=bool(cmd.get("commit")))
@@ -781,9 +791,9 @@ class Bridge:
                     time.sleep(s)
                     return done(True, f"Waited {s:g}s", self.window_look())
                 if action in DRIVE:
-                    return done(False, "Refused: in CTMS's own window the bridge can press keys and type so "
-                                       "far - clicking, selecting, scrolling and the rest are the next "
-                                       "increment, not built yet.")
+                    return done(False, "Refused: in CTMS's own window the bridge can type, press keys and "
+                                       "left-click (and double-click) so far - right-click, drag, select and "
+                                       "scroll are the next increment, not built yet.")
             if action == "tabs":
                 tabs = self.tab_list()
                 return done(True, f"{len(tabs)} tab(s) could be CTMS.", {"tabs": tabs})

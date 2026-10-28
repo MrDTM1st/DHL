@@ -1,31 +1,36 @@
 """
-Acting in CTMS's own window - step 2, the keyboard half.
+Acting in CTMS's own window: the same keystrokes and mouse clicks he would make.
 
 CTMS is Oracle Forms in Internet Explorer mode inside his normal Edge. There is
 no page to drive through a debugger there (ctms_drive.py is for web pages in the
 automation browser, which cannot open CTMS at all). So the bridge works the
-window the way a person does: it sends the same keystrokes he would, to the
-window he already has open and logged in.
+window the way a person does: to the window he already has open and logged in it
+sends the keys he would press, and clicks the point on it he would click.
 
 The rails, in this order, every time:
   1. This PC must allow acting (--allow-control) AND he must have switched
      "Claude can act" on from the dashboard. The bridge checks both before it
      ever calls in here; without them nothing below runs.
-  2. CTMS must be the FOREGROUND window, confirmed right before the keys go.
-     Keystrokes go to whatever is in front, so if CTMS cannot be brought to the
-     front - another app is over it, or Windows will not allow the switch -
-     nothing is sent. Keys are never sent "blind" into whatever happens to be
+  2. CTMS must be the FOREGROUND window, confirmed right before the keys or the
+     click go. Input goes to whatever is in front, so if CTMS cannot be brought
+     to the front - another app is over it, or Windows will not allow the switch
+     - nothing is sent. Nothing is sent "blind" into whatever happens to be
      focused.
-  3. F10 (Forms Save/Commit) and Ctrl+S wait for his go-ahead (commit=True),
+  3. A click lands by a FRACTION of CTMS's own picture (0..1 across and down),
+     turned into a screen point inside CTMS's content area. A fraction outside
+     that is refused, so a click can only ever land on CTMS, never on the
+     browser frame, another window, or the desktop.
+  4. F10 (Forms Save/Commit) and Ctrl+S wait for his go-ahead (commit=True),
      which Claude only passes after he has said go in the chat.
-  4. Keys that act on Windows or the browser rather than on CTMS - close the
+  5. Keys that act on Windows or the browser rather than on CTMS - close the
      window, switch away, paste the clipboard (which could hold a password) -
-     are refused.
+     are refused. Right-click and drag, which reach Forms' booking menus, are
+     not built yet: left click and double-click only.
 
 Reading CTMS's fields by name (so the bridge could know a box is a password box,
-or what a button says) needs Java's Access Bridge, which is the next piece.
-Until then the sign-in box is kept off-limits by him and by the picture Claude
-reads, not by code here - so this only runs while he is directing it.
+or what a button says) needs Java's Access Bridge. Until that is available the
+sign-in box is kept off-limits by him and by the picture Claude reads, not by
+code here - so this only runs while he is directing it.
 
 Standard library (ctypes) only, Windows only - like the rest of work_pc\\.
 """
@@ -39,10 +44,18 @@ IS_WIN = os.name == "nt"
 GA_ROOT = 2
 SW_RESTORE = 9
 
+INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_ABSOLUTE = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+# GetSystemMetrics indices for the whole virtual desktop (all monitors)
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 
 if IS_WIN:
     from ctypes import wintypes
@@ -91,6 +104,8 @@ if IS_WIN:
     user32.MapVirtualKeyExW.restype = wintypes.UINT
     user32.GetKeyState.argtypes = [ctypes.c_int]
     user32.GetKeyState.restype = ctypes.c_short
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
 
 # name -> (virtual-key code, is it an "extended" key)
 VK = {
@@ -209,6 +224,51 @@ def press(hwnd, spec, commit=False):
     seq += [_vk(MOD_VK[m], False, up=True) for m in reversed(mods)]
     _send(seq)
     return "Pressed " + "+".join([m.capitalize() for m in mods] + [name.capitalize()]) + " in CTMS"
+
+
+def _mouse_event(dx, dy, flags):
+    return INPUT(type=INPUT_MOUSE, u=_INPUTunion(mi=MOUSEINPUT(dx, dy, 0, flags, 0, 0)))
+
+
+def _absolute(x, y):
+    """A screen point as SendInput's 0..65535 coordinates over the whole virtual desktop."""
+    vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN) or 1
+    vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN) or 1
+    nx = round((x - vx) * 65535 / (vw - 1)) if vw > 1 else 0
+    ny = round((y - vy) * 65535 / (vh - 1)) if vh > 1 else 0
+    return max(0, min(65535, nx)), max(0, min(65535, ny))
+
+
+def click(hwnd, fx, fy, area, double=False):
+    """Click CTMS at a fraction (fx, fy) of its picture - 0..1 across and down.
+
+    The fraction is turned into a screen point inside `area` (CTMS's content
+    rectangle, in screen pixels). A fraction outside 0..1 is refused, so the
+    click can only land on CTMS itself. He positions nothing; this is the whole
+    pointer move and left button, at the one point.
+    """
+    try:
+        fx, fy = float(fx), float(fy)
+    except (TypeError, ValueError):
+        raise Refused("A click needs a point on the picture (across, down).")
+    if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+        raise Refused("That point is off CTMS's picture, so nothing was clicked - aim within the picture, "
+                      "and take a fresh one if the window has moved.")
+    left, top, right, bottom = (int(v) for v in area)
+    x = min(right - 1, left + round(fx * (right - left)))
+    y = min(bottom - 1, top + round(fy * (bottom - top)))
+    _require_front(hwnd)
+    nx, ny = _absolute(x, y)
+    base = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    seq = [_mouse_event(nx, ny, MOUSEEVENTF_MOVE | base),
+           _mouse_event(nx, ny, MOUSEEVENTF_LEFTDOWN | base),
+           _mouse_event(nx, ny, MOUSEEVENTF_LEFTUP | base)]
+    if double:                                  # a second press/release at the same point = a double-click
+        seq += [_mouse_event(nx, ny, MOUSEEVENTF_LEFTDOWN | base),
+                _mouse_event(nx, ny, MOUSEEVENTF_LEFTUP | base)]
+    _send(seq)
+    return f"{'Double-clicked' if double else 'Clicked'} CTMS at {round(fx * 100)}% across, {round(fy * 100)}% down"
 
 
 def type_text(hwnd, text, enter=False, commit=False):

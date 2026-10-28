@@ -112,6 +112,7 @@ def save_state(p):
     os.makedirs(OUT, exist_ok=True)
     with open(STATE, "w", encoding="utf-8") as f:
         json.dump({"snap": p.get("snap"), "ppc": p.get("ppc"), "url": p.get("url"),
+                   "kind": p.get("kind"), "img_w": p.get("img_w"), "img_h": p.get("img_h"),
                    "at": datetime.now().isoformat(timespec="seconds")}, f)
 
 
@@ -230,7 +231,9 @@ def trace(action, args, result, payload):
 
 def print_screen(p, action, full=False, words=2500):
     if p.get("kind") == "window":
-        # CTMS's own window in his Edge: a picture, read by eye - no numbered list yet
+        # CTMS's own window in his Edge: a picture, read by eye - no numbered list.
+        # Saved so a following click --at X,Y knows the picture its X,Y are from.
+        save_state(p)
         pic = save_picture(p, action)
         w = p.get("window") or {}
         print(f"\nCTMS's window: {p.get('title') or '?'}  ({w.get('process') or w.get('kind')}, "
@@ -523,7 +526,17 @@ def run(a):
                 x, y = (float(v) for v in a.at.split(","))
             except ValueError:
                 raise Stop("--at takes X,Y - a point on the latest picture, e.g. --at 640,300")
-            args["at"] = [x, y]
+            st = load_state()
+            if st.get("kind") == "window":
+                # CTMS's own window has no numbered things: a click lands by where it
+                # is on the picture. Send it as a fraction of the picture it came from,
+                # so it still lands right if the window has since moved or resized.
+                iw, ih = st.get("img_w") or 0, st.get("img_h") or 0
+                if not (iw and ih):
+                    raise Stop("Take a picture first (see), then click a point on it.")
+                args["at"] = [max(0.0, min(1.0, x / iw)), max(0.0, min(1.0, y / ih))]
+            else:
+                args["at"] = [x, y]
         elif a.ref is not None:
             args["ref"] = _ref(a.ref)
         else:
