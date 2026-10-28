@@ -154,6 +154,42 @@ The bridge remembers CTMS's app root (`ctms_url`) and opens the automation
 browser on it. A web page cannot start programs on the PC, so this is the one
 double-click; everything after it is buttons.
 
+### CTMS is Oracle Forms in IE mode - the window route (28/10)
+
+First contact with the real thing changed the plan. CTMS is **Calidus TMS**,
+`https://calidustms.dhl.com/ctms-uk3/forms/frmservlet?config=indprd...` -
+Oracle Forms, which runs in **Internet Explorer mode** inside his normal Edge
+(the work profile, briefcase icon), drawn by a Java applet. Opening it in the
+bridge's automation browser gives "turn off remote debugging to open this site
+in Internet Explorer mode": Edge refuses IE mode in any browser started with a
+debug port, and CDP cannot see inside IE-mode content anyway. So everything
+CDP-based (`ctms_drive.py`, network recording) can never reach CTMS itself.
+
+The bridge now works with **CTMS's own window** (`work_pc/ctms_window.py`):
+
+- **Find**: only windows CTMS can be IN count - Edge with an
+  `Internet Explorer_Server` and/or `SunAwt*` (Java) child, a Java top-level
+  window, IE itself. A window that merely mentions CTMS (an email, the
+  bridge's own console) is never described or pictured.
+- **Picture**: `PrintWindow(PW_RENDERFULLCONTENT)` so it can sit behind other
+  windows; of an Edge window only the IE content area (no tab strip with other
+  tabs' titles). A window unaware of display scaling draws itself small inside
+  a transparent frame - measured from the alpha channel and corrected. Only if
+  Windows will not hand the picture over is the screen read - and only when a
+  12x12 grid of `WindowFromPoint` checks says CTMS is what is showing; the
+  visible frame (DWM extended bounds, not `GetWindowRect`, whose invisible
+  borders leaked another window's text in testing), rounded corners greyed.
+- **Live view, see, walkthrough capture** all use it (PNG); the bridge no
+  longer opens the automation browser unless `launch_browser` is set.
+- **Probe** (`ctms_remote.py probe`): Java installs, Access Bridge files and
+  whether it is switched on (`~/.accessibility.properties`), relevant process
+  counts, and a live Access Bridge check (`isJavaWindow`, one
+  `AccessibleContextInfo`) run in a separate Python process so a native fault
+  cannot take the bridge down.
+- **Step 2** (not built): acting in the window - SendInput keys/clicks with the
+  window in front and him hands-off, or the Access Bridge if the probe says it
+  can read Forms' fields (no input stealing, field names). Forms' F10 = save.
+
 **Remote updates** (`work_pc/ctms_update.py`): `update` (dashboard button or
 `ctms_remote.py update [--branch B] [--all]`) makes the bridge download the
 branch's ZIP from GitHub - code never comes from the dashboard - compile every

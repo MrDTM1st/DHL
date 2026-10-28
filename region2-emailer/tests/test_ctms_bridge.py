@@ -10,6 +10,7 @@ anything, and undone if they will not start).
 Run:  python region2-emailer/tests/test_ctms_bridge.py
 """
 import base64
+import array
 import contextlib
 import io
 import json
@@ -21,6 +22,8 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+import zlib
+import struct
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.join(HERE, "..")
@@ -34,6 +37,7 @@ import server as S                      # noqa: E402  (reads the keys at import)
 import ctms_bridge as B                 # noqa: E402
 import ctms_drive as D                  # noqa: E402
 import ctms_update as U                 # noqa: E402
+import ctms_window as W                 # noqa: E402
 import ctms_remote as R                 # noqa: E402
 import cdp                              # noqa: E402
 from http.server import ThreadingHTTPServer  # noqa: E402
@@ -795,6 +799,122 @@ def test_the_setup_sets_up_a_fresh_pc_and_a_second_run_changes_the_choices():
         run("0", "0")
         cfg = json.load(open(os.path.join(wp, "ctms_bridge.json")))
         assert cfg["allow_control"] is False and cfg["match"] == "ctms" and not os.path.exists(startup)
+
+
+
+# ---- CTMS's own window (Oracle Forms in IE mode, in his normal Edge) --------------------
+def _bgra(rows):
+    """BGRA bytes from rows of 0xAARRGGBB pixels."""
+    return array.array("I", [p for row in rows for p in row]).tobytes()
+
+
+def test_a_window_picture_is_a_real_png_of_exactly_those_pixels():
+    red, green, blue, white = 0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF
+    data = W.png(_bgra([[red, green, blue], [white, red, green]]), 3, 2)
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    w, h, depth, colour = struct.unpack(">IIBB", data[16:26])
+    assert (w, h, depth, colour) == (3, 2, 8, 2)
+    idat = data[data.index(b"IDAT") + 4:data.index(b"IEND") - 8]
+    raw = zlib.decompress(idat)
+    assert raw == (b"\x00" + bytes([255, 0, 0, 0, 255, 0, 0, 0, 255])
+                   + b"\x00" + bytes([255, 255, 255, 255, 0, 0, 0, 255, 0]))
+
+
+def test_only_ctms_s_part_is_kept_and_an_unscaled_window_is_measured_by_what_it_drew():
+    px = [[0xFF000000 + (y * 10 + x) for x in range(10)] for y in range(6)]
+    part, w, h = W.crop(_bgra(px), 10, 6, (2, 1, 5, 4))
+    assert (w, h) == (3, 3) and array.array("I", part)[0] == 0xFF000000 + 12
+    # a window unaware of 125% scaling draws 8 of 10 columns and leaves the rest transparent
+    drawn = [[(0xFF336699 if x < 8 and y < 4 else 0) for x in range(10)] for y in range(5)]
+    assert W.drawn_size(_bgra(drawn), 10, 5) == (8, 4)
+
+
+def test_a_picture_windows_would_not_draw_is_not_passed_off_as_ctms():
+    assert W.blank(_bgra([[0xFFFFFFFF] * 50] * 50))                     # all one colour
+    half = [[(0 if x < 20 else 0xFF000000 + x * 999) for x in range(50)] for _ in range(50)]
+    assert W.blank(_bgra(half))                                           # 40% never drawn
+    varied = [[0xFF000000 + (x * 7919 + y * 104729) % 0xFFFFFF for x in range(50)] for y in range(50)]
+    assert not W.blank(_bgra(varied))
+
+
+def test_the_rounded_corners_of_a_window_read_off_the_screen_are_greyed():
+    out = array.array("I", W.round_corners(_bgra([[0xFF112233] * 20] * 20), 20, 20, 6))
+    assert out[0] == 0xFF808080 and out[19] == 0xFF808080 and out[19 * 20] == 0xFF808080
+    assert out[10 * 20 + 10] == 0xFF112233                                # the middle untouched
+
+
+def test_only_a_window_ctms_can_be_in_counts_never_one_that_mentions_it():
+    keep = W.TEST_CLASSES
+    W.TEST_CLASSES = ()
+    try:
+        assert W.score("Chrome_WidgetWin_1", "Calidus TMS", 1, 1, 3) > W.score("SunAwtFrame", "x", 0, 0, 0) > 0
+        assert W.score("Chrome_WidgetWin_1", "CTMS wiki - Work - Edge", 0, 0, 0) == 0     # plain web page
+        assert W.score("rctrl_renwnd32", "RE: CTMS booking", 0, 0, 0) == 0               # an email about it
+        assert W.score("ConsoleWindowClass", "CTMS bridge", 0, 0, 0) == 0                # the bridge itself
+        assert W.score("Chrome_WidgetWin_1", "Smart Connect", 1, 0, 0) > 0               # CTMS in a back tab
+    finally:
+        W.TEST_CLASSES = keep
+
+
+FAKE_WIN = {"hwnd": 4242, "title": "Calidus TMS - Work - Microsoft Edge", "class": "Chrome_WidgetWin_1",
+            "process": "msedge.exe", "rect": [0, 0, 1000, 700], "frame": [8, 0, 992, 692], "scale": 1.0,
+            "minimized": False, "foreground": True, "score": 8, "kind": "edge", "ie": 1, "ie_showing": True,
+            "content": [8, 120, 992, 692], "java": 3, "java_classes": ["SunAwtCanvas"], "java_hwnds": [1, 2, 3]}
+
+
+class _Rec:
+    base = "https://desk.example"
+
+    def __init__(self):
+        self.sent = []
+
+    def post(self, path, body, timeout=20):
+        self.sent.append((path, body))
+        return {}
+
+
+def test_with_ctms_s_window_found_the_bridge_watches_it_ahead_of_any_tab():
+    keep = (W.find_windows, W.picture, B.LOG)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.scan_window(force=True)
+        st = b.state()
+        assert st["attached"] is True and st["view"] == "window" and st["tab_title"].startswith("Calidus")
+        assert st["window"]["found"] and st["window"]["java"] == 3 and st["error"] == ""
+        b.handle({"id": 1, "action": "see"})
+        path, body = desk.sent[-1]
+        assert body["ok"] and body["payload"]["kind"] == "window" and body["payload"]["mime"] == "image/png"
+        assert base64.b64decode(body["payload"]["img"])[:4] == b"\x89PNG"
+        b.armed = True                          # even with acting switched on...
+        b.handle({"id": 2, "action": "click", "ref": 1})
+        assert desk.sent[-1][1]["ok"] is False and "step 2" in desk.sent[-1][1]["detail"]
+        b.watched = True                        # ...and the live view sends CTMS's window, as a PNG
+        b.send_shot(force=True)
+        shot = [bd for pth, bd in desk.sent if pth == "/api/ctms/shot"][-1]
+        assert shot["mime"] == "image/png" and shot["w"] == 4
+        W.find_windows = lambda: []             # CTMS closed
+        b.scan_window(force=True)
+        st = b.state()
+        assert st["attached"] is False and "open it there" in st["error"]
+    finally:
+        W.find_windows, W.picture, B.LOG = keep
+
+
+def test_the_probe_and_png_pictures_reach_the_dashboard_and_claude():
+    fresh()
+    assert call("/api/ctms/command", {"action": "probe"}, key=AGENT)[0] == 200    # looking: no switch needed
+    poll({"version": "2", "view": "window",
+          "window": {"found": True, "title": "Calidus TMS", "kind": "edge", "java": 3, "showing": True}})
+    st = call("/api/ctms/status")[1]["state"]
+    assert st["view"] == "window" and st["window"]["title"] == "Calidus TMS" and st["window"]["java"] == 3
+    call("/api/ctms/shot", {"data": "iVBORw0K", "mime": "image/png", "w": 4, "h": 3}, key=BRIDGE)
+    assert call("/api/ctms/shot")[1]["mime"] == "image/png"
+    call("/api/ctms/shot", {"data": "AAAA", "mime": "text/html", "w": 4, "h": 3}, key=BRIDGE)
+    assert call("/api/ctms/shot")[1]["mime"] == "image/jpeg"       # anything else is not trusted as-is
 
 
 

@@ -60,7 +60,7 @@ _panel = {}          # agent-pushed persistent panel state: site decisions, hand
 CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdigest()
             if DASH_KEY else "")
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-CTMS_READ = ("see", "wait", "tabs")                # Claude looking
+CTMS_READ = ("see", "wait", "tabs", "probe")       # Claude looking
 CTMS_DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab")           # Claude acting - only while the switch is on
 CTMS_ADMIN = ("update",)
@@ -246,9 +246,16 @@ def _ctms_take_state_locked(s):
                 pass
     for k, n in (("browser", 80), ("tab_title", 200), ("tab_url", 500), ("mode", 20),
                  ("error", 300), ("version", 20), ("match", 80), ("machine", 60),
-                 ("code", 60), ("code_at", 30), ("dialog", 300), ("rolled_back", 300)):
+                 ("code", 60), ("code_at", 30), ("dialog", 300), ("rolled_back", 300), ("view", 20)):
         if k in s:
             st[k] = str(s[k] or "")[:n]
+    if isinstance(s.get("window"), dict):
+        w = s["window"]
+        st["window"] = {"found": bool(w.get("found")), "title": str(w.get("title") or "")[:120],
+                        "kind": str(w.get("kind") or "")[:10], "java": int(w.get("java") or 0)
+                        if str(w.get("java") or "0").isdigit() else 0,
+                        "showing": bool(w.get("showing")), "minimized": bool(w.get("minimized")),
+                        "foreground": bool(w.get("foreground"))}
     if isinstance(s.get("net_tail"), list):
         st["net_tail"] = [{k: str(e.get(k) or "")[:300] for k in ("at", "method", "url", "status", "type", "mime")}
                           for e in s["net_tail"][-20:] if isinstance(e, dict)]
@@ -1641,7 +1648,9 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms["shot"] = {"id": _ctms["next_shot"], "ts": time.time(),
                                      "data": str(data["data"]), "w": w, "h": h,
                                      "url": str(data.get("url") or "")[:500],
-                                     "title": str(data.get("title") or "")[:200]}
+                                     "title": str(data.get("title") or "")[:200],
+                                     # CTMS's own window comes as PNG; a browser tab as JPEG
+                                     "mime": "image/png" if data.get("mime") == "image/png" else "image/jpeg"}
             return self._json(200, {"ok": True, "need": True} if need else {"ok": True})
         if path == "/api/ctms/result":
             if length > 12_000_000:

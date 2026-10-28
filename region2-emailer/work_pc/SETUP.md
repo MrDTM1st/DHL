@@ -43,8 +43,10 @@ your PC, choose **More info → Run anyway**. That is the whole job. It:
 3. if ticked, makes the bridge start by itself when you log in — a one-line
    file in your Startup folder (untick and re-run, or
    `python ctms_bridge.py --autostart off`, to stop that);
-4. starts the bridge, which opens the automation browser — on CTMS, once it
-   has seen CTMS once. Log in there.
+4. starts the bridge. Open CTMS in your normal Edge as always — the bridge
+   finds CTMS's own window by itself. (CTMS runs in Internet Explorer mode,
+   which a browser opened for automation cannot run, so the bridge no longer
+   opens one.)
 
 Run it again any time to change the choices, or to start a bridge that has
 stopped: it closes the running one first. After this, updates are the

@@ -96,7 +96,7 @@ function SetupPanel({ onDownload }) {
       <ol className="ctms-steps">
         <li>Open <b>CTMS bridge setup.cmd</b> from your downloads. If Windows says it protected your PC,
           choose <b>More info</b>, then <b>Run anyway</b>.</li>
-        <li>It does the rest and opens the automation browser. Log into CTMS there; this page lights up by itself.</li>
+        <li>It does the rest. Then open CTMS in your normal Edge as always - this page lights up by itself.</li>
       </ol>
       <div className="ctms-muted">
         If it says it can&rsquo;t get the code, <a href={CODE_ZIP} target="_blank" rel="noreferrer">download the
@@ -273,8 +273,16 @@ export default function CtmsPage({ onAuthFail, pushToast }) {
       + 'To start it again, run the setup there (Setup file, below).';
   } else if (st && !attached) {
     tone = 'warn';
-    head = 'Bridge online, no CTMS tab';
-    body = s.error || 'Open CTMS in the automation browser and log in.';
+    head = 'Bridge online - CTMS not open';
+    body = s.error || 'Open CTMS in your Edge as normal; the bridge finds its window by itself.';
+  } else if (st && s.view === 'window') {
+    // CTMS's own window in his normal Edge - it runs in IE mode, which no
+    // automation browser can open, so this is the bridge's main way in
+    const w = s.window || {};
+    tone = w.minimized ? 'warn' : 'on';
+    head = 'Connected to CTMS';
+    body = (w.title || 'CTMS') + ' - your own Edge window'
+      + (w.minimized ? '. It is minimised: restore it so it can be pictured (it can sit behind other windows).' : '.');
   } else if (st) {
     tone = 'on';
     head = 'Connected to CTMS';
@@ -315,7 +323,7 @@ export default function CtmsPage({ onAuthFail, pushToast }) {
               <button className="btn mini" disabled={!shot} onClick={() => setActual((v) => !v)}>{actual ? 'Fit' : 'Actual size'}</button>
             </div>
             <div className={'ctms-screen' + (actual ? ' actual' : '') + (shot && !fresh ? ' stale' : '')}>
-              {shot ? <img src={'data:image/jpeg;base64,' + shot.data} alt="The CTMS tab on the work PC" /> : (
+              {shot ? <img src={'data:' + (shot.mime || 'image/jpeg') + ';base64,' + shot.data} alt="CTMS on the work PC" /> : (
                 <div className="ctms-empty">
                   {I.ctms}
                   <div>{!st ? 'Connecting…' : !online ? 'Nothing to show until the work PC bridge is running.'
@@ -333,16 +341,19 @@ export default function CtmsPage({ onAuthFail, pushToast }) {
             <div className="statushd">
               <span className="lbl">What CTMS sends</span>
               <button className={'switch' + (s.net ? ' on' : '')} style={{ marginLeft: 'auto' }}
-                role="switch" aria-checked={!!s.net} disabled={!attached}
+                role="switch" aria-checked={!!s.net} disabled={!attached || (s.view === 'window' && !s.net)}
                 onClick={() => send({ action: 'net', on: !s.net })}>
                 <span className="knob" />
                 <span className="swlabel">{s.net ? 'Recording' : 'Not recording'}</span>
               </button>
             </div>
             <div className="ctms-sub">
-              Records the requests the CTMS tab makes, into every capture while it is on. It answers the one
-              question that decides how bookings get automated: does CTMS post to an API, or submit a form?
-              Sign-in requests and passwords are never recorded.
+              {s.view === 'window'
+                ? <>Not for CTMS itself: it runs in Internet Explorer mode in your own Edge, where its requests
+                    cannot be recorded. Its screens are read from its window instead.</>
+                : <>Records the requests the CTMS tab makes, into every capture while it is on. It answers the one
+                    question that decides how bookings get automated: does CTMS post to an API, or submit a form?
+                    Sign-in requests and passwords are never recorded.</>}
             </div>
             {s.net && <div className={'ctms-verdict ' + vTone}>{vText}</div>}
             {s.net && tail.length > 0 && (

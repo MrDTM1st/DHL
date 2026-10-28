@@ -12,8 +12,8 @@ It:
      bridge's own, made from your dashboard key: it opens the bridge's channel
      and nothing else - it cannot send email or run the desk
   3. if you ticked it, makes the bridge start by itself when you log in
-  4. starts the bridge, which opens the automation browser - log into CTMS
-     there yourself, as always. Your password never touches any of this.
+  4. starts the bridge. Open CTMS in your normal Edge as always - the bridge
+     finds its window by itself. Your password never touches any of this.
 
 After that, the dashboard's Update button keeps it up to date. Run this file
 again any time to change your choices or repair the install.
@@ -261,7 +261,7 @@ def main():
         subprocess.Popen([sys.executable, os.path.join(WP, "ctms_bridge.py")], cwd=WP, close_fds=True,
                          creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
         say("     its window is opening now - leave it open (it can sit behind other windows).")
-    say("\nDone. The bridge opens the automation browser: log into CTMS there, yourself.")
+    say("\nDone. Open CTMS in your normal Edge as always - the bridge finds its window by itself.")
     say("The dashboard's CTMS page lights up by itself within a few seconds.")
     say("This file holds the bridge's key - you can delete it from Downloads now.")
     return 0

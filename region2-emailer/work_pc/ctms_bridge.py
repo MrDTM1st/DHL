@@ -13,18 +13,25 @@ file made for your dashboard. Double-click it and it does all of this for you.
 
 Leave it running in its Command Prompt while you work. What it does:
 
-  - opens the automation browser if it is not open already - its own window
-    and profile, the one start_here.py uses. Log into CTMS in THAT window,
-    yourself, as normal. Your password never passes through any of this.
+  - finds CTMS's OWN window in your normal Edge (ctms_window.py). CTMS is
+    Oracle Forms in Internet Explorer mode, which no browser opened for
+    automation can run - Edge refuses - so the bridge works with the window
+    you use, as it is. You log in yourself, as always; your password never
+    passes through any of this.
   - checks in with the Haulage Desk. Outbound only: nothing connects in to
     this PC, exactly like the home PC's agent.
   - while the CTMS page is open on the dashboard (phone or laptop), sends it
-    a picture of the CTMS tab every couple of seconds.
-  - "Capture this screen" snapshots the tab for the booking automation and
-    sends it home; "Record what CTMS sends" logs the requests CTMS makes.
-  - LETS CLAUDE LOOK at CTMS from the home PC: a picture with everything
-    clickable numbered on it, the list of those things, and the words.
-  - LETS CLAUDE ACT in CTMS - click, type, choose, scroll - the way you tell
+    a picture of CTMS's window every couple of seconds - of CTMS only, never
+    the rest of your screen, and never other tabs' titles.
+  - "Capture this screen" files a picture of CTMS for the walkthrough.
+  - LETS CLAUDE LOOK at CTMS from the home PC, and check what this PC has for
+    reading CTMS's fields by name ("probe": Java's Access Bridge).
+  - In a web page in the automation browser (only opened if ctms_bridge.json
+    says "launch_browser": true - CTMS cannot run there), Claude also gets a
+    numbered list of everything clickable, and "Record what CTMS sends" logs
+    the page's requests.
+  - LETS CLAUDE ACT - in a web page so far; in CTMS's own window that is step 2
+    - click, type, choose, scroll - the way you tell
     it to in the chat, but only while BOTH are true: this PC allows it
     (--allow-control, asked once at setup) and "Claude can act" is switched on
     on the dashboard's CTMS page, which switches itself off again. The rails
@@ -63,6 +70,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import cdp
 import ctms_drive
 import ctms_update
+import ctms_window
 import pip_here
 from ctms_capture import SCREENS
 from ctms_probe import DEBUG_PORT, find_browser, port_open
@@ -81,7 +89,7 @@ LOCK_PORT = 8792
 
 # Everything this bridge will do, by who may ask and what it takes.
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-READ = ("see", "wait", "tabs")                # Claude looking: no switch needed
+READ = ("see", "wait", "tabs", "probe")       # Claude looking: no switch needed
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab")           # Claude acting: this PC AND the dashboard must allow it
 ADMIN = ("update",)
@@ -297,6 +305,39 @@ class Bridge:
         self.restart_after = False   # an update was laid down: exit so the supervisor restarts us
         self.confirmed = False
         self.rolled_back = ctms_update.rolled_back()
+        # CTMS's own window in his normal Edge (ctms_window.py). CTMS runs in
+        # Internet Explorer mode there, which no automation browser can open, so
+        # when it is found it is what the bridge watches - ahead of any tab.
+        self.win = None
+        self.win_checked = 0.0
+
+    # -- CTMS's own window --
+    def scan_window(self, force=False):
+        if not force and time.time() - self.win_checked < 5:
+            return self.win
+        self.win_checked = time.time()
+        try:
+            wins = ctms_window.find_windows()
+        except Exception as e:
+            wins = []
+            self.shot_error = f"Could not look for CTMS's window ({type(e).__name__})."
+        old, self.win = self.win, (wins[0] if wins else None)
+        if bool(old) != bool(self.win) or (old and self.win and old["hwnd"] != self.win["hwnd"]):
+            if self.win:
+                say(f"Found CTMS's window: {self.win['title'][:80] or '?'} ({self.win['process'] or self.win['class']})")
+                log("window", title=self.win["title"][:120], window_kind=self.win["kind"], java=self.win["java"])
+            else:
+                say("CTMS's window has gone (closed, or not open in Edge).")
+                log("window", title="")
+            self.shot_hash = None
+        return self.win
+
+    def window_picture(self):
+        """(BGRA, w, h, how) of CTMS's window, found afresh - it may have moved."""
+        if not self.scan_window(force=True):
+            raise RuntimeError("CTMS is not open in your Edge - open it there as normal; the bridge finds "
+                               "its window by itself.")
+        return ctms_window.picture(self.win)
 
     # -- which tab is CTMS --
     def candidates(self):
@@ -475,7 +516,33 @@ class Bridge:
             raise RuntimeError(self.error or "No CTMS tab to look at.")
         return ctms_drive.grab(self.ws, fmt, max_w, quality, self.driver.dialog if self.driver else None)
 
+    def send_window_shot(self, force=False):
+        """The live view of CTMS's own window - a PNG, made only when the window changed."""
+        self.shot_at = time.time()
+        try:
+            bgra, w, h, _ = self.window_picture()
+        except RuntimeError as e:
+            self.shot_error = str(e)
+            self.shot_at = time.time() + 4
+            raise
+        digest = hashlib.sha1(bgra).hexdigest()
+        try:
+            if digest == self.shot_hash and not force:
+                if self.desk.post("/api/ctms/shot", {"same": True}).get("need"):
+                    self.shot_hash = None
+            else:
+                data = base64.b64encode(ctms_window.png(bgra, w, h)).decode()
+                self.desk.post("/api/ctms/shot", {"data": data, "mime": "image/png", "w": w, "h": h, "url": "",
+                                                  "title": (self.win or {}).get("title") or "CTMS"}, timeout=60)
+                self.shot_hash = digest
+        except Exception as e:
+            self.shot_error = f"The picture did not reach the dashboard: {friendly(e)}"
+            raise RuntimeError(self.shot_error)
+        self.shot_error = ""
+
     def send_shot(self, force=False):
+        if self.win:
+            return self.send_window_shot(force)
         self.shot_at = time.time()
         try:
             data, view = self.picture()
@@ -561,6 +628,39 @@ class Bridge:
                    + (f", {len(net)} request(s) recorded" if net else "") + "." + note)
         return zname, summary
 
+    def window_look(self):
+        """CTMS's own window as Claude gets it: the picture - no numbered list yet."""
+        bgra, w, h, how = self.window_picture()
+        win = self.win
+        return {"kind": "window", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
+                "mime": "image/png", "img_w": w, "img_h": h, "title": win["title"], "how": how,
+                "window": {k: win[k] for k in ("kind", "process", "java", "ie_showing", "foreground", "minimized")},
+                "note": "CTMS's own window: a picture only - no numbered list (that comes with step 2)."}
+
+    def capture_window(self, name):
+        """A walkthrough capture of CTMS's own window: the picture and where it came from."""
+        bgra, w, h, how = self.window_picture()
+        win = self.win
+        meta = {"name": name, "captured": datetime.now().isoformat(timespec="seconds"), "title": win["title"],
+                "kind": win["kind"], "process": win["process"], "java_parts": win["java"], "picture": how,
+                "size": [w, h], "bridge": VERSION, "machine": platform.node()}
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("meta.json", json.dumps(meta, indent=1))
+            z.writestr("screen.png", ctms_window.png(bgra, w, h))
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")[:40] or "screen"
+        zname = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{safe}.zip"
+        os.makedirs(OUTDIR, exist_ok=True)
+        with open(os.path.join(OUTDIR, zname), "wb") as f:
+            f.write(buf.getvalue())
+        try:
+            self.desk.post("/api/ctms/capture", {"name": zname, "size": len(buf.getvalue()),
+                                                 "data": base64.b64encode(buf.getvalue()).decode()}, timeout=180)
+        except Exception as e:
+            raise RuntimeError(f"Saved on the work PC as ctms_capture\\{zname}, but it did not reach "
+                               f"the dashboard ({friendly(e)}) - capture it again in a minute.")
+        return zname, f"{win['title'] or 'CTMS'} - a picture of CTMS's window ({w}x{h})."
+
     # -- what Claude gets back --
     def _finish(self, p):
         """A look at the screen, fit to leave this PC, with the tabs alongside."""
@@ -622,16 +722,33 @@ class Bridge:
         if action == "update":
             return self.update(cmd, done)
         self.refresh(force=True)
+        self.scan_window(force=True)
         try:
             if action == "look":
                 self.send_shot(force=True)
                 return done(True, "Fresh picture sent.")
             if action == "capture":
-                zname, summary = self.capture(name or "screen")
+                if self.win:
+                    zname, summary = self.capture_window(name or "screen")
+                else:
+                    zname, summary = self.capture(name or "screen")
                 return done(True, f"Captured {zname}: {summary}")
             if action == "net":
+                if self.win and not self.ws and cmd.get("on"):
+                    raise RuntimeError("CTMS runs in Internet Explorer mode in your own Edge, where the bridge "
+                                       "cannot see its requests - recording only works in the automation browser.")
                 self.set_net(bool(cmd.get("on")))
                 return done(True, "Recording what CTMS sends." if self.net_on else "Stopped recording.")
+            if action == "probe":
+                p = ctms_window.probe()
+                return done(True, probe_summary(p), p)
+            if self.win:
+                # CTMS's own window: looking only, at this step
+                if action == "see":
+                    return done(True, "Looked at CTMS's window.", self.window_look())
+                if action in DRIVE or action == "wait":
+                    return done(False, "Refused: the bridge only looks at CTMS's own window so far - "
+                                       "clicking and typing in it is step 2, not built yet.")
             if action == "tabs":
                 tabs = self.tab_list()
                 return done(True, f"{len(tabs)} tab(s) could be CTMS.", {"tabs": tabs})
@@ -720,13 +837,27 @@ class Bridge:
     # -- what the dashboard sees --
     def state(self):
         d = self.driver.dialog if self.driver else None
-        st = {"attached": bool(self.ws and self.tab), "browser": self.browser, "tabs": self.tabs,
-              "tab_title": (self.tab or {}).get("title", ""),
-              "tab_url": redact_url((self.tab or {}).get("url", "")),
+        win = self.win
+        # CTMS's own window first: it IS CTMS; a tab in the automation browser is only ever a web page
+        view = "window" if win else ("browser" if self.ws and self.tab else "")
+        if view == "window":
+            error = self.shot_error
+        elif view == "browser":
+            error = self.error or self.shot_error
+        else:
+            error = ("CTMS is not open in your Edge - open it there as normal; the bridge finds its window "
+                     "by itself.")
+        st = {"attached": bool(view), "view": view, "browser": self.browser, "tabs": self.tabs,
+              "tab_title": win["title"] if win else (self.tab or {}).get("title", ""),
+              "tab_url": "" if win else redact_url((self.tab or {}).get("url", "")),
+              "window": ({"found": True, "title": win["title"][:120], "kind": win["kind"], "java": win["java"],
+                          "showing": bool(win["ie_showing"] or win["kind"] == "java"),
+                          "minimized": win["minimized"], "foreground": win["foreground"]}
+                         if win else {"found": False}),
               "mode": "act" if self.allow_control and self.armed else "observe",
               "control": self.allow_control,
               "net": self.net_on, "net_count": self.net_count,
-              "error": self.error or self.shot_error, "version": VERSION,
+              "error": error, "version": VERSION,
               "code": code_label(), "code_at": ctms_update.current().get("at", ""),
               "dialog": f"{d.get('type')}: {d.get('message', '')}"[:300] if d else "",
               "autostart": autostart_on(),
@@ -779,12 +910,13 @@ def run(bridge, desk):
     while True:
         t0 = time.time()
         bridge.refresh()
+        bridge.scan_window()
         st = bridge.state()
         # The dashboard holds a check-in open until there is something to do,
         # so a command lands in well under a second without polling hard -
         # except while pictures are due, when it must come back in time.
         wait = (max(0.0, SHOT_EVERY - (time.time() - bridge.shot_at))
-                if bridge.watched and bridge.ws else WAIT_IDLE)
+                if bridge.watched and (bridge.ws or bridge.win) else WAIT_IDLE)
         try:
             resp = desk.post("/api/ctms/poll", {"state": st, "wait": round(wait, 2),
                                                 "watched": bridge.watched, "armed": bridge.armed},
@@ -823,7 +955,7 @@ def run(bridge, desk):
                 log("restart", reason="update", code=code_label())
                 bridge._detach()
                 return RESTART
-        if bridge.watched and bridge.ws and time.time() - bridge.shot_at >= SHOT_EVERY:
+        if bridge.watched and (bridge.ws or bridge.win) and time.time() - bridge.shot_at >= SHOT_EVERY:
             try:
                 bridge.send_shot()
             except Exception as e:
@@ -839,6 +971,19 @@ def run(bridge, desk):
 
 
 # ---- setup -------------------------------------------------------------------
+def probe_summary(p):
+    """The probe in one line, for the activity list."""
+    w, j, ab = p.get("windows") or [], p.get("java") or {}, p.get("access_bridge") or {}
+    parts = [f"CTMS's window: {w[0]['title'][:60] or '?'} ({w[0]['kind']}, {w[0]['java']} Java part(s))"
+             if w else "CTMS's window: not found"]
+    parts.append(f"Java installs: {len(j.get('installs') or [])}; Access Bridge switched on: "
+                 + ("yes" if j.get("switched_on") else "no"))
+    if ab.get("tried"):
+        parts.append("Access Bridge can read CTMS: " + ("yes" if ab.get("java_windows") else "no")
+                     + (f" ({ab['error']})" if ab.get("error") else ""))
+    return "; ".join(parts) + "."
+
+
 def bridge_key(dash_key):
     """The bridge's own key. server.py derives the same one (CTMS_KEY)."""
     return hmac.new(dash_key.strip().encode(), b"ctms-bridge-v1", hashlib.sha256).hexdigest()
@@ -1015,7 +1160,11 @@ def child(args):
         print("Not set up yet - run:  python ctms_bridge.py")
         return 2
     desk = Desk(cfg["url"], cfg["key"])
-    if not port_open(args.port) and not args.no_launch:
+    ctms_window.dpi_aware()             # real pixels for CTMS's window, before anything measures it
+    # CTMS needs Internet Explorer mode, which a browser opened for automation
+    # cannot run - so the automation browser only opens if asked for
+    # ("launch_browser": true in ctms_bridge.json), for other web pages.
+    if cfg.get("launch_browser") and not port_open(args.port) and not args.no_launch:
         exe = find_browser("Edge") or find_browser("Chrome")
         if not exe:
             say("No Edge or Chrome found to open - start the automation browser yourself.")

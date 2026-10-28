@@ -234,9 +234,13 @@ python ctms_remote.py see               numbered list + words; picture at ctms_r
 python ctms_remote.py click 12 | type 7 "HS6366072" [--enter] | select 9 "Region 2" | key Tab
 python ctms_remote.py scroll down | scroll to 31 | goto /path | back | reload | dialog dismiss
 python ctms_remote.py text | find "MAN" | tabs | tab 2 | wait --for "Saved"
+python ctms_remote.py probe              Java / Access Bridge on the work PC, for acting in CTMS's window
 python ctms_remote.py update [--branch B]   the work PC pulls code from GitHub, tries it, restarts
 ```
 
+REAL CTMS is Oracle Forms in IE mode in his own Edge: `see` gives a picture of its
+window (`latest.png`, read it) and no numbered list - click/type are refused there
+until step 2 is built. The numbered list and acting below are for web pages.
 Numbers come from the latest picture; every action answers with a fresh one.
 **Exit 3 + "needs his go-ahead"** means the bridge judged it a book/save/submit/
 confirm/delete: ask Delali, and only after he says go, repeat with `--commit`.
@@ -323,7 +327,7 @@ Every file below lives in `region2-emailer/`. Anything importing
 | `home_tick.py` | The COM adapter for self-update ("R2 UPDATE" emails) + holiday-handover forwarding. |
 | `handover_cli.py` | The COM side of `handover_start`. |
 | `modules/` | Pure-Python, COM-free, tested: `site_matching` (self-learning fuzzy site store, 0.92 auto-accept), `profiles` (team + never-email-yourself), `handover`, `self_update`. |
-| `work_pc/` | `ctms_bridge.py` (the work PC's side of the CTMS channel: live pictures, captures, network recording, Claude's see/act commands - a supervisor plus the bridge as its child, stdlib only), `ctms_drive.py` (what it does in the CTMS tab, with the rails: sign-in page, password boxes, commit guard, stale numbers), `ctms_update.py` (GitHub-only self-update, tried first, rolled back if it will not start), `cdp.py` (the shared hand-rolled CDP websocket client + page walkers), `ctms_probe.py` (stdlib-only capability report), `ctms_attach_test.py` (proves attaching to a browser *he* logged into), `ctms_capture.py` (the walkthrough at the keyboard). |
+| `work_pc/` | `ctms_window.py` (CTMS's own window: find, picture - of CTMS only - and probe Java's Access Bridge), `ctms_bridge.py` (the work PC's side of the CTMS channel: live pictures, captures, network recording, Claude's see/act commands - a supervisor plus the bridge as its child, stdlib only), `ctms_drive.py` (what it does in the CTMS tab, with the rails: sign-in page, password boxes, commit guard, stale numbers), `ctms_update.py` (GitHub-only self-update, tried first, rolled back if it will not start), `cdp.py` (the shared hand-rolled CDP websocket client + page walkers), `ctms_probe.py` (stdlib-only capability report), `ctms_attach_test.py` (proves attaching to a browser *he* logged into), `ctms_capture.py` (the walkthrough at the keyboard). |
 | `ctms_remote.py` | Claude's side of the CTMS bridge on the home PC (see "Driving CTMS from a session"). Output in `ctms_remote/` (gitignored): `latest.jpg` and a per-step trace. |
 
 ### Agent command vocabulary
@@ -685,6 +689,22 @@ note; and Excel floats (`1770679.0`) normalise to integers.
 
 The last ~30 commits, grouped. Each entry is *why*, not just *what* — the "why"
 is usually a real incident.
+
+**CTMS is Oracle Forms in IE mode: the bridge works with its window (2026-10-28)**
+First contact with the real CTMS: Calidus TMS
+(`calidustms.dhl.com/ctms-uk3/forms/frmservlet?config=indprd`) runs in Internet
+Explorer mode in his normal (work-profile) Edge, a Java applet inside, and Edge
+refuses IE mode in a browser opened with a debug port ("turn off remote
+debugging..."). So `work_pc/ctms_window.py` finds CTMS's OWN window (Edge with
+IE/Java children, a Java window - never a window that merely mentions CTMS),
+pictures only it (PrintWindow, cropped to the IE content; the screen only when
+CTMS is provably what is showing), feeds the live view / see / captures with
+PNGs, and `probe` reports Java and its Access Bridge for step 2 (acting).
+Found while testing: GetWindowRect's invisible borders let a screen read pick up
+another window's text (now the DWM visible frame + a 12x12 showing-check);
+unscaled windows draw small inside a transparent frame (measured by alpha);
+and a `log(kind=...)` clash would have crashed the bridge the moment it found
+CTMS. The automation browser is no longer opened unless `launch_browser`.
 
 **One-click setup for the work PC (2026-10-28)**
 "A button in the online dashboard that would download and do those steps for

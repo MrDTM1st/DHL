@@ -192,12 +192,16 @@ def _squeeze(text):
     return "\n".join(out).strip()
 
 
+def _ext(p):
+    return ".png" if (p or {}).get("mime") == "image/png" else ".jpg"
+
+
 def save_picture(p, action):
     if not p.get("img"):
         return None
     raw = base64.b64decode(p["img"])
     os.makedirs(OUT, exist_ok=True)
-    latest = os.path.join(OUT, "latest.jpg")
+    latest = os.path.join(OUT, "latest" + _ext(p))
     with open(latest, "wb") as f:
         f.write(raw)
     return latest
@@ -211,7 +215,7 @@ def trace(action, args, result, payload):
         os.makedirs(d, exist_ok=True)
         stem = os.path.join(d, now.strftime("%H%M%S") + f"-{action}")
         if payload and payload.get("img"):
-            with open(stem + ".jpg", "wb") as f:
+            with open(stem + _ext(payload), "wb") as f:
                 f.write(base64.b64decode(payload["img"]))
         rec = {"at": now.isoformat(timespec="seconds"), "action": action, "args": args, "result": result,
                "screen": {k: v for k, v in (payload or {}).items() if k != "img"}}
@@ -222,6 +226,16 @@ def trace(action, args, result, payload):
 
 
 def print_screen(p, action, full=False, words=2500):
+    if p.get("kind") == "window":
+        # CTMS's own window in his Edge: a picture, read by eye - no numbered list yet
+        pic = save_picture(p, action)
+        w = p.get("window") or {}
+        print(f"\nCTMS's window: {p.get('title') or '?'}  ({w.get('process') or w.get('kind')}, "
+              f"{w.get('java', 0)} Java part(s){', in front' if w.get('foreground') else ', behind other windows'})")
+        if pic:
+            print(f"Picture: {pic}  ({p.get('img_w')}x{p.get('img_h')}, taken {p.get('how')})")
+        print(p.get("note") or "")
+        return
     if p.get("dialog"):
         d = p["dialog"]
         print(f"\nDIALOG BOX OPEN ({d.get('type')}): \"{d.get('message')}\"")
@@ -271,6 +285,27 @@ def print_screen(p, action, full=False, words=2500):
         print(text[:words])
 
 
+def print_probe(p):
+    wins = p.get("windows") or []
+    print("\nWindows CTMS could be in:" if wins else "\nNo window CTMS could be in - is CTMS open in Edge?")
+    for w in wins:
+        ie = (f"  IE content: {w.get('ie')} ({'on show' if w.get('ie_showing') else 'tab not selected'}),"
+              if w.get("kind") in ("edge", "ie") else "")
+        print(f"  {w.get('title')[:70] or '(no title)'}  [{w.get('kind')}, {w.get('process') or w.get('class')}]"
+              f"{ie} Java parts: {w.get('java')} {w.get('java_classes')}"
+              + ("  MINIMISED" if w.get("minimized") else "") + ("  in front" if w.get("foreground") else ""))
+    j = p.get("java") or {}
+    print(f"\nJava on the work PC: {len(j.get('installs') or [])} install(s)")
+    for i in j.get("installs") or []:
+        print(f"  {i.get('version')} ({i.get('bits')}-bit) {i.get('home')}  jabswitch: "
+              f"{'yes' if i.get('jabswitch') else 'no'}; bridge files: {', '.join(i.get('bridge_dlls') or []) or 'none'}"
+              + ("; switched on for everyone" if i.get("jre_switch") else ""))
+    print(f"Windows' own Access Bridge files: {j.get('system_dlls')}")
+    print(f"Access Bridge switched on for this user: {'yes' if j.get('user_switch') else 'no'}")
+    print(f"Processes: {p.get('processes')}")
+    print(f"Access Bridge, asked live: {json.dumps(p.get('access_bridge') or {})}")
+
+
 def report(action, args, result, payload, full=False, words=2500):
     trace(action, args, result, payload)
     print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
@@ -297,8 +332,14 @@ def cmd_status(_a):
         print("Work PC bridge: OFFLINE" + (f" (last seen {seen}s ago)" if seen is not None else " (never seen)"))
     else:
         print(f"Work PC bridge: online - {s.get('machine', '?')}, {s.get('browser', '?')}")
-    print("CTMS tab: " + (f"{s.get('tab_title') or '?'}  |  {s.get('tab_url', '')}" if s.get("attached")
-                          else (s.get("error") or "none attached")))
+    win = s.get("window") or {}
+    if s.get("view") == "window":
+        print(f"CTMS: its own window{' in Edge' if win.get('kind') == 'edge' else ''} - {win.get('title') or '?'}"
+              + (" (MINIMISED - cannot be pictured)" if win.get("minimized") else "")
+              + (", in front" if win.get("foreground") else ", behind other windows"))
+    else:
+        print("CTMS tab: " + (f"{s.get('tab_title') or '?'}  |  {s.get('tab_url', '')}" if s.get("attached")
+                              else (s.get("error") or "none attached")))
     if s.get("dialog"):
         print("DIALOG BOX OPEN: " + s["dialog"])
     allowed = s.get("control")
@@ -386,6 +427,7 @@ def main(argv=None):
     p.add_argument("--for", dest="text")
     p.add_argument("--timeout", type=float, default=10)
     sub.add_parser("tabs")
+    sub.add_parser("probe", help="what the work PC has for reading CTMS's fields (Java's Access Bridge)")
     p = sub.add_parser("tab")
     p.add_argument("n", type=int)
     p = sub.add_parser("update")
@@ -486,6 +528,13 @@ def run(a):
         return report(c, args, *ask("wait", wait_total=120, **args))
     if c == "tabs":
         return report(c, {}, *ask("tabs"))
+    if c == "probe":
+        result, payload = ask("probe", wait_total=120)
+        trace(c, {}, result, payload)
+        print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
+        if payload:
+            print_probe(payload)
+        return 0 if result.get("ok") else 3
     if c == "tab":
         args = {"tab": a.n}
         return report(c, args, *ask("tab", **args))
