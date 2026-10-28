@@ -30,14 +30,16 @@ Leave it running in its Command Prompt while you work. What it does:
     says "launch_browser": true - CTMS cannot run there), Claude also gets a
     numbered list of everything clickable, and "Record what CTMS sends" logs
     the page's requests.
-  - LETS CLAUDE ACT - in a web page so far; in CTMS's own window that is step 2
-    - click, type, choose, scroll - the way you tell
-    it to in the chat, but only while BOTH are true: this PC allows it
+  - LETS CLAUDE ACT - in CTMS's own window, keys and typing so far
+    (ctms_act.py): only once CTMS is confirmed as the window in front, and
+    F10 / Ctrl+S (save) only after you have said go. Clicking there is next.
+    In a web page: click, type, choose, scroll. Either way the way you tell it
+    to in the chat, and only while BOTH are true: this PC allows it
     (--allow-control, asked once at setup) and "Claude can act" is switched on
-    on the dashboard's CTMS page, which switches itself off again. The rails
-    are in ctms_drive.py: never on the sign-in page, never into a password
-    box, never anything that books, saves, submits or deletes until you have
-    said go. Stop on the dashboard cuts it off at once.
+    on the dashboard's CTMS page, which switches itself off again. The web
+    page rails are in ctms_drive.py: never on the sign-in page, never into a
+    password box, never anything that books, saves, submits or deletes until
+    you have said go. Stop on the dashboard cuts it off at once.
   - UPDATES ITSELF when the dashboard or the home PC asks - from GitHub only,
     tried out before it is used, and put back by itself if the new code will
     not start (ctms_update.py). Nothing to copy across by hand.
@@ -68,6 +70,7 @@ from datetime import datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import cdp
+import ctms_act
 import ctms_drive
 import ctms_update
 import ctms_window
@@ -635,7 +638,8 @@ class Bridge:
         return {"kind": "window", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
                 "mime": "image/png", "img_w": w, "img_h": h, "title": win["title"], "how": how,
                 "window": {k: win[k] for k in ("kind", "process", "java", "ie_showing", "foreground", "minimized")},
-                "note": "CTMS's own window: a picture only - no numbered list (that comes with step 2)."}
+                "note": "CTMS's own window: a picture, no numbered list yet. Typing (type --focused) and "
+                        "keys work here; clicking is next."}
 
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""
@@ -743,12 +747,28 @@ class Bridge:
                 p = ctms_window.probe()
                 return done(True, probe_summary(p), p)
             if self.win:
-                # CTMS's own window: looking only, at this step
+                # CTMS's own window (Oracle Forms in IE mode): keys and typing go
+                # to it through ctms_act; clicking and the rest are the next increment.
                 if action == "see":
                     return done(True, "Looked at CTMS's window.", self.window_look())
-                if action in DRIVE or action == "wait":
-                    return done(False, "Refused: the bridge only looks at CTMS's own window so far - "
-                                       "clicking and typing in it is step 2, not built yet.")
+                if action == "key":
+                    detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
+                                            commit=bool(cmd.get("commit")))
+                    time.sleep(0.3)
+                    return done(True, detail, self.window_look())
+                if action == "type":
+                    detail = ctms_act.type_text(self.win["hwnd"], cmd.get("text") or "",
+                                                enter=bool(cmd.get("enter")), commit=bool(cmd.get("commit")))
+                    time.sleep(0.3)
+                    return done(True, detail, self.window_look())
+                if action == "wait":
+                    s = min(max(float(cmd.get("seconds") or 2), 0.0), 30.0)
+                    time.sleep(s)
+                    return done(True, f"Waited {s:g}s", self.window_look())
+                if action in DRIVE:
+                    return done(False, "Refused: in CTMS's own window the bridge can press keys and type so "
+                                       "far - clicking, selecting, scrolling and the rest are the next "
+                                       "increment, not built yet.")
             if action == "tabs":
                 tabs = self.tab_list()
                 return done(True, f"{len(tabs)} tab(s) could be CTMS.", {"tabs": tabs})

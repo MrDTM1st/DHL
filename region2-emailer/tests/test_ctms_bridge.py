@@ -38,6 +38,7 @@ import ctms_bridge as B                 # noqa: E402
 import ctms_drive as D                  # noqa: E402
 import ctms_update as U                 # noqa: E402
 import ctms_window as W                 # noqa: E402
+import ctms_act as A                    # noqa: E402
 import ctms_remote as R                 # noqa: E402
 import cdp                              # noqa: E402
 from http.server import ThreadingHTTPServer  # noqa: E402
@@ -889,9 +890,9 @@ def test_with_ctms_s_window_found_the_bridge_watches_it_ahead_of_any_tab():
         path, body = desk.sent[-1]
         assert body["ok"] and body["payload"]["kind"] == "window" and body["payload"]["mime"] == "image/png"
         assert base64.b64decode(body["payload"]["img"])[:4] == b"\x89PNG"
-        b.armed = True                          # even with acting switched on...
+        b.armed = True                          # clicking in the window is the next increment...
         b.handle({"id": 2, "action": "click", "ref": 1})
-        assert desk.sent[-1][1]["ok"] is False and "step 2" in desk.sent[-1][1]["detail"]
+        assert desk.sent[-1][1]["ok"] is False and "next increment" in desk.sent[-1][1]["detail"]
         b.watched = True                        # ...and the live view sends CTMS's window, as a PNG
         b.send_shot(force=True)
         shot = [bd for pth, bd in desk.sent if pth == "/api/ctms/shot"][-1]
@@ -902,6 +903,72 @@ def test_with_ctms_s_window_found_the_bridge_watches_it_ahead_of_any_tab():
         assert st["attached"] is False and "open it there" in st["error"]
     finally:
         W.find_windows, W.picture, B.LOG = keep
+
+
+def test_ctms_act_guards_every_key_before_any_is_sent():
+    assert A._combo("Shift+Ctrl+F10")[2] == "ctrl+shift+f10"      # order-independent, canonical
+    assert A.text_units_for("A") == [0x41]
+    assert A.text_units_for("\U0001F600") == [0xD83D, 0xDE00]     # a character above the BMP -> a surrogate pair
+    sent = []
+    keep = (A.to_front, A._send)
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(len(inputs)))
+    try:
+        for junk in ("alt+f4", "ctrl+w", "ctrl+v", "f11"):        # OS/browser/paste keys never reach the keyboard
+            try:
+                A.press(1, junk)
+                assert False, junk
+            except A.Refused:
+                pass
+        assert sent == []
+        try:
+            A.press(1, "f10")                                    # F10 saves the record
+            assert False
+        except A.NeedsCommit:
+            pass
+        assert sent == []
+        A.press(1, "f10", commit=True)                           # ...and goes through once he has said go
+        assert sent and sent[-1] == 2                            # one key: down + up
+        sent.clear()
+        A.type_text(1, "HS123456")                               # typed as one batch of down/up pairs
+        assert sent[-1] == len("HS123456") * 2
+        A.to_front = lambda hwnd: False                          # if CTMS will not come to the front, nothing is sent
+        n = len(sent)
+        try:
+            A.press(1, "tab")
+            assert False
+        except A.Refused:
+            pass
+        assert len(sent) == n
+    finally:
+        A.to_front, A._send = keep
+
+
+def test_in_the_window_the_bridge_types_and_presses_but_save_waits_for_go_ahead():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    sent = []
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(len(inputs)))
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.scan_window(force=True)
+        b.handle({"id": 1, "action": "type", "text": "x"})       # acting off: not even attempted
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.armed = True
+        b.handle({"id": 2, "action": "type", "text": "HS123456"})
+        body = desk.sent[-1][1]
+        assert body["ok"] and body["payload"]["kind"] == "window" and sent[-1] == len("HS123456") * 2
+        b.handle({"id": 3, "action": "key", "key": "tab"})       # move between fields
+        assert desk.sent[-1][1]["ok"]
+        b.handle({"id": 4, "action": "key", "key": "f10"})       # save waits for his go-ahead
+        r = desk.sent[-1][1]
+        assert r["ok"] is False and r.get("payload", {}).get("needs_commit") is True
+        b.handle({"id": 5, "action": "key", "key": "f10", "commit": True})
+        assert desk.sent[-1][1]["ok"]
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
 
 
 def test_the_probe_and_png_pictures_reach_the_dashboard_and_claude():
