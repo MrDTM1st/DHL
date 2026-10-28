@@ -92,6 +92,21 @@ def branch_ok(branch):
     return bool(re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", branch or "")) and ".." not in branch
 
 
+def opener_for(url):
+    """A URL opener that gets out of this PC: through the proxy, trusting its roots."""
+    host = (urlsplit(url).hostname or "").lower()
+    if host in ("127.0.0.1", "localhost"):
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # the same two walls pip hits on this PC, got round the same way:
+    # the proxy out of the PAC, and the machine's own trusted roots
+    proxy = pip_here.proxy_from_pac()
+    bundle = pip_here.write_bundle()
+    handler = (urllib.request.ProxyHandler({"http": f"http://{proxy}", "https": f"http://{proxy}"})
+               if proxy else urllib.request.ProxyHandler())
+    ctx = ssl.create_default_context(cafile=bundle) if bundle else ssl.create_default_context()
+    return urllib.request.build_opener(handler, urllib.request.HTTPSHandler(context=ctx))
+
+
 def download(branch="main", url=None):
     """The branch as a ZIP, from GitHub, into a temp folder. Returns the file's path."""
     if not url:
@@ -99,18 +114,7 @@ def download(branch="main", url=None):
             raise UpdateError(f"'{branch}' is not a branch name.")
         # CTMS_UPDATE_ZIP points the tests at a ZIP served locally
         url = os.environ.get("CTMS_UPDATE_ZIP", REPO_ZIP).format(branch=branch)
-    host = (urlsplit(url).hostname or "").lower()
-    if host in ("127.0.0.1", "localhost"):
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    else:
-        # the same two walls pip hits on this PC, got round the same way:
-        # the proxy out of the PAC, and the machine's own trusted roots
-        proxy = pip_here.proxy_from_pac()
-        bundle = pip_here.write_bundle()
-        handler = (urllib.request.ProxyHandler({"http": f"http://{proxy}", "https": f"http://{proxy}"})
-                   if proxy else urllib.request.ProxyHandler())
-        ctx = ssl.create_default_context(cafile=bundle) if bundle else ssl.create_default_context()
-        opener = urllib.request.build_opener(handler, urllib.request.HTTPSHandler(context=ctx))
+    opener = opener_for(url)
     folder = tempfile.mkdtemp(prefix="ctms-update-")
     dest = os.path.join(folder, "repo.zip")
     try:

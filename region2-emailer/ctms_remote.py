@@ -16,6 +16,9 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py dialog accept|dismiss [--text T]                 [--commit]
     python ctms_remote.py wait SECONDS  |  wait --for "Saved" [--timeout S]
     python ctms_remote.py tabs  |  tab N
+    python ctms_remote.py fields [--all]          CTMS's fields by name, through Java's Access Bridge -
+                                                  works with CTMS behind other windows or minimised
+    python ctms_remote.py fields-setup            the work PC fetches the 32-bit Python that fields needs
     python ctms_remote.py update [--branch B] [--all]    the work PC pulls new code from GitHub
 
 N is a number from the latest picture. Every action answers with a fresh one,
@@ -306,6 +309,42 @@ def print_probe(p):
     print(f"Access Bridge, asked live: {json.dumps(p.get('access_bridge') or {})}")
 
 
+def fmt_field(e):
+    s = f"[{e.get('n')}] {e.get('r', '?')}"
+    if e.get("nm"):
+        s += f' "{e["nm"]}"'
+    if e.get("secret"):
+        s += " = (withheld)"
+    elif "v" in e:
+        s += f" = {e['v']!r}"
+    if e.get("st"):
+        s += f"  ({', '.join(e['st'])})"
+    return s
+
+
+def print_fields(p, full=False):
+    """CTMS's fields as the Access Bridge read them - and kept whole in ctms_remote/latest_fields.json."""
+    els = p.get("elements") or []
+    wins = {w.get("w"): w for w in p.get("windows") or []}
+    os.makedirs(OUT, exist_ok=True)
+    with open(os.path.join(OUT, "latest_fields.json"), "w", encoding="utf-8") as f:
+        json.dump(p, f, indent=1)
+    print(f"\n{len(els)} thing(s) in {len(wins)} Java window(s) - Java {p.get('java') or '?'}, "
+          f"read in {p.get('took', '?')}s" + ("  CUT SHORT" if p.get("cut") else ""))
+    cur = next((e for e in els if e.get("n") == p.get("focus")), None)
+    print("Cursor: " + (fmt_field(cur) if cur else "no field reports it (CTMS is not the active window?)"))
+    shown = els if full else els[:300]
+    w = None
+    for e in shown:
+        if e.get("w") != w:
+            w = e.get("w")
+            win = wins.get(w) or {}
+            print(f"-- window {w}: {win.get('title') or '(no title)'} [{win.get('class', '')}]")
+        print("  " + "  " * min(int(e.get("lv") or 0), 10) + fmt_field(e))
+    if len(els) > len(shown):
+        print(f"  ... {len(els) - len(shown)} more - fields --all, or ctms_remote/latest_fields.json")
+
+
 def report(action, args, result, payload, full=False, words=2500):
     trace(action, args, result, payload)
     print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
@@ -428,6 +467,9 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=10)
     sub.add_parser("tabs")
     sub.add_parser("probe", help="what the work PC has for reading CTMS's fields (Java's Access Bridge)")
+    p = sub.add_parser("fields", help="CTMS's fields by name, through Java's Access Bridge")
+    p.add_argument("--all", action="store_true", help="every one, not just the first 300")
+    sub.add_parser("fields-setup", help="the work PC fetches the 32-bit Python that reading fields needs")
     p = sub.add_parser("tab")
     p.add_argument("n", type=int)
     p = sub.add_parser("update")
@@ -535,6 +577,16 @@ def run(a):
         if payload:
             print_probe(payload)
         return 0 if result.get("ok") else 3
+    if c == "fields":
+        result, payload = ask("fields", wait_total=150)
+        trace(c, {}, result, payload)
+        print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
+        if payload and payload.get("kind") == "fields":
+            print_fields(payload, full=a.all)
+        return 0 if result.get("ok") else 3
+    if c == "fields-setup":
+        result, payload = ask("fields_setup", wait_total=400)
+        return report(c, {}, result, payload)
     if c == "tab":
         args = {"tab": a.n}
         return report(c, args, *ask("tab", **args))

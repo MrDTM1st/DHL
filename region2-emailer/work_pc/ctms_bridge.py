@@ -26,6 +26,11 @@ Leave it running in its Command Prompt while you work. What it does:
   - "Capture this screen" files a picture of CTMS for the walkthrough.
   - LETS CLAUDE LOOK at CTMS from the home PC, and check what this PC has for
     reading CTMS's fields by name ("probe": Java's Access Bridge).
+  - LETS CLAUDE READ CTMS's fields by name ("fields", ctms_jab.py): each field
+    and button, what is in it, where the cursor is - asked of Java itself, so
+    CTMS can be behind other windows or minimised. Never a password box, never
+    a sign-in screen. Needs a 32-bit Python next to the bridge, which
+    "fields_setup" fetches from python.org and checks before unpacking.
   - In a web page in the automation browser (only opened if ctms_bridge.json
     says "launch_browser": true - CTMS cannot run there), Claude also gets a
     numbered list of everything clickable, and "Record what CTMS sends" logs
@@ -72,6 +77,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import cdp
 import ctms_act
 import ctms_drive
+import ctms_jab
 import ctms_update
 import ctms_window
 import pip_here
@@ -92,10 +98,10 @@ LOCK_PORT = 8792
 
 # Everything this bridge will do, by who may ask and what it takes.
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-READ = ("see", "wait", "tabs", "probe")       # Claude looking: no switch needed
+READ = ("see", "wait", "tabs", "probe", "fields")   # Claude looking: no switch needed
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab")           # Claude acting: this PC AND the dashboard must allow it
-ADMIN = ("update",)
+ADMIN = ("update", "fields_setup")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
@@ -638,8 +644,8 @@ class Bridge:
         return {"kind": "window", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
                 "mime": "image/png", "img_w": w, "img_h": h, "title": win["title"], "how": how,
                 "window": {k: win[k] for k in ("kind", "process", "java", "ie_showing", "foreground", "minimized")},
-                "note": "CTMS's own window: a picture, no numbered list yet. Typing (type --focused) and "
-                        "keys work here; clicking is next."}
+                "note": "CTMS's own window: a picture, no numbered list yet - fields reads its fields by "
+                        "name. Typing (type --focused) and keys work here; clicking is next."}
 
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""
@@ -746,6 +752,15 @@ class Bridge:
             if action == "probe":
                 p = ctms_window.probe()
                 return done(True, probe_summary(p), p)
+            if action == "fields":
+                # Java's Access Bridge: works with CTMS behind other windows or minimised
+                if not self.win:
+                    raise RuntimeError("Reading fields works on CTMS's own window, and it is not open in your "
+                                       "Edge - open CTMS there as normal.")
+                p = ctms_jab.read_fields(self.win)
+                return done(True, ctms_jab.summary(p), dict(p, kind="fields", title=self.win["title"]))
+            if action == "fields_setup":
+                return done(True, ctms_jab.setup())
             if self.win:
                 # CTMS's own window (Oracle Forms in IE mode): keys and typing go
                 # to it through ctms_act; clicking and the rest are the next increment.

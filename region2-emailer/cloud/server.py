@@ -60,10 +60,10 @@ _panel = {}          # agent-pushed persistent panel state: site decisions, hand
 CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdigest()
             if DASH_KEY else "")
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-CTMS_READ = ("see", "wait", "tabs", "probe")       # Claude looking
+CTMS_READ = ("see", "wait", "tabs", "probe", "fields")   # Claude looking
 CTMS_DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab")           # Claude acting - only while the switch is on
-CTMS_ADMIN = ("update",)
+CTMS_ADMIN = ("update", "fields_setup")
 # The bridge refuses anything else on its own side as well; this list only
 # stops something queuing that would just come back refused.
 CTMS_ACTIONS = CTMS_OBSERVE + CTMS_READ + CTMS_DRIVE + CTMS_ADMIN

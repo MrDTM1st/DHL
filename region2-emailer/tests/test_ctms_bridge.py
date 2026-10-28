@@ -13,9 +13,11 @@ import base64
 import array
 import contextlib
 import ctypes
+import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -40,6 +42,7 @@ import ctms_drive as D                  # noqa: E402
 import ctms_update as U                 # noqa: E402
 import ctms_window as W                 # noqa: E402
 import ctms_act as A                    # noqa: E402
+import ctms_jab as J                    # noqa: E402
 import ctms_remote as R                 # noqa: E402
 import cdp                              # noqa: E402
 from http.server import ThreadingHTTPServer  # noqa: E402
@@ -989,6 +992,268 @@ def test_the_probe_and_png_pictures_reach_the_dashboard_and_claude():
     assert call("/api/ctms/shot")[1]["mime"] == "image/png"
     call("/api/ctms/shot", {"data": "AAAA", "mime": "text/html", "w": 4, "h": 3}, key=BRIDGE)
     assert call("/api/ctms/shot")[1]["mime"] == "image/jpeg"       # anything else is not trusted as-is
+
+
+# ---- reading CTMS's fields through Java's Access Bridge ---------------------------------
+def _n(role, name="", value=None, kids=(), hidden=False, focused=False, desc=""):
+    states = {"enabled", "showing"} | (set() if hidden else {"visible"}) | ({"focused"} if focused else set())
+    if role == "text":
+        states.add("editable")
+    n = {"role": role, "name": name, "desc": desc, "states": states, "kids": list(kids)}
+    if value is not None:
+        n["value"] = value
+    return n
+
+
+class _FakeJava:
+    """CTMS's Java as the Access Bridge hands it over - counting every reference
+    handed out and not given back, and every field whose contents were read."""
+
+    def __init__(self, windows, top_level=(), titles=None):
+        self.windows, self.top_level, self.titles = windows, list(top_level), titles or {}
+        self.refs, self.held, self.read, self.next = {}, set(), [], 100
+
+    def _ref(self, node):
+        self.next += 1
+        self.refs[self.next] = node
+        self.held.add(self.next)
+        return self.next
+
+    def java_window(self, h):
+        return h in self.windows
+
+    def pid(self, h):
+        return 7
+
+    def top_windows(self):
+        return list(self.top_level)
+
+    def title(self, h):
+        return self.titles.get(h, "")
+
+    def cls(self, h):
+        return "SunAwtFrame"
+
+    def version(self, vm):
+        return "1.8.0_481"
+
+    def context(self, h):
+        return 1, self._ref(self.windows[h])
+
+    def top(self, vm, ac):
+        return self._ref(self.refs[ac])
+
+    def same(self, vm, a, b):
+        return self.refs[a] is self.refs[b]
+
+    def info(self, vm, ac):
+        n = self.refs[ac]
+        return {"role": n["role"], "name": n["name"], "description": n["desc"], "states": n["states"],
+                "children": len(n["kids"]), "x": 0, "y": 0, "w": 10, "h": 10, "text": "value" in n}
+
+    def child(self, vm, ac, k):
+        return self._ref(self.refs[ac]["kids"][k])
+
+    def text(self, vm, ac, most):
+        self.read.append(self.refs[ac]["name"])
+        return self.refs[ac]["value"][:most]
+
+    def release(self, vm, ac):
+        self.held.discard(ac)
+
+
+def test_the_fields_reader_names_what_is_there_and_never_reads_a_password():
+    applet = _n("frame", kids=[_n("internal frame", "Planning", kids=[
+        _n("label", "Search"), _n("text", "Search", "x", focused=True),
+        _n("password text", "Password", "hunter2"),
+        _n("text", "Your PIN", "1234"),
+        _n("panel", kids=[_n("text", "Order No", "HS1234567")]),     # an unnamed panel: looked through, not listed
+        _n("panel", "hidden canvas", hidden=True, kids=[_n("text", "Gone", "nope")]),
+        _n("push button", "Find")])])
+    logon = _n("dialog", "Logon", kids=[_n("text", "Username", "user01"), _n("text", "Database", "proddb")])
+    java = _FakeJava({11: applet, 12: applet, 20: logon}, top_level=[20, 99], titles={20: "Logon"})
+    # 4242 is Edge itself (not Java); 11 and 12 are two parts of one applet; the logon box is a window of its own
+    out = J.read([4242, 11, 12], api=java)
+    els = out["elements"]
+    assert out["java_windows"] == 3 and len(out["windows"]) == 2           # the applet read once, not twice
+    search = next(e for e in els if e["r"] == "text" and e["nm"] == "Search")
+    assert search["v"] == "x" and out["focus"] == search["n"] and "focused" in search["st"]
+    named = {e["nm"]: e for e in els if e["r"] != "label"}
+    assert named["Order No"]["v"] == "HS1234567" and named["Order No"]["lv"] == 1
+    assert named["Find"]["r"] == "push button" and "Gone" not in named and "hidden canvas" not in named
+    for secret in ("Password", "Your PIN", "Username", "Database"):
+        assert named[secret]["secret"] and "v" not in named[secret], secret
+    assert java.read == ["Search", "Order No"]          # nothing else's contents were even asked for
+    assert java.held == set()                           # every Java object handed back to CTMS's Java
+
+
+def test_a_huge_screen_is_cut_short_and_says_so_and_still_gives_everything_back():
+    keep = J.LIMIT
+    J.LIMIT = 50
+    try:
+        java = _FakeJava({11: _n("frame", kids=[_n("text", "", f"r{i}") for i in range(400)])})
+        out = J.read([11], api=java)
+        assert out["cut"] is True and len(out["elements"]) == 50
+        assert java.held == set()
+    finally:
+        J.LIMIT = keep
+
+
+def test_the_bridge_checks_the_readers_answer_again_before_it_leaves_the_pc():
+    out = {"windows": [{"w": 1, "title": "C-TMS"}, {"w": 2, "title": "Oracle Forms - Logon"}],
+           "elements": [{"n": 1, "w": 1, "lv": 0, "r": "internal frame", "nm": "Sign In"},
+                        {"n": 2, "w": 1, "lv": 1, "r": "text", "nm": "User", "v": "user01"},
+                        {"n": 3, "w": 1, "lv": 0, "r": "internal frame", "nm": "Planning"},
+                        {"n": 4, "w": 1, "lv": 1, "r": "text", "nm": "Search", "v": "x"},
+                        {"n": 5, "w": 1, "lv": 1, "r": "password text", "nm": "Code", "v": "hunter2"},
+                        {"n": 6, "w": 1, "lv": 1, "r": "text", "nm": "Notes", "ds": "password hint", "v": "abc"},
+                        {"n": 7, "w": 2, "lv": 0, "r": "text", "nm": "Username", "v": "user01"}]}
+    J.scrub(out)
+    e = {x["n"]: x for x in out["elements"]}
+    assert e[2]["secret"] and "v" not in e[2]            # inside a sign-in screen in the applet
+    assert e[4]["v"] == "x"                              # an ordinary field keeps what is in it
+    assert all("v" not in e[k] and e[k]["secret"] for k in (5, 6, 7))
+    assert "hunter2" not in json.dumps(out) and "user01" not in json.dumps(out)
+    assert "Logon screen" in J.summary(out)              # and the answer says where CTMS is
+
+
+def test_a_dropped_ctms_session_is_called_out():
+    # CTMS's session drops when left (seen in his walkthrough, 28/10): a Forms alert says so
+    out = {"windows": [{"w": 1, "title": "", "class": "SunAwtCanvas"}], "took": 0.3, "focus": None,
+           "elements": [{"n": 1, "w": 1, "lv": 0, "r": "label", "nm": "FRM-92102: A network error or server "
+                                                                     "failure has occurred."},
+                        {"n": 2, "w": 1, "lv": 0, "r": "push button", "nm": "OK"}]}
+    assert "lost its connection" in J.summary(out) and "Logon" not in J.summary(out)
+    assert J.VALUE_MAX >= 2000          # Special Instructions read whole: the contact note goes at the END
+
+
+def test_fields_needs_its_32_bit_python_first_and_says_how_to_get_it():
+    keep = (W.find_windows, W.picture, B.LOG, J.python32, J.IS_WIN)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    J.python32, J.IS_WIN = (lambda: None), True
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=False)       # reading needs nothing switched on
+        b.scan_window(force=True)
+        b.handle({"id": 1, "action": "fields"})
+        r = desk.sent[-1][1]
+        assert r["ok"] is False and "32-bit Python" in r["detail"] and "fields-setup" in r["detail"]
+    finally:
+        W.find_windows, W.picture, B.LOG, J.python32, J.IS_WIN = keep
+
+
+def test_fields_come_back_by_name_with_the_cursor_and_secrets_held_back():
+    reader = {"ok": True, "java_windows": 2, "java": "1.8.0_481", "took": 0.4, "cut": False, "focus": 2,
+              "windows": [{"w": 1, "title": "", "class": "SunAwtCanvas"}],
+              "elements": [{"n": 1, "w": 1, "lv": 0, "r": "internal frame", "nm": "Planning"},
+                           {"n": 2, "w": 1, "lv": 1, "r": "text", "nm": "Search", "v": "x", "st": ["focused"]},
+                           {"n": 3, "w": 1, "lv": 1, "r": "password text", "nm": "Password", "v": "leaked"}]}
+    calls = []
+
+    class _Done:
+        returncode, stderr = 0, ""
+
+        def __init__(self, out):
+            self.stdout = out
+    keep = (W.find_windows, W.picture, W.java_report, B.LOG, J.python32, J._run, J.IS_WIN)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    J.python32, J.IS_WIN = (lambda: r"C:\bridge\py32\python.exe"), True
+    J._run = lambda args, timeout: calls.append(args) or _Done("noise\n" + json.dumps(reader) + "\n")
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "")
+        b.scan_window(force=True)
+        b.handle({"id": 1, "action": "fields"})
+        r = desk.sent[-1][1]
+        assert r["ok"] and "the cursor is in text 'Search' = 'x'" in r["detail"]
+        p = r["payload"]
+        assert p["kind"] == "fields" and p["title"].startswith("Calidus") and p["elements"][2]["secret"]
+        assert "leaked" not in json.dumps(desk.sent)
+        assert calls[0][1:4] == ["-I", os.path.abspath(J.__file__), "fields"]
+        assert calls[0][4:] == ["4242", "1", "2", "3"]
+        # CTMS's Java not answering at all: what to switch on, and how
+        reader.update(java_windows=0, windows=[], elements=[])
+        W.java_report = lambda: {"switched_on": False, "installs": [
+            {"home": r"C:\Program Files (x86)\Java\jre1.8.0_481", "jabswitch": True}]}
+        b.handle({"id": 2, "action": "fields"})
+        r = desk.sent[-1][1]
+        assert r["ok"] is False and r"jre1.8.0_481\bin\jabswitch.exe" in r["detail"] and "-enable" in r["detail"]
+        W.java_report = lambda: {"switched_on": True, "installs": []}
+        b.handle({"id": 3, "action": "fields"})
+        assert "open it again" in desk.sent[-1][1]["detail"]
+    finally:
+        W.find_windows, W.picture, W.java_report, B.LOG, J.python32, J._run, J.IS_WIN = keep
+
+
+def test_the_32_bit_python_is_unpacked_only_when_its_fingerprint_matches():
+    def zip_of(files):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name, data in files.items():
+                z.writestr(name, data)
+        return buf.getvalue()
+    good = zip_of({"python.exe": b"MZ fake", "python312.zip": b"lib"})
+    evil = zip_of({"python.exe": b"MZ", "../escaped.txt": b"x"})
+    served = {}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.close()
+
+    class _Opener:
+        def open(self, url, timeout=None):
+            return _Resp(served["data"])
+    root = tempfile.mkdtemp()
+    keep = (J.PY32_DIR, J.PY32_SHA256, J.bits, J.IS_WIN, U.opener_for)
+    J.PY32_DIR, J.IS_WIN = os.path.join(root, "py32"), True
+    U.opener_for = lambda url: _Opener()
+    runs32 = (lambda exe: 32 if os.path.isfile(exe) else None)
+    J.bits = runs32
+    try:
+        served["data"], J.PY32_SHA256 = good, hashlib.sha256(b"a proxy page").hexdigest()
+        try:
+            J.setup()
+            assert False, "unpacked without a matching fingerprint"
+        except J.SetupError as e:
+            assert "fingerprint" in str(e)
+        assert not os.path.exists(J.PY32_DIR)
+        served["data"], J.PY32_SHA256 = evil, hashlib.sha256(evil).hexdigest()
+        try:
+            J.setup()
+            assert False, "unpacked a path outside its folder"
+        except J.SetupError as e:
+            assert "outside its folder" in str(e)
+        assert not os.path.exists(os.path.join(root, "escaped.txt")) and not os.path.exists(J.PY32_DIR)
+        served["data"], J.PY32_SHA256 = good, hashlib.sha256(good).hexdigest()
+        J.bits = lambda exe: 64
+        try:
+            J.setup()
+            assert False, "kept a Python that is not 32-bit"
+        except J.SetupError as e:
+            assert "32-bit" in str(e)
+        assert not os.path.exists(J.PY32_DIR) and not os.path.exists(J.PY32_DIR + ".new")
+        J.bits = runs32
+        assert "Fetched" in J.setup()
+        assert os.path.isfile(os.path.join(J.PY32_DIR, "python.exe"))
+        assert "already here" in J.setup()
+    finally:
+        J.PY32_DIR, J.PY32_SHA256, J.bits, J.IS_WIN, U.opener_for = keep
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_reading_fields_needs_no_switch_and_its_setup_is_an_admin_job():
+    fresh()
+    assert call("/api/ctms/command", {"action": "fields"}, key=AGENT)[0] == 200
+    assert call("/api/ctms/command", {"action": "fields_setup"}, key=AGENT)[0] == 200
+    assert [c["action"] for c in S._ctms["queue"]] == ["fields", "fields_setup"]
+    assert "fields" in B.READ and "fields_setup" in B.ADMIN            # the bridge's own list agrees
 
 
 
