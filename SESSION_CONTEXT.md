@@ -54,7 +54,8 @@ DHL/
     ├── *.py                    the home-PC engine (Outlook/COM + domain logic)
     ├── modules/                pure-Python, COM-free, unit-tested logic
     ├── tests/test_modules.py   tests for modules/
-    ├── work_pc/                the second machine: CTMS automation probes
+    ├── work_pc/                the second machine: the CTMS bridge (+ probes)
+    ├── ctms_remote.py          Claude's side of the CTMS bridge (see, click, type...)
     ├── config/team.json.example
     ├── cloud.json.example
     ├── postcode_regions.json   11k-line postcode-district → NR region lookup
@@ -126,7 +127,8 @@ Three hard rules that shape everything:
 | `desk.pyw` | one-click launcher; `pythonw desk.pyw open` also opens the dashboard. |
 
 **Single-instance ports:** watchdog 8785, supervisor 8786, control plane 8787,
-local agent 8788, cloud agent 8789, chase run 8790, wait-list release 8791.
+local agent 8788, cloud agent 8789, chase run 8790, wait-list release 8791,
+CTMS bridge 8792 (work PC).
 
 ### The `IS_LOCAL` rule (important — it caused real double-sends)
 
@@ -197,6 +199,48 @@ agent-produced files), `_dropped` (expired commands, max 8).
 | `POST /api/tracker`, `/api/waitlist`, `/api/panel` | agent | data pushes |
 | `POST /api/upload` | dash | browser→agent file handoff |
 | `POST /api/files` | agent | agent uploads an outbox file |
+| `GET /api/ctms/status[?watch=1]` | dash or agent | CTMS bridge state, `control` {armed, left}, queue, running command, results (with `by`), picture meta, captures. `watch=1` (dash only) keeps pictures coming for ~10s |
+| `GET /api/ctms/result?id=&wait=` | dash or agent | held open (<=20s) until command `id` is answered: `{done, result, payload}` - payload is the screen it came back with |
+| `GET /api/ctms/shot` | dash | the latest picture of the CTMS tab (base64 JPEG) |
+| `GET /api/ctms/captures`, `/api/ctms/capture?name=` | dash or agent | walkthrough captures (zips); the cloud agent collects them |
+| `POST /api/ctms/command` | dash or agent | look: `look`/`capture`/`net`/`see`/`wait`/`tabs`; act: `click`/`type`/`key`/`select`/`scroll`/`hover`/`goto`/`back`/`forward`/`reload`/`dialog`/`tab` - **409 unless "Claude can act" is on**; `update{branch,scope}`. Fields checked and capped by `_ctms_args` |
+| `POST /api/ctms/control` | **dash only** | "Claude can act" `{on, minutes 5-480}`; off cancels queued actions |
+| `POST /api/ctms/stop` | dash | cancel the CTMS queue, recording off, "Claude can act" off |
+| `POST /api/ctms/poll` | bridge | check-in, held open up to `wait` (<=20s) until there is work: state up, `{cmd, watch, stop, resync, control, long}` down |
+| `POST /api/ctms/shot`, `/result`, `/capture` | bridge | picture (or `same`), command result (+ `payload`), capture zip |
+
+### The CTMS channel
+
+The work PC's `ctms_bridge.py` has a channel of its own, separate from the home
+agent's queue, so neither machine can ever pull the other's commands. Its key
+("bridge" above) is HMAC-SHA256 of `DASH_KEY` with `ctms-bridge-v1` - nothing
+new to set on Railway, and the work PC stores only the derived key. Commands
+expire after 60s whether the bridge is online or not (a late capture would
+capture the wrong screen), and `ctms_online` rides on `GET /api/status` for the
+nav dot. Claude can always LOOK; it can only ACT while the dashboard's "Claude
+can act" switch is on (dash key only, times out) AND the work PC allows it -
+see `region2-emailer/CTMS_BOOKING_SPEC.md` for the rails and the update path.
+
+### Driving CTMS from a session (the learner phase)
+
+When Delali asks you to do something in CTMS, use `region2-emailer/ctms_remote.py`
+on the home PC (it reads `cloud.json`: url + agent_key):
+
+```
+python ctms_remote.py status            bridge online? "Claude can act" on? what code?
+python ctms_remote.py see               numbered list + words; picture at ctms_remote/latest.jpg (Read it)
+python ctms_remote.py click 12 | type 7 "HS6366072" [--enter] | select 9 "Region 2" | key Tab
+python ctms_remote.py scroll down | scroll to 31 | goto /path | back | reload | dialog dismiss
+python ctms_remote.py text | find "MAN" | tabs | tab 2 | wait --for "Saved"
+python ctms_remote.py update [--branch B]   the work PC pulls code from GitHub, tries it, restarts
+```
+
+Numbers come from the latest picture; every action answers with a fresh one.
+**Exit 3 + "needs his go-ahead"** means the bridge judged it a book/save/submit/
+confirm/delete: ask Delali, and only after he says go, repeat with `--commit`.
+**Exit 5** = acting is off - only he can switch it on (dashboard CTMS page).
+Never try to sign in or type a password; the bridge refuses on a sign-in page.
+Each step is kept in `ctms_remote/trace/<day>/` - the record Stage 1 is built from.
 
 ### The command TTL / "NOT sent" guarantee
 
@@ -277,7 +321,8 @@ Every file below lives in `region2-emailer/`. Anything importing
 | `home_tick.py` | The COM adapter for self-update ("R2 UPDATE" emails) + holiday-handover forwarding. |
 | `handover_cli.py` | The COM side of `handover_start`. |
 | `modules/` | Pure-Python, COM-free, tested: `site_matching` (self-learning fuzzy site store, 0.92 auto-accept), `profiles` (team + never-email-yourself), `handover`, `self_update`. |
-| `work_pc/` | `ctms_probe.py` (stdlib-only capability report), `ctms_attach_test.py` (proves attaching to a browser *he* logged into), `ctms_capture.py` (hand-rolled CDP client that snapshots CTMS screens, fields, and dropdown options). All read-only. |
+| `work_pc/` | `ctms_bridge.py` (the work PC's side of the CTMS channel: live pictures, captures, network recording, Claude's see/act commands - a supervisor plus the bridge as its child, stdlib only), `ctms_drive.py` (what it does in the CTMS tab, with the rails: sign-in page, password boxes, commit guard, stale numbers), `ctms_update.py` (GitHub-only self-update, tried first, rolled back if it will not start), `cdp.py` (the shared hand-rolled CDP websocket client + page walkers), `ctms_probe.py` (stdlib-only capability report), `ctms_attach_test.py` (proves attaching to a browser *he* logged into), `ctms_capture.py` (the walkthrough at the keyboard). |
+| `ctms_remote.py` | Claude's side of the CTMS bridge on the home PC (see "Driving CTMS from a session"). Output in `ctms_remote/` (gitignored): `latest.jpg` and a per-step trace. |
 
 ### Agent command vocabulary
 
@@ -639,6 +684,34 @@ note; and Excel floats (`1770679.0`) normalise to integers.
 The last ~30 commits, grouped. Each entry is *why*, not just *what* — the "why"
 is usually a real incident.
 
+**CTMS learner phase: Claude works CTMS live, the work PC updates itself (2026-10-28)**
+"A live connection between the work PC and the home PC... you see my CTMS, ask
+me what to do, and go off from there" - and later, code written on the home PC
+updating the work PC remotely. Built without Playwright (it drives Edge over the
+same DevTools socket the bridge already had; installing it on a locked-down PC
+was the risk): `work_pc/ctms_drive.py` (numbered see / click / type / select /
+key / scroll / goto / dialog...), `ctms_remote.py` for Claude on the home PC,
+held-open check-ins and answer waits on the cloud, a dashboard "Claude can act"
+switch only the dashboard key can flip, and `work_pc/ctms_update.py` + a
+supervisor in `ctms_bridge.py` for GitHub-only self-updates with automatic
+rollback. Found while testing: the update's backup copy nested the repo path
+and hit Windows' 260-character limit mid-update (now flat, numbered files, and
+a failed write rolls back at once); a bare "Cancel" link was being treated as
+a commit (now only "cancel order/booking/job..." is); a textarea borrowed the
+neighbouring dropdown's options as its label.
+
+**CTMS bridge, Stage 0 (2026-10-28)**
+"Build the bridge so we can control CTMS from the dashboard." The walkthrough
+had sat undone since August - it meant a Command Prompt script, a zip and an
+email to yourself. Now `work_pc/ctms_bridge.py` attaches to the browser he
+logged into CTMS with, the dashboard's **CTMS** page shows that tab live, and
+**Capture** files each walkthrough screen straight to the home PC. Observe
+only by construction (look / capture / record). Redaction is tested: password
+boxes, sign-in bodies, `;jsessionid=` in links and form actions, token params.
+Found while testing: an unchanged screen sent as "same as before" left the live
+view blank after any cloud restart (the cloud had no "before") - the restart
+now asks for the whole picture.
+
 **Work-PC / CTMS bridge (8cb2035, 5049e8a)**
 Python landed on the work PC. Build loop: Claude writes on the home PC → GitHub
 → work PC downloads the ZIP and runs it; anything the work PC needs to send back
@@ -785,7 +858,7 @@ and Classic Outlook signed in.
 
 | Thread | State |
 |---|---|
-| **CTMS auto-booking** | Spec written (`CTMS_BOOKING_SPEC.md`), probes committed. Blocked on the work-PC probe report + a CTMS screen walkthrough before selectors can be written. Staged safety model: assist → supervised auto → full auto, always with dry-run, screenshots, a stop button and an idempotency check. |
+| **CTMS auto-booking** | Bridge + learner phase built (`CTMS_BOOKING_SPEC.md`): Claude sees and, when switched on, works CTMS on the work PC via `ctms_remote.py`; the bridge self-updates from GitHub. Not yet run on the real work PC / real CTMS (group policy on remote debugging still unproven). Next: deploy, run it there, learn the booking flow live (traces), then Stage 1 assist → supervised auto → full auto, always with dry-run, screenshots, a stop button and an idempotency check. |
 | **Supplier collect-first** | Two-stage supplier→delivery draft flow for Anderton / BCM / Trough Tec. Needs an HS number from an upload sheet — pending. |
 | **Consolidation** | Spot same-day deliveries to the same/nearby postcode area so two jobs share one vehicle. Advisory suggestion in the extract output. |
 | **Quote comparison** | `quotes.py` works; entry is manual. The haulier layer and contact recommendations are live on the map. Once quote history is deep enough, *cheapest* supersedes *distance* in the ranking tie-break. |

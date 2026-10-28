@@ -1,0 +1,525 @@
+"""
+CTMS on the work PC, from the home PC - how Claude sees it and works it.
+
+    python ctms_remote.py status                  is the bridge there, may Claude act
+    python ctms_remote.py see [--all]             picture with numbers + the numbered list + words
+    python ctms_remote.py text                    every word on the screen
+    python ctms_remote.py find WORDS              numbered things and lines that mention WORDS
+    python ctms_remote.py click N                 click a numbered thing   [--double] [--commit]
+    python ctms_remote.py click --at X,Y          ...or a point on the latest picture
+    python ctms_remote.py type N "text"           replace what is in N     [--enter] [--append] [--commit]
+    python ctms_remote.py key Tab|Enter|Escape|ctrl+a|...                  [--commit]
+    python ctms_remote.py select N "option"       choose in a dropdown list
+    python ctms_remote.py scroll down|up|left|right [--amount PX] [--in N]  |  scroll to N
+    python ctms_remote.py hover N
+    python ctms_remote.py goto ADDRESS | back | forward | reload           [--commit]
+    python ctms_remote.py dialog accept|dismiss [--text T]                 [--commit]
+    python ctms_remote.py wait SECONDS  |  wait --for "Saved" [--timeout S]
+    python ctms_remote.py tabs  |  tab N
+    python ctms_remote.py update [--branch B] [--all]    the work PC pulls new code from GitHub
+
+N is a number from the latest picture. Every action answers with a fresh one,
+so the numbers to use next are always the ones just printed.
+
+Anything that would save, book, submit, confirm, send or delete is refused
+unless --commit is given, and --commit is only ever given after Delali has
+said go in the chat. Looking needs nothing switched on; acting needs "Claude
+can act" switched on on the dashboard's CTMS page - which only he can do, and
+which this script cannot.
+
+Everything is kept: ctms_remote/latest.jpg is the newest picture, and
+ctms_remote/trace/<day>/ keeps every step - the picture, what was on the
+screen, what was asked and what happened. That is the record the booking
+automation gets written from.
+
+Reads the dashboard's address and the home PC's key from cloud.json, like the
+cloud agent (CTMS_DESK_URL / CTMS_DESK_KEY override both).
+
+Exit codes: 0 done, 3 not done (refused, or needs his go-ahead), 4 the work
+PC did not answer, 5 acting is switched off, 1 anything else.
+"""
+import argparse
+import base64
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+from urllib.parse import urlsplit
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "ctms_remote")          # gitignored
+STATE = os.path.join(OUT, "state.json")          # the latest picture's snap id
+NEEDS_SNAP = ("click", "type", "select", "scroll", "hover")
+
+
+class Stop(Exception):
+    def __init__(self, msg, code=1):
+        super().__init__(msg)
+        self.code = code
+
+
+def _desk():
+    url, key = os.environ.get("CTMS_DESK_URL"), os.environ.get("CTMS_DESK_KEY")
+    if not (url and key):
+        try:
+            with open(os.path.join(HERE, "cloud.json"), encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (OSError, ValueError):
+            raise Stop("No cloud.json next to this script, and no CTMS_DESK_URL / CTMS_DESK_KEY set - "
+                       "run it from the home PC's region2-emailer folder.")
+        url, key = url or cfg.get("url"), key or cfg.get("agent_key")
+    if not (url and key):
+        raise Stop("cloud.json has no url / agent_key.")
+    return url.rstrip("/"), key
+
+
+BASE, KEY = "", ""
+
+
+def http(method, path, body=None, timeout=45):
+    host = (urlsplit(BASE).hostname or "").lower()
+    handlers = [urllib.request.ProxyHandler({})] if host in ("127.0.0.1", "localhost") else []
+    req = urllib.request.Request(BASE + path, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"X-Auth": KEY, "Content-Type": "application/json"}, method=method)
+    try:
+        with urllib.request.build_opener(*handlers).open(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except ValueError:
+            return e.code, {"error": f"HTTP {e.code}"}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise Stop(f"Could not reach the dashboard at {BASE}: {getattr(e, 'reason', e)}", 4)
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(p):
+    os.makedirs(OUT, exist_ok=True)
+    with open(STATE, "w", encoding="utf-8") as f:
+        json.dump({"snap": p.get("snap"), "ppc": p.get("ppc"), "url": p.get("url"),
+                   "at": datetime.now().isoformat(timespec="seconds")}, f)
+
+
+def ask(action, wait_total=90, **args):
+    """Send one command to the work PC and wait for its answer: (result, payload)."""
+    body = {k: v for k, v in args.items() if v is not None}
+    body["action"] = action
+    if action in NEEDS_SNAP and ("ref" in body or "at" in body):
+        body["snap"] = load_state().get("snap") or ""
+    code, r = http("POST", "/api/ctms/command", body)
+    if code == 401:
+        raise Stop("The dashboard did not accept the home PC's key from cloud.json.")
+    if code == 404:
+        raise Stop("This dashboard has no CTMS channel yet - it needs redeploying.")
+    if code == 409:
+        raise Stop(r.get("error") or "Acting is switched off.", 5)
+    if code != 200:
+        raise Stop(r.get("error") or f"The dashboard answered HTTP {code}.")
+    cid = r["id"]
+    if not r.get("online"):
+        print("(the work PC bridge is offline right now - it gets 60s to check in and pick this up)")
+    deadline = time.time() + wait_total
+    while True:
+        left = deadline - time.time()
+        if left <= 0:
+            raise Stop("No answer from the work PC in time. It may still have done it - run see "
+                       "before trying the same thing again.", 4)
+        code, w = http("GET", f"/api/ctms/result?id={cid}&wait={max(1, min(20, int(left)))}", timeout=45)
+        if code != 200:
+            raise Stop(w.get("error") or f"The dashboard answered HTTP {code}.")
+        if w.get("done"):
+            return w["result"], w.get("payload")
+
+
+# ---- what gets printed ---------------------------------------------------------
+def fmt_el(e):
+    s = f"[{e['n']}] {e.get('r', '?')}"
+    if e.get("t"):
+        s += f"({e['t']})"
+    if e.get("l"):
+        s += f' "{e["l"]}"'
+    elif e.get("id"):
+        s += f" #{e['id']}"
+    elif e.get("nm"):
+        s += f" [name={e['nm']}]"
+    if "v" in e:
+        s += f' = "{e["v"]}"'
+    if "on" in e:
+        s += " [x]" if e["on"] else " [ ]"
+    if e.get("o"):
+        s += "  {" + " | ".join(e["o"][:12]) + (" | ..." if len(e["o"]) > 12 else "") + "}"
+    flags = []
+    if e.get("c"):
+        flags.append("SAVES/SUBMITS - needs his go-ahead")
+    if e.get("pw"):
+        flags.append("PASSWORD - never typed into")
+    for k, word in (("dis", "disabled"), ("ro", "read-only"), ("req", "required")):
+        if e.get(k):
+            flags.append(word)
+    if e.get("f"):
+        flags.append("in frame " + e["f"])
+    if e.get("off"):
+        flags.append(e["off"] + " - not in view")
+    href = e.get("href") or ""
+    if href and not href.lower().startswith("javascript") and href != "#":
+        flags.append("-> " + href[:70])
+    return s + ("  (" + "; ".join(flags) + ")" if flags else "")
+
+
+def _squeeze(text):
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in (text or "").splitlines()]
+    out, blank = [], False
+    for ln in lines:
+        if not ln:
+            if not blank and out:
+                out.append("")
+            blank = True
+        else:
+            out.append(ln)
+            blank = False
+    return "\n".join(out).strip()
+
+
+def save_picture(p, action):
+    if not p.get("img"):
+        return None
+    raw = base64.b64decode(p["img"])
+    os.makedirs(OUT, exist_ok=True)
+    latest = os.path.join(OUT, "latest.jpg")
+    with open(latest, "wb") as f:
+        f.write(raw)
+    return latest
+
+
+def trace(action, args, result, payload):
+    """Keep the step: the picture, the screen, what was asked, what happened."""
+    try:
+        now = datetime.now()
+        d = os.path.join(OUT, "trace", now.strftime("%Y-%m-%d"))
+        os.makedirs(d, exist_ok=True)
+        stem = os.path.join(d, now.strftime("%H%M%S") + f"-{action}")
+        if payload and payload.get("img"):
+            with open(stem + ".jpg", "wb") as f:
+                f.write(base64.b64decode(payload["img"]))
+        rec = {"at": now.isoformat(timespec="seconds"), "action": action, "args": args, "result": result,
+               "screen": {k: v for k, v in (payload or {}).items() if k != "img"}}
+        with open(stem + ".json", "w", encoding="utf-8") as f:
+            json.dump(rec, f, indent=1)
+    except Exception as e:
+        print(f"(could not keep this step in the trace: {e})")
+
+
+def print_screen(p, action, full=False, words=2500):
+    if p.get("dialog"):
+        d = p["dialog"]
+        print(f"\nDIALOG BOX OPEN ({d.get('type')}): \"{d.get('message')}\"")
+        print("  -> dialog dismiss, or dialog accept (OK on a confirm needs his go-ahead: --commit)")
+    if p.get("note") and not p.get("snap"):
+        print(p["note"])
+    if not p.get("snap"):
+        if p.get("picture_error"):
+            print("No picture: " + p["picture_error"])
+        return
+    save_state(p)
+    print(f"\n{p.get('title') or '(no title)'}  |  {p.get('url', '')}")
+    pic = save_picture(p, action)
+    if pic:
+        print(f"Picture: {pic}  ({p.get('img_w')}x{p.get('img_h')}, numbers drawn on)  [{p['snap']}]")
+    elif p.get("picture_error"):
+        print("No picture: " + p["picture_error"])
+    if p.get("sign_in"):
+        print("SIGN-IN PAGE: a password box is showing. Delali signs in himself - nothing is "
+              "clicked or typed here.")
+    if p.get("focus"):
+        print("Cursor in: " + p["focus"])
+    els = p.get("elements") or []
+    inview = [e for e in els if not e.get("off")]
+    print(f"\nOn screen ({len(inview)}):")
+    for e in (els if full else inview):
+        print("  " + fmt_el(e))
+    off = [e for e in els if e.get("off")]
+    if off and not full:
+        counts = {}
+        for e in off:
+            counts[e["off"]] = counts.get(e["off"], 0) + 1
+        print("Not in view: " + ", ".join(f"{n} {w}" for w, n in counts.items())
+              + " - scroll, or use the number (it scrolls by itself); see --all lists them.")
+    if (p.get("total") or 0) > len(els):
+        print(f"({p['total'] - len(els)} more clickable things not listed - the page is crowded)")
+    for o in p.get("opaque") or []:
+        print(f"A frame the bridge cannot read: {o['frame']} at {o['x']},{o['y']} ({o['w']}x{o['h']} "
+              f"page px) - only click --at works inside it.")
+    tabs = p.get("tabs") or []
+    if len(tabs) > 1:
+        print("Tabs: " + "  |  ".join(f"{t['n']}{' (this one)' if t.get('current') else ''}: "
+                                      f"{t.get('title', '')[:40]}" for t in tabs))
+    text = _squeeze(p.get("text"))
+    if text and words:
+        print("\nWords on the screen" + (" (start of)" if len(text) > words else "") + ":")
+        print(text[:words])
+
+
+def report(action, args, result, payload, full=False, words=2500):
+    trace(action, args, result, payload)
+    print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
+    if payload and payload.get("needs_commit"):
+        print("  -> ask Delali first. If he says go, run the same command again with --commit.")
+    if payload:
+        if payload.get("tabs") and not payload.get("snap") and action == "tabs":
+            for t in payload["tabs"]:
+                print(f"  {t['n']}{' *' if t.get('current') else '  '} {t.get('title', '')}  |  {t.get('url', '')}")
+        print_screen(payload, action, full=full, words=words)
+    return 0 if result.get("ok") else 3
+
+
+# ---- the commands ------------------------------------------------------------------
+def cmd_status(_a):
+    code, st = http("GET", "/api/ctms/status")
+    if code == 401:
+        raise Stop("The dashboard did not accept the home PC's key from cloud.json.")
+    if code == 404:
+        raise Stop("This dashboard has no CTMS channel yet - it needs redeploying.")
+    s, c = st.get("state") or {}, st.get("control") or {}
+    if not st.get("online"):
+        seen = st.get("seen_ago")
+        print("Work PC bridge: OFFLINE" + (f" (last seen {seen}s ago)" if seen is not None else " (never seen)"))
+    else:
+        print(f"Work PC bridge: online - {s.get('machine', '?')}, {s.get('browser', '?')}")
+    print("CTMS tab: " + (f"{s.get('tab_title') or '?'}  |  {s.get('tab_url', '')}" if s.get("attached")
+                          else (s.get("error") or "none attached")))
+    if s.get("dialog"):
+        print("DIALOG BOX OPEN: " + s["dialog"])
+    allowed = s.get("control")
+    if c.get("armed"):
+        print(f"Claude can act: ON - {c['left'] // 60} min {c['left'] % 60}s left"
+              + ("" if allowed is not False else " (but the work PC is observe only)"))
+    else:
+        print("Claude can act: off (look only) - Delali switches it on from the dashboard's CTMS page")
+    if allowed is False:
+        print("Work PC setting: observe only (python ctms_bridge.py --allow-control on the work PC to allow acting)")
+    print("Bridge code: " + (s.get("code") or "not known until its first remote update")
+          + (f", v{s['version']}" if s.get("version") else "")
+          + (f", since {s['code_at']}" if s.get("code_at") else ""))
+    if s.get("rolled_back"):
+        print("ROLLED BACK: " + s["rolled_back"])
+    if st.get("running"):
+        r = st["running"]
+        print(f"Doing now: {r['action']} ({r.get('age', 0)}s)")
+    for r in (st.get("results") or [])[:6]:
+        who = {"home PC": "Claude", "dashboard": "dash"}.get(r.get("by"), r.get("by") or "")
+        print(f"  {r.get('at')} {'ok ' if r.get('ok') else 'NO '} {who:6} {r.get('action', ''):8} {str(r.get('detail'))[:110]}")
+    return 0
+
+
+def _ref(v):
+    try:
+        return int(str(v).strip("[]"))
+    except ValueError:
+        raise Stop(f"'{v}' is not a number from the picture.")
+
+
+def main(argv=None):
+    global BASE, KEY
+    if hasattr(sys.stdout, "reconfigure"):
+        # piped (as Claude runs it), Windows would write the codepage, and
+        # CTMS's middle dots and pound signs arrive as question marks
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ap = argparse.ArgumentParser(prog="ctms_remote.py", description="CTMS on the work PC, from the home PC.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status")
+    p = sub.add_parser("see")
+    p.add_argument("--all", action="store_true", help="list what is out of view too")
+    p.add_argument("--no-marks", action="store_true", help="a picture without the numbers drawn on")
+    sub.add_parser("text")
+    p = sub.add_parser("find")
+    p.add_argument("words", nargs="+")
+    p = sub.add_parser("click")
+    p.add_argument("ref", nargs="?")
+    p.add_argument("--at", help="X,Y on the latest picture")
+    p.add_argument("--double", action="store_true")
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("type")
+    p.add_argument("ref", nargs="?")
+    p.add_argument("text", nargs="?")
+    p.add_argument("--focused", metavar="TEXT", help="type into whatever has the cursor")
+    p.add_argument("--enter", action="store_true")
+    p.add_argument("--append", action="store_true", help="add to what is there instead of replacing it")
+    p.add_argument("--paste", action="store_true", help="put it in at once instead of key by key")
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("key")
+    p.add_argument("key")
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("select")
+    p.add_argument("ref")
+    p.add_argument("option")
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("scroll")
+    p.add_argument("dir", nargs="?", default="down", choices=["down", "up", "left", "right", "to"])
+    p.add_argument("ref", nargs="?")
+    p.add_argument("--amount", type=int)
+    p.add_argument("--in", dest="inside", help="scroll inside numbered thing N (a list, a panel)")
+    p = sub.add_parser("hover")
+    p.add_argument("ref")
+    p = sub.add_parser("goto")
+    p.add_argument("url")
+    p.add_argument("--commit", action="store_true")
+    for name in ("back", "forward", "reload"):
+        sub.add_parser(name).add_argument("--commit", action="store_true")
+    p = sub.add_parser("dialog")
+    p.add_argument("answer", choices=["accept", "dismiss"])
+    p.add_argument("--text")
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("wait")
+    p.add_argument("seconds", nargs="?", type=float)
+    p.add_argument("--for", dest="text")
+    p.add_argument("--timeout", type=float, default=10)
+    sub.add_parser("tabs")
+    p = sub.add_parser("tab")
+    p.add_argument("n", type=int)
+    p = sub.add_parser("update")
+    p.add_argument("--branch", default="main")
+    p.add_argument("--all", action="store_true", help="the whole toolkit, not just the bridge's folder")
+    a = ap.parse_args(argv)
+    try:
+        BASE, KEY = _desk()
+        return run(a)
+    except Stop as e:
+        print(str(e))
+        return e.code
+
+
+def run(a):
+    c = a.cmd
+    if c == "status":
+        return cmd_status(a)
+    if c == "see":
+        args = {"marks": not a.no_marks}
+        return report(c, args, *ask("see", **args), full=a.all)
+    if c in ("text", "find"):
+        result, payload = ask("see", picture=False, marks=False)
+        trace(c, {"words": getattr(a, "words", None)}, result, payload)
+        if not result.get("ok") or not payload:
+            return report(c, {}, result, payload)
+        save_state(payload)
+        text = _squeeze(payload.get("text"))
+        if c == "text":
+            print(f"{payload.get('title') or '(no title)'}  |  {payload.get('url', '')}  [{payload.get('snap')}]\n")
+            print(text or "(no words on the screen)")
+            return 0
+        want = " ".join(a.words).lower()
+        hits = [e for e in payload.get("elements") or []
+                if want in " ".join(str(e.get(k) or "") for k in ("l", "v", "id", "nm", "href")).lower()
+                or any(want in str(o).lower() for o in e.get("o") or [])]
+        print(f"Numbered things mentioning \"{want}\" [{payload.get('snap')}]:")
+        for e in hits:
+            print("  " + fmt_el(e))
+        if not hits:
+            print("  none")
+        lines = [ln for ln in text.splitlines() if want in ln.lower()]
+        print(f"\nLines of text mentioning it ({len(lines)}):")
+        for ln in lines[:40]:
+            print("  " + ln[:200])
+        return 0
+    if c == "click":
+        args = {"commit": a.commit, "double": a.double}
+        if a.at:
+            try:
+                x, y = (float(v) for v in a.at.split(","))
+            except ValueError:
+                raise Stop("--at takes X,Y - a point on the latest picture, e.g. --at 640,300")
+            args["at"] = [x, y]
+        elif a.ref is not None:
+            args["ref"] = _ref(a.ref)
+        else:
+            raise Stop("Click what? A number from the picture, or --at X,Y.")
+        return report(c, args, *ask("click", **args))
+    if c == "type":
+        if a.focused is not None:
+            args = {"text": a.focused}
+        else:
+            if a.ref is None or a.text is None:
+                raise Stop('type N "text" - or type --focused "text" for wherever the cursor is.')
+            args = {"ref": _ref(a.ref), "text": a.text}
+        args.update(enter=a.enter, append=a.append, paste=a.paste, commit=a.commit)
+        return report(c, args, *ask("type", **args))
+    if c == "key":
+        args = {"key": a.key, "commit": a.commit}
+        return report(c, args, *ask("key", **args))
+    if c == "select":
+        args = {"ref": _ref(a.ref), "option": a.option, "commit": a.commit}
+        return report(c, args, *ask("select", **args))
+    if c == "scroll":
+        args = {"dir": a.dir, "amount": a.amount}
+        if a.dir == "to":
+            if a.ref is None:
+                raise Stop("scroll to N - which number?")
+            args["ref"] = _ref(a.ref)
+        elif a.inside is not None:
+            args["ref"] = _ref(a.inside)
+        return report(c, args, *ask("scroll", **args))
+    if c == "hover":
+        args = {"ref": _ref(a.ref)}
+        return report(c, args, *ask("hover", **args))
+    if c == "goto":
+        args = {"url": a.url, "commit": a.commit}
+        return report(c, args, *ask("goto", **args))
+    if c in ("back", "forward", "reload"):
+        args = {"commit": a.commit}
+        return report(c, args, *ask(c, **args))
+    if c == "dialog":
+        args = {"accept": a.answer == "accept", "text": a.text, "commit": a.commit}
+        return report(c, args, *ask("dialog", **args))
+    if c == "wait":
+        args = {"seconds": a.seconds, "text": a.text, "timeout": a.timeout}
+        return report(c, args, *ask("wait", wait_total=120, **args))
+    if c == "tabs":
+        return report(c, {}, *ask("tabs"))
+    if c == "tab":
+        args = {"tab": a.n}
+        return report(c, args, *ask("tab", **args))
+    if c == "update":
+        return cmd_update(a)
+    raise Stop(f"Unknown command {c}")
+
+
+def cmd_update(a):
+    """The work PC fetches the branch from GitHub, tries it, restarts on it - then wait to hear from it."""
+    args = {"branch": a.branch, "scope": "all" if a.all else "bridge"}
+    code, before = http("GET", "/api/ctms/status")
+    old = ((before or {}).get("state") or {}).get("code", "")
+    result, payload = ask("update", wait_total=300, **args)
+    rc = report("update", args, result, payload)
+    if not result.get("ok") or "Restarting" not in str(result.get("detail")):
+        return rc
+    print("Waiting for the bridge to come back on the new code...")
+    deadline = time.time() + 120
+    time.sleep(5)
+    while time.time() < deadline:
+        code, st = http("GET", "/api/ctms/status")
+        s = (st or {}).get("state") or {}
+        if code == 200 and st.get("online") and s.get("code") and s.get("code") != old:
+            print(f"Back, running {s['code']}.")
+            return 0
+        if s.get("rolled_back") and s.get("code") == old:
+            print("ROLLED BACK: " + s["rolled_back"])
+            return 3
+        time.sleep(3)
+    print("Not heard from the bridge on the new code yet - check status in a minute "
+          "(if it would not start, it rolls itself back).")
+    return 4
+
+
+if __name__ == "__main__":
+    sys.exit(main())

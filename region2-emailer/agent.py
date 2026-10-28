@@ -123,6 +123,44 @@ def push_new_files(before):
             pass
 
 
+# The work PC's CTMS bridge (work_pc/ctms_bridge.py) sends every "Capture this
+# screen" to the cloud, which holds them in memory only - a redeploy would lose
+# any nobody had fetched. Collect them here, where the booking selectors get
+# written from them. Only the cloud agent can see them (the local control plane
+# has no CTMS channel), and fetching by name is idempotent, so this is a data
+# pull, not one of the IS_LOCAL send/write jobs. Never raises.
+CTMS_CAPTURE_DIR = os.path.join(HERE, "work_pc", "ctms_capture")
+
+
+def pull_ctms_captures():
+    import base64
+    import zipfile
+    from urllib.parse import quote
+    try:
+        lst = _req("/api/ctms/captures").get("captures") or []
+    except Exception:
+        return
+    for c in lst:
+        name = str(c.get("name") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}\.zip", name):
+            continue
+        dest = os.path.join(CTMS_CAPTURE_DIR, name)
+        if os.path.exists(dest):
+            continue
+        try:
+            d = _req("/api/ctms/capture?name=" + quote(name), timeout=120)
+            os.makedirs(CTMS_CAPTURE_DIR, exist_ok=True)
+            with open(dest + ".part", "wb") as f:
+                f.write(base64.b64decode(d.get("data") or ""))
+            os.replace(dest + ".part", dest)
+            # unpacked beside it, so a screen can be read without a zip tool
+            # (extractall strips absolute paths and ".." from member names)
+            with zipfile.ZipFile(dest) as z:
+                z.extractall(dest[:-4])
+        except Exception:
+            pass
+
+
 # States that hold a review panel open on the dashboard. A "done" report
 # replaces the state, and with it the panel: a batch waiting to be ticked or an
 # email waiting to be sent simply disappears. Background jobs must not do that.
@@ -736,6 +774,7 @@ def main():
     last_files = time.time()
     last_push = time.time()
     last_panel = time.time()
+    last_ctms = 0.0
     bg = None
     if IS_LOCAL:                    # the cloud agent runs no timer jobs
         try:
@@ -1481,6 +1520,9 @@ def main():
         if time.time() - last_files > 1800:   # heal the Files list after a redeploy
             push_new_files({})
             last_files = time.time()
+        if not IS_LOCAL and time.time() - last_ctms > 60:   # CTMS captures come home
+            pull_ctms_captures()
+            last_ctms = time.time()
         # Background Outlook jobs - see BackgroundJobs. Guarded so that nothing
         # a timer job does can ever take the agent (and the dashboard) down.
         if bg is not None:

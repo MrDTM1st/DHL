@@ -38,14 +38,20 @@ REPORT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                       "ctms_workpc_report.txt")
 
 
-def launch(exe):
+def launch(exe, port=DEBUG_PORT, profile=PROFILE):
     args = [
         exe,
-        f"--remote-debugging-port={DEBUG_PORT}",
+        f"--remote-debugging-port={port}",
         "--remote-allow-origins=*",
-        f"--user-data-dir={PROFILE}",
+        f"--user-data-dir={profile}",
         "--no-first-run",
         "--no-default-browser-check",
+        # The dashboard bridge takes pictures of this window while you work in
+        # others. Edge stops painting a window it thinks nobody can see, and a
+        # screenshot of a window that is not painting never comes back - so
+        # keep it painting when it is covered.
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
     ]
     # Detached, so closing this Command Prompt does not take the browser with
     # it - the walkthrough happens in that window long after this script exits.
@@ -55,10 +61,10 @@ def launch(exe):
     subprocess.Popen(args, close_fds=True, **kwargs)
 
 
-def wait_for_port(seconds=25):
+def wait_for_port(seconds=25, port=DEBUG_PORT):
     deadline = time.time() + seconds
     while time.time() < deadline:
-        if port_open(timeout=1):
+        if port_open(port, timeout=1):
             return True
         time.sleep(1)
     return False

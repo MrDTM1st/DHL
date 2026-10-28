@@ -11,7 +11,7 @@ Same dashboard as the local control plane, hardened for the internet:
 
     DASH_KEY=... AGENT_KEY=... PORT=8080 python server.py
 """
-import json, os, sys, time, threading
+import hashlib, hmac, json, os, re, sys, time, threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -38,6 +38,201 @@ except ValueError:
 _dropped = []        # expired-unrun commands, kept until dismissed from the dashboard
 _MAX_DROPPED = 8
 _panel = {}          # agent-pushed persistent panel state: site decisions, handover, team
+
+
+# ---- CTMS bridge channel -------------------------------------------------
+# The work PC runs work_pc/ctms_bridge.py, which drives the Edge window he
+# logged into CTMS with himself. It is a channel of its own, NOT more actions
+# on the home agent's queue: /api/next must never hand an Outlook command to
+# the work PC, and the bridge must never be able to pull one. Its key opens
+# the bridge's endpoints below and nothing else.
+#
+# That key is DERIVED from DASH_KEY, so there is nothing new to set on Railway:
+# the bridge asks for the dashboard key once, derives the same value, and keeps
+# only the derived one - the work PC never holds a key that can send email.
+#
+# Who may ask the bridge for what:
+#   the dashboard (DASH_KEY)   everything - and it ALONE can switch "Claude can
+#                              act" on, for a set time
+#   the home PC (AGENT_KEY)    what Claude uses through ctms_remote.py: looking
+#                              at any time, acting only while that switch is on,
+#                              and asking the work PC to update itself
+CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdigest()
+            if DASH_KEY else "")
+CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
+CTMS_READ = ("see", "wait", "tabs")                # Claude looking
+CTMS_DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
+              "reload", "dialog", "tab")           # Claude acting - only while the switch is on
+CTMS_ADMIN = ("update",)
+# The bridge refuses anything else on its own side as well; this list only
+# stops something queuing that would just come back refused.
+CTMS_ACTIONS = CTMS_OBSERVE + CTMS_READ + CTMS_DRIVE + CTMS_ADMIN
+# A CTMS command is about the screen as it is NOW. "Capture this screen" run
+# ten minutes late captures whatever is up ten minutes later, filed under the
+# name of the screen you meant - so an unclaimed command expires in a minute,
+# online or not. (The home agent's queue deliberately keeps its backlog; this
+# one deliberately does not.)
+_CTMS_TTL = 60
+_CTMS_MAX_CAPTURES = 20
+_CTMS_MAX_CAPTURE_B64 = 80_000_000   # all held captures together, in memory
+_CTMS_MAX_PAYLOADS = 8               # screens sent back for Claude, newest kept
+_CTMS_MAX_PAYLOAD_BYTES = 40_000_000
+_CTMS_MAX_WAIT = 20                  # longest a check-in or a wait for a result is held open
+_ctms = {
+    "seen": 0.0,           # last bridge check-in
+    "state": {},           # what the bridge last said about itself
+    "queue": [],
+    # Numbering starts from the clock, not 0: a dashboard left open across a
+    # redeploy still holds the old numbers, and picture 1 or command 1 of the
+    # new run must not be mistaken for the one it already has.
+    "next_id": int(time.time()),
+    "results": [],         # newest first
+    "shot": None,          # the latest picture of the CTMS tab
+    "next_shot": int(time.time()),
+    "watch_until": 0.0,    # a dashboard has the CTMS page open until then
+    "stop": False,         # one-shot, handed to the bridge on its next check-in
+    "running": None,       # the command handed out and not yet answered
+    "captures": {},        # name -> {data, size, at}, oldest first
+    "control_until": 0.0,  # "Claude can act" is on until then (switched on from the dashboard only)
+    "payloads": {},        # command id -> {data, size}: the screen an answer came back with
+    "asked": {},           # command id -> who asked, for the activity list
+    "polling": 0,          # check-ins being held open right now
+}
+# Wakes a held check-in when there is work, and a held wait when its answer lands.
+_ctms_cv = threading.Condition(_lock)
+
+
+def _ctms_online():
+    # The bridge checks in every 1-10s (a check-in is held open while it waits
+    # for work), and capturing a heavy page holds it for several seconds
+    # between check-ins - 20s rides that out.
+    return _ctms["polling"] > 0 or (time.time() - _ctms["seen"]) < 20
+
+
+def _ctms_armed():
+    return time.time() < _ctms["control_until"]
+
+
+def _ctms_control_locked():
+    left = _ctms["control_until"] - time.time()
+    return {"armed": left > 0, "left": max(0, int(left))}
+
+
+def _ctms_result_locked(res):
+    res = dict(res, ts=time.time(), at=datetime.now().strftime("%H:%M:%S"))
+    _ctms["results"].insert(0, res)
+    del _ctms["results"][30:]
+
+
+def _ctms_note_locked(detail):
+    """A line in the activity list for something the dashboard did itself."""
+    _ctms["next_id"] += 1
+    _ctms_result_locked({"id": _ctms["next_id"], "action": "control", "name": "", "ok": True,
+                         "detail": detail, "by": "dashboard"})
+
+
+def _ctms_cancel_locked(why, only=None):
+    keep = []
+    for c in _ctms["queue"]:
+        if only is None or c["action"] in only:
+            _ctms_result_locked({"id": c["id"], "action": c["action"], "name": c.get("name", ""),
+                                 "ok": False, "detail": why, "by": c.get("by", "")})
+        else:
+            keep.append(c)
+    _ctms["queue"] = keep
+
+
+def _ctms_sweep_locked():
+    now = time.time()
+    keep = []
+    for c in _ctms["queue"]:
+        if now - c["queued_at"] > _CTMS_TTL:
+            _ctms_result_locked({"id": c["id"], "action": c["action"], "name": c.get("name", ""),
+                                 "ok": False, "by": c.get("by", ""),
+                                 "detail": f"Not run - the work PC did not pick this up within "
+                                           f"{_CTMS_TTL}s, so nothing was done. Ask again "
+                                           f"once the bridge shows online."})
+        else:
+            keep.append(c)
+    _ctms["queue"] = keep
+    if not _ctms_armed() and any(c["action"] in CTMS_DRIVE for c in keep):
+        _ctms_cancel_locked("Cancelled - 'Claude can act' ran out before the work PC got to it.",
+                            only=CTMS_DRIVE)
+
+
+def _ctms_args(action, data):
+    """What a command may carry, each field checked and cut to size. Anything else is dropped."""
+    out = {}
+
+    def num(k, lo, hi, kind=float):
+        try:
+            v = kind(data[k])
+        except (KeyError, TypeError, ValueError):
+            return
+        if lo <= v <= hi:
+            out[k] = v
+    if action == "capture":
+        name = re.sub(r"[^A-Za-z0-9 ._-]+", "-", str(data.get("name") or ""))[:48].strip(" .-")
+        out["name"] = name or "screen"
+    for k in ("on", "commit", "enter", "append", "paste", "double", "accept", "marks", "picture"):
+        if k in data:
+            out[k] = bool(data[k])
+    num("ref", 1, 100000, int)
+    num("tab", 1, 50, int)
+    num("amount", 1, 20000, int)
+    num("seconds", 0, 30)
+    num("timeout", 0, 60)
+    at = data.get("at")
+    if isinstance(at, (list, tuple)) and len(at) == 2:
+        try:
+            out["at"] = [max(0.0, min(float(at[0]), 20000.0)), max(0.0, min(float(at[1]), 20000.0))]
+        except (TypeError, ValueError):
+            pass
+    for k, n in (("text", 2000), ("key", 40), ("option", 200), ("url", 2000)):
+        if data.get(k) is not None:
+            out[k] = str(data[k])[:n]
+    snap = str(data.get("snap") or "")
+    if re.fullmatch(r"s\d{1,9}", snap):
+        out["snap"] = snap
+    if data.get("dir") in ("up", "down", "left", "right", "to"):
+        out["dir"] = data["dir"]
+    branch = str(data.get("branch") or "")
+    if re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", branch) and ".." not in branch:
+        out["branch"] = branch
+    if data.get("scope") in ("bridge", "all"):
+        out["scope"] = data["scope"]
+    return out
+
+
+def _ctms_take_state_locked(s):
+    """Keep what the bridge says about itself - known keys only, sizes capped.
+
+    A check-in carries only what changed for the bulky parts (the network tail,
+    the walkthrough screen list), so absent keys keep their last value.
+    """
+    if not isinstance(s, dict):
+        return
+    st = _ctms["state"]
+    for k in ("attached", "net", "control"):
+        if k in s:
+            st[k] = bool(s[k])
+    for k in ("tabs", "net_count"):
+        if k in s:
+            try:
+                st[k] = int(s[k])
+            except (TypeError, ValueError):
+                pass
+    for k, n in (("browser", 80), ("tab_title", 200), ("tab_url", 500), ("mode", 20),
+                 ("error", 300), ("version", 20), ("match", 80), ("machine", 60),
+                 ("code", 60), ("code_at", 30), ("dialog", 300), ("rolled_back", 300)):
+        if k in s:
+            st[k] = str(s[k] or "")[:n]
+    if isinstance(s.get("net_tail"), list):
+        st["net_tail"] = [{k: str(e.get(k) or "")[:300] for k in ("at", "method", "url", "status", "type", "mime")}
+                          for e in s["net_tail"][-20:] if isinstance(e, dict)]
+    if isinstance(s.get("screens"), list):
+        st["screens"] = [[str(x)[:160] for x in pair[:2]] for pair in s["screens"][:20]
+                         if isinstance(pair, (list, tuple)) and pair]
 
 
 # ---- front end -----------------------------------------------------------
@@ -1150,6 +1345,297 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return False
 
+    def _is_ctms(self):
+        # The work PC's bridge. Deliberately does NOT touch _agent_seen - the
+        # pill that says "Home PC online" must not light up because the work
+        # PC checked in.
+        return bool(CTMS_KEY) and hmac.compare_digest(
+            self._key().encode("utf-8", "replace"), CTMS_KEY.encode())
+
+    def _agent_key_ok(self):
+        # The home PC's key, WITHOUT refreshing "Home PC online": Claude using
+        # ctms_remote.py says nothing about whether the home agent is running.
+        return bool(AGENT_KEY) and hmac.compare_digest(
+            self._key().encode("utf-8", "replace"), AGENT_KEY.encode())
+
+    # ---- CTMS bridge channel (see _ctms above) ----
+    def _ctms_get(self):
+        from urllib.parse import parse_qs
+        path, _, query = self.path.partition("?")
+        q = parse_qs(query)
+        if path == "/api/ctms/status":
+            dash = self._is_dash()
+            if not (dash or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            now = time.time()
+            with _lock:
+                if dash and "watch=1" in query.split("&"):
+                    # the CTMS page is open somewhere: keep pictures coming
+                    if _ctms["watch_until"] < now:
+                        _ctms_cv.notify_all()       # a held check-in hears it now, not in 10s
+                    _ctms["watch_until"] = now + 10
+                _ctms_sweep_locked()
+                shot = _ctms["shot"]
+                out = {
+                    "online": _ctms_online(),
+                    "seen_ago": int(now - _ctms["seen"]) if _ctms["seen"] else None,
+                    "state": dict(_ctms["state"]),
+                    "control": _ctms_control_locked(),
+                    "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
+                                "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
+                    "running": (dict({k: v for k, v in _ctms["running"].items() if k != "since"},
+                                     age=int(now - _ctms["running"]["since"]))
+                                if _ctms["running"] else None),
+                    "results": [dict({k: v for k, v in r.items() if k != "ts"}, ago=int(now - r["ts"]))
+                                for r in _ctms["results"]],
+                    "shot": (dict({k: shot[k] for k in ("id", "w", "h", "url", "title")},
+                                  ago=round(now - shot["ts"], 1)) if shot else None),
+                    "captures": [{"name": n, "size": c["size"], "at": c["at"]}
+                                 for n, c in reversed(list(_ctms["captures"].items()))],
+                    "ttl": _CTMS_TTL,
+                }
+            return self._json(200, out)
+        if path == "/api/ctms/result":
+            # Claude waits here for the answer to one command - held open
+            # until it lands, so an action and its result are one round trip
+            if not (self._is_dash() or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            try:
+                cid = int((q.get("id") or [""])[0])
+            except ValueError:
+                return self._json(400, {"error": "which command? ?id=..."})
+            try:
+                wait = max(0.0, min(float((q.get("wait") or ["0"])[0]), _CTMS_MAX_WAIT))
+            except ValueError:
+                wait = 0.0
+            deadline = time.time() + wait
+            with _lock:
+                while True:
+                    _ctms_sweep_locked()
+                    res = next((r for r in _ctms["results"] if r.get("id") == cid), None)
+                    left = deadline - time.time()
+                    if res or left <= 0:
+                        break
+                    _ctms_cv.wait(min(left, 5))
+                out = {"done": bool(res), "online": _ctms_online()}
+                if res:
+                    out["result"] = {k: v for k, v in res.items() if k != "ts"}
+                    held = _ctms["payloads"].get(cid)
+                    if held:
+                        out["payload"] = held["data"]
+                else:
+                    out["queued"] = any(c["id"] == cid for c in _ctms["queue"])
+                    out["running"] = bool(_ctms["running"] and _ctms["running"]["id"] == cid)
+            return self._json(200, out)
+        if path == "/api/ctms/shot":
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                shot = _ctms["shot"]
+                out = (dict({k: v for k, v in shot.items() if k != "ts"},
+                            ago=round(time.time() - shot["ts"], 1)) if shot else {})
+            return self._json(200, out)
+        if path == "/api/ctms/captures":
+            # the home agent collects these, so the walkthrough lands on the
+            # home PC with nobody zipping or emailing anything
+            if not (self._is_dash() or self._is_agent()):
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                lst = [{"name": n, "size": c["size"], "at": c["at"]}
+                       for n, c in reversed(list(_ctms["captures"].items()))]
+            return self._json(200, {"captures": lst})
+        if path == "/api/ctms/capture":
+            if not (self._is_dash() or self._is_agent()):
+                return self._json(401, {"error": "auth"})
+            name = (q.get("name") or [""])[0]
+            with _lock:
+                c = _ctms["captures"].get(name)
+            if not c:
+                return self._json(404, {"error": "gone"})
+            return self._json(200, {"name": name, "data": c["data"]})
+        return self._json(404, {"error": "not found"})
+
+    def _ctms_post(self, data, length):
+        path = self.path.partition("?")[0]
+        if not isinstance(data, dict):
+            data = {}
+        # ---- from the dashboard, or from Claude on the home PC ----
+        if path == "/api/ctms/command":
+            dash = self._is_dash()
+            if not (dash or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            action = str(data.get("action") or "")
+            if action not in CTMS_ACTIONS:
+                return self._json(400, {"error": f"the CTMS bridge does not do '{action[:40]}'"})
+            refused = None
+            with _lock:
+                _ctms_sweep_locked()
+                if action in CTMS_DRIVE and not _ctms_armed():
+                    refused = ("Claude can't act in CTMS right now: 'Claude can act' is off on the "
+                               "dashboard's CTMS page. Only Delali can switch it on, from there.", "control")
+                elif action in CTMS_DRIVE and _ctms["state"].get("control") is False:
+                    refused = ("The work PC is set to observe only. To let Claude act, run this on the "
+                               "work PC:  python ctms_bridge.py --allow-control", "allow")
+                else:
+                    # one picture request in the queue is plenty
+                    cmd = next((c for c in _ctms["queue"] if action == "look" and c["action"] == "look"), None)
+                    if cmd is None:
+                        _ctms["next_id"] += 1
+                        cmd = dict(_ctms_args(action, data), id=_ctms["next_id"], action=action,
+                                   by="dashboard" if dash else "home PC", queued_at=time.time())
+                        _ctms["queue"].append(cmd)
+                        _ctms["asked"][cmd["id"]] = cmd["by"]
+                        for old in list(_ctms["asked"])[:-100]:
+                            _ctms["asked"].pop(old, None)
+                        _ctms_cv.notify_all()
+                    online = _ctms_online()
+            if refused:
+                return self._json(409, {"error": refused[0], "need": refused[1]})
+            return self._json(200, {"ok": True, "id": cmd["id"], "online": online})
+        if path == "/api/ctms/control":
+            # "Claude can act" - the dashboard's switch, and nobody else's
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            on = bool(data.get("on"))
+            try:
+                minutes = max(5, min(int(data.get("minutes") or 60), 480))
+            except (TypeError, ValueError):
+                minutes = 60
+            with _lock:
+                if on:
+                    _ctms["control_until"] = time.time() + minutes * 60
+                    _ctms_note_locked(f"'Claude can act' switched on for {minutes} min.")
+                else:
+                    _ctms["control_until"] = 0.0
+                    _ctms_cancel_locked("Cancelled - 'Claude can act' was switched off.", only=CTMS_DRIVE)
+                    _ctms_note_locked("'Claude can act' switched off.")
+                _ctms_cv.notify_all()
+                out = {"ok": True, "control": _ctms_control_locked()}
+            return self._json(200, out)
+        if path == "/api/ctms/stop":
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                _ctms_cancel_locked("Cancelled - Stop was pressed.")
+                _ctms["stop"] = True
+                if _ctms_armed():
+                    _ctms_note_locked("Stop pressed - 'Claude can act' switched off.")
+                _ctms["control_until"] = 0.0
+                _ctms_cv.notify_all()
+            return self._json(200, {"ok": True})
+        # ---- from the work PC's bridge ----
+        if not self._is_ctms():
+            return self._json(401, {"error": "auth"})
+        if path == "/api/ctms/poll":
+            if length > 200_000:
+                return self._json(413, {"error": "check-in too large"})
+            try:
+                wait = max(0.0, min(float(data.get("wait") or 0), _CTMS_MAX_WAIT))
+            except (TypeError, ValueError):
+                wait = 0.0
+            watched, armed = bool(data.get("watched")), bool(data.get("armed"))
+            with _lock:
+                _ctms["seen"] = time.time()
+                _ctms_take_state_locked(data.get("state"))
+                _ctms_sweep_locked()
+                # Held open until there is work, or something the bridge has
+                # to know changes (pictures wanted, the switch flipped).
+                deadline = time.time() + wait
+                _ctms["polling"] += 1
+                try:
+                    while not _ctms["queue"] and not _ctms["stop"]:
+                        now = time.time()
+                        if ((now < _ctms["watch_until"]) != watched or _ctms_armed() != armed
+                                or now >= deadline):
+                            break
+                        _ctms_cv.wait(min(deadline - now, 5))
+                        _ctms_sweep_locked()
+                finally:
+                    _ctms["polling"] -= 1
+                _ctms["seen"] = time.time()
+                cmd = _ctms["queue"].pop(0) if _ctms["queue"] else None
+                # The bridge does one thing at a time, so a check-in means the
+                # last thing it was handed is over, answered or not.
+                _ctms["running"] = ({"id": cmd["id"], "action": cmd["action"], "name": cmd.get("name", ""),
+                                     "by": cmd.get("by", ""), "since": time.time()} if cmd else None)
+                stop, _ctms["stop"] = _ctms["stop"], False
+                watch = time.time() < _ctms["watch_until"]
+                control = _ctms_armed()
+                # A restart empties this memory; the bridge only sends its bulky
+                # parts when they change, so tell it to send them again.
+                resync = not _ctms["state"].get("screens")
+            if cmd:
+                cmd = {k: v for k, v in cmd.items() if k != "queued_at"}
+            return self._json(200, {"cmd": cmd, "watch": watch, "stop": stop, "resync": resync,
+                                    "control": control, "long": True})
+        if path == "/api/ctms/shot":
+            if length > 6_000_000:
+                return self._json(413, {"error": "picture too large"})
+            need = False
+            with _lock:
+                _ctms["seen"] = time.time()
+                if data.get("same"):
+                    if _ctms["shot"]:
+                        _ctms["shot"]["ts"] = time.time()     # unchanged screen - just fresher
+                    else:
+                        # "same as before" - but a restart emptied before. Ask for
+                        # the whole picture, or the live view waits until the
+                        # CTMS screen happens to change.
+                        need = True
+                elif data.get("data"):
+                    _ctms["next_shot"] += 1
+                    try:
+                        w, h = int(data.get("w") or 0), int(data.get("h") or 0)
+                    except (TypeError, ValueError):
+                        w = h = 0
+                    _ctms["shot"] = {"id": _ctms["next_shot"], "ts": time.time(),
+                                     "data": str(data["data"]), "w": w, "h": h,
+                                     "url": str(data.get("url") or "")[:500],
+                                     "title": str(data.get("title") or "")[:200]}
+            return self._json(200, {"ok": True, "need": True} if need else {"ok": True})
+        if path == "/api/ctms/result":
+            if length > 12_000_000:
+                return self._json(413, {"error": "answer too large"})
+            payload = data.get("payload") if isinstance(data.get("payload"), dict) else None
+            with _lock:
+                _ctms["seen"] = time.time()
+                cid = data.get("id")
+                if _ctms["running"] and _ctms["running"]["id"] == cid:
+                    _ctms["running"] = None
+                _ctms_result_locked({"id": cid, "action": str(data.get("action") or "")[:20],
+                                     "name": str(data.get("name") or "")[:60], "ok": bool(data.get("ok")),
+                                     "detail": str(data.get("detail") or "")[:1000],
+                                     "by": _ctms["asked"].get(cid, ""),
+                                     "pic": bool(payload and payload.get("img"))})
+                if payload is not None and isinstance(cid, int):
+                    held = _ctms["payloads"]
+                    held.pop(cid, None)
+                    held[cid] = {"data": payload, "size": length}
+                    while len(held) > 1 and (len(held) > _CTMS_MAX_PAYLOADS or
+                                             sum(h["size"] for h in held.values()) > _CTMS_MAX_PAYLOAD_BYTES):
+                        held.pop(next(iter(held)))
+                _ctms_cv.notify_all()
+            return self._json(200, {"ok": True})
+        if path == "/api/ctms/capture":
+            name = str(data.get("name") or "")
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}\.zip", name) or not data.get("data"):
+                return self._json(400, {"error": "a capture needs a .zip name and data"})
+            with _lock:
+                _ctms["seen"] = time.time()
+                caps = _ctms["captures"]
+                caps.pop(name, None)
+                try:
+                    size = int(data.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                caps[name] = {"data": str(data["data"]), "size": size,
+                              "at": datetime.now().strftime("%d/%m %H:%M")}
+                while len(caps) > 1 and (len(caps) > _CTMS_MAX_CAPTURES or
+                                         sum(len(c["data"]) for c in caps.values()) > _CTMS_MAX_CAPTURE_B64):
+                    caps.pop(next(iter(caps)))
+            return self._json(200, {"ok": True})
+        return self._json(404, {"error": "not found"})
+
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
             body = _index_bytes()
@@ -1180,6 +1666,7 @@ class Handler(BaseHTTPRequestHandler):
                 out["queue_ttl"] = _QUEUE_TTL
                 out["dropped"] = list(_dropped)
                 out["panel"] = _panel
+                out["ctms_online"] = _ctms_online()
             self._json(200, out)
         elif self.path == "/api/next":
             seen_before = _agent_seen
@@ -1234,17 +1721,27 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
         elif self.path == "/healthz":
             self._json(200, {"ok": True, "files": True})
+        elif self.path.startswith("/api/ctms/"):
+            self._ctms_get()
         else:
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
         global _tracker, _waitlist, _upload
         length = int(self.headers.get("Content-Length", 0))
+        # Everything legitimate is far below this (the biggest are an outbox
+        # file and a CTMS capture, a few MB each). Without a ceiling any
+        # client, signed in or not, could make this read a body of any size
+        # into memory before the auth check below ever ran.
+        if length > 40_000_000:
+            return self._json(413, {"error": "too large"})
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
             data = {}
-        if self.path == "/api/command":
+        if self.path.startswith("/api/ctms/"):
+            self._ctms_post(data, length)
+        elif self.path == "/api/command":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
             with _lock:

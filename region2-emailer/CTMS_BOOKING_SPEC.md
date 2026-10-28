@@ -1,7 +1,13 @@
 # CTMS Auto-Booking — Design / Build Spec
 
-**Status:** Spec. Build blocked pending a CTMS screen walkthrough.
-**Needs:** Python + Playwright on the **work PC** (that's where the CTMS session lives).
+**Status:** the bridge and the LEARNER PHASE are BUILT (see below): Claude, on
+the home PC, sees CTMS on the work PC live and works it while Delali directs it
+in the chat; the bridge updates itself from GitHub. Automated booking (Stage 1+)
+still waits on learning the screens, which that phase is for.
+**Needs:** Python on the **work PC** (that's where the CTMS session lives) -
+standard library only. Playwright turned out not to be needed: it drives Edge
+over the same DevTools connection the bridge already uses, and installing it on
+a locked-down work PC is the part most likely to fail.
 
 Sits on top of the existing toolkit — the job data it books comes from what we
 already parse (extracts / tracker). This is the automation that actually *acts*
@@ -44,6 +50,108 @@ Phone PWA / dashboard
   work PC.
 - Requires the work PC on + the work-PC agent running for remote control (same
   trade-off as today's home-PC desk).
+
+### What is built - the Stage 0 bridge
+
+`work_pc/ctms_bridge.py` on the work PC, the **CTMS** page on the dashboard,
+and a channel of their own on the control plane (`/api/ctms/*` in
+`cloud/server.py`). Standard library only, like the rest of `work_pc/`.
+
+- **Its own channel and key.** Not more actions on the home agent's queue: the
+  work PC can never pull an Outlook command, and the home agent never sees a
+  CTMS one. The bridge's key is derived from `DASH_KEY` (HMAC, `ctms-bridge-v1`),
+  so nothing new is set on Railway; the work PC stores only the derived key,
+  which opens the bridge's endpoints and nothing else.
+- **Observe commands for the dashboard** - `look` (a picture now), `capture`
+  (one walkthrough screen), `net` (record what CTMS sends, on/off). (Stage 0
+  had nothing else; the learner phase below added acting, behind a switch.)
+- **Live view.** While the CTMS page is open on screen, the bridge sends a
+  scaled JPEG of the CTMS tab every ~1.5s (an unchanged screen costs a few
+  bytes). Nothing streams when nobody is looking.
+- **The walkthrough comes home by itself.** Each capture is zipped (fields with
+  dropdown options, page HTML, page text, PNG, network log), kept on the work
+  PC in `work_pc\ctms_capture\`, sent to the cloud, and collected by the home
+  PC's cloud agent into the same folder there, unpacked.
+- **Nothing secret leaves.** Password boxes are blanked, a sign-in request's
+  body is never recorded, and session ids / tokens are stripped from every
+  address, form action, link, request body and the page HTML. Tested in
+  `tests/test_ctms_bridge.py`.
+- **Commands expire in 60s, online or not.** "Capture this screen" run late
+  would capture the wrong screen under the right name.
+- **Stop** cancels anything queued and switches recording off. Every command
+  and result is logged on the work PC in `work_pc\ctms_bridge_log.jsonl`.
+- **Single instance:** port 8792 (the toolkit's locks run 8785-8791).
+
+### What is built - the learner phase (Claude drives, Delali directs)
+
+Delali asked for "a live connection between the work PC and the home PC" so
+Claude can see CTMS, ask what to do, and do it - learning CTMS before any of it
+is automated. Three parts:
+
+- **`work_pc/ctms_drive.py`** - what the bridge does in the CTMS tab. `see`
+  returns a picture with every clickable thing numbered on it (frames and
+  shadow roots included), the numbered list (role, label, value, options,
+  frame) and the page text. `click` / `type` / `key` / `select` / `scroll` /
+  `hover` act on a number (or `click --at x,y` on the picture);
+  `goto` / `back` / `forward` / `reload` / `dialog` / `wait` / `tab(s)` round
+  it out. Every action answers with a fresh `see`, so the result is seen, not
+  assumed. Built on the stdlib CDP client: real mouse and key events
+  (keyup-driven lookups fire), settle-waits for page loads and data calls,
+  confirm()/alert() boxes reported the moment they open.
+- **`ctms_remote.py`** (home PC) - how Claude uses it: `python ctms_remote.py
+  see`, `click 12`, `type 7 "HS6366072" --enter`, ... Reads `cloud.json`
+  (url + agent_key). Keeps `ctms_remote/latest.jpg` and a step-by-step trace in
+  `ctms_remote/trace/<day>/` (picture + screen + command + result) - the record
+  Stage 1 selectors get written from.
+- **The relay** - the bridge's check-in is held open (`wait`, up to 20s) until
+  there is work, and Claude's wait for an answer is held open until it lands
+  (`GET /api/ctms/result?id=&wait=`), so a command and its result are one round
+  trip of a second or two, with no hard polling.
+
+Who may do what (server-enforced, and the bridge checks again on its side):
+
+| | dashboard (`DASH_KEY`) | home PC / Claude (`AGENT_KEY`) | bridge (derived key) |
+|---|---|---|---|
+| look: `see`, `wait`, `tabs`, `look`, `capture`, `net` | yes | yes | - |
+| act: `click`, `type`, `key`, `select`, `scroll`, `hover`, `goto`, `back`, `forward`, `reload`, `dialog`, `tab` | only while armed | only while armed | - |
+| switch **Claude can act** on/off (`/api/ctms/control`, 5-480 min) | **yes** | no | no |
+| Stop (cancels the queue, disarms) | yes | no | no |
+| `update` | yes | yes | - |
+| check in, answer, upload pictures/captures | - | - | yes |
+
+The rails, in code (`ctms_drive.py`), not good intentions:
+
+- **Two locks to act:** the work PC must allow it (`allow_control`, asked at
+  setup; `--allow-control` / `--observe-only`) AND the dashboard switch must be
+  on. It runs out by itself; Stop and switching off cancel anything queued.
+- **Sign-in page:** a visible password box anywhere (frames included) means
+  nothing is clicked or typed on that page. Password boxes are never typed
+  into. Clipboard paste and browser-level keys (close, print, DevTools...) are
+  refused.
+- **Commit guard:** a button/link/key/dropdown/dialog answer that would book,
+  save, submit, confirm, send, delete (or cancel an order/booking/job) is
+  refused unless the command carries `commit` - which Claude only sends after
+  Delali says go in the chat. Judged on the label, on ids/names/onclick split
+  out of camelCase, and on the form's action; a submit button with no label
+  counts as risky, and so does a click into a frame the bridge cannot read.
+  Reload/back onto a form-submit page and `goto` an address that looks like an
+  action need it too.
+- **Stale numbers:** a number only works against the picture it came from; if
+  the page navigated or redrew, the action is refused ("look again").
+- **goto** stays on the CTMS host.
+
+**Remote updates** (`work_pc/ctms_update.py`): `update` (dashboard button or
+`ctms_remote.py update [--branch B] [--all]`) makes the bridge download the
+branch's ZIP from GitHub - code never comes from the dashboard - compile every
+changed file and import the bridge's modules in a scratch folder, back up what
+it replaces (`_update_backups\`, flat numbered files: deep paths hit Windows'
+260-character limit), lay the new files down and exit 75. `ctms_bridge.py` now
+runs as a small **supervisor** plus the bridge as its child: exit 75 restarts
+on the new code; a child that dies before its first check-in after an update is
+rolled back automatically (`_update_rolled_back.json`, shown on the dashboard);
+anything else restarts up to three times in ten minutes. Verified end to end on
+the home PC: good update, update that does not compile (refused), update that
+crashes on start (rolled back by itself).
 
 ## Safety model — human-in-the-loop, staged
 
@@ -98,9 +206,12 @@ non-empty means the job is not bookable yet.
 
 ## What I still need — the walkthrough
 
-Run `work_pc\ctms_capture.py`. It is guided: it asks for each screen below in
-order, and captures URL, full HTML (including inside frames), every field with
-its id / name / label / dropdown options, a PNG, and the network calls.
+With the bridge running, open the **CTMS** page on the dashboard: it lists the
+screens below with a Capture button each, and ticks them off as they arrive.
+Bring each screen up in CTMS on the work PC and press Capture. Each one records
+URL, full HTML (including inside frames), every field with its id / name /
+label / dropdown options, a PNG, and - with recording on - the network calls.
+(`work_pc\ctms_capture.py` still does the same at the keyboard, as a fallback.)
 
 | Screen | Why |
 |---|---|
@@ -114,7 +225,7 @@ its id / name / label / dropdown options, a PNG, and the network calls.
 | booked-job | the update-an-existing-job flow, if it differs |
 | validation-error | how failures present, so the bot can stop rather than guess |
 
-Say **yes** to the network question. It records the requests CTMS makes, and
+Switch **What CTMS sends** on first. It records the requests CTMS makes, and
 answers the one architectural question in this whole build:
 
 - **CTMS posts the booking to a JSON API** → drive that API. Stable, fast,
@@ -138,7 +249,9 @@ dashboard selection, or a day/week at a time.
 
 ## Rollout checklist
 
-- [ ] Playwright installed on the work PC; dedicated CTMS Chrome profile set up.
+- [x] Bridge: work PC ↔ dashboard, observe only, its own key and channel.
+- [ ] Walkthrough captured from the dashboard (all nine screens, recording on).
+- [ ] Read-only lookups (booked? MAN ref? which orders share a vehicle) from the captures.
 - [ ] Booking script built from the walkthrough; **dry-run** first.
 - [ ] Stage 1 (assist) on a handful of real jobs.
 - [ ] Audit log + stop button verified.

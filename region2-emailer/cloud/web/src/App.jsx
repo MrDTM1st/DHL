@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import MapPage from './pages/MapPage.jsx';
 import TrackerPage from './pages/TrackerPage.jsx';
 import Notifications from './pages/Notifications.jsx';
+import CtmsPage from './pages/CtmsPage.jsx';
 import { useStatus, useTracker } from './hooks.js';
 import { isUrgent, within3, ordLabel, dueText } from './lib/orders.js';
 import * as api from './api.js';
@@ -58,6 +59,8 @@ export default function App() {
     ? (status.queue_ttl >= 60 ? Math.floor(status.queue_ttl / 60) + ' minutes' : status.queue_ttl + ' seconds')
     : '10 minutes';
   const agentText = 'Home PC ' + (agentOnline ? 'online' : 'offline');
+  // the work PC's CTMS bridge - a separate machine on its own channel
+  const ctmsOnline = !!(status && status.ctms_online);
 
   // ---- toasts ----
   const pushToast = useCallback((title, msg, kind) => {
@@ -250,6 +253,7 @@ export default function App() {
         unread={unread}
         agentOnline={agentOnline}
         agentText={agentText}
+        ctmsOnline={ctmsOnline}
         bellOpen={bellOpen}
         onBell={(e) => { e.stopPropagation(); setBellOpen((v) => !v); }}
       />
@@ -276,6 +280,7 @@ export default function App() {
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
         )}
+        {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} />}
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}

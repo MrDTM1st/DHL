@@ -43,6 +43,14 @@ region2-emailer/work_pc/ctms_probe_report.txt
 region2-emailer/work_pc/ctms_attach_report.txt
 region2-emailer/work_pc/ctms_workpc_report.txt
 region2-emailer/work_pc/ctms_capture/
+region2-emailer/work_pc/ctms_bridge.json
+region2-emailer/work_pc/ctms_bridge_log.jsonl
+region2-emailer/work_pc/ctms_bridge_crash.txt
+region2-emailer/work_pc/_update_backups/
+region2-emailer/work_pc/_update_pending.json
+region2-emailer/work_pc/_code_version.json
+region2-emailer/work_pc/_update_rolled_back.json
+region2-emailer/ctms_remote/
 region2-emailer/work_pc/engine_preflight_report.txt
 region2-emailer/work_pc/_win_ca_bundle.pem
 

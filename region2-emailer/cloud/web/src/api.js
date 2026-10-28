@@ -67,15 +67,61 @@ export function fileToB64(file) {
   });
 }
 
-// Trigger a browser download of an agent-produced file (from /api/file).
-export async function downloadFile(name) {
-  const d = await getFile(name);
-  const bin = atob(d.data);
+function saveB64(name, b64) {
+  const bin = atob(b64);
   const arr = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   const url = URL.createObjectURL(new Blob([arr]));
   const a = document.createElement('a');
-  a.href = url; a.download = d.name || name;
+  a.href = url; a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+}
+
+// Trigger a browser download of an agent-produced file (from /api/file).
+export async function downloadFile(name) {
+  const d = await getFile(name);
+  saveB64(d.name || name, d.data);
+}
+
+// ---- CTMS bridge (the work PC's own channel - see server.py _ctms) ----
+// watch=true while the CTMS page is on screen: that is what keeps the work PC
+// sending pictures, and it stops by itself ~10s after the page closes.
+export const ctmsStatus = (watch) => getJSON('/api/ctms/status' + (watch ? '?watch=1' : ''));
+export const ctmsShot = () => getJSON('/api/ctms/shot');
+
+// Unlike command(), this one says when the server turned it down - a refused
+// CTMS action has to read as refused, not as a button that did nothing.
+export async function ctmsCommand(body) {
+  const r = await req('/api/ctms/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
+export async function ctmsStop() {
+  await req('/api/ctms/stop', { method: 'POST' });
+}
+
+// "Claude can act" - on for a set number of minutes, or off. Only the
+// dashboard's own key can do this; the home PC's cannot.
+export async function ctmsControl(on, minutes) {
+  const r = await req('/api/ctms/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ on, minutes }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
+export async function downloadCtmsCapture(name) {
+  const d = await getJSON('/api/ctms/capture?name=' + encodeURIComponent(name));
+  if (!d.data) throw new Error('gone');
+  saveB64(name, d.data);
 }
