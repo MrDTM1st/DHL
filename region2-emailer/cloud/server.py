@@ -204,6 +204,28 @@ def _ctms_args(action, data):
     return out
 
 
+# "Set up this PC": the work PC's whole setup as one file to double-click, with
+# the bridge's own key already in it - so nothing is typed on the work PC. The
+# template is ordinary Python next to this file (ctms_setup.py); one line of
+# batch goes in front, which Windows runs and Python skips (python -x).
+_SETUP_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ctms_setup.py")
+_SETUP_HEAD = '@python -x "%~f0" %* & pause & goto :eof\r\n'
+
+
+def _ctms_setup_file(desk, allow, autostart):
+    try:
+        with open(_SETUP_TEMPLATE, encoding="utf-8") as f:
+            tpl = f.read()
+    except OSError:
+        return None
+    if "CONFIG = {}" not in tpl:
+        return None
+    cfg = {"desk": desk, "key": CTMS_KEY, "allow_control": bool(allow), "autostart": bool(autostart),
+           "made": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    body = tpl.replace("CONFIG = {}", "CONFIG = " + repr(cfg), 1)
+    return (_SETUP_HEAD + body.replace("\r\n", "\n").replace("\n", "\r\n")).encode("utf-8")
+
+
 def _ctms_take_state_locked(s):
     """Keep what the bridge says about itself - known keys only, sizes capped.
 
@@ -213,7 +235,7 @@ def _ctms_take_state_locked(s):
     if not isinstance(s, dict):
         return
     st = _ctms["state"]
-    for k in ("attached", "net", "control"):
+    for k in ("attached", "net", "control", "autostart"):
         if k in s:
             st[k] = bool(s[k])
     for k in ("tabs", "net_count"):
@@ -1435,6 +1457,30 @@ class Handler(BaseHTTPRequestHandler):
                 out = (dict({k: v for k, v in shot.items() if k != "ts"},
                             ago=round(time.time() - shot["ts"], 1)) if shot else {})
             return self._json(200, out)
+        if path == "/api/ctms/setup":
+            # the dashboard's key only: the file carries the bridge's key
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            from urllib.parse import urlsplit
+            desk = (q.get("desk") or [""])[0].rstrip("/")
+            d = urlsplit(desk)
+            # the address the work PC will call is this dashboard's own, as the
+            # browser asking for the file reached it - never one passed in from elsewhere
+            hosts = {(self.headers.get(h) or "").lower() for h in ("Host", "X-Forwarded-Host")} - {""}
+            if d.scheme not in ("http", "https") or d.netloc.lower() not in hosts:
+                return self._json(400, {"error": "the setup is made for this dashboard's own address"})
+            body = _ctms_setup_file(desk, (q.get("allow") or ["1"])[0] == "1",
+                                    (q.get("autostart") or ["1"])[0] == "1")
+            if body is None:
+                return self._json(500, {"error": "the setup template is missing from this deployment"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="CTMS bridge setup.cmd"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return None
         if path == "/api/ctms/captures":
             # the home agent collects these, so the walkthrough lands on the
             # home PC with nobody zipping or emailing anything
@@ -1526,6 +1572,10 @@ class Handler(BaseHTTPRequestHandler):
         # ---- from the work PC's bridge ----
         if not self._is_ctms():
             return self._json(401, {"error": "auth"})
+        if path == "/api/ctms/hello":
+            # the setup asking "can this PC reach the dashboard?" - nothing
+            # handed out, nothing marked as running
+            return self._json(200, {"ok": True})
         if path == "/api/ctms/poll":
             if length > 200_000:
                 return self._json(413, {"error": "check-in too large"})
@@ -1720,7 +1770,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             self._json(200, {"ok": True})
         elif self.path == "/healthz":
-            self._json(200, {"ok": True, "files": True})
+            # ctms_setup: the work PC's setup template made it into this build
+            # (it is a COPY line in both Dockerfiles - easy to lose)
+            self._json(200, {"ok": True, "files": True, "ctms_setup": os.path.isfile(_SETUP_TEMPLATE)})
         elif self.path.startswith("/api/ctms/"):
             self._ctms_get()
         else:

@@ -140,6 +140,20 @@ The rails, in code (`ctms_drive.py`), not good intentions:
   the page navigated or redrew, the action is refused ("look again").
 - **goto** stays on the CTMS host.
 
+**One-click setup** ("Set up this PC" on the CTMS page, asked for so the work
+PC needs no Command Prompt at all): `GET /api/ctms/setup` (dashboard key only)
+fills `cloud/ctms_setup.py` with this dashboard's address, the bridge key and
+his two choices, and puts `@python -x "%~f0" %* & pause & goto :eof` in front -
+Windows runs that line on a double-click, `python -x` skips it. The setup gets
+the code (PAC proxy -> PowerShell -> a DHL-main.zip in Downloads), installs into
+`%USERPROFILE%\CTMS-bridge`, writes the config, checks `POST /api/ctms/hello`,
+writes/removes the Startup-folder entry (`ctms_bridge.py --autostart on|off`),
+closes any running bridge and starts the new one in its own console (not via
+`start` from a shell: an inherited handle kept the setup window from closing).
+The bridge remembers CTMS's app root (`ctms_url`) and opens the automation
+browser on it. A web page cannot start programs on the PC, so this is the one
+double-click; everything after it is buttons.
+
 **Remote updates** (`work_pc/ctms_update.py`): `update` (dashboard button or
 `ctms_remote.py update [--branch B] [--all]`) makes the bridge download the
 branch's ZIP from GitHub - code never comes from the dashboard - compile every

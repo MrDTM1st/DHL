@@ -10,6 +10,8 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 COPY region2-emailer/cloud/server.py .
+# the work PC's one-click setup, filled in and served by /api/ctms/setup
+COPY region2-emailer/cloud/ctms_setup.py .
 # The built UI; server.py serves it at "/" (falls back to its inline page if absent).
 COPY --from=web /web/dist/index.html ./web_index.html
 # PWA assets (manifest, service worker, icons) from the build's public/ dir.

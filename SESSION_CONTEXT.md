@@ -205,6 +205,8 @@ agent-produced files), `_dropped` (expired commands, max 8).
 | `GET /api/ctms/captures`, `/api/ctms/capture?name=` | dash or agent | walkthrough captures (zips); the cloud agent collects them |
 | `POST /api/ctms/command` | dash or agent | look: `look`/`capture`/`net`/`see`/`wait`/`tabs`; act: `click`/`type`/`key`/`select`/`scroll`/`hover`/`goto`/`back`/`forward`/`reload`/`dialog`/`tab` - **409 unless "Claude can act" is on**; `update{branch,scope}`. Fields checked and capped by `_ctms_args` |
 | `POST /api/ctms/control` | **dash only** | "Claude can act" `{on, minutes 5-480}`; off cancels queued actions |
+| `GET /api/ctms/setup?allow=&autostart=&desk=` | **dash only** | the work PC's one-click setup: `cloud/ctms_setup.py` filled in with this dashboard's own address (must match Host) + the bridge key + his choices, a batch line in front (`python -x` skips it) |
+| `POST /api/ctms/hello` | bridge | "can this PC reach the dashboard?" - the setup's check; hands nothing out |
 | `POST /api/ctms/stop` | dash | cancel the CTMS queue, recording off, "Claude can act" off |
 | `POST /api/ctms/poll` | bridge | check-in, held open up to `wait` (<=20s) until there is work: state up, `{cmd, watch, stop, resync, control, long}` down |
 | `POST /api/ctms/shot`, `/result`, `/capture` | bridge | picture (or `same`), command result (+ `payload`), capture zip |
@@ -683,6 +685,20 @@ note; and Excel floats (`1770679.0`) normalise to integers.
 
 The last ~30 commits, grouped. Each entry is *why*, not just *what* — the "why"
 is usually a real incident.
+
+**One-click setup for the work PC (2026-10-28)**
+"A button in the online dashboard that would download and do those steps for
+me on the work PC... then the bridge would be seamless." A web page cannot
+start programs on the PC, so it is one double-click: **Set up this PC** on the
+CTMS page downloads `CTMS bridge setup.cmd`, made for this dashboard (the
+bridge key inside - nothing typed), which gets the code (proxy, then
+PowerShell, then a ZIP in Downloads), installs into `%USERPROFILE%\CTMS-bridge`,
+checks it can reach the dashboard, adds a Startup-folder entry if ticked,
+closes any running bridge and starts the new one. The bridge now remembers
+CTMS's address and opens the automation browser on it. Found while testing:
+started with `start` from a shell, the bridge inherited the setup window's
+handle and kept it from ever closing - it is now its own console process.
+Remember both Dockerfiles copy `cloud/ctms_setup.py`.
 
 **CTMS learner phase: Claude works CTMS live, the work PC updates itself (2026-10-28)**
 "A live connection between the work PC and the home PC... you see my CTMS, ask

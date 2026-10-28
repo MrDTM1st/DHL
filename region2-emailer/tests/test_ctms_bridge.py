@@ -680,6 +680,124 @@ def test_claude_sees_numbers_acts_on_them_and_every_step_is_kept():
 
 
 
+# ---- "Set up this PC": the one file the work PC needs ----------------------------------
+def _setup_text(allow="1", autostart="1", desk=None, key=DASH):
+    q = f"allow={allow}&autostart={autostart}&desk=" + (desk or BASE)
+    req = urllib.request.Request(BASE + "/api/ctms/setup?" + q, headers={"X-Auth": key})
+    try:
+        with _op.open(req, timeout=10) as r:
+            return r.status, r.read(), r.headers
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), e.headers
+
+
+def test_the_setup_file_is_made_for_this_dashboard_and_only_for_its_own_key():
+    code, body, headers = _setup_text(allow="1", autostart="0")
+    assert code == 200 and "CTMS bridge setup.cmd" in headers.get("Content-Disposition", "")
+    text = body.decode("utf-8")
+    first, rest = text.split("\r\n", 1)
+    assert first == '@python -x "%~f0" %* & pause & goto :eof'     # what Windows runs; Python skips it
+    compile(rest, "setup", "exec")                                     # the rest is the Python
+    cfg = eval(next(ln for ln in rest.splitlines() if ln.startswith("CONFIG = "))[9:])
+    assert cfg["desk"] == BASE and cfg["key"] == BRIDGE and cfg["key"] != DASH
+    assert cfg["allow_control"] is True and cfg["autostart"] is False
+    for key in (AGENT, BRIDGE, ""):
+        assert _setup_text(key=key)[0] == 401
+    assert call("/healthz", key="")[1]["ctms_setup"] is True          # the template is in this build
+    # made only for the address the browser actually reached
+    assert _setup_text(desk="https://evil.example")[0] == 400
+    assert _setup_text(desk="javascript:alert(1)")[0] == 400
+
+
+def test_hello_answers_the_bridge_and_hands_nothing_out():
+    fresh()
+    cid = call("/api/ctms/command", {"action": "see"}, key=AGENT)[1]["id"]
+    assert call("/api/ctms/hello", {}, key=BRIDGE) == (200, {"ok": True})
+    assert [c["id"] for c in S._ctms["queue"]] == [cid] and S._ctms["running"] is None
+    for key in (DASH, AGENT, ""):
+        assert call("/api/ctms/hello", {}, key=key)[0] == 401
+
+
+def test_start_at_login_is_one_file_in_startup_that_comes_and_goes():
+    keep = os.environ.get("APPDATA")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["APPDATA"] = tmp
+        try:
+            path = B.set_autostart(True)
+            assert B.autostart_on() and path.startswith(tmp) and path.endswith("CTMS bridge.cmd")
+            body = open(path).read()
+            assert "ctms_bridge.py" in body and "/min" in body
+            B.set_autostart(False)
+            assert not B.autostart_on() and not os.path.exists(path)
+        finally:
+            if keep is None:
+                os.environ.pop("APPDATA", None)
+            else:
+                os.environ["APPDATA"] = keep
+
+
+def test_the_bridge_remembers_where_ctms_lives_for_next_time():
+    keep = B.CONFIG
+    with tempfile.TemporaryDirectory() as tmp:
+        B.CONFIG = os.path.join(tmp, "ctms_bridge.json")
+        try:
+            B.save_config({"url": "u", "key": "k"})
+            B.remember_ctms_url("https://ctms.example/CTMS/OrderSearch.do;jsessionid=ABC?x=1")
+            assert B.load_config()["ctms_url"] == "https://ctms.example/CTMS/"
+            B.remember_ctms_url("https://ctms.example/index.html")
+            assert B.load_config()["ctms_url"] == "https://ctms.example/"
+            B.remember_ctms_url("edge://settings")                     # not a web page: ignored
+            assert B.load_config()["ctms_url"] == "https://ctms.example/"
+        finally:
+            B.CONFIG = keep
+
+
+def _toolkit_zip(path, commit=COMMIT):
+    """The repo as GitHub would hand it over - the real work_pc code inside."""
+    wp = os.path.join(ENGINE, "work_pc")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n in os.listdir(wp):
+            if n.endswith(".py"):
+                z.write(os.path.join(wp, n), "DHL-main/region2-emailer/work_pc/" + n)
+        z.writestr("DHL-main/region2-emailer/build_drafts.py", "# toolkit\n")
+        z.writestr("DHL-main/region2-emailer/send_order.py", "# toolkit\n")
+        z.comment = commit.encode()
+
+
+def test_the_setup_sets_up_a_fresh_pc_and_a_second_run_changes_the_choices():
+    import pathlib
+    import subprocess
+    with tempfile.TemporaryDirectory() as tmp:
+        zpath = os.path.join(tmp, "DHL-main.zip")
+        _toolkit_zip(zpath)
+        home, appdata = os.path.join(tmp, "CTMS-bridge"), os.path.join(tmp, "appdata")
+        env = dict(os.environ, CTMS_SETUP_TEST="1", CTMS_BRIDGE_HOME=home, APPDATA=appdata,
+                   CTMS_SETUP_ZIP=pathlib.Path(zpath).as_uri(), PYTHONDONTWRITEBYTECODE="1")
+
+        def run(allow, autostart):
+            cmd = os.path.join(tmp, "CTMS bridge setup.cmd")
+            with open(cmd, "wb") as f:
+                f.write(_setup_text(allow=allow, autostart=autostart)[1])
+            r = subprocess.run([sys.executable, "-x", cmd], env=env, capture_output=True, text=True, timeout=120)
+            assert r.returncode == 0, r.stdout + r.stderr
+            return r.stdout
+        out = run("1", "1")
+        wp = os.path.join(home, "region2-emailer", "work_pc")
+        cfg = json.load(open(os.path.join(wp, "ctms_bridge.json")))
+        assert cfg["url"] == BASE and cfg["key"] == BRIDGE and cfg["allow_control"] is True
+        assert json.load(open(os.path.join(wp, "_code_version.json")))["commit"] == COMMIT
+        startup = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "CTMS bridge.cmd")
+        assert os.path.isfile(startup) and wp in open(startup).read()
+        assert "it can." in out and "1/4" in out and "4/4" in out, out      # reached the dashboard
+        # again, with the boxes unticked: settings change, his own match word stays
+        cfg["match"] = "ctms"
+        json.dump(cfg, open(os.path.join(wp, "ctms_bridge.json"), "w"))
+        run("0", "0")
+        cfg = json.load(open(os.path.join(wp, "ctms_bridge.json")))
+        assert cfg["allow_control"] is False and cfg["match"] == "ctms" and not os.path.exists(startup)
+
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

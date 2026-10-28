@@ -107,6 +107,24 @@ export async function ctmsStop() {
   await req('/api/ctms/stop', { method: 'POST' });
 }
 
+// "Set up this PC": the work PC's whole setup as one file to double-click,
+// made for THIS dashboard (the bridge's own key is inside it), so nothing is
+// typed on the work PC. Fetched with the login key, then handed to the browser.
+export async function downloadCtmsSetup(allow, autostart) {
+  const q = new URLSearchParams({ allow: allow ? '1' : '0', autostart: autostart ? '1' : '0',
+    desk: window.location.origin });
+  const r = await req('/api/ctms/setup?' + q.toString());
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || 'HTTP ' + r.status);
+  }
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = 'CTMS bridge setup.cmd';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 // "Claude can act" - on for a set number of minutes, or off. Only the
 // dashboard's own key can do this; the home PC's cannot.
 export async function ctmsControl(on, minutes) {

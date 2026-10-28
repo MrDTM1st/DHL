@@ -38,7 +38,7 @@ REPORT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                       "ctms_workpc_report.txt")
 
 
-def launch(exe, port=DEBUG_PORT, profile=PROFILE):
+def launch(exe, port=DEBUG_PORT, profile=PROFILE, url=None):
     args = [
         exe,
         f"--remote-debugging-port={port}",
@@ -53,6 +53,8 @@ def launch(exe, port=DEBUG_PORT, profile=PROFILE):
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
     ]
+    if url:
+        args.append(url)        # open straight on CTMS - the bridge remembers where it was
     # Detached, so closing this Command Prompt does not take the browser with
     # it - the walkthrough happens in that window long after this script exits.
     kwargs = {}

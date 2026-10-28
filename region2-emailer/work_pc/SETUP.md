@@ -26,6 +26,30 @@ bridge fetches it, tries it, and restarts on it when asked (see **Updates**).
   your go-ahead in the chat, every time.
 - Keep your manager/IT in the loop about what runs on this machine.
 
+## The easy way — "Set up this PC", from the dashboard
+
+On the work PC, open the dashboard, go to the **CTMS** page and press
+**Download the setup** (tick or untick its two choices first). Open
+`CTMS bridge setup.cmd` from your downloads — if Windows says it protected
+your PC, choose **More info → Run anyway**. That is the whole job. It:
+
+1. gets the latest code from GitHub into `%USERPROFILE%\CTMS-bridge` (through
+   this PC's proxy, or with PowerShell; if neither can get out, use the
+   "download the code here" link on the same panel and run the setup again —
+   it finds the ZIP in Downloads);
+2. connects the bridge to your dashboard. The bridge's own key is already in
+   the file, so there is nothing to type (it opens the bridge's channel and
+   nothing else), and it checks this PC can actually reach the dashboard;
+3. if ticked, makes the bridge start by itself when you log in — a one-line
+   file in your Startup folder (untick and re-run, or
+   `python ctms_bridge.py --autostart off`, to stop that);
+4. starts the bridge, which opens the automation browser — on CTMS, once it
+   has seen CTMS once. Log in there.
+
+Run it again any time to change the choices, or to start a bridge that has
+stopped: it closes the running one first. After this, updates are the
+dashboard's **Update** button. Steps 1-3 below are the same thing by hand.
+
 ## Step 1 — get the code (no git needed)
 
 1. In the browser: `github.com/MrDTM1st/DHL` → green **Code** button →

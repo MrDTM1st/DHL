@@ -5,7 +5,11 @@ CTMS bridge - CTMS on the dashboard, and within reach of the home PC.
     python ctms_bridge.py --setup          ask them again
     python ctms_bridge.py --allow-control  let Claude act in CTMS when the dashboard switches it on
     python ctms_bridge.py --observe-only   never act - look and record only
+    python ctms_bridge.py --autostart on   start by itself when you log in (off to stop that)
     python ctms_bridge.py --rollback       put back the code the last remote update replaced
+
+Easiest of all: the dashboard's CTMS page -> "Set up this PC" downloads a setup
+file made for your dashboard. Double-click it and it does all of this for you.
 
 Leave it running in its Command Prompt while you work. What it does:
 
@@ -356,6 +360,7 @@ class Bridge:
             self.shot_hash = None
             say(f"Watching: {tab.get('title') or '?'} | {redact_url(tab.get('url'))[:90]}")
             log("attach", title=tab.get("title"), url=redact_url(tab.get("url")))
+            remember_ctms_url(tab.get("url"))
         except Exception as e:
             self._detach()
             self.error = f"Could not attach to the CTMS tab: {friendly(e)}"
@@ -724,6 +729,7 @@ class Bridge:
               "error": self.error or self.shot_error, "version": VERSION,
               "code": code_label(), "code_at": ctms_update.current().get("at", ""),
               "dialog": f"{d.get('type')}: {d.get('message', '')}"[:300] if d else "",
+              "autostart": autostart_on(),
               "match": self.match,
               "machine": platform.node()}
         if self.rolled_back:
@@ -852,6 +858,52 @@ def save_config(cfg):
         json.dump(cfg, f, indent=1)
 
 
+def remember_ctms_url(url):
+    """Where CTMS lives, so the automation browser can open straight on it next time.
+
+    Only the site and the app's own folder (https://host/app/): a deep link
+    from yesterday's session tends to land on an error page, the app root on
+    the sign-in page - which is where a new day starts anyway.
+    """
+    p = urlsplit(str(url or ""))
+    if p.scheme not in ("http", "https") or not p.netloc:
+        return
+    seg = [s for s in p.path.split(";")[0].split("/") if s]
+    start = f"{p.scheme}://{p.netloc}/" + (seg[0] + "/" if len(seg) > 1 else "")
+    cfg = load_config()
+    if cfg and cfg.get("ctms_url") != start:
+        cfg["ctms_url"] = start
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
+
+
+# ---- starting by itself when he logs in -------------------------------------------
+def startup_file():
+    """A one-line .cmd in his own Startup folder: no admin rights, no registry, deleted to undo."""
+    return os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"),
+                        "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "CTMS bridge.cmd")
+
+
+def autostart_on():
+    return os.path.isfile(startup_file())
+
+
+def set_autostart(on):
+    path = startup_file()
+    if on:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="ascii", errors="replace", newline="\r\n") as f:
+            f.write("@rem Starts the CTMS bridge when you log in - made by its setup. Delete this file to stop that.\n")
+            f.write(f'@start "CTMS bridge" /min "{sys.executable}" "{os.path.abspath(__file__)}"\n')
+        log("autostart", on=True, file=path)
+    elif os.path.isfile(path):
+        os.remove(path)
+        log("autostart", on=False)
+    return path
+
+
 def _cloud_json_url():
     try:
         with open(os.path.join(os.path.dirname(HERE), "cloud.json"), encoding="utf-8") as f:
@@ -969,7 +1021,7 @@ def child(args):
             say("No Edge or Chrome found to open - start the automation browser yourself.")
         else:
             say("Opening the automation browser - its own window; your normal Edge is untouched.")
-            launch(exe, port=args.port, profile=args.profile)
+            launch(exe, port=args.port, profile=args.profile, url=cfg.get("ctms_url"))
             if wait_for_port(port=args.port):
                 say("Open. Log into CTMS in THAT window; the bridge finds it by itself.")
             else:
@@ -1005,6 +1057,7 @@ def main():
                     help="let Claude act in CTMS while the dashboard switches it on")
     ap.add_argument("--observe-only", action="store_true", help="never act - look and record only")
     ap.add_argument("--rollback", action="store_true", help="put back the code the last update replaced")
+    ap.add_argument("--autostart", choices=["on", "off"], help="start the bridge by itself when you log in")
     ap.add_argument("--no-launch", action="store_true", help="never open the automation browser")
     ap.add_argument("--port", type=int, default=DEBUG_PORT, help=argparse.SUPPRESS)
     ap.add_argument("--profile", default=PROFILE, help=argparse.SUPPRESS)
@@ -1012,7 +1065,17 @@ def main():
     args = ap.parse_args()
     if args.child:
         return child(args)
+    if args.autostart:
+        path = set_autostart(args.autostart == "on")
+        print(f"Starts by itself when you log in: {args.autostart} ({path})")
+        return 0
     _lock = single_instance()   # noqa: F841 - held for the life of the supervisor
+    if os.name == "nt":
+        try:                    # so the window says what it is, however it was started
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW("CTMS bridge")
+        except Exception:
+            pass
     if args.rollback:
         try:
             print(ctms_update.rollback("rolled back by hand on the work PC"))
