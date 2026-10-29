@@ -174,7 +174,7 @@ def _ctms_args(action, data):
     if action == "capture":
         name = re.sub(r"[^A-Za-z0-9 ._-]+", "-", str(data.get("name") or ""))[:48].strip(" .-")
         out["name"] = name or "screen"
-    for k in ("on", "commit", "enter", "append", "paste", "double", "accept", "marks", "picture"):
+    for k in ("on", "commit", "enter", "append", "paste", "double", "right", "accept", "marks", "picture"):
         if k in data:
             out[k] = bool(data[k])
     num("ref", 1, 100000, int)

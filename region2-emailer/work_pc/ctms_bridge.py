@@ -763,8 +763,8 @@ class Bridge:
             if action == "fields_setup":
                 return done(True, ctms_jab.setup())
             if self.win:
-                # CTMS's own window (Oracle Forms in IE mode): keys, typing and
-                # clicks go to it through ctms_act; right-click/drag are still to come.
+                # CTMS's own window (Oracle Forms in IE mode): keys, typing, clicks
+                # (left, double, right) and drags go to it through ctms_act.
                 if action == "see":
                     return done(True, "Looked at CTMS's window.", self.window_look())
                 if action == "click":
@@ -773,7 +773,8 @@ class Bridge:
                         raise RuntimeError("In CTMS's window, click a point on the picture: click --at X,Y. "
                                            "There are no numbered things to click here.")
                     area = ctms_window.content_area(self.win)
-                    detail = ctms_act.click(self.win["hwnd"], at[0], at[1], area, double=bool(cmd.get("double")))
+                    detail = ctms_act.click(self.win["hwnd"], at[0], at[1], area, double=bool(cmd.get("double")),
+                                            right=bool(cmd.get("right")))
                     time.sleep(0.4)
                     return done(True, detail, self.window_look())
                 if action == "drag":
@@ -800,7 +801,7 @@ class Bridge:
                     return done(True, f"Waited {s:g}s", self.window_look())
                 if action in DRIVE:
                     return done(False, "Refused: in CTMS's own window the bridge can type, press keys, "
-                                       "left-click, double-click and drag - right-click, select and scroll "
+                                       "left-click, double-click, right-click and drag - select and scroll "
                                        "are the next increment, not built yet.")
             if action == "tabs":
                 tabs = self.tab_list()

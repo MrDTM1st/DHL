@@ -6,7 +6,7 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py text                    every word on the screen
     python ctms_remote.py find WORDS              numbered things and lines that mention WORDS
     python ctms_remote.py click N                 click a numbered thing   [--double] [--commit]
-    python ctms_remote.py click --at X,Y          ...or a point on the latest picture
+    python ctms_remote.py click --at X,Y          ...or a point on the latest picture   [--right]
     python ctms_remote.py type N "text"           replace what is in N     [--enter] [--append] [--commit]
     python ctms_remote.py key Tab|Enter|Escape|ctrl+a|...                  [--commit]
     python ctms_remote.py select N "option"       choose in a dropdown list
@@ -589,6 +589,7 @@ def main(argv=None):
     p.add_argument("ref", nargs="?")
     p.add_argument("--at", help="X,Y on the latest picture")
     p.add_argument("--double", action="store_true")
+    p.add_argument("--right", action="store_true", help="right-click: opens CTMS's right-click menu there")
     p.add_argument("--commit", action="store_true")
     p = sub.add_parser("type")
     p.add_argument("ref", nargs="?")
@@ -694,7 +695,7 @@ def run(a):
             print("  " + ln[:200])
         return 0
     if c == "click":
-        args = {"commit": a.commit, "double": a.double}
+        args = {"commit": a.commit, "double": a.double, "right": getattr(a, "right", False)}
         if a.at:
             x, y = _xy(a.at, "--at")
             args["at"] = _window_point(x, y) if load_state().get("kind") == "window" else [x, y]

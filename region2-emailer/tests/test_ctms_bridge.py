@@ -1087,6 +1087,65 @@ def test_in_the_window_a_drag_needs_both_points_and_acting_switched_on():
         W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute = keep
 
 
+def test_a_right_click_presses_only_the_right_button_and_only_on_ctms():
+    sent = []
+    keep = (A.to_front, A._send, A._absolute)
+    A.to_front = lambda hwnd: True
+    A._send = lambda inputs: sent.append([i.u.mi.dwFlags for i in inputs])
+    A._absolute = lambda x, y: (1, 2)
+    try:
+        assert A.click(1, 0.5, 0.5, (0, 0, 1000, 600), right=True).startswith("Right-clicked")
+        flags = sent[-1]
+        assert len(flags) == 3 and flags[1] & A.MOUSEEVENTF_RIGHTDOWN and flags[2] & A.MOUSEEVENTF_RIGHTUP
+        assert not any(f & (A.MOUSEEVENTF_LEFTDOWN | A.MOUSEEVENTF_LEFTUP) for f in flags)
+        sent.clear()
+        for fx, extra in ((1.3, {}), (0.5, {"double": True})):    # off CTMS / a right double-click
+            try:
+                A.click(1, fx, 0.5, (0, 0, 1000, 600), right=True, **extra)
+                assert False
+            except A.Refused:
+                pass
+        assert sent == []                                              # nothing pressed either time
+    finally:
+        A.to_front, A._send, A._absolute = keep
+
+
+def test_the_right_flag_reaches_the_bridge_from_home_through_the_dashboard():
+    import types
+    seen = {}
+    keep = (R.load_state, R.ask, R.trace)
+    R.load_state = lambda: {"kind": "window", "img_w": 1000, "img_h": 500}
+    R.ask = lambda action, **a: (seen.update(action=action, args=a) or ({"ok": True, "detail": "ok"}, None))
+    R.trace = lambda *a, **k: None
+    try:
+        R.run(types.SimpleNamespace(cmd="click", at="250,400", ref=None, double=False, right=True, commit=False))
+    finally:
+        R.load_state, R.ask, R.trace = keep
+    assert seen["args"]["right"] is True and seen["args"]["at"] == [0.25, 0.8]
+    fresh()
+    call("/api/ctms/control", {"on": True})
+    assert call("/api/ctms/command", {"action": "click", "at": [0.25, 0.8], "right": True}, key=AGENT)[0] == 200
+    assert S._ctms["queue"][-1]["right"] is True                       # kept, as a plain yes/no
+    # and the bridge hands it to ctms_act
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    flags = []
+    A.to_front, A._absolute = (lambda hwnd: True), (lambda x, y: (1, 2))
+    A._send = lambda inputs: flags.extend(i.u.mi.dwFlags for i in inputs)
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.scan_window(force=True)
+        b.armed = True
+        b.handle({"id": 1, "action": "click", "at": [0.5, 0.5], "right": True})
+        assert desk.sent[-1][1]["ok"] and "Right-clicked" in desk.sent[-1][1]["detail"]
+        assert any(f & A.MOUSEEVENTF_RIGHTDOWN for f in flags)
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute = keep
+
+
 def test_the_dashboard_passes_a_drags_end_point_and_holds_it_until_acting_is_on():
     fresh()
     assert call("/api/ctms/command", {"action": "drag", "at": [0.3, 0.1], "to": [0.6, 0.1]}, key=AGENT)[0] == 409

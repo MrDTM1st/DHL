@@ -24,9 +24,11 @@ The rails, in this order, every time:
      which Claude only passes after he has said go in the chat.
   5. Keys that act on Windows or the browser rather than on CTMS - close the
      window, switch away, paste the clipboard (which could hold a password) -
-     are refused. Left click, double-click and left-button drag (to move a
-     Forms window aside) only; right-click, which opens Forms' booking menus,
-     is not built.
+     are refused. Left click, double-click, left-button drag (to move a Forms
+     window aside) and right-click. A right-click only OPENS CTMS's right-click
+     menu - where Create Trip lives, so it was held back until he asked for it
+     (29/10) - and every item on it is then a separate left click, picked off
+     the picture while he directs. There is no right double-click.
 
 Reading CTMS's fields by name (so the bridge could know a box is a password box,
 or what a button says) needs Java's Access Bridge. Until that is available the
@@ -53,6 +55,8 @@ KEYEVENTF_UNICODE = 0x0004
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_ABSOLUTE = 0x8000
 MOUSEEVENTF_VIRTUALDESK = 0x4000
 # GetSystemMetrics indices for the whole virtual desktop (all monitors)
@@ -256,27 +260,31 @@ def _point(fx, fy, area, what="click"):
             min(bottom - 1, top + round(fy * (bottom - top))))
 
 
-def click(hwnd, fx, fy, area, double=False):
+def click(hwnd, fx, fy, area, double=False, right=False):
     """Click CTMS at a fraction (fx, fy) of its picture - 0..1 across and down.
 
     The fraction is turned into a screen point inside `area` (CTMS's content
     rectangle, in screen pixels). A fraction outside 0..1 is refused, so the
     click can only land on CTMS itself. He positions nothing; this is the whole
-    pointer move and left button, at the one point.
+    pointer move and button, at the one point. right=True presses the right
+    button instead, which opens CTMS's right-click menu there and nothing more.
     """
+    if right and double:
+        raise Refused("A right-click is a single press - there is no right double-click.")
     x, y = _point(fx, fy, area)
     _require_front(hwnd)
     nx, ny = _absolute(x, y)
     base = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    down, up = (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP) if right else (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
     seq = [_mouse_event(nx, ny, MOUSEEVENTF_MOVE | base),
-           _mouse_event(nx, ny, MOUSEEVENTF_LEFTDOWN | base),
-           _mouse_event(nx, ny, MOUSEEVENTF_LEFTUP | base)]
+           _mouse_event(nx, ny, down | base),
+           _mouse_event(nx, ny, up | base)]
     if double:                                  # a second press/release at the same point = a double-click
-        seq += [_mouse_event(nx, ny, MOUSEEVENTF_LEFTDOWN | base),
-                _mouse_event(nx, ny, MOUSEEVENTF_LEFTUP | base)]
+        seq += [_mouse_event(nx, ny, down | base),
+                _mouse_event(nx, ny, up | base)]
     _send(seq)
-    return f"{'Double-clicked' if double else 'Clicked'} CTMS at {round(float(fx) * 100)}% across, " \
-           f"{round(float(fy) * 100)}% down"
+    how = "Right-clicked" if right else "Double-clicked" if double else "Clicked"
+    return f"{how} CTMS at {round(float(fx) * 100)}% across, {round(float(fy) * 100)}% down"
 
 
 def drag(hwnd, start, end, area, steps=12):
