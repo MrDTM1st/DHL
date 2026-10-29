@@ -101,12 +101,12 @@ LOCK_PORT = 8792
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 READ = ("see", "wait", "tabs", "probe", "fields")   # Claude looking: no switch needed
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
-         "reload", "dialog", "tab")           # Claude acting: this PC AND the dashboard must allow it
+         "reload", "dialog", "tab", "drag")   # Claude acting: this PC AND the dashboard must allow it
 ADMIN = ("update", "fields_setup")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
-LOGGED = ("name", "on", "ref", "at", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
+LOGGED = ("name", "on", "ref", "at", "to", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
           "enter", "accept", "seconds", "tab", "branch", "scope", "by")
 RESTART = 75            # the child's exit code for "updated - start me again"
 
@@ -776,6 +776,14 @@ class Bridge:
                     detail = ctms_act.click(self.win["hwnd"], at[0], at[1], area, double=bool(cmd.get("double")))
                     time.sleep(0.4)
                     return done(True, detail, self.window_look())
+                if action == "drag":
+                    at, to = cmd.get("at"), cmd.get("to")
+                    if not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in (at, to)):
+                        raise RuntimeError("A drag needs where to press and where to let go, both points on the "
+                                           "picture: drag --from X,Y --to X,Y.")
+                    detail = ctms_act.drag(self.win["hwnd"], at, to, ctms_window.content_area(self.win))
+                    time.sleep(0.4)
+                    return done(True, detail, self.window_look())
                 if action == "key":
                     detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
                                             commit=bool(cmd.get("commit")))
@@ -791,9 +799,9 @@ class Bridge:
                     time.sleep(s)
                     return done(True, f"Waited {s:g}s", self.window_look())
                 if action in DRIVE:
-                    return done(False, "Refused: in CTMS's own window the bridge can type, press keys and "
-                                       "left-click (and double-click) so far - right-click, drag, select and "
-                                       "scroll are the next increment, not built yet.")
+                    return done(False, "Refused: in CTMS's own window the bridge can type, press keys, "
+                                       "left-click, double-click and drag - right-click, select and scroll "
+                                       "are the next increment, not built yet.")
             if action == "tabs":
                 tabs = self.tab_list()
                 return done(True, f"{len(tabs)} tab(s) could be CTMS.", {"tabs": tabs})

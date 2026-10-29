@@ -19,6 +19,14 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py fields [--all]          CTMS's fields by name, through Java's Access Bridge -
                                                   works with CTMS behind other windows or minimised
     python ctms_remote.py fields-setup            the work PC fetches the 32-bit Python that fields needs
+    python ctms_remote.py drag --from X,Y --to X,Y   move a Forms window aside by its title bar
+
+The CTMS note run (CTMS's own window; each answers with a picture to check):
+    python ctms_remote.py orders-page             C-TMS Modules > Order Management > Orders
+    python ctms_remote.py order-find 1234567      the order's lines (then double-click -1-1's Status cell)
+    python ctms_remote.py order-note " - Emailed DO 28/10"   at the END of Special Instructions
+    python ctms_remote.py order-save | order-close
+    python ctms_notes.py                          which notes are owed; ctms_notes.py done REF "NOTE"
     python ctms_remote.py update [--branch B] [--all]    the work PC pulls new code from GitHub
 
 N is a number from the latest picture. Every action answers with a fresh one,
@@ -413,6 +421,79 @@ def _ref(v):
         raise Stop(f"'{v}' is not a number from the picture.")
 
 
+def _xy(text, flag):
+    try:
+        x, y = (float(v) for v in str(text).split(","))
+        return x, y
+    except ValueError:
+        raise Stop(f"{flag} takes X,Y - a point on the latest picture, e.g. {flag} 640,300")
+
+
+def _window_point(x, y):
+    """A point read off the latest picture of CTMS's own window, as the fraction the
+    bridge takes - so it lands right even if the window has moved or resized since."""
+    st = load_state()
+    iw, ih = st.get("img_w") or 0, st.get("img_h") or 0
+    if st.get("kind") != "window" or not (iw and ih):
+        raise Stop("Take a picture of CTMS's window first (see), then aim at a point on it.")
+    return [max(0.0, min(1.0, x / iw)), max(0.0, min(1.0, y / ih))]
+
+
+# ---- the CTMS note run, one fixed step-sequence at a time ---------------------------
+# Where things are on CTMS's screens, in pixels of the work PC's picture. Forms lays its
+# windows out at fixed positions from the top left, so these hold until someone moves a
+# window - and every sequence answers with a picture, so a moved one is seen before the
+# next sequence types anything. Calibrated on the live screens 29/10.
+CTMS_AT = {
+    "menu_modules": (121, 37), "menu_order_mgmt": (135, 63), "menu_orders": (240, 67),
+    "search_clear": (626, 226), "search_custref": (728, 123), "search_refresh": (742, 226),
+    "si_end": (1000, 639), "order_save": (337, 733), "order_close": (424, 733),
+}
+
+
+def _at(name):
+    return {"at_px": CTMS_AT[name]}
+
+
+RUN_STEPS = {
+    # Order Management > Orders: the Order Summary page with its Order Search card
+    "orders-page": lambda a: [("click", _at("menu_modules")), ("click", _at("menu_order_mgmt")),
+                              ("click", _at("menu_orders")), ("wait", {"seconds": 8})],
+    # the order's lines, by customer ref with a % (all its lines come back - NOT in line
+    # order, so pick the -1-1 row off the picture and double-click its Status cell)
+    "order-find": lambda a: [("click", _at("search_clear")), ("click", _at("search_custref")),
+                             ("type", {"text": a.order.split("-")[0].strip() + "%"}),
+                             ("click", _at("search_refresh")), ("wait", {"seconds": 4})],
+    # the contact note at the END of Special Instructions on the open order
+    "order-note": lambda a: [("click", _at("si_end")), ("key", {"key": "end"}), ("type", {"text": a.note})],
+    "order-save": lambda a: [("click", _at("order_save")), ("wait", {"seconds": 3})],
+    "order-close": lambda a: [("click", _at("order_close")), ("wait", {"seconds": 2})],
+}
+
+
+def run_steps(name, steps):
+    """A fixed sequence of steps in CTMS's own window, stopping at the first that is not
+    done. Every step is kept in the trace; the last picture is shown."""
+    result = payload = None
+    for action, args in steps:
+        args = dict(args)
+        if "at_px" in args:
+            args["at"] = _window_point(*args.pop("at_px"))
+        result, payload = ask(action, **args)
+        trace(f"{name}:{action}", args, result, payload)
+        if payload and payload.get("kind") == "window":
+            save_state(payload)
+        if not result.get("ok"):
+            print(f"STOPPED at {action}: {result.get('detail')}")
+            if payload:
+                print_screen(payload, name)
+            return 3
+    print(f"DONE  {name}: {result.get('detail') if result else 'nothing to do'}")
+    if payload:
+        print_screen(payload, name)
+    return 0
+
+
 def main(argv=None):
     global BASE, KEY
     if hasattr(sys.stdout, "reconfigure"):
@@ -473,6 +554,15 @@ def main(argv=None):
     p = sub.add_parser("fields", help="CTMS's fields by name, through Java's Access Bridge")
     p.add_argument("--all", action="store_true", help="every one, not just the first 300")
     sub.add_parser("fields-setup", help="the work PC fetches the 32-bit Python that reading fields needs")
+    p = sub.add_parser("drag", help="press at one point of CTMS's picture and let go at another")
+    p.add_argument("--from", dest="start", required=True, help="X,Y on the latest picture")
+    p.add_argument("--to", dest="end", required=True, help="X,Y on the latest picture")
+    sub.add_parser("orders-page", help="C-TMS Modules > Order Management > Orders (the Order Search card)")
+    sub.add_parser("order-find", help="list an order's lines by customer ref").add_argument("order")
+    sub.add_parser("order-note", help="add a note at the END of the open order's Special Instructions"
+                   ).add_argument("note")
+    sub.add_parser("order-save", help="the open order's Save button")
+    sub.add_parser("order-close", help="the open order's Close button")
     p = sub.add_parser("tab")
     p.add_argument("n", type=int)
     p = sub.add_parser("update")
@@ -522,26 +612,18 @@ def run(a):
     if c == "click":
         args = {"commit": a.commit, "double": a.double}
         if a.at:
-            try:
-                x, y = (float(v) for v in a.at.split(","))
-            except ValueError:
-                raise Stop("--at takes X,Y - a point on the latest picture, e.g. --at 640,300")
-            st = load_state()
-            if st.get("kind") == "window":
-                # CTMS's own window has no numbered things: a click lands by where it
-                # is on the picture. Send it as a fraction of the picture it came from,
-                # so it still lands right if the window has since moved or resized.
-                iw, ih = st.get("img_w") or 0, st.get("img_h") or 0
-                if not (iw and ih):
-                    raise Stop("Take a picture first (see), then click a point on it.")
-                args["at"] = [max(0.0, min(1.0, x / iw)), max(0.0, min(1.0, y / ih))]
-            else:
-                args["at"] = [x, y]
+            x, y = _xy(a.at, "--at")
+            args["at"] = _window_point(x, y) if load_state().get("kind") == "window" else [x, y]
         elif a.ref is not None:
             args["ref"] = _ref(a.ref)
         else:
             raise Stop("Click what? A number from the picture, or --at X,Y.")
         return report(c, args, *ask("click", **args))
+    if c == "drag":
+        args = {"at": _window_point(*_xy(a.start, "--from")), "to": _window_point(*_xy(a.end, "--to"))}
+        return report(c, args, *ask("drag", **args))
+    if c in RUN_STEPS:
+        return run_steps(c, RUN_STEPS[c](a))
     if c == "type":
         if a.focused is not None:
             args = {"text": a.focused}

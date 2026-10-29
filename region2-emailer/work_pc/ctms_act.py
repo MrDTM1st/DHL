@@ -16,16 +16,17 @@ The rails, in this order, every time:
      to the front - another app is over it, or Windows will not allow the switch
      - nothing is sent. Nothing is sent "blind" into whatever happens to be
      focused.
-  3. A click lands by a FRACTION of CTMS's own picture (0..1 across and down),
-     turned into a screen point inside CTMS's content area. A fraction outside
-     that is refused, so a click can only ever land on CTMS, never on the
-     browser frame, another window, or the desktop.
+  3. A click (and both ends of a drag) lands by a FRACTION of CTMS's own
+     picture (0..1 across and down), turned into a screen point inside CTMS's
+     content area. A fraction outside that is refused, so the mouse can only
+     ever act on CTMS, never on the browser frame, another window, or the desktop.
   4. F10 (Forms Save/Commit) and Ctrl+S wait for his go-ahead (commit=True),
      which Claude only passes after he has said go in the chat.
   5. Keys that act on Windows or the browser rather than on CTMS - close the
      window, switch away, paste the clipboard (which could hold a password) -
-     are refused. Right-click and drag, which reach Forms' booking menus, are
-     not built yet: left click and double-click only.
+     are refused. Left click, double-click and left-button drag (to move a
+     Forms window aside) only; right-click, which opens Forms' booking menus,
+     is not built.
 
 Reading CTMS's fields by name (so the bridge could know a box is a password box,
 or what a button says) needs Java's Access Bridge. Until that is available the
@@ -240,6 +241,21 @@ def _absolute(x, y):
     return max(0, min(65535, nx)), max(0, min(65535, ny))
 
 
+def _point(fx, fy, area, what="click"):
+    """A fraction (across, down) of CTMS's picture as a screen point inside `area`.
+    Refused unless both are 0..1 - so it can only ever be a point ON CTMS."""
+    try:
+        fx, fy = float(fx), float(fy)
+    except (TypeError, ValueError):
+        raise Refused(f"A {what} needs a point on the picture (across, down).")
+    if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+        raise Refused(f"That point is off CTMS's picture, so nothing was done ({what}) - aim within the "
+                      f"picture, and take a fresh one if the window has moved.")
+    left, top, right, bottom = (int(v) for v in area)
+    return (min(right - 1, left + round(fx * (right - left))),
+            min(bottom - 1, top + round(fy * (bottom - top))))
+
+
 def click(hwnd, fx, fy, area, double=False):
     """Click CTMS at a fraction (fx, fy) of its picture - 0..1 across and down.
 
@@ -248,16 +264,7 @@ def click(hwnd, fx, fy, area, double=False):
     click can only land on CTMS itself. He positions nothing; this is the whole
     pointer move and left button, at the one point.
     """
-    try:
-        fx, fy = float(fx), float(fy)
-    except (TypeError, ValueError):
-        raise Refused("A click needs a point on the picture (across, down).")
-    if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
-        raise Refused("That point is off CTMS's picture, so nothing was clicked - aim within the picture, "
-                      "and take a fresh one if the window has moved.")
-    left, top, right, bottom = (int(v) for v in area)
-    x = min(right - 1, left + round(fx * (right - left)))
-    y = min(bottom - 1, top + round(fy * (bottom - top)))
+    x, y = _point(fx, fy, area)
     _require_front(hwnd)
     nx, ny = _absolute(x, y)
     base = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
@@ -268,7 +275,30 @@ def click(hwnd, fx, fy, area, double=False):
         seq += [_mouse_event(nx, ny, MOUSEEVENTF_LEFTDOWN | base),
                 _mouse_event(nx, ny, MOUSEEVENTF_LEFTUP | base)]
     _send(seq)
-    return f"{'Double-clicked' if double else 'Clicked'} CTMS at {round(fx * 100)}% across, {round(fy * 100)}% down"
+    return f"{'Double-clicked' if double else 'Clicked'} CTMS at {round(float(fx) * 100)}% across, " \
+           f"{round(float(fy) * 100)}% down"
+
+
+def drag(hwnd, start, end, area, steps=12):
+    """Press the left button at one point of CTMS's picture, move to another and
+    let go - how a Forms window (the Order Search card, say) is moved out of the
+    way by its title bar. Both points are fractions of the picture, so both are
+    on CTMS. The pointer travels in small steps, so Java sees a real drag."""
+    x0, y0 = _point(start[0], start[1], area, "drag")
+    x1, y1 = _point(end[0], end[1], area, "drag")
+    _require_front(hwnd)
+    base = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    nx, ny = _absolute(x0, y0)
+    _send([_mouse_event(nx, ny, MOUSEEVENTF_MOVE | base), _mouse_event(nx, ny, MOUSEEVENTF_LEFTDOWN | base)])
+    try:
+        for i in range(1, steps + 1):
+            time.sleep(0.02)
+            nx, ny = _absolute(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps)
+            _send([_mouse_event(nx, ny, MOUSEEVENTF_MOVE | base)])
+    finally:
+        _send([_mouse_event(nx, ny, MOUSEEVENTF_LEFTUP | base)])     # never leave the button held down
+    return (f"Dragged in CTMS from {round(float(start[0]) * 100)}%,{round(float(start[1]) * 100)}% "
+            f"to {round(float(end[0]) * 100)}%,{round(float(end[1]) * 100)}%")
 
 
 def type_text(hwnd, text, enter=False, commit=False):

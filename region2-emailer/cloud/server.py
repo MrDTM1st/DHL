@@ -62,7 +62,7 @@ CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdi
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 CTMS_READ = ("see", "wait", "tabs", "probe", "fields")   # Claude looking
 CTMS_DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
-              "reload", "dialog", "tab")           # Claude acting - only while the switch is on
+              "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
 CTMS_ADMIN = ("update", "fields_setup")
 # The bridge refuses anything else on its own side as well; this list only
 # stops something queuing that would just come back refused.
@@ -182,12 +182,13 @@ def _ctms_args(action, data):
     num("amount", 1, 20000, int)
     num("seconds", 0, 30)
     num("timeout", 0, 60)
-    at = data.get("at")
-    if isinstance(at, (list, tuple)) and len(at) == 2:
-        try:
-            out["at"] = [max(0.0, min(float(at[0]), 20000.0)), max(0.0, min(float(at[1]), 20000.0))]
-        except (TypeError, ValueError):
-            pass
+    for k in ("at", "to"):                 # a point, and a drag's end point
+        pt = data.get(k)
+        if isinstance(pt, (list, tuple)) and len(pt) == 2:
+            try:
+                out[k] = [max(0.0, min(float(pt[0]), 20000.0)), max(0.0, min(float(pt[1]), 20000.0))]
+            except (TypeError, ValueError):
+                pass
     for k, n in (("text", 2000), ("key", 40), ("option", 200), ("url", 2000)):
         if data.get(k) is not None:
             out[k] = str(data[k])[:n]

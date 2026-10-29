@@ -43,6 +43,7 @@ import ctms_update as U                 # noqa: E402
 import ctms_window as W                 # noqa: E402
 import ctms_act as A                    # noqa: E402
 import ctms_jab as J                    # noqa: E402
+import ctms_notes as N                  # noqa: E402
 import ctms_remote as R                 # noqa: E402
 import cdp                              # noqa: E402
 from http.server import ThreadingHTTPServer  # noqa: E402
@@ -1032,6 +1033,123 @@ def test_the_home_side_sends_a_window_click_as_a_fraction_of_the_picture():
         R.load_state, R.ask, R.trace = keep
     assert seen["action"] == "click" and seen["args"]["double"] is True
     assert seen["args"]["at"] == [0.25, 0.8]                            # 250/1000 across, 400/500 down
+
+
+def test_a_drag_presses_moves_in_steps_and_always_lets_go_on_ctms():
+    sent, pts = [], []
+    keep = (A.to_front, A._send, A._absolute)
+    A.to_front = lambda hwnd: True
+    A._send = lambda inputs: sent.append([i.u.mi.dwFlags for i in inputs])
+    A._absolute = lambda x, y: (pts.append((round(x), round(y))) or (1, 2))
+    try:
+        A.drag(1, (0.25, 0.1), (0.75, 0.5), (0, 0, 1000, 600), steps=4)
+        assert pts[0] == (250, 60) and pts[-1] == (750, 300)           # press here, let go there
+        assert sent[0][-1] & A.MOUSEEVENTF_LEFTDOWN and sent[-1][-1] & A.MOUSEEVENTF_LEFTUP
+        assert len(sent) == 1 + 4 + 1                                  # press, four moves, let go
+        sent.clear()
+        try:
+            A.drag(1, (0.2, 0.2), (1.3, 0.2), (0, 0, 1000, 600))       # the end is off CTMS: nothing pressed
+            assert False
+        except A.Refused:
+            pass
+        assert sent == []
+        A.to_front = lambda hwnd: False                                # CTMS will not come to the front
+        try:
+            A.drag(1, (0.2, 0.2), (0.4, 0.2), (0, 0, 1000, 600))
+            assert False
+        except A.Refused:
+            pass
+        assert sent == []
+    finally:
+        A.to_front, A._send, A._absolute = keep
+
+
+def test_in_the_window_a_drag_needs_both_points_and_acting_switched_on():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    sent = []
+    A.to_front, A._send, A._absolute = (lambda hwnd: True), (lambda inputs: sent.append(1)), (lambda x, y: (1, 2))
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.scan_window(force=True)
+        b.handle({"id": 1, "action": "drag", "at": [0.3, 0.1], "to": [0.6, 0.1]})   # acting off
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.armed = True
+        b.handle({"id": 2, "action": "drag", "at": [0.3, 0.1], "to": [0.6, 0.1]})
+        assert desk.sent[-1][1]["ok"] and "Dragged" in desk.sent[-1][1]["detail"] and sent
+        b.handle({"id": 3, "action": "drag", "at": [0.3, 0.1]})                        # no end point
+        assert desk.sent[-1][1]["ok"] is False and "let go" in desk.sent[-1][1]["detail"]
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute = keep
+
+
+def test_the_dashboard_passes_a_drags_end_point_and_holds_it_until_acting_is_on():
+    fresh()
+    assert call("/api/ctms/command", {"action": "drag", "at": [0.3, 0.1], "to": [0.6, 0.1]}, key=AGENT)[0] == 409
+    call("/api/ctms/control", {"on": True})
+    assert call("/api/ctms/command", {"action": "drag", "at": [0.3, 0.1], "to": [0.6, "x"]}, key=AGENT)[0] == 200
+    assert call("/api/ctms/command", {"action": "drag", "at": [0.3, 0.1], "to": [0.6, 0.1]}, key=AGENT)[0] == 200
+    bad, good = S._ctms["queue"]
+    assert "to" not in bad and good["to"] == [0.6, 0.1] and good["at"] == [0.3, 0.1]
+
+
+def test_each_sent_site_email_owes_one_note_on_the_first_line_only():
+    recs = [
+        {"status": "sent", "kind": "delivery", "orders": ["1234567"], "emailed_at": "2026-10-28 09:15",
+         "chases": 0},
+        {"status": "sent", "kind": "delivery", "orders": ["2345678", "3456789-2-1"],
+         "emailed_at": "2026-10-27 16:40", "chases": 2, "last_chased_at": "2026-10-30"},
+        {"status": "drafted", "kind": "delivery", "orders": ["4567890"], "emailed_at": "2026-10-28 10:00"},
+        {"status": "sent", "kind": "collection", "orders": ["5678901"], "emailed_at": "2026-10-28 11:00"},
+        {"status": "sent", "kind": "delivery", "orders": ["1234567"], "emailed_at": "2026-10-28 09:15"},
+    ]
+    notes = N.owed(recs)
+    got = [(n["ref"], n["note"]) for n in notes]
+    assert got == [("2345678-1-1", " - Emailed DO 27/10"), ("3456789-1-1", " - Emailed DO 27/10"),
+                   ("1234567-1-1", " - Emailed DO 28/10"),
+                   ("2345678-1-1", " - Chased DO 30/10"), ("3456789-1-1", " - Chased DO 30/10")]
+    # every note on the -1-1 line, never another; drafts and collection requests owe nothing
+    assert all(n["ref"].endswith("-1-1") for n in notes)
+    assert not any(n["order"] in ("4567890", "5678901") for n in notes)
+    # once written, a note is off the list
+    done = [{"ref": "1234567-1-1", "note": " - Emailed DO 28/10"}]
+    assert ("1234567-1-1", " - Emailed DO 28/10") not in [(n["ref"], n["note"]) for n in N.owed(recs, done)]
+
+
+def test_marking_a_note_written_is_kept_and_never_doubled():
+    path = os.path.join(tempfile.mkdtemp(), "done.json")
+    N.mark_done("1234567-1-1", " - Emailed DO 28/10", path)
+    N.mark_done("1234567-1-1", " - Emailed DO 28/10", path)
+    done = N.load_done(path)
+    assert len(done) == 1 and done[0]["ref"] == "1234567-1-1"
+
+
+def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
+    import types
+    asked = []
+    answers = {}
+    keep = (R.load_state, R.ask, R.trace, R.save_state, R.print_screen)
+    R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
+    R.ask = lambda action, **a: (asked.append((action, a)) or answers.get(action, ({"ok": True, "detail": "ok"},
+                                                                                   None)))
+    R.trace, R.save_state, R.print_screen = (lambda *a, **k: None), (lambda p: None), (lambda *a, **k: None)
+    try:
+        assert R.run(types.SimpleNamespace(cmd="order-find", order="1234567")) == 0
+        assert [x[0] for x in asked] == ["click", "click", "type", "click", "wait"]
+        assert asked[2][1]["text"] == "1234567%"                         # the order's lines, by its ref and a %
+        assert asked[1][1]["at"] == [728 / 1910, 123 / 915]              # Customer Ref box, as a fraction
+        asked.clear()
+        assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 0
+        assert [x[0] for x in asked] == ["click", "key", "type"] and asked[1][1]["key"] == "end"
+        asked.clear()
+        answers["key"] = ({"ok": False, "detail": "Refused: CTMS could not be brought to the front"}, None)
+        assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 3
+        assert [x[0] for x in asked] == ["click", "key"]                 # stopped: nothing typed
+    finally:
+        R.load_state, R.ask, R.trace, R.save_state, R.print_screen = keep
 
 
 def test_the_probe_and_png_pictures_reach_the_dashboard_and_claude():
