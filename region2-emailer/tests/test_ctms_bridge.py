@@ -1382,6 +1382,123 @@ def test_in_the_window_a_drag_needs_both_points_and_acting_switched_on():
         W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute = keep
 
 
+def test_steps_run_on_the_work_pc_in_one_go_and_stop_at_the_first_refused():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute, B.time.sleep)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    pictures = []
+    W.picture = lambda win: pictures.append(1) or (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    sent = []
+    A.to_front, A._send, A._absolute = (lambda hwnd: True), (lambda inputs: sent.append(1)), (lambda x, y: (1, 2))
+    B.time.sleep = lambda s: None
+    steps = [{"action": "click", "at": [0.5, 0.5]}, {"action": "key", "key": "home"},
+             {"action": "type", "text": "977.50"}, {"action": "wait", "seconds": 1.5}, {"action": "key", "key": "tab"}]
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.handle({"id": 1, "action": "steps", "steps": steps})              # 'Claude can act' off
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.armed = True
+        pictures.clear()
+        b.handle({"id": 2, "action": "steps", "steps": steps})
+        body = desk.sent[-1][1]
+        assert body["ok"] and "Ran 5 step(s)" in body["detail"] and len(sent) == 4
+        assert body["payload"]["kind"] == "window" and len(pictures) <= 2     # one look at the end, not five
+        sent.clear()
+        bad = [{"action": "click", "at": [0.5, 0.5]}, {"action": "key", "key": "ctrl+v"}, {"action": "key", "key": "tab"}]
+        b.handle({"id": 3, "action": "steps", "steps": bad})                 # the clipboard is never pasted
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "step 2 of 3" in body["detail"] and len(sent) == 1 and body["payload"]
+        b.handle({"id": 4, "action": "steps", "steps": [{"action": "steps"}]})
+        assert desk.sent[-1][1]["ok"] is False                               # no batch inside a batch
+        b.click_first = True                                                 # Edge has just switched tabs
+        sent.clear()
+        b.handle({"id": 5, "action": "steps", "steps": [{"action": "key", "key": "tab"}]})
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.handle({"id": 6, "action": "steps", "steps": steps})               # a click first: then keys go
+        assert desk.sent[-1][1]["ok"] and b.click_first is False
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, A._absolute, B.time.sleep = keep
+
+
+def test_paste_puts_only_claudes_text_in_and_the_clipboard_back():
+    board, sent = ["his own text"], []
+    keep = (A._clip_text, A._clip_set, A.to_front, A._send, A.time.sleep)
+    A._clip_text = lambda: board[0]
+    A._clip_set = lambda text: board.__setitem__(0, text) or sent.append(("clip", text))
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(("keys", [i.u.ki.wVk for i in inputs])))
+    A.time.sleep = lambda s: None
+    try:
+        rows = "MAN-1\tPASS_DH\t325\tDelali\t\tY\nMAN-2\tAQ_DH\t895\tDelali\t\tN"
+        assert A.paste_text(1, rows).startswith("Pasted 2 row(s)")
+        assert sent[0] == ("clip", rows.replace("\n", "\r\n"))                      # ours, for the paste
+        assert sent[1] == ("keys", [0x11, ord("V"), ord("V"), 0x11])                # Ctrl+V
+        assert sent[2] == ("clip", "his own text") and board[0] == "his own text"  # and his put back
+        for bad in ("", "  ", "x" * (A.PASTE_MAX + 1)):
+            try:
+                A.paste_text(1, bad)
+                assert False, bad
+            except A.Refused:
+                pass
+        try:
+            A.press(1, "ctrl+v")                                                    # his clipboard: never
+            assert False
+        except A.Refused:
+            pass
+    finally:
+        A._clip_text, A._clip_set, A.to_front, A._send, A.time.sleep = keep
+
+
+def test_the_dashboard_lets_steps_and_paste_through_only_with_the_switch_and_only_window_steps():
+    fresh()
+    steps = [{"action": "click", "at": [0.5, 0.5], "junk": 1}, {"action": "reload"}, {"action": "steps"},
+             {"action": "paste", "text": "a\tb\nc"}, "nonsense"] + [{"action": "key", "key": "tab"}] * 70
+    for action, body in (("steps", {"steps": steps}), ("paste", {"text": "x"})):
+        assert call("/api/ctms/command", dict(body, action=action), key=AGENT)[0] == 409   # switched off
+    call("/api/ctms/control", {"on": True, "minutes": 15})
+    assert call("/api/ctms/command", {"action": "steps", "steps": steps}, key=AGENT)[0] == 200
+    queued = S._ctms["queue"][-1]["steps"]
+    assert [s["action"] for s in queued[:3]] == ["click", "paste", "key"] and len(queued) <= 60
+    assert "junk" not in queued[0] and queued[1]["text"] == "a\tb\nc"
+    rows = "MAN-1\tPASS_DH\t325\tDelali\t\tY\n" * 100                            # past the 2000 a type takes
+    assert call("/api/ctms/command", {"action": "paste", "text": rows}, key=AGENT)[0] == 200
+    assert len(S._ctms["queue"][-1]["text"]) == min(len(rows), 6000)
+
+
+def test_the_home_pc_sends_steps_as_one_batch_and_falls_back_one_by_one():
+    import types
+    keep = (R.load_state, R.ask, R.trace, R.save_state, R.print_screen)
+    R.load_state = lambda: {"kind": "window", "img_w": 1000, "img_h": 500}
+    asked = []
+
+    def ask(action, **a):
+        asked.append(action)
+        if action == "steps" and old[0]:
+            raise R.Stop("the CTMS bridge does not do 'steps'")
+        return {"ok": True, "detail": "ok"}, None
+    old = [False]
+    R.ask, R.trace, R.save_state, R.print_screen = ask, (lambda *a, **k: None), (lambda p: None), (lambda *a: None)
+    try:
+        batch = R.parse_steps(["click 500,250", "right 100,50", "key shift+end", "type 977.50", "wait 1.5",
+                               "paste MAN-1\\tPASS_DH"])
+        assert batch[0] == {"action": "click", "at": [0.5, 0.5]} and batch[1]["right"] is True
+        assert batch[4] == {"action": "wait", "seconds": 1.5} and batch[5]["text"] == "MAN-1\tPASS_DH"
+        for bad in (["shout 1,2"], ["click nowhere"], ["wait soon"]):
+            try:
+                R.parse_steps(bad)
+                assert False, bad
+            except R.Stop:
+                pass
+        assert R.run(types.SimpleNamespace(cmd="steps", items=["key tab", "key tab"], commit=False)) == 0
+        assert asked == ["steps"]                                                # one round trip
+        asked.clear()
+        old[0] = True                                                            # a dashboard from before
+        assert R.run(types.SimpleNamespace(cmd="planning-save")) == 0
+        assert asked == ["steps", "click", "wait"]
+    finally:
+        R.load_state, R.ask, R.trace, R.save_state, R.print_screen = keep
+
+
 def test_a_right_click_presses_only_the_right_button_and_only_on_ctms():
     sent = []
     keep = (A.to_front, A._send, A._absolute)
@@ -1488,8 +1605,11 @@ def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
     answers = {}
     keep = (R.load_state, R.ask, R.trace, R.save_state, R.print_screen)
     R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
-    R.ask = lambda action, **a: (asked.append((action, a)) or answers.get(action, ({"ok": True, "detail": "ok"},
-                                                                                   None)))
+
+    def ask(action, **a):      # a run goes as one batch; its steps are what was asked for
+        asked.extend([(s["action"], s) for s in a["steps"]] if action == "steps" else [(action, a)])
+        return answers.get(action, ({"ok": True, "detail": "ok"}, None))
+    R.ask = ask
     R.trace, R.save_state, R.print_screen = (lambda *a, **k: None), (lambda p: None), (lambda *a, **k: None)
     try:
         assert R.run(types.SimpleNamespace(cmd="order-find", order="1234567")) == 0
@@ -1503,9 +1623,10 @@ def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
         assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 0
         assert [x[0] for x in asked] == ["click", "key", "type"] and asked[1][1]["key"] == "end"
         asked.clear()
-        answers["key"] = ({"ok": False, "detail": "Refused: CTMS could not be brought to the front"}, None)
+        # the work PC stops the batch at the refused step (test_steps_run_on_the_work_pc_...); here, the run says so
+        answers["steps"] = ({"ok": False, "detail": "Stopped at step 2 of 3 (key): Refused: CTMS could not be "
+                                                    "brought to the front"}, None)
         assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 3
-        assert [x[0] for x in asked] == ["click", "key"]                 # stopped: nothing typed
     finally:
         R.load_state, R.ask, R.trace, R.save_state, R.print_screen = keep
 
@@ -1577,7 +1698,8 @@ def test_the_import_and_weight_runs_type_only_what_they_are_given():
     asked = []
     keep = (R.load_state, R.ask, R.trace, R.save_state, R.print_screen)
     R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
-    R.ask = lambda action, **a: (asked.append((action, a)) or ({"ok": True, "detail": "ok"}, None))
+    R.ask = lambda action, **a: (asked.extend([(s["action"], s) for s in a["steps"]] if action == "steps"
+                                              else [(action, a)]) or ({"ok": True, "detail": "ok"}, None))
     R.trace, R.save_state, R.print_screen = (lambda *a, **k: None), (lambda p: None), (lambda *a, **k: None)
     try:
         path = "C:\\Downloads\\NR_heavy_AH01-01-2026-AB-CD_01012026120000.csv"

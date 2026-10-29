@@ -24,7 +24,8 @@ The rails, in this order, every time:
      which Claude only passes after he has said go in the chat.
   5. Keys that act on Windows or the browser rather than on CTMS - close the
      window, switch away, paste the clipboard (which could hold a password) -
-     are refused. Left click, double-click, left-button drag (to move a Forms
+     are refused (paste_text pastes only text Claude itself supplies, and
+     puts back what the clipboard held). Left click, double-click, left-button drag (to move a Forms
      window aside) and right-click. A right-click only OPENS CTMS's right-click
      menu - where Create Trip lives, so it was held back until he asked for it
      (29/10) - and every item on it is then a separate left click, picked off
@@ -365,3 +366,96 @@ def text_units_for(ch):
         return [code]
     code -= 0x10000
     return [0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)]
+
+
+# ---- paste: a block of Claude's own text in one go (29/10) ------------------------------------
+# The tracker takes a row a booking, six cells across; typed cell by cell that was a dozen round trips
+# each. Pasted, the rows of every job just booked go in at once ("just select the cells you need for all
+# the jobs ... and then just copy and paste it"). Ctrl+V itself stays refused (BLOCKED): what the work
+# PC's clipboard holds could be a password, so only text Claude supplies is ever pasted - put on the
+# clipboard for the moment the paste takes, and the text that was there before put back.
+CF_UNICODETEXT = 13
+GMEM_MOVEABLE = 0x0002
+PASTE_MAX = 6000
+
+if IS_WIN:
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+
+
+def _open_clipboard():
+    for _ in range(20):                 # another program may hold it for a moment
+        if user32.OpenClipboard(None):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _clip_text():
+    """The text on the clipboard now, or None. Read only to be put back - never sent anywhere."""
+    if not _open_clipboard():
+        raise Refused("The clipboard is busy in another program, so nothing was pasted - try again.")
+    try:
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return None
+        p = kernel32.GlobalLock(h)
+        try:
+            return ctypes.wstring_at(p) if p else None
+        finally:
+            kernel32.GlobalUnlock(h)
+    finally:
+        user32.CloseClipboard()
+
+
+def _clip_set(text):
+    """Put text on the clipboard (None: leave it empty)."""
+    if not _open_clipboard():
+        raise Refused("The clipboard is busy in another program, so nothing was pasted - try again.")
+    try:
+        user32.EmptyClipboard()
+        if text is None:
+            return
+        data = ctypes.create_unicode_buffer(text)
+        h = kernel32.GlobalAlloc(GMEM_MOVEABLE, ctypes.sizeof(data))
+        p = kernel32.GlobalLock(h)
+        ctypes.memmove(p, data, ctypes.sizeof(data))
+        kernel32.GlobalUnlock(h)
+        if not user32.SetClipboardData(CF_UNICODETEXT, h):   # the clipboard owns h once this succeeds
+            kernel32.GlobalFree(h)
+            raise Refused("Windows would not take the text onto the clipboard, so nothing was pasted.")
+    finally:
+        user32.CloseClipboard()
+
+
+def paste_text(hwnd, text):
+    """Paste Claude's own text where the cursor is - a block of cells in the tracker, rows split by line
+    breaks and cells by tabs. The window must be in front, as for any key."""
+    text = str(text or "")
+    if not text.strip():
+        raise Refused("Nothing to paste.")
+    if len(text) > PASTE_MAX:
+        raise Refused(f"That is more than {PASTE_MAX} characters - paste it in parts.")
+    _require_front(hwnd)
+    before = _clip_text()
+    _clip_set(text.replace("\r\n", "\n").replace("\n", "\r\n"))
+    try:
+        _send([_vk(MOD_VK["ctrl"], False), _vk(ord("V"), False), _vk(ord("V"), False, up=True),
+               _vk(MOD_VK["ctrl"], False, up=True)])
+        time.sleep(1.0)                 # the page reads the clipboard as it handles the keys
+    finally:
+        _clip_set(before)
+    rows = text.strip("\r\n").count("\n") + 1
+    return f"Pasted {rows} row(s), {len(text)} characters"

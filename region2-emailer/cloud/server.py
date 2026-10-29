@@ -61,9 +61,11 @@ CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdi
             if DASH_KEY else "")
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking
-CTMS_DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
+CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / Claude's own text pasted
+              "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
 CTMS_ADMIN = ("update", "fields_setup")
+CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste")   # what one of a batch's steps can be
 # The bridge refuses anything else on its own side as well; this list only
 # stops something queuing that would just come back refused.
 CTMS_ACTIONS = CTMS_OBSERVE + CTMS_READ + CTMS_DRIVE + CTMS_ADMIN
@@ -227,6 +229,12 @@ def _ctms_args(action, data):
         out["branch"] = branch
     if data.get("scope") in ("bridge", "all"):
         out["scope"] = data["scope"]
+    if action == "paste" and data.get("text") is not None:
+        out["text"] = str(data["text"])[:6000]          # rows for the tracker, tabs and line breaks kept
+    if action == "steps" and isinstance(data.get("steps"), list):
+        # each step checked like a command of its own; nothing but the window's own steps goes through
+        out["steps"] = [dict(_ctms_args(s["action"], s), action=s["action"]) for s in data["steps"][:60]
+                        if isinstance(s, dict) and s.get("action") in CTMS_STEP_ACTIONS]
     return out
 
 

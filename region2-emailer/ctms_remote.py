@@ -23,6 +23,11 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py use ctms|tracker        which window the bridge works: CTMS's, or the DigiHaul
                                                   Job Tracker's page; every start is CTMS. Its tab not the
                                                   selected one: with Claude can act on, Edge brings it up
+    python ctms_remote.py steps "click X,Y" "key tab" "type 977.50" "wait 1.5" ...
+                                                  run on the work PC in one go, one picture at the end
+                                                  (also double/right X,Y, drag X,Y X,Y, paste TEXT)
+    python ctms_remote.py paste "MAN-1\\tPASS_DH\\t325\\tDelali\\t\\tY"   rows into the tracker at the
+                                                  cursor (\\t cells, \\n rows) - or --file ROWS.txt
 
 The CTMS note run (CTMS's own window; each answers with a picture to check):
     python ctms_remote.py orders-page             C-TMS Modules > Order Management > Orders
@@ -41,6 +46,10 @@ An upload into CTMS, and the weight after it (CTMS's import reads no weight):
     python ctms_remote.py order-weight 12         the open order's item weight, typed (check the picture)
     python ctms_remote.py order-weight-save       item Save + Exit, then the order's Save; then order-close
     python ctms_remote.py update [--branch B] [--all]    the work PC pulls new code from GitHub
+
+A booking, from the order well (Planning):
+    python ctms_remote.py planning-open           C-TMS Modules > Trip Management > Planning
+    python ctms_remote.py planning-save           Planning's Save - after Create Trip, after Accepted
 
 N is a number from the latest picture. Every action answers with a fresh one,
 so the numbers to use next are always the ones just printed.
@@ -488,6 +497,8 @@ CTMS_AT = {
     # an open order's Order Items tab and its "Create, Edit or Delete Order Item" box
     "items_tab": (136, 187), "item_edit": (200, 525), "item_weight": (182, 405),
     "item_save": (182, 499), "item_exit": (663, 499),
+    # C-TMS Modules > Trip Management > Planning, and Planning's own Save (29/10)
+    "menu_trip_mgmt": (128, 87), "menu_planning": (249, 258), "planning_save": (1337, 98),
 }
 
 
@@ -546,6 +557,12 @@ RUN_STEPS = {
                                ("key", {"key": "shift+end"}), ("type", {"text": str(a.kg)})],
     # Save and Exit the item box, then Save the order: its Planned line and total follow
     # the item. order-close after - no discard prompt means it saved.
+    # Trip Management > Planning - the order well, the manifest tree, Create New Trip (closing the
+    # Orders page closes Planning too, 29/10)
+    "planning-open": lambda a: [("click", _at("menu_modules")), ("click", _at("menu_trip_mgmt")),
+                                ("click", _at("menu_planning")), ("wait", {"seconds": 8})],
+    # Planning's Save: after Create Trip, and after Set Status > Accepted
+    "planning-save": lambda a: [("click", _at("planning_save")), ("wait", {"seconds": 4})],
     "order-weight-save": lambda a: [("click", _at("item_save")), ("wait", {"seconds": 3}),
                                     ("click", _at("item_exit")), ("wait", {"seconds": 2}),
                                     ("click", _at("order_save")), ("wait", {"seconds": 3})],
@@ -553,13 +570,80 @@ RUN_STEPS = {
 
 
 def run_steps(name, steps):
-    """A fixed sequence of steps in CTMS's own window, stopping at the first that is not
-    done. Every step is kept in the trace; the last picture is shown."""
-    result = payload = None
+    """A fixed sequence of steps in CTMS's own window, sent as ONE batch (send_batch)."""
+    batch = []
     for action, args in steps:
         args = dict(args)
         if "at_px" in args:
             args["at"] = _window_point(*args.pop("at_px"))
+        batch.append(dict(args, action=action))
+    return send_batch(name, batch)
+
+
+def _unescape(text):
+    """\\t between cells and \\n between rows, as typed on a command line."""
+    return str(text or "").replace("\\t", "\t").replace("\\n", "\n")
+
+
+def parse_steps(items, commit=False):
+    """The steps command's shorthand, one step an item: "click X,Y", "double X,Y", "right X,Y",
+    "drag X,Y X,Y", "key K", "type TEXT", "wait S", "paste TEXT" - points off the latest picture,
+    as for click --at."""
+    out = []
+    for item in items:
+        verb, _, rest = str(item).strip().partition(" ")
+        verb = verb.lower()
+        if verb in ("click", "double", "right"):
+            step = {"action": "click", "at": _window_point(*_xy(rest, verb))}
+            if verb != "click":
+                step[verb] = True
+        elif verb == "drag" and len(rest.split()) == 2:
+            start, end = rest.split()
+            step = {"action": "drag", "at": _window_point(*_xy(start, "drag")), "to": _window_point(*_xy(end, "drag"))}
+        elif verb == "key" and rest.strip():
+            step = {"action": "key", "key": rest.strip(), "commit": commit}
+        elif verb == "type":
+            step = {"action": "type", "text": rest}
+        elif verb == "wait":
+            try:
+                step = {"action": "wait", "seconds": float(rest)}
+            except ValueError:
+                raise Stop(f"steps: '{item}' - wait how many seconds?")
+        elif verb == "paste" and rest:
+            step = {"action": "paste", "text": _unescape(rest)}
+        else:
+            raise Stop(f"steps: '{item}' - each is click|double|right X,Y, drag X,Y X,Y, key K, type TEXT, "
+                       f"wait S or paste TEXT.")
+        out.append(step)
+    return out
+
+
+def send_batch(name, batch):
+    """Steps the work PC runs by itself, one after another, with ONE picture at the end - a round
+    trip and a picture per step was most of a booking's time (29/10). It stops at the first step that
+    is refused or fails, and says which. A bridge or dashboard from before batches gets them one by one."""
+    try:
+        result, payload = ask("steps", wait_total=90 + 10 * len(batch), steps=batch)
+    except Stop as e:
+        if "does not do 'steps'" not in str(e):
+            raise
+        return _one_by_one(name, batch)
+    if not result.get("ok") and "is not something this bridge does" in str(result.get("detail")):
+        return _one_by_one(name, batch)
+    trace(f"{name}:steps", {"steps": batch}, result, payload)
+    if payload and payload.get("kind") == "window":
+        save_state(payload)
+    print(("DONE  " if result.get("ok") else "STOPPED  ") + f"{name}: {result.get('detail')}")
+    if payload:
+        print_screen(payload, name)
+    return 0 if result.get("ok") else 3
+
+
+def _one_by_one(name, batch):
+    result = payload = None
+    for step in batch:
+        args = {k: v for k, v in step.items() if k != "action"}
+        action = step["action"]
         result, payload = ask(action, **args)
         trace(f"{name}:{action}", args, result, payload)
         if payload and payload.get("kind") == "window":
@@ -654,6 +738,14 @@ def main(argv=None):
     sub.add_parser("import-close", help="the Import card's Close button")
     sub.add_parser("order-weight", help="type the open order's item weight (not saved)").add_argument("kg")
     sub.add_parser("order-weight-save", help="item Save + Exit, then the order's Save")
+    sub.add_parser("planning-open", help="C-TMS Modules > Trip Management > Planning")
+    sub.add_parser("planning-save", help="Planning's Save button")
+    p = sub.add_parser("steps", help="several steps run on the work PC in one go, one picture at the end")
+    p.add_argument("items", nargs="+", help='"click X,Y" "key tab" "type 977.50" "wait 1.5" ...')
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("paste", help="paste text where the cursor is: \\t between cells, \\n between rows")
+    p.add_argument("text", nargs="?")
+    p.add_argument("--file", help="a text file of the rows (tab-separated cells)")
     p = sub.add_parser("tab")
     p.add_argument("n", type=int)
     p = sub.add_parser("update")
@@ -715,6 +807,16 @@ def run(a):
         return report(c, args, *ask("drag", **args))
     if c in RUN_STEPS:
         return run_steps(c, RUN_STEPS[c](a))
+    if c == "steps":
+        return send_batch("steps", parse_steps(a.items, commit=a.commit))
+    if c == "paste":
+        if a.file:
+            with open(a.file, encoding="utf-8") as f:
+                text = f.read()
+        else:
+            text = _unescape(a.text)
+        args = {"text": text}
+        return report(c, args, *ask("paste", **args))
     if c == "uploads":
         return cmd_uploads(a.text)
     if c == "use":

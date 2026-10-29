@@ -105,13 +105,17 @@ LOCK_PORT = 8792
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking: no switch needed
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
-         "reload", "dialog", "tab", "drag")   # Claude acting: this PC AND the dashboard must allow it
+         "reload", "dialog", "tab", "drag",
+         "steps", "paste")   # Claude acting: this PC AND the dashboard must allow it
+# What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
+WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
+STEPS_MAX = 60
 ADMIN = ("update", "fields_setup")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
 LOGGED = ("name", "on", "ref", "at", "to", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
-          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target")
+          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target", "steps")
 RESTART = 75            # the child's exit code for "updated - start me again"
 
 SHOT_EVERY = 1.5        # seconds between pictures while the CTMS page is open
@@ -672,6 +676,67 @@ class Bridge:
                         + (" Edge has just switched tabs: click into the page before any keys."
                            if self.click_first else "")}
 
+    def window_step(self, action, args):
+        """One step in the window being worked - click, drag, key, type, wait or paste - with the same rails
+        alone or in a batch. Returns what was done; anything refused raises."""
+        if action in ("click", "drag"):
+            at = args.get("at")
+            if action == "click":
+                if not (isinstance(at, (list, tuple)) and len(at) == 2):
+                    raise RuntimeError("In CTMS's window, click a point on the picture: click --at X,Y. "
+                                       "There are no numbered things to click here.")
+                detail = ctms_act.click(self.win["hwnd"], at[0], at[1], ctms_window.content_area(self.win),
+                                        double=bool(args.get("double")), right=bool(args.get("right")))
+            else:
+                to = args.get("to")
+                if not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in (at, to)):
+                    raise RuntimeError("A drag needs where to press and where to let go, both points on the "
+                                       "picture: drag --from X,Y --to X,Y.")
+                detail = ctms_act.drag(self.win["hwnd"], at, to, ctms_window.content_area(self.win))
+            self.click_first = False
+            time.sleep(0.4)
+            return detail
+        if action == "wait":
+            s = min(max(float(args.get("seconds") or 2), 0.0), 30.0)
+            time.sleep(s)
+            return f"Waited {s:g}s"
+        if self.click_first:
+            raise RuntimeError("Edge has just switched tabs, and where its keyboard focus landed is Edge's "
+                               "choice - click into the page first (click --at X,Y), then the keys.")
+        if action == "key":
+            detail = ctms_act.press(self.win["hwnd"], args.get("key") or "",
+                                    commit=bool(args.get("commit")), page=self.win.get("kind") == "page")
+        elif action == "type":
+            detail = ctms_act.type_text(self.win["hwnd"], args.get("text") or "",
+                                        enter=bool(args.get("enter")), commit=bool(args.get("commit")))
+        elif action == "paste":
+            detail = ctms_act.paste_text(self.win["hwnd"], args.get("text") or "")
+        else:
+            raise RuntimeError(f"'{action}' is not a step in CTMS's window.")
+        time.sleep(0.3)
+        return detail
+
+    def window_steps(self, steps, done):
+        """A batch of steps run here one after another, with ONE picture at the end - each step a round
+        trip through the dashboard with a picture of its own was most of a booking's time (29/10). Stops
+        at the first step that is refused or fails, and says which; the picture shows where it stopped."""
+        if not isinstance(steps, list) or not steps:
+            raise RuntimeError("steps needs a list of steps.")
+        if len(steps) > STEPS_MAX:
+            raise RuntimeError(f"At most {STEPS_MAX} steps in one go.")
+        last = ""
+        for i, step in enumerate(steps, 1):
+            action = str((step or {}).get("action") or "") if isinstance(step, dict) else ""
+            try:
+                if action not in WINDOW_STEPS:
+                    raise RuntimeError(f"'{action[:20]}' is not a step in CTMS's window.")
+                last = self.window_step(action, step)
+            except Exception as e:
+                why = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit)) else friendly(e)
+                return done(False, f"Stopped at step {i} of {len(steps)} ({action or '?'}): {why}"
+                                   + (f" Done before it: {i - 1} step(s)." if i > 1 else ""), self.window_look())
+        return done(True, f"Ran {len(steps)} step(s); the last: {last}", self.window_look())
+
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""
         bgra, w, h, how = self.window_picture()
@@ -837,47 +902,16 @@ class Bridge:
                 if action == "see":
                     return done(True, "Looked at " + ("the tracker." if self.target == "page" else "CTMS's window."),
                                 self.window_look())
-                if action == "click":
-                    at = cmd.get("at")
-                    if not (isinstance(at, (list, tuple)) and len(at) == 2):
-                        raise RuntimeError("In CTMS's window, click a point on the picture: click --at X,Y. "
-                                           "There are no numbered things to click here.")
-                    area = ctms_window.content_area(self.win)
-                    detail = ctms_act.click(self.win["hwnd"], at[0], at[1], area, double=bool(cmd.get("double")),
-                                            right=bool(cmd.get("right")))
-                    self.click_first = False
-                    time.sleep(0.4)
-                    return done(True, detail, self.window_look())
-                if action == "drag":
-                    at, to = cmd.get("at"), cmd.get("to")
-                    if not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in (at, to)):
-                        raise RuntimeError("A drag needs where to press and where to let go, both points on the "
-                                           "picture: drag --from X,Y --to X,Y.")
-                    detail = ctms_act.drag(self.win["hwnd"], at, to, ctms_window.content_area(self.win))
-                    self.click_first = False
-                    time.sleep(0.4)
-                    return done(True, detail, self.window_look())
-                if action in ("key", "type") and self.click_first:
-                    raise RuntimeError("Edge has just switched tabs, and where its keyboard focus landed is Edge's "
-                                       "choice - click into the page first (click --at X,Y), then the keys.")
-                if action == "key":
-                    detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
-                                            commit=bool(cmd.get("commit")), page=self.win.get("kind") == "page")
-                    time.sleep(0.3)
-                    return done(True, detail, self.window_look())
-                if action == "type":
-                    detail = ctms_act.type_text(self.win["hwnd"], cmd.get("text") or "",
-                                                enter=bool(cmd.get("enter")), commit=bool(cmd.get("commit")))
-                    time.sleep(0.3)
-                    return done(True, detail, self.window_look())
-                if action == "wait":
-                    s = min(max(float(cmd.get("seconds") or 2), 0.0), 30.0)
-                    time.sleep(s)
-                    return done(True, f"Waited {s:g}s", self.window_look())
+                if action in WINDOW_STEPS:
+                    return done(True, self.window_step(action, cmd), self.window_look())
+                if action == "steps":
+                    return self.window_steps(cmd.get("steps"), done)
                 if action in DRIVE:
-                    return done(False, "Refused: in CTMS's own window the bridge can type, press keys, "
-                                       "left-click, double-click, right-click and drag - select and scroll "
-                                       "are the next increment, not built yet.")
+                    return done(False, "Refused: in CTMS's own window the bridge can type, paste, press keys, "
+                                       "left-click, double-click, right-click and drag, alone or as steps - "
+                                       "select and scroll are the next increment, not built yet.")
+            if action in ("steps", "paste"):
+                raise RuntimeError(self.not_found())
             if action == "tabs":
                 tabs = self.tab_list()
                 return done(True, f"{len(tabs)} tab(s) could be CTMS.", {"tabs": tabs})
