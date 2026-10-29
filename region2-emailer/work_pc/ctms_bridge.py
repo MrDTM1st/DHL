@@ -35,10 +35,12 @@ Leave it running in its Command Prompt while you work. What it does:
     says "launch_browser": true - CTMS cannot run there), Claude also gets a
     numbered list of everything clickable, and "Record what CTMS sends" logs
     the page's requests.
-  - LETS CLAUDE ACT - in CTMS's own window, typing, keys and left-clicks
-    (ctms_act.py): only once CTMS is confirmed as the window in front, a click
-    only ever landing on CTMS itself, and F10 / Ctrl+S (save) only after you
-    have said go. Right-click and drag are still to come.
+  - LETS CLAUDE ACT - in CTMS's own window, typing, keys, clicks (left, double,
+    right) and drags (ctms_act.py): only once CTMS is confirmed as the window
+    in front, a click only ever landing on CTMS itself, and F10 / Ctrl+S (save)
+    only after you have said go. While acting is on, `use ctms` / `use tracker`
+    also has Edge bring up CTMS's tab or the tracker's, by its name
+    (ctms_tabs.py) - never any other tab.
     In a web page: click, type, choose, scroll. Either way the way you tell it
     to in the chat, and only while BOTH are true: this PC allows it
     (--allow-control, asked once at setup) and "Claude can act" is switched on
@@ -79,6 +81,7 @@ import cdp
 import ctms_act
 import ctms_drive
 import ctms_jab
+import ctms_tabs
 import ctms_update
 import ctms_window
 import pip_here
@@ -323,6 +326,9 @@ class Bridge:
         # Which window the bridge works: CTMS's ("ctms"), or the one allowed web page ("page" - the DigiHaul
         # Job Tracker, ctms_window.PAGE_WORDS). Claude switches it with `use`; every start is CTMS.
         self.target = "ctms"
+        # `use` has just had Edge bring a tab up (ctms_tabs): Edge decides where its keyboard focus lands,
+        # so keys wait until Claude has clicked into the page.
+        self.click_first = False
 
     # -- CTMS's own window --
     def scan_window(self, force=False):
@@ -355,10 +361,10 @@ class Bridge:
 
     def not_found(self):
         if self.target == "page":
-            return ("The DigiHaul Job Tracker is not the selected tab of any Edge window - select its tab "
-                    "(`use ctms` goes back to CTMS).")
-        return ("CTMS is not open in your Edge, or another tab is selected in its window - select CTMS's tab; "
-                "the bridge finds its window by itself.")
+            return ("The DigiHaul Job Tracker is not the selected tab of any Edge window - select its tab, or "
+                    "`use tracker` brings it up while Claude can act (`use ctms` goes back to CTMS).")
+        return ("CTMS is not open in your Edge, or another tab is selected in its window - select CTMS's tab, or "
+                "`use ctms` brings it up while Claude can act; the bridge finds its window by itself.")
 
     # -- which tab is CTMS --
     def candidates(self):
@@ -660,7 +666,9 @@ class Bridge:
                          "with click --at X,Y; type --focused and keys work, the browser's own keys do not."
                          if win.get("kind") == "page" else
                          "CTMS's own window: a picture, read by eye - no numbered list. Click a point on it "
-                         "with click --at X,Y (--double to open an order); type --focused and keys also work.")}
+                         "with click --at X,Y (--double to open an order); type --focused and keys also work.")
+                        + (" Edge has just brought this tab up: click into the page before any keys."
+                           if self.click_first else "")}
 
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""
@@ -777,20 +785,36 @@ class Bridge:
             if action == "fields_setup":
                 return done(True, ctms_jab.setup())
             if action == "use":
-                # which window to work - CTMS's, or the tracker's page. Not found: stay where we were.
+                # which window to work - CTMS's, or the tracker's page. Its tab not the selected one: while
+                # Claude can act, Edge brings it up by its name (ctms_tabs). Not found even so: stay where we were.
                 want, was = cmd.get("target"), self.target
                 if want not in ("ctms", "page"):
                     raise RuntimeError("Use which window? use ctms, or use tracker.")
                 self.target = want
-                if not self.scan_window(force=True):
+                brought = None
+                if not self.scan_window(force=True) and self.allow_control and self.armed:
+                    brought = ctms_tabs.select(want)
+                    if brought[0]:
+                        self.click_first = True
+                        for _ in range(12):             # CTMS's Internet Explorer page takes a moment to come back
+                            if self.scan_window(force=True):
+                                break
+                            time.sleep(0.25)
+                if not self.win:
                     self.target = was
                     self.scan_window(force=True)
-                    raise RuntimeError(("The DigiHaul Job Tracker is not the selected tab of any Edge window - "
-                                        "select its tab, then try again. Still working "
-                                        if want == "page" else "CTMS is not open in your Edge. Still working ")
-                                       + ("the tracker." if was == "page" else "CTMS."))
-                return done(True, "Now working " + ("the DigiHaul Job Tracker." if want == "page"
-                                                    else "CTMS's window."), self.window_look())
+                    if brought:
+                        why = brought[1] if not brought[0] else (
+                            "Edge brought its tab up, but " + ("the tracker's page" if want == "page"
+                                                               else "CTMS's window") + " did not show.")
+                    else:
+                        why = (("The DigiHaul Job Tracker's tab is not the selected one in Edge" if want == "page"
+                                else "CTMS is not open in your Edge, or its tab is not the selected one")
+                               + " - select it, or switch 'Claude can act' on and use brings it up itself.")
+                    raise RuntimeError(why + " Still working " + ("the tracker." if was == "page" else "CTMS."))
+                return done(True, (brought[1] + " " if brought else "") + "Now working "
+                            + ("the DigiHaul Job Tracker." if want == "page" else "CTMS's window."),
+                            self.window_look())
             if self.win:
                 # CTMS's own window (Oracle Forms in IE mode): keys, typing, clicks
                 # (left, double, right) and drags go to it through ctms_act.
@@ -805,6 +829,7 @@ class Bridge:
                     area = ctms_window.content_area(self.win)
                     detail = ctms_act.click(self.win["hwnd"], at[0], at[1], area, double=bool(cmd.get("double")),
                                             right=bool(cmd.get("right")))
+                    self.click_first = False
                     time.sleep(0.4)
                     return done(True, detail, self.window_look())
                 if action == "drag":
@@ -813,8 +838,12 @@ class Bridge:
                         raise RuntimeError("A drag needs where to press and where to let go, both points on the "
                                            "picture: drag --from X,Y --to X,Y.")
                     detail = ctms_act.drag(self.win["hwnd"], at, to, ctms_window.content_area(self.win))
+                    self.click_first = False
                     time.sleep(0.4)
                     return done(True, detail, self.window_look())
+                if action in ("key", "type") and self.click_first:
+                    raise RuntimeError("Edge has just brought this tab up, and where its keyboard focus landed is "
+                                       "Edge's choice - click into the page first (click --at X,Y), then the keys.")
                 if action == "key":
                     detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
                                             commit=bool(cmd.get("commit")), page=self.win.get("kind") == "page")

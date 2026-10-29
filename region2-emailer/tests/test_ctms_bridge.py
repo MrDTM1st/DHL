@@ -43,6 +43,7 @@ import ctms_update as U                 # noqa: E402
 import ctms_window as W                 # noqa: E402
 import ctms_act as A                    # noqa: E402
 import ctms_jab as J                    # noqa: E402
+import ctms_tabs as TB                  # noqa: E402
 import ctms_notes as N                  # noqa: E402
 import ctms_remote as R                 # noqa: E402
 import upload_weights as UW             # noqa: E402
@@ -859,8 +860,73 @@ def test_only_a_window_ctms_can_be_in_counts_never_one_that_mentions_it():
         assert W.score("rctrl_renwnd32", "RE: CTMS booking", 0, 0, 0) == 0               # an email about it
         assert W.score("ConsoleWindowClass", "CTMS bridge", 0, 0, 0) == 0                # the bridge itself
         assert W.score("Chrome_WidgetWin_1", "Smart Connect", 1, 0, 0) > 0               # CTMS in a back tab
+        assert W.score("SunAwtFrame", "Java Console", 0, 0, 0) == 0                      # Java's own console
+        assert W.score("SunAwtFrame", "Oracle Fusion Middleware Forms Services", 0, 0, 0) > 0   # CTMS's own frame
     finally:
         W.TEST_CLASSES = keep
+
+
+def test_only_ctmss_tab_or_the_trackers_is_ever_brought_up_and_a_hung_edge_is_not_waited_on():
+    assert TB._matches("Oracle Fusion Middleware Forms Services", "ctms")
+    assert TB._matches("DigiHaul Job Tracker.xlsx - Memory usage - 19.6 MB", "page")          # Edge adds the memory
+    assert not TB._matches("DigiHaul Job Tracker.xlsx", "ctms") and not TB._matches("Oracle Fusion Middleware", "page")
+    for other in ("CTMS user guide - SharePoint", "Haulage Desk - CTMS", "Inbox - Outlook", ""):
+        assert not TB._matches(other, "ctms") and not TB._matches(other, "page"), other
+    # Edge's title is the selected tab's - how a switch is confirmed
+    assert TB._matches("Oracle Fusion Middleware Forms Services and 2 more pages - Work - Microsoft​ Edge", "ctms")
+    assert TB.select("elsewhere")[0] is False
+    keep = (TB.IS_WIN, TB._select)
+    TB.IS_WIN, TB._select = True, (lambda target: time.sleep(1) or (True, "too late"))
+    try:
+        ok, why = TB.select("ctms", timeout=0.1)
+        assert ok is False and "in time" in why
+    finally:
+        TB.IS_WIN, TB._select = keep
+
+
+def test_use_has_edge_bring_up_the_tab_only_while_claude_can_act_and_keys_wait_for_a_click():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, TB.select)
+    ctms = dict(FAKE_WIN)
+    tracker = dict(FAKE_WIN, hwnd=5151, kind="page", score=1, title="DigiHaul Job Tracker.xlsx - Work - Microsoft Edge",
+                   content=[8, 90, 992, 692])
+    showing, asked, sent = [tracker], [], []          # the tracker's tab is selected: CTMS's window is not there
+
+    def bring_up(target):
+        asked.append(target)
+        showing[:] = [ctms] if target == "ctms" else [tracker]
+        return True, "Brought up CTMS's tab in Edge."
+
+    W.find_windows = lambda: [dict(w) for w in showing]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(1))
+    TB.select = bring_up
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.handle({"id": 1, "action": "use", "target": "ctms"})         # 'Claude can act' off: Edge is left alone
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and asked == [] and "Claude can act" in body["detail"]
+        b.armed = True
+        b.handle({"id": 2, "action": "use", "target": "ctms"})
+        body = desk.sent[-1][1]
+        assert body["ok"] and asked == ["ctms"] and b.win["hwnd"] == 4242 and "Brought up" in body["detail"]
+        assert "click into the page" in body["payload"]["note"]
+        for i, cmd in enumerate(({"action": "key", "key": "f7"}, {"action": "type", "text": "x"})):
+            b.handle(dict(cmd, id=3 + i))                              # where Edge put the focus is not known
+            assert desk.sent[-1][1]["ok"] is False and "click into the page" in desk.sent[-1][1]["detail"]
+        assert sent == []
+        b.handle({"id": 5, "action": "click", "at": [0.5, 0.5]})
+        b.handle({"id": 6, "action": "key", "key": "f7"})               # clicked into it: keys go
+        assert desk.sent[-1][1]["ok"] and len(sent) == 2
+        b.handle({"id": 7, "action": "use", "target": "ctms"})         # already showing: nothing asked of Edge
+        assert desk.sent[-1][1]["ok"] and asked == ["ctms"]
+        TB.select = lambda target: (False, "The DigiHaul Job Tracker is not open in any Edge tab.")
+        b.handle({"id": 8, "action": "use", "target": "page"})         # not open: stay where we were
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "not open" in body["detail"] and b.target == "ctms" and b.win["hwnd"] == 4242
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, TB.select = keep
 
 
 def test_the_tracker_page_counts_only_as_the_selected_tab_and_never_above_ctms():

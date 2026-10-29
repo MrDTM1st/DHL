@@ -214,9 +214,14 @@ def score(cls, title, ie, ie_showing, java):
     A window whose title merely MENTIONS CTMS - an email about it, the
     bridge's own console - never does: its picture would not be CTMS's. The
     allowed web page (PAGE_WORDS) counts while it is an Edge window's selected
-    tab - lowest of all, so CTMS's own window is always preferred to it.
+    tab - lowest of all, so CTMS's own window is always preferred to it. Java's
+    own console ("Java Console") never counts: it is not CTMS, and a key there
+    runs one of its commands (29/10: it was all `use ctms` found with the
+    tracker's tab selected).
     """
     java_top = cls.startswith("SunAwt") or cls in TEST_CLASSES
+    if java_top and (title or "").strip().lower().startswith("java console"):
+        return 0
     ie_frame = cls == "IEFrame"
     page = is_page(cls, title)
     if not (java_top or ie_frame or ((cls == EDGE_CLASS) and (ie or java)) or page):

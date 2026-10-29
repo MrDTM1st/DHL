@@ -21,7 +21,8 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py fields-setup            the work PC fetches the 32-bit Python that fields needs
     python ctms_remote.py drag --from X,Y --to X,Y   move a Forms window aside by its title bar
     python ctms_remote.py use ctms|tracker        which window the bridge works: CTMS's, or the DigiHaul
-                                                  Job Tracker's page (its tab selected); every start is CTMS
+                                                  Job Tracker's page; every start is CTMS. Its tab not the
+                                                  selected one: with Claude can act on, Edge brings it up
 
 The CTMS note run (CTMS's own window; each answers with a picture to check):
     python ctms_remote.py orders-page             C-TMS Modules > Order Management > Orders
