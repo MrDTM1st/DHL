@@ -99,7 +99,7 @@ LOCK_PORT = 8792
 
 # Everything this bridge will do, by who may ask and what it takes.
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-READ = ("see", "wait", "tabs", "probe", "fields")   # Claude looking: no switch needed
+READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking: no switch needed
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab", "drag")   # Claude acting: this PC AND the dashboard must allow it
 ADMIN = ("update", "fields_setup")
@@ -107,7 +107,7 @@ ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
 LOGGED = ("name", "on", "ref", "at", "to", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
-          "enter", "accept", "seconds", "tab", "branch", "scope", "by")
+          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target")
 RESTART = 75            # the child's exit code for "updated - start me again"
 
 SHOT_EVERY = 1.5        # seconds between pictures while the CTMS page is open
@@ -320,6 +320,9 @@ class Bridge:
         # when it is found it is what the bridge watches - ahead of any tab.
         self.win = None
         self.win_checked = 0.0
+        # Which window the bridge works: CTMS's ("ctms"), or the one allowed web page ("page" - the DigiHaul
+        # Job Tracker, ctms_window.PAGE_WORDS). Claude switches it with `use`; every start is CTMS.
+        self.target = "ctms"
 
     # -- CTMS's own window --
     def scan_window(self, force=False):
@@ -331,10 +334,12 @@ class Bridge:
         except Exception as e:
             wins = []
             self.shot_error = f"Could not look for CTMS's window ({type(e).__name__})."
+        wins = [w for w in wins if (w.get("kind") == "page") == (self.target == "page")]
         old, self.win = self.win, (wins[0] if wins else None)
         if bool(old) != bool(self.win) or (old and self.win and old["hwnd"] != self.win["hwnd"]):
             if self.win:
-                say(f"Found CTMS's window: {self.win['title'][:80] or '?'} ({self.win['process'] or self.win['class']})")
+                say(f"Found {'the tracker' if self.target == 'page' else 'CTMS'}'s window: "
+                    f"{self.win['title'][:80] or '?'} ({self.win['process'] or self.win['class']})")
                 log("window", title=self.win["title"][:120], window_kind=self.win["kind"], java=self.win["java"])
             else:
                 say("CTMS's window has gone (closed, or not open in Edge).")
@@ -343,11 +348,17 @@ class Bridge:
         return self.win
 
     def window_picture(self):
-        """(BGRA, w, h, how) of CTMS's window, found afresh - it may have moved."""
+        """(BGRA, w, h, how) of the window being worked, found afresh - it may have moved."""
         if not self.scan_window(force=True):
-            raise RuntimeError("CTMS is not open in your Edge - open it there as normal; the bridge finds "
-                               "its window by itself.")
+            raise RuntimeError(self.not_found())
         return ctms_window.picture(self.win)
+
+    def not_found(self):
+        if self.target == "page":
+            return ("The DigiHaul Job Tracker is not the selected tab of any Edge window - select its tab "
+                    "(`use ctms` goes back to CTMS).")
+        return ("CTMS is not open in your Edge, or another tab is selected in its window - select CTMS's tab; "
+                "the bridge finds its window by itself.")
 
     # -- which tab is CTMS --
     def candidates(self):
@@ -765,11 +776,27 @@ class Bridge:
                 return done(True, ctms_jab.summary(p), dict(p, kind="fields", title=self.win["title"]))
             if action == "fields_setup":
                 return done(True, ctms_jab.setup())
+            if action == "use":
+                # which window to work - CTMS's, or the tracker's page. Not found: stay where we were.
+                want, was = cmd.get("target"), self.target
+                if want not in ("ctms", "page"):
+                    raise RuntimeError("Use which window? use ctms, or use tracker.")
+                self.target = want
+                if not self.scan_window(force=True):
+                    self.target = was
+                    self.scan_window(force=True)
+                    raise RuntimeError(("The DigiHaul Job Tracker is not the selected tab of any Edge window - "
+                                        "select its tab, then try again. Still working "
+                                        if want == "page" else "CTMS is not open in your Edge. Still working ")
+                                       + ("the tracker." if was == "page" else "CTMS."))
+                return done(True, "Now working " + ("the DigiHaul Job Tracker." if want == "page"
+                                                    else "CTMS's window."), self.window_look())
             if self.win:
                 # CTMS's own window (Oracle Forms in IE mode): keys, typing, clicks
                 # (left, double, right) and drags go to it through ctms_act.
                 if action == "see":
-                    return done(True, "Looked at CTMS's window.", self.window_look())
+                    return done(True, "Looked at " + ("the tracker." if self.target == "page" else "CTMS's window."),
+                                self.window_look())
                 if action == "click":
                     at = cmd.get("at")
                     if not (isinstance(at, (list, tuple)) and len(at) == 2):
@@ -908,9 +935,11 @@ class Bridge:
               "tab_title": win["title"] if win else (self.tab or {}).get("title", ""),
               "tab_url": "" if win else redact_url((self.tab or {}).get("url", "")),
               "window": ({"found": True, "title": win["title"][:120], "kind": win["kind"], "java": win["java"],
-                          "showing": bool(win["ie_showing"] or win["kind"] == "java"),
+                          "showing": bool(win["ie_showing"] or win["kind"] == "java"
+                                          or (win["kind"] == "page" and win["content"])),
                           "minimized": win["minimized"], "foreground": win["foreground"]}
                          if win else {"found": False}),
+              "target": self.target,
               "mode": "act" if self.allow_control and self.armed else "observe",
               "control": self.allow_control,
               "net": self.net_on, "net_count": self.net_count,

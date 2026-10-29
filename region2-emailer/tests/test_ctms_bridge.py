@@ -944,6 +944,8 @@ def test_on_the_tracker_page_the_browsers_own_keys_are_refused():
         desk = _Rec()
         b = B.Bridge(desk, 1, "", allow_control=True)
         b.scan_window(force=True)
+        assert b.win is None                                           # every start is CTMS - not the page
+        b.handle({"id": 0, "action": "use", "target": "page"})
         b.armed = True
         b.handle({"id": 1, "action": "key", "key": "ctrl+l"})          # the bridge says it is the page
         assert desk.sent[-1][1]["ok"] is False and sent == []
@@ -952,6 +954,60 @@ def test_on_the_tracker_page_the_browsers_own_keys_are_refused():
         assert body["ok"] and sent and "Tracker" in body["payload"]["note"]
     finally:
         W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
+
+
+def test_use_switches_the_bridge_between_ctms_and_the_tracker_and_stays_put_when_it_is_not_there():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send)
+    ctms = dict(FAKE_WIN)
+    tracker = dict(FAKE_WIN, hwnd=5151, kind="page", score=1, title="DigiHaul Job Tracker.xlsx - Work - Microsoft Edge",
+                   content=[8, 90, 992, 692])
+    open_now = [ctms, tracker]
+    W.find_windows = lambda: [dict(w) for w in open_now]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: None)
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        assert b.scan_window(force=True)["hwnd"] == 4242 and b.target == "ctms"      # every start is CTMS
+        b.handle({"id": 1, "action": "use", "target": "page"})                       # looking: no switch needed
+        body = desk.sent[-1][1]
+        assert body["ok"] and b.win["hwnd"] == 5151 and "Tracker" in body["payload"]["note"]
+        assert b.state()["target"] == "page"
+        b.armed = True
+        b.handle({"id": 2, "action": "key", "key": "ctrl+l"})                        # the page's rails apply
+        assert desk.sent[-1][1]["ok"] is False
+        b.handle({"id": 3, "action": "use", "target": "ctms"})
+        assert desk.sent[-1][1]["ok"] and b.win["hwnd"] == 4242
+        open_now.remove(tracker)                                                     # the tracker is closed
+        b.handle({"id": 4, "action": "use", "target": "page"})
+        assert desk.sent[-1][1]["ok"] is False and b.target == "ctms" and b.win["hwnd"] == 4242
+        b.handle({"id": 5, "action": "use", "target": "somewhere"})
+        assert desk.sent[-1][1]["ok"] is False and b.target == "ctms"
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
+
+
+def test_the_dashboard_queues_use_without_the_switch_and_keeps_which_window_is_worked():
+    import types
+    fresh()
+    assert call("/api/ctms/command", {"action": "use", "target": "page"}, key=AGENT)[0] == 200      # look-only
+    assert call("/api/ctms/command", {"action": "use", "target": "elsewhere"}, key=AGENT)[0] == 200
+    good, bad = S._ctms["queue"][-2:]
+    assert good["target"] == "page" and "target" not in bad
+    poll({"version": "2", "view": "window", "target": "page",
+          "window": {"found": True, "title": "DigiHaul Job Tracker.xlsx", "kind": "page", "java": 0, "showing": True}})
+    assert call("/api/ctms/status")[1]["state"]["target"] == "page"
+    seen = {}
+    keep = (R.load_state, R.ask, R.trace)
+    R.load_state = lambda: {"kind": "window", "img_w": 1000, "img_h": 500}
+    R.ask = lambda action, **a: (seen.update(action=action, args=a) or ({"ok": True, "detail": "ok"}, None))
+    R.trace = lambda *a, **k: None
+    try:
+        R.run(types.SimpleNamespace(cmd="use", target="tracker"))
+    finally:
+        R.load_state, R.ask, R.trace = keep
+    assert seen == {"action": "use", "args": {"target": "page"}}
 
 
 FAKE_WIN = {"hwnd": 4242, "title": "Calidus TMS - Work - Microsoft Edge", "class": "Chrome_WidgetWin_1",

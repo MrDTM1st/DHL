@@ -20,6 +20,8 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
                                                   works with CTMS behind other windows or minimised
     python ctms_remote.py fields-setup            the work PC fetches the 32-bit Python that fields needs
     python ctms_remote.py drag --from X,Y --to X,Y   move a Forms window aside by its title bar
+    python ctms_remote.py use ctms|tracker        which window the bridge works: CTMS's, or the DigiHaul
+                                                  Job Tracker's page (its tab selected); every start is CTMS
 
 The CTMS note run (CTMS's own window; each answers with a picture to check):
     python ctms_remote.py orders-page             C-TMS Modules > Order Management > Orders
@@ -410,6 +412,8 @@ def cmd_status(_a):
     else:
         print(f"Work PC bridge: online - {s.get('machine', '?')}, {s.get('browser', '?')}")
     win = s.get("window") or {}
+    if s.get("target") == "page":
+        print("Working: the DigiHaul Job Tracker (use ctms to go back to CTMS)")
     if s.get("view") == "window":
         print(f"CTMS: its own window{' in Edge' if win.get('kind') == 'edge' else ''} - {win.get('title') or '?'}"
               + (" (MINIMISED - cannot be pictured)" if win.get("minimized") else "")
@@ -641,6 +645,7 @@ def main(argv=None):
     sub.add_parser("order-save", help="the open order's Save button")
     sub.add_parser("order-close", help="the open order's Close button")
     sub.add_parser("uploads", help="the dashboard's CSVs, newest first").add_argument("text", nargs="?", default="")
+    sub.add_parser("use", help="which window the bridge works").add_argument("target", choices=["ctms", "tracker"])
     sub.add_parser("import-open", help="Administration > File Interfaces > Imports, File Type NRHEAVY_Order_Import")
     sub.add_parser("import-file", help="the CSV's full path on the work PC, typed into Input file"
                    ).add_argument("path")
@@ -711,6 +716,9 @@ def run(a):
         return run_steps(c, RUN_STEPS[c](a))
     if c == "uploads":
         return cmd_uploads(a.text)
+    if c == "use":
+        args = {"target": "page" if a.target == "tracker" else "ctms"}
+        return report(c, args, *ask("use", **args))
     if c == "type":
         if a.focused is not None:
             args = {"text": a.focused}

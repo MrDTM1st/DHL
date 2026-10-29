@@ -60,7 +60,7 @@ _panel = {}          # agent-pushed persistent panel state: site decisions, hand
 CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdigest()
             if DASH_KEY else "")
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-CTMS_READ = ("see", "wait", "tabs", "probe", "fields")   # Claude looking
+CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking
 CTMS_DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
 CTMS_ADMIN = ("update", "fields_setup")
@@ -197,6 +197,8 @@ def _ctms_args(action, data):
         out["snap"] = snap
     if data.get("dir") in ("up", "down", "left", "right", "to"):
         out["dir"] = data["dir"]
+    if data.get("target") in ("ctms", "page"):      # which window the bridge works
+        out["target"] = data["target"]
     branch = str(data.get("branch") or "")
     if re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", branch) and ".." not in branch:
         out["branch"] = branch
@@ -247,7 +249,8 @@ def _ctms_take_state_locked(s):
                 pass
     for k, n in (("browser", 80), ("tab_title", 200), ("tab_url", 500), ("mode", 20),
                  ("error", 300), ("version", 20), ("match", 80), ("machine", 60),
-                 ("code", 60), ("code_at", 30), ("dialog", 300), ("rolled_back", 300), ("view", 20)):
+                 ("code", 60), ("code_at", 30), ("dialog", 300), ("rolled_back", 300), ("view", 20),
+                 ("target", 10)):
         if k in s:
             st[k] = str(s[k] or "")[:n]
     if isinstance(s.get("window"), dict):
