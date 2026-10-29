@@ -226,6 +226,12 @@ def score(cls, title, ie, ie_showing, java):
             + (1 if ie else 0) + (1 if ie_showing else 0) + (1 if ie_frame else 0) + (1 if page else 0))
 
 
+def _inside(r, outer):
+    """The part of rectangle r inside outer, or None if nothing of it is."""
+    x0, y0, x1, y1 = max(r[0], outer[0]), max(r[1], outer[1]), min(r[2], outer[2]), min(r[3], outer[3])
+    return [x0, y0, x1, y1] if x1 > x0 and y1 > y0 else None
+
+
 def find_windows():
     """The windows CTMS could be in, best first. Nothing else is described."""
     if not IS_WIN:
@@ -254,6 +260,15 @@ def find_windows():
             shown = [k for k, c in kid_cls if c == RENDER_CLASS and user32.IsWindowVisible(k)]
             if shown:
                 content = max((_rect(k) for k in shown), key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+            elif ie:
+                # Edge drew the page without a window of its own to measure (the work PC's does, 29/10).
+                # CTMS's tab, hidden in the same window, still holds its page area - below the tab strip
+                # and the address bar, so it can only ever miss a sliver of the page, never take in the
+                # browser's own bars. Kept inside the window's frame in case it went stale.
+                outer = _frame(h) or _rect(h)
+                rects = [r for r in (_inside(_rect(k), outer) for k in ie) if r]
+                if rects:
+                    content = max(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
         elif ie_showing:                # the largest Internet Explorer area on show is CTMS's page
             rects = [_rect(k) for k in ie_showing]
             content = max(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))

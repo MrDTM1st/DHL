@@ -906,6 +906,13 @@ def test_with_the_tracker_tab_selected_its_page_is_the_window_and_nothing_else()
         wins = W.find_windows()
         assert [w["hwnd"] for w in wins] == [top]                     # the Outlook window is never described
         assert wins[0]["kind"] == "page" and wins[0]["content"] == [8, 90, 992, 692]   # the page Edge draws
+        # Edge drew the page without a window of its own (the work PC, 29/10): CTMS's hidden tab gives the area
+        kids[top] = [ie]
+        wins = W.find_windows()
+        assert wins[0]["kind"] == "page" and wins[0]["content"] == [8, 120, 992, 692]
+        rects[ie] = [8, 120, 1400, 900]                                 # gone stale past the window: kept inside
+        assert W.find_windows()[0]["content"] == [8, 120, 1000, 700]
+        rects[ie] = [8, 120, 992, 692]
         titles[top], visible[ie] = "Calidus TMS and 2 more pages - Work - Microsoft Edge", True   # back on CTMS
         wins = W.find_windows()
         assert wins[0]["kind"] == "edge" and wins[0]["content"] == [8, 120, 992, 692]
