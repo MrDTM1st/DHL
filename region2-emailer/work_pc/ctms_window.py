@@ -232,6 +232,26 @@ def _inside(r, outer):
     return [x0, y0, x1, y1] if x1 > x0 and y1 > y0 else None
 
 
+# The page area of each Edge window CTMS has been seen showing in - as offsets from the window's corner,
+# with the window's size. Edge draws a normal tab with no window of its own to measure (the work PC's,
+# 29/10), so the tracker's tab in CTMS's window gets the area CTMS's tab had: the same window, the same
+# size, the same page area below the tab strip and the address bar. Moved: shifted with it. Resized: forgotten.
+_PAGE_AREA = {}
+
+
+def _remember_area(h, rect, content):
+    _PAGE_AREA[int(h)] = ((rect[2] - rect[0], rect[3] - rect[1]),
+                          (content[0] - rect[0], content[1] - rect[1], content[2] - rect[0], content[3] - rect[1]))
+
+
+def _recall_area(h, rect):
+    got = _PAGE_AREA.get(int(h))
+    if not got or got[0] != (rect[2] - rect[0], rect[3] - rect[1]):
+        return None
+    d = got[1]
+    return [rect[0] + d[0], rect[1] + d[1], rect[0] + d[2], rect[1] + d[3]]
+
+
 def find_windows():
     """The windows CTMS could be in, best first. Nothing else is described."""
     if not IS_WIN:
@@ -269,9 +289,12 @@ def find_windows():
                 rects = [r for r in (_inside(_rect(k), outer) for k in ie) if r]
                 if rects:
                     content = max(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+            if not content:
+                content = _recall_area(h, _rect(h))
         elif ie_showing:                # the largest Internet Explorer area on show is CTMS's page
             rects = [_rect(k) for k in ie_showing]
             content = max(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+            _remember_area(h, _rect(h), content)
         out.append({
             "hwnd": int(h), "title": title[:200], "class": cls, "process": _exe(h), "rect": _rect(h),
             "frame": _frame(h), "scale": _scale(h),
@@ -454,7 +477,9 @@ def content_area(win):
 
 def _not_showing(win):
     if win.get("kind") == "page":
-        return "The tracker's tab is selected but its page is not showing - wait for it to load, then try again."
+        return ("The tracker's tab is selected, but the bridge does not know where its page sits yet - show "
+                "CTMS's tab in that window for a few seconds (it measures the page area there), then the "
+                "tracker's tab again. Resizing the window means doing that again.")
     return ("CTMS is not the selected tab in its window - select the CTMS tab (it can sit behind other "
             "windows), then try again.")
 

@@ -896,6 +896,7 @@ def test_with_the_tracker_tab_selected_its_page_is_the_window_and_nothing_else()
              other: [0, 0, 500, 500]}
     titles = {top: "DigiHaul Job Tracker.xlsx and 2 more pages - Work - Microsoft Edge",
               other: "Inbox - Outlook - Work - Microsoft Edge"}
+    W._PAGE_AREA.clear()
     try:
         W.IS_WIN, W.TEST_CLASSES, W.dpi_aware = True, (), (lambda: None)
         W._enum = lambda parent=None: [top, other] if parent is None else kids.get(parent, [])
@@ -916,6 +917,14 @@ def test_with_the_tracker_tab_selected_its_page_is_the_window_and_nothing_else()
         titles[top], visible[ie] = "Calidus TMS and 2 more pages - Work - Microsoft Edge", True   # back on CTMS
         wins = W.find_windows()
         assert wins[0]["kind"] == "edge" and wins[0]["content"] == [8, 120, 992, 692]
+        # the tracker again, and now Edge keeps no window inside for either (the work PC, 29/10): the page
+        # area CTMS's tab had in this window is remembered, moves with the window, and is dropped on a resize
+        titles[top], kids[top] = "DigiHaul Job Tracker.xlsx and 2 more pages - Work - Microsoft Edge", []
+        assert W.find_windows()[0]["content"] == [8, 120, 992, 692]
+        rects[top] = [100, 50, 1100, 750]
+        assert W.find_windows()[0]["content"] == [108, 170, 1092, 742]
+        rects[top] = [0, 0, 1200, 800]
+        assert W.find_windows()[0]["content"] is None
     finally:
         (W.IS_WIN, W.dpi_aware, W._enum, W._cls, W._text, W._rect, W.user32, W._exe, W._frame, W._scale,
          W.TEST_CLASSES) = keep
