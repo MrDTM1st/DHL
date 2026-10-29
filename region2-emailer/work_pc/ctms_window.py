@@ -309,7 +309,8 @@ def find_windows():
             "java": len(java), "java_classes": sorted({c for _, c in kid_cls if c.startswith("SunAwt")})[:8],
             "java_hwnds": [int(k) for k in java[:40]],
         })
-    out.sort(key=lambda w: -w["score"])
+    # the tracker the selected tab of more than one window (29/10): CTMS's own first - its page area is known
+    out.sort(key=lambda w: (-w["score"], not (w["kind"] == "page" and w["hwnd"] in _PAGE_AREA)))
     return out
 
 

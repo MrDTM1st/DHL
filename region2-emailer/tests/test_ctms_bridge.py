@@ -875,6 +875,11 @@ def test_only_ctmss_tab_or_the_trackers_is_ever_brought_up_and_a_hung_edge_is_no
     # Edge's title is the selected tab's - how a switch is confirmed
     assert TB._matches("Oracle Fusion Middleware Forms Services and 2 more pages - Work - Microsoft​ Edge", "ctms")
     assert TB.select("elsewhere")[0] is False
+    # the tracker open in two windows (29/10): the copy beside CTMS is the one brought up
+    elsewhere = (1, [("inbox", "Inbox - Outlook"), ("copy", "DigiHaul Job Tracker.xlsx")])
+    beside = (2, [("ctms", "Oracle Fusion Middleware Forms Services"), ("tracker", "DigiHaul Job Tracker.xlsx")])
+    assert TB._pick([elsewhere, beside], "page") == (2, "tracker") and TB._pick([elsewhere, beside], "ctms") == (2, "ctms")
+    assert TB._pick([elsewhere], "page") == (1, "copy") and TB._pick([elsewhere], "ctms") is None
     keep = (TB.IS_WIN, TB._select)
     TB.IS_WIN, TB._select = True, (lambda target: time.sleep(1) or (True, "too late"))
     try:
@@ -897,7 +902,8 @@ def test_use_has_edge_bring_up_the_tab_only_while_claude_can_act_and_keys_wait_f
         return True, "Brought up CTMS's tab in Edge."
 
     W.find_windows = lambda: [dict(w) for w in showing]
-    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    drawn = _bgra([[0xFF000000 + (x * 7919 + y * 104729) % 0xFFFFFF for x in range(50)] for y in range(50)])
+    W.picture = lambda win: (drawn, 50, 50, "from the window")
     B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
     A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(1))
     TB.select = bring_up
@@ -994,6 +1000,29 @@ def test_with_the_tracker_tab_selected_its_page_is_the_window_and_nothing_else()
     finally:
         (W.IS_WIN, W.dpi_aware, W._enum, W._cls, W._text, W._rect, W.user32, W._exe, W._frame, W._scale,
          W.TEST_CLASSES) = keep
+
+
+def test_the_tracker_selected_in_two_windows_is_worked_in_ctmss_own():
+    import types
+    keep = (W.IS_WIN, W.dpi_aware, W._enum, W._cls, W._text, W._rect, W.user32, W._exe, W._frame, W._scale,
+            W.TEST_CLASSES)
+    other, beside = 300, 100
+    title = "DigiHaul Job Tracker.xlsx and 2 more pages - Work - Microsoft Edge"
+    W._PAGE_AREA.clear()
+    try:
+        W.IS_WIN, W.TEST_CLASSES, W.dpi_aware = True, (), (lambda: None)
+        W._enum = lambda parent=None: [other, beside] if parent is None else []
+        W._cls, W._text, W._rect = (lambda h: "Chrome_WidgetWin_1"), (lambda h: title), (lambda h: [0, 0, 1000, 700])
+        W.user32 = types.SimpleNamespace(IsWindowVisible=lambda h: True, GetForegroundWindow=lambda: other,
+                                         IsIconic=lambda h: False)
+        W._exe, W._frame, W._scale = (lambda h: "msedge.exe"), (lambda h: [0, 0, 1000, 700]), (lambda h: 1.0)
+        assert [w["hwnd"] for w in W.find_windows()] == [other, beside]          # the one in front, as ever
+        W._remember_area(beside, [0, 0, 1000, 700], [8, 120, 992, 692])          # CTMS has shown in this one
+        assert [w["hwnd"] for w in W.find_windows()] == [beside, other]
+    finally:
+        (W.IS_WIN, W.dpi_aware, W._enum, W._cls, W._text, W._rect, W.user32, W._exe, W._frame, W._scale,
+         W.TEST_CLASSES) = keep
+        W._PAGE_AREA.clear()
 
 
 def test_on_the_tracker_page_the_browsers_own_keys_are_refused():

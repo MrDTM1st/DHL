@@ -188,6 +188,19 @@ class _Session:
         self.held = []
 
 
+def _pick(windows, target):
+    """Which tab to bring up, from [(hwnd, [(element, name), ...]), ...] -> (hwnd, element), or None.
+
+    CTMS's own window first: the tracker is kept as a tab beside CTMS, and only in that window is its page
+    area known - and a copy open in another window (the one he works in, 29/10) is left alone.
+    """
+    for hwnd, tabs in sorted(windows, key=lambda w: not any(_matches(n, "ctms") for _, n in w[1])):
+        for el, name in tabs:
+            if _matches(name, target):
+                return hwnd, el
+    return None
+
+
 def _edge_windows():
     return [h for h in ctms_window._enum()
             if ctms_window.user32.IsWindowVisible(h) and ctms_window._cls(h) == ctms_window.EDGE_CLASS
@@ -199,20 +212,19 @@ def _select(target):
     try:
         s = _Session()
         try:
-            for hwnd in _edge_windows():
-                for el, name in s.tabs(hwnd):
-                    if not _matches(name, target):
-                        continue
-                    if not s.select(el):
-                        return False, f"Edge would not bring up {WHAT[target]} - select it yourself."
-                    end = time.time() + 3
-                    while time.time() < end:            # Edge's title is the selected tab's
-                        if _matches(ctms_window._text(hwnd), target):
-                            return True, f"Brought up {WHAT[target]} in Edge."
-                        time.sleep(0.1)
-                    return False, f"Edge did not bring up {WHAT[target]} - select it yourself."
-            return False, ("CTMS is not open in any Edge tab." if target == "ctms"
-                           else "The DigiHaul Job Tracker is not open in any Edge tab.")
+            pick = _pick([(hwnd, s.tabs(hwnd)) for hwnd in _edge_windows()], target)
+            if not pick:
+                return False, ("CTMS is not open in any Edge tab." if target == "ctms"
+                               else "The DigiHaul Job Tracker is not open in any Edge tab.")
+            hwnd, el = pick
+            if not s.select(el):
+                return False, f"Edge would not bring up {WHAT[target]} - select it yourself."
+            end = time.time() + 3
+            while time.time() < end:                    # Edge's title is the selected tab's
+                if _matches(ctms_window._text(hwnd), target):
+                    return True, f"Brought up {WHAT[target]} in Edge."
+                time.sleep(0.1)
+            return False, f"Edge did not bring up {WHAT[target]} - select it yourself."
         finally:
             s.close()
     except OSError as e:

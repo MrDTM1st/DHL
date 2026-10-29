@@ -667,7 +667,7 @@ class Bridge:
                          if win.get("kind") == "page" else
                          "CTMS's own window: a picture, read by eye - no numbered list. Click a point on it "
                          "with click --at X,Y (--double to open an order); type --focused and keys also work.")
-                        + (" Edge has just brought this tab up: click into the page before any keys."
+                        + (" Edge has just switched tabs: click into the page before any keys."
                            if self.click_first else "")}
 
     def capture_window(self, name):
@@ -800,6 +800,14 @@ class Bridge:
                             if self.scan_window(force=True):
                                 break
                             time.sleep(0.25)
+                        end = time.time() + 6           # a tab Edge had let sleep is blank until it draws again
+                        while self.win and time.time() < end:
+                            try:
+                                if not ctms_window.blank(self.window_picture()[0]):
+                                    break
+                            except Exception:
+                                pass
+                            time.sleep(0.5)
                 if not self.win:
                     self.target = was
                     self.scan_window(force=True)
@@ -842,8 +850,8 @@ class Bridge:
                     time.sleep(0.4)
                     return done(True, detail, self.window_look())
                 if action in ("key", "type") and self.click_first:
-                    raise RuntimeError("Edge has just brought this tab up, and where its keyboard focus landed is "
-                                       "Edge's choice - click into the page first (click --at X,Y), then the keys.")
+                    raise RuntimeError("Edge has just switched tabs, and where its keyboard focus landed is Edge's "
+                                       "choice - click into the page first (click --at X,Y), then the keys.")
                 if action == "key":
                     detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
                                             commit=bool(cmd.get("commit")), page=self.win.get("kind") == "page")
