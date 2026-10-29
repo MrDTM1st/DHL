@@ -12,7 +12,10 @@ person would; at this step only by looking:
   find      the window CTMS is in: an Edge window with Internet Explorer
             content and a Java applet inside it, or a Java window of its own,
             or a window whose title says CTMS / Calidus / Oracle Forms. Only
-            those are described - never the rest of what is open.
+            those are described - never the rest of what is open. One web page
+            besides CTMS may be worked too, named in PAGE_WORDS (the DigiHaul
+            Job Tracker, where a booking is logged): only while it is the
+            selected tab, and only its page.
   picture   that window and nothing else, never the rest of the screen. Of an
             Edge window, only the CTMS part: not the tab strip (other tabs'
             titles) or the address bar. Taken straight from the window, so it
@@ -39,8 +42,13 @@ import zlib
 IS_WIN = os.name == "nt"
 # Words in a window title that mean CTMS. Edge's title is the selected tab's.
 TITLE_WORDS = ("ctms", "calidus", "oracle fusion middleware", "forms services", "frmservlet")
+# The one web page besides CTMS the bridge may work, by its tab's title - the online Excel sheet each booking is
+# logged in (29/10). Only while it is the selected tab, and only its page: never the tab strip, the address bar
+# or any other tab. Anything else stays unseen.
+PAGE_WORDS = ("digihaul job tracker",)
 EDGE_CLASS = "Chrome_WidgetWin_1"
 IE_CLASS = "Internet Explorer_Server"
+RENDER_CLASS = "Chrome_RenderWidgetHostHWND"     # where Edge draws a web page
 PW_RENDERFULLCONTENT = 2
 GA_ROOT = 2
 
@@ -193,21 +201,29 @@ def _enum(parent=None):
 TEST_CLASSES = tuple(c for c in os.environ.get("CTMS_WINDOW_TEST_CLASS", "").split(",") if c)
 
 
+def is_page(cls, title):
+    """Is this an Edge window whose selected tab is the one allowed web page?"""
+    return cls == EDGE_CLASS and any(w in (title or "").lower() for w in PAGE_WORDS)
+
+
 def score(cls, title, ie, ie_showing, java):
     """How sure we are a top-level window is CTMS's; 0 = it is not, and it is not described.
 
     Only a window CTMS can actually be IN counts: Edge with Internet Explorer
     content or a Java applet inside, a Java window, Internet Explorer itself.
     A window whose title merely MENTIONS CTMS - an email about it, the
-    bridge's own console - never does: its picture would not be CTMS's.
+    bridge's own console - never does: its picture would not be CTMS's. The
+    allowed web page (PAGE_WORDS) counts while it is an Edge window's selected
+    tab - lowest of all, so CTMS's own window is always preferred to it.
     """
     java_top = cls.startswith("SunAwt") or cls in TEST_CLASSES
     ie_frame = cls == "IEFrame"
-    if not (java_top or ie_frame or ((cls == EDGE_CLASS) and (ie or java))):
+    page = is_page(cls, title)
+    if not (java_top or ie_frame or ((cls == EDGE_CLASS) and (ie or java)) or page):
         return 0
     titled = any(w in (title or "").lower() for w in TITLE_WORDS)
     return ((4 if ie and java else 0) + (3 if java_top else 0) + (2 if titled else 0)
-            + (1 if ie else 0) + (1 if ie_showing else 0) + (1 if ie_frame else 0))
+            + (1 if ie else 0) + (1 if ie_showing else 0) + (1 if ie_frame else 0) + (1 if page else 0))
 
 
 def find_windows():
@@ -232,15 +248,20 @@ def find_windows():
         s = score(cls, title, len(ie), len(ie_showing), len(java))
         if not s:
             continue                    # an ordinary browser window: never described
+        page = is_page(cls, title)
         content = None
-        if ie_showing:                  # the largest Internet Explorer area on show is CTMS's page
+        if page:                        # the allowed page is the selected tab: the page it is drawn in
+            shown = [k for k, c in kid_cls if c == RENDER_CLASS and user32.IsWindowVisible(k)]
+            if shown:
+                content = max((_rect(k) for k in shown), key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+        elif ie_showing:                # the largest Internet Explorer area on show is CTMS's page
             rects = [_rect(k) for k in ie_showing]
             content = max(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
         out.append({
             "hwnd": int(h), "title": title[:200], "class": cls, "process": _exe(h), "rect": _rect(h),
             "frame": _frame(h), "scale": _scale(h),
             "minimized": bool(user32.IsIconic(h)), "foreground": h == fg, "score": s,
-            "kind": "edge" if cls == EDGE_CLASS else ("ie" if cls == "IEFrame" else "java"),
+            "kind": "page" if page else ("edge" if cls == EDGE_CLASS else ("ie" if cls == "IEFrame" else "java")),
             "ie": len(ie), "ie_showing": bool(ie_showing), "content": content,
             "java": len(java), "java_classes": sorted({c for _, c in kid_cls if c.startswith("SunAwt")})[:8],
             "java_hwnds": [int(k) for k in java[:40]],
@@ -374,14 +395,13 @@ def picture(win):
     if win.get("minimized"):
         raise RuntimeError("CTMS's window is minimised - restore it (it can sit behind other windows).")
     rect = win["rect"]
-    whole = win.get("kind") not in ("edge", "ie")
+    whole = win.get("kind") not in ("edge", "ie", "page")
     if whole:
         area = win.get("frame") or rect
     else:
         if not win.get("content"):
-            raise RuntimeError("CTMS is not the selected tab in its window - select the CTMS tab "
-                               "(the window can sit behind others).")
-        area = win["content"]           # CTMS's page only: not the tab strip or the address bar
+            raise RuntimeError(_not_showing(win))
+        area = win["content"]           # the page only: not the tab strip or the address bar
     data, w, h = _grab(win["hwnd"], rect, from_screen=False)
     how = "from the window"
     if data is not None:                # judged only once cropped: the unscaled frame is not CTMS
@@ -406,16 +426,22 @@ def content_area(win):
     """The screen rectangle the picture covers - what a click's fraction is taken of.
 
     The same choice picture() makes: for CTMS in Edge it is the Internet Explorer
-    content only (not the tab strip or the address bar); for a Java window of its
-    own it is the whole frame.
+    content only (not the tab strip or the address bar), for the allowed web page
+    the page Edge draws it in; for a Java window of its own it is the whole frame.
     """
-    whole = win.get("kind") not in ("edge", "ie")
+    whole = win.get("kind") not in ("edge", "ie", "page")
     if whole:
         return win.get("frame") or win["rect"]
     if not win.get("content"):
-        raise RuntimeError("CTMS is not the selected tab in its window - select the CTMS tab (it can sit "
-                           "behind other windows), then try again.")
+        raise RuntimeError(_not_showing(win))
     return win["content"]
+
+
+def _not_showing(win):
+    if win.get("kind") == "page":
+        return "The tracker's tab is selected but its page is not showing - wait for it to load, then try again."
+    return ("CTMS is not the selected tab in its window - select the CTMS tab (it can sit behind other "
+            "windows), then try again.")
 
 
 # ---- Java, and its Access Bridge -------------------------------------------------------

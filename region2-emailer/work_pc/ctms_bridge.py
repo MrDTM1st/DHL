@@ -645,8 +645,11 @@ class Bridge:
         return {"kind": "window", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
                 "mime": "image/png", "img_w": w, "img_h": h, "title": win["title"], "how": how,
                 "window": {k: win[k] for k in ("kind", "process", "java", "ie_showing", "foreground", "minimized")},
-                "note": "CTMS's own window: a picture, read by eye - no numbered list. Click a point on it "
-                        "with click --at X,Y (--double to open an order); type --focused and keys also work."}
+                "note": ("The DigiHaul Job Tracker (its tab is selected): only its page is pictured. Click a point "
+                         "with click --at X,Y; type --focused and keys work, the browser's own keys do not."
+                         if win.get("kind") == "page" else
+                         "CTMS's own window: a picture, read by eye - no numbered list. Click a point on it "
+                         "with click --at X,Y (--double to open an order); type --focused and keys also work.")}
 
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""
@@ -787,7 +790,7 @@ class Bridge:
                     return done(True, detail, self.window_look())
                 if action == "key":
                     detail = ctms_act.press(self.win["hwnd"], cmd.get("key") or "",
-                                            commit=bool(cmd.get("commit")))
+                                            commit=bool(cmd.get("commit")), page=self.win.get("kind") == "page")
                     time.sleep(0.3)
                     return done(True, detail, self.window_look())
                 if action == "type":

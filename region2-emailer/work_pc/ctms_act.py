@@ -29,6 +29,9 @@ The rails, in this order, every time:
      menu - where Create Trip lives, so it was held back until he asked for it
      (29/10) - and every item on it is then a separate left click, picked off
      the picture while he directs. There is no right double-click.
+     On the one allowed web page (the DigiHaul Job Tracker, ctms_window.
+     PAGE_WORDS) the keys that would work the BROWSER instead - the address
+     bar, reload, history, back/forward, other tabs - are refused as well.
 
 Reading CTMS's fields by name (so the bridge could know a box is a password box,
 or what a button says) needs Java's Access Bridge. Until that is available the
@@ -130,6 +133,14 @@ COMMIT = {"f10", "ctrl+s"}
 # pasting the work PC's clipboard (it could hold a password). Refused outright.
 BLOCKED = {"alt+f4", "alt+tab", "ctrl+w", "ctrl+f4", "f11", "ctrl+esc", "ctrl+shift+esc",
            "ctrl+v", "shift+insert", "ctrl+shift+v", "alt+space", "ctrl+p", "ctrl+n", "ctrl+t"}
+# On a web page (not CTMS's Java), these reach Edge itself: the address bar, reload, history, downloads,
+# bookmarks, open/save, back/forward, the browser's menus, and other tabs. Refused there - keys stay on the page.
+PAGE_BLOCKED = ({"ctrl+l", "alt+d", "f6", "shift+f6", "ctrl+e", "ctrl+k", "f5", "shift+f5", "ctrl+f5", "ctrl+r",
+                 "ctrl+shift+r", "ctrl+h", "ctrl+j", "ctrl+d", "ctrl+o", "ctrl+s", "ctrl+u", "f12", "f7",
+                 "alt+left", "alt+right", "alt+home", "alt+f", "alt+e", "ctrl+tab", "ctrl+shift+tab",
+                 "ctrl+pageup", "ctrl+pagedown", "ctrl+shift+t", "ctrl+shift+n", "ctrl+shift+b",
+                 "ctrl+shift+delete", "ctrl+shift+i", "ctrl+shift+j"}
+                | {f"ctrl+{d}" for d in "123456789"} | {f"alt+{d}" for d in "123456789"})
 
 
 def _send(inputs):
@@ -208,12 +219,15 @@ def _combo(spec):
     return mods, name, canon
 
 
-def press(hwnd, spec, commit=False):
-    """Send one key or chord to CTMS's window. Returns what was pressed."""
+def press(hwnd, spec, commit=False, page=False):
+    """Send one key or chord to CTMS's window (page=True: the allowed web page). Returns what was pressed."""
     mods, name, canon = _combo(spec)
     if canon in BLOCKED:
         raise Refused(f"{canon} is not allowed: it works Windows or the browser rather than CTMS "
                       f"(close it, switch away, or paste the clipboard).")
+    if page and canon in PAGE_BLOCKED:
+        raise Refused(f"{canon} is not allowed on this page: it works the browser itself (address bar, reload, "
+                      f"history, other tabs), not the page.")
     if canon in COMMIT and not commit:
         raise NeedsCommit(f"{canon.upper()} saves the record in CTMS. Not pressed - ask Delali, and re-run "
                           f"with commit if he says go.")

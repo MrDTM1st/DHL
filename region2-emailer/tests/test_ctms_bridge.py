@@ -863,6 +863,97 @@ def test_only_a_window_ctms_can_be_in_counts_never_one_that_mentions_it():
         W.TEST_CLASSES = keep
 
 
+def test_the_tracker_page_counts_only_as_the_selected_tab_and_never_above_ctms():
+    keep = W.TEST_CLASSES
+    W.TEST_CLASSES = ()
+    page_title = "DigiHaul Job Tracker.xlsx and 2 more pages - Work - Microsoft Edge"
+    try:
+        assert W.score("Chrome_WidgetWin_1", page_title, 0, 0, 0) > 0                      # a window of its own
+        assert W.score("Chrome_WidgetWin_1", "Inbox - Outlook - Work - Microsoft Edge", 0, 0, 0) == 0
+        assert W.score("rctrl_renwnd32", "RE: DigiHaul Job Tracker", 0, 0, 0) == 0           # an email about it
+        assert W.score("Chrome_WidgetWin_1", "Calidus TMS", 1, 1, 3) > W.score("Chrome_WidgetWin_1", page_title, 0, 0, 0)
+    finally:
+        W.TEST_CLASSES = keep
+    page = dict(FAKE_WIN, kind="page", title=page_title, content=[8, 90, 992, 692])
+    assert W.content_area(page) == [8, 90, 992, 692]                                        # its page, nothing more
+    try:
+        W.content_area(dict(page, content=None))
+        assert False
+    except RuntimeError as e:
+        assert "tracker" in str(e)
+
+
+def test_with_the_tracker_tab_selected_its_page_is_the_window_and_nothing_else():
+    import types
+    keep = (W.IS_WIN, W.dpi_aware, W._enum, W._cls, W._text, W._rect, W.user32, W._exe, W._frame, W._scale,
+            W.TEST_CLASSES)
+    top, ie, big, small, other = 100, 101, 102, 103, 200
+    cls = {top: "Chrome_WidgetWin_1", ie: "Internet Explorer_Server", big: "Chrome_RenderWidgetHostHWND",
+           small: "Chrome_RenderWidgetHostHWND", other: "Chrome_WidgetWin_1"}
+    kids = {top: [ie, big, small], other: []}
+    visible = {top: True, ie: False, big: True, small: True, other: True}
+    rects = {top: [0, 0, 1000, 700], ie: [8, 120, 992, 692], big: [8, 90, 992, 692], small: [900, 90, 992, 200],
+             other: [0, 0, 500, 500]}
+    titles = {top: "DigiHaul Job Tracker.xlsx and 2 more pages - Work - Microsoft Edge",
+              other: "Inbox - Outlook - Work - Microsoft Edge"}
+    try:
+        W.IS_WIN, W.TEST_CLASSES, W.dpi_aware = True, (), (lambda: None)
+        W._enum = lambda parent=None: [top, other] if parent is None else kids.get(parent, [])
+        W._cls, W._text, W._rect = (lambda h: cls[h]), (lambda h: titles.get(h, "")), (lambda h: rects[h])
+        W.user32 = types.SimpleNamespace(IsWindowVisible=lambda h: visible[h], GetForegroundWindow=lambda: top,
+                                         IsIconic=lambda h: False)
+        W._exe, W._frame, W._scale = (lambda h: "msedge.exe"), (lambda h: rects[h]), (lambda h: 1.0)
+        wins = W.find_windows()
+        assert [w["hwnd"] for w in wins] == [top]                     # the Outlook window is never described
+        assert wins[0]["kind"] == "page" and wins[0]["content"] == [8, 90, 992, 692]   # the page Edge draws
+        titles[top], visible[ie] = "Calidus TMS and 2 more pages - Work - Microsoft Edge", True   # back on CTMS
+        wins = W.find_windows()
+        assert wins[0]["kind"] == "edge" and wins[0]["content"] == [8, 120, 992, 692]
+    finally:
+        (W.IS_WIN, W.dpi_aware, W._enum, W._cls, W._text, W._rect, W.user32, W._exe, W._frame, W._scale,
+         W.TEST_CLASSES) = keep
+
+
+def test_on_the_tracker_page_the_browsers_own_keys_are_refused():
+    sent = []
+    keep = (A.to_front, A._send)
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(len(inputs)))
+    try:
+        for k in ("ctrl+l", "f5", "ctrl+tab", "alt+left", "ctrl+2", "F6", "ctrl+s"):
+            try:
+                A.press(1, k, page=True)
+                assert False, k
+            except A.Refused:
+                pass
+        assert sent == []                                              # none of them reached Windows
+        for k in ("tab", "enter", "ctrl+g", "down"):
+            A.press(1, k, page=True)
+        assert len(sent) == 4
+        A.press(1, "f5")                                               # in CTMS F5 is Forms' own key: still allowed
+    finally:
+        A.to_front, A._send = keep
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send)
+    page = dict(FAKE_WIN, kind="page", title="DigiHaul Job Tracker.xlsx - Work - Microsoft Edge",
+                content=[8, 90, 992, 692])
+    W.find_windows = lambda: [dict(page)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    sent.clear()
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(1))
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.scan_window(force=True)
+        b.armed = True
+        b.handle({"id": 1, "action": "key", "key": "ctrl+l"})          # the bridge says it is the page
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.handle({"id": 2, "action": "key", "key": "tab"})
+        body = desk.sent[-1][1]
+        assert body["ok"] and sent and "Tracker" in body["payload"]["note"]
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
+
+
 FAKE_WIN = {"hwnd": 4242, "title": "Calidus TMS - Work - Microsoft Edge", "class": "Chrome_WidgetWin_1",
             "process": "msedge.exe", "rect": [0, 0, 1000, 700], "frame": [8, 0, 992, 692], "scale": 1.0,
             "minimized": False, "foreground": True, "score": 8, "kind": "edge", "ie": 1, "ie_showing": True,
