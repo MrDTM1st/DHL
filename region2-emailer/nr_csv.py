@@ -559,7 +559,12 @@ def dts_row(pdf_path):
         "Product Qty": d["pallets"],
         "Serial Number": "", "Raised by": d.get("raiser_email", ""),
         "Account": "NRADHOC_NH", "Cost Centre": None, "Vehicle Type": "",
-        "Delivery Instructions": "Del Notes " + " ".join(d["del_notes"]),
+        # CTMS's import reads no weight either, so a DTS order came in at its
+        # pallet count. The total now LEADS the instructions in the forms' own
+        # words - ahead of the del notes, so the 255 cut can't take it - and
+        # upload_weights reads it back to set the weight after the import.
+        "Delivery Instructions": (f"Weight - {d['weight_kg']}kg- " if d.get("weight_kg") else "")
+                                 + "Del Notes " + " ".join(d["del_notes"]),
         "HIAB": "N", "Vehicle Escort": "N", "PTS": "N", "Banksman": "N",
         "Moffett": "N", "Log Grab": "N", "Rear Steer": "N",
         "Est Cost": None, "Notes for Collection Location Comments": "",

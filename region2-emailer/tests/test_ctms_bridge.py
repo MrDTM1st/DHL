@@ -45,6 +45,7 @@ import ctms_act as A                    # noqa: E402
 import ctms_jab as J                    # noqa: E402
 import ctms_notes as N                  # noqa: E402
 import ctms_remote as R                 # noqa: E402
+import upload_weights as UW             # noqa: E402
 import cdp                              # noqa: E402
 from http.server import ThreadingHTTPServer  # noqa: E402
 
@@ -1138,9 +1139,12 @@ def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
     R.trace, R.save_state, R.print_screen = (lambda *a, **k: None), (lambda p: None), (lambda *a, **k: None)
     try:
         assert R.run(types.SimpleNamespace(cmd="order-find", order="1234567")) == 0
-        assert [x[0] for x in asked] == ["click", "click", "type", "click", "wait"]
-        assert asked[2][1]["text"] == "1234567%"                         # the order's lines, by its ref and a %
-        assert asked[1][1]["at"] == [728 / 1910, 123 / 915]              # Customer Ref box, as a fraction
+        assert [x[0] for x in asked] == ["click", "key", "key", "type", "click", "wait"]
+        assert asked[3][1]["text"] == "1234567%"                         # the order's lines, by its ref and a %
+        assert asked[0][1]["at"] == [728 / 1910, 123 / 915]              # Customer Ref box, as a fraction
+        # the card's Clear empties the results, not the box - so the old ref is selected
+        # and the new one replaces it, never appended to it (29/10 a second ref landed on the first)
+        assert [x[1]["key"] for x in asked[1:3]] == ["home", "shift+end"]
         asked.clear()
         assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 0
         assert [x[0] for x in asked] == ["click", "key", "type"] and asked[1][1]["key"] == "end"
@@ -1148,6 +1152,98 @@ def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
         answers["key"] = ({"ok": False, "detail": "Refused: CTMS could not be brought to the front"}, None)
         assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 3
         assert [x[0] for x in asked] == ["click", "key"]                 # stopped: nothing typed
+    finally:
+        R.load_state, R.ask, R.trace, R.save_state, R.print_screen = keep
+
+
+# ---- an upload into CTMS, and the weight after it ---------------------------------------
+def test_the_weight_an_upload_states_is_read_back_and_never_guessed():
+    stated = {
+        "Material Box Dimension  Qty 1 Weight  - 12kg-": 12,
+        "Material Pallet Dimension Small box Qty 1 Weight  - 30kg-Delivery ASAP after collection": 30,
+        "Weight  - 600Kgs-3.5 or 7.5ton vehicle Must have taillift": 600,     # the load, not the lorry
+        "Qty X1 DRUM Weight - 400KG-DRUM W= 580MM X H 1000MM": 400,
+        "Collect from stores / Weight 32 kg": 32,                             # repair_weights' wording
+        "Weight - 3061kg- Del Notes 1234/567890": 3061,                       # a DTS upload's lead
+        "Weight - 1 200kg-": 1200,                                            # "1,200" once commas are gone
+        "Weight - approx 1.5 tonnes": 1500,
+    }
+    for text, want in stated.items():
+        assert UW.kg(text)[0] == want, (text, UW.kg(text))
+    for text in ("Weight - TBC", "Weight - 12", "Weight - 7.5ton vehicle", "Weight - 25kg each",
+                 "Weight - 10-12kg", "Weight - 90000kg", "Del Notes 1234/567890", ""):
+        weight, why = UW.kg(text)
+        assert weight is None and why, (text, weight)                         # left to set by hand, with why
+
+
+def test_each_order_in_an_upload_gets_the_weight_its_instructions_state():
+    def order(ref, instr):
+        r = [""] * 35
+        r[0], r[1], r[27] = "ORDER", ref, instr
+        return ",".join(r)
+    path = os.path.join(tempfile.mkdtemp(), "NR_heavy_TEST.csv")
+    with open(path, "w", encoding="cp1252", newline="") as f:
+        f.write("\r\n".join([order("AH01/01/2026/AB-CD", "Material Box Dimension  Qty 1 Weight  - 12kg-"),
+                             "ITEMS,Box,1" + "," * 32,
+                             order("AH01/01/2026/EF-GH", "Material Pallet Dimension  Qty 2 Weight  - TBC")]) + "\r\n")
+    got = UW.orders(path)
+    assert [(ref, weight) for ref, weight, _ in got] == [("AH01/01/2026/AB-CD", 12), ("AH01/01/2026/EF-GH", None)]
+    # the same weight on two orders of one file: each, or one load between them? Neither is set.
+    with open(path, "w", encoding="cp1252", newline="") as f:
+        f.write("\r\n".join([order("1234567", "Total Pallet Weight 126Kg / Alt Contact A"),
+                             order("1234568", "Total Pallet Weight 126Kg / Alt Contact A")]) + "\r\n")
+    got = UW.orders(path)
+    assert [weight for _, weight, _ in got] == [None, None] and "same weight" in got[0][2]
+
+
+def test_a_dts_upload_leads_its_instructions_with_the_weight():
+    import types
+    import nr_csv
+    fake = types.ModuleType("dts_convert")
+    fake.to_time = lambda v, end=False: "09:00"
+    base = {"ref": "DTS-TEST-1", "pallets": 3, "del_notes": ["1234/567890"], "coll": {}, "deliv": {},
+            "raiser_email": ""}
+    keep = sys.modules.get("dts_convert")
+    sys.modules["dts_convert"] = fake
+    try:
+        fake.parse_dts = lambda p: dict(base, weight_kg=3061)
+        instr = nr_csv.dts_row("x.pdf")["Delivery Instructions"]
+        assert instr == "Weight - 3061kg- Del Notes 1234/567890" and UW.kg(instr)[0] == 3061
+        fake.parse_dts = lambda p: dict(base, weight_kg=0)                    # none on the DTS: none invented
+        assert nr_csv.dts_row("x.pdf")["Delivery Instructions"] == "Del Notes 1234/567890"
+    finally:
+        if keep is None:
+            sys.modules.pop("dts_convert", None)
+        else:
+            sys.modules["dts_convert"] = keep
+
+
+def test_the_import_and_weight_runs_type_only_what_they_are_given():
+    import types
+    asked = []
+    keep = (R.load_state, R.ask, R.trace, R.save_state, R.print_screen)
+    R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
+    R.ask = lambda action, **a: (asked.append((action, a)) or ({"ok": True, "detail": "ok"}, None))
+    R.trace, R.save_state, R.print_screen = (lambda *a, **k: None), (lambda p: None), (lambda *a, **k: None)
+    try:
+        path = "C:\\Downloads\\NR_heavy_AH01-01-2026-AB-CD_01012026120000.csv"
+        assert R.run(types.SimpleNamespace(cmd="import-file", path=path)) == 0
+        assert [x[0] for x in asked] == ["click", "key", "key", "type"]
+        assert [x[1]["key"] for x in asked[1:3]] == ["home", "shift+end"]     # the c:\temp default is replaced
+        assert asked[3][1]["text"] == path and asked[0][1]["at"] == [357 / 1910, 267 / 915]
+        asked.clear()
+        assert R.run(types.SimpleNamespace(cmd="order-weight", kg="12")) == 0
+        assert [x[0] for x in asked] == ["click", "wait", "click", "wait", "click", "key", "key", "type"]
+        assert asked[-1][1]["text"] == "12" and asked[4][1]["at"] == [182 / 1910, 405 / 915]
+        assert not any(x[1].get("commit") for x in asked)                     # typing a weight saves nothing
+        asked.clear()
+        assert R.run(types.SimpleNamespace(cmd="order-weight-save")) == 0
+        assert [x[1]["at"] for x in asked if x[0] == "click"] == [[182 / 1910, 499 / 915],   # item Save
+                                                                 [663 / 1910, 499 / 915],   # item Exit
+                                                                 [337 / 1910, 733 / 915]]   # order Save
+        # an ad hoc's ref is searched whole; an NR order by its 7-digit base
+        assert R._search_ref("AH01/01/2026/AB-CD") == "AH01/01/2026/AB-CD"
+        assert R._search_ref("1234567-1-1") == R._search_ref("1234567") == "1234567"
     finally:
         R.load_state, R.ask, R.trace, R.save_state, R.print_screen = keep
 

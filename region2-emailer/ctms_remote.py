@@ -27,6 +27,16 @@ The CTMS note run (CTMS's own window; each answers with a picture to check):
     python ctms_remote.py order-note " - Emailed DO 28/10"   at the END of Special Instructions
     python ctms_remote.py order-save | order-close
     python ctms_notes.py                          which notes are owed; ctms_notes.py done REF "NOTE"
+
+An upload into CTMS, and the weight after it (CTMS's import reads no weight):
+    python ctms_remote.py uploads [TEXT]          the dashboard's CSVs, newest first - the exact name
+    python ctms_remote.py import-open             Administration > File Interfaces > Imports, NRHEAVY
+    python ctms_remote.py import-file PATH        the CSV's full path on the work PC into Input file
+    python ctms_remote.py import-go               Import - then its Yes / Yes / OK, read off the picture
+    python ctms_remote.py import-close            the Import card's Close
+    python upload_weights.py CSV                  each order's weight in the CSV, or why there isn't one
+    python ctms_remote.py order-weight 12         the open order's item weight, typed (check the picture)
+    python ctms_remote.py order-weight-save       item Save + Exit, then the order's Save; then order-close
     python ctms_remote.py update [--branch B] [--all]    the work PC pulls new code from GitHub
 
 N is a number from the latest picture. Every action answers with a fresh one,
@@ -370,6 +380,23 @@ def report(action, args, result, payload, full=False, words=2500):
 
 
 # ---- the commands ------------------------------------------------------------------
+def cmd_uploads(text=""):
+    """The dashboard's CSVs, newest first - the exact name of the one to import. The
+    work PC's browser saves a download under that same name in its Downloads folder."""
+    code, body = http("GET", "/api/files")
+    if code == 401:
+        raise Stop("The dashboard did not accept the home PC's key from cloud.json.")
+    if code != 200:
+        raise Stop(f"The dashboard would not list its files ({code}: {body.get('error', '')}).")
+    want = str(text or "").lower()
+    rows = [f for f in body.get("files") or []
+            if str(f.get("name", "")).lower().endswith(".csv") and want in str(f.get("name", "")).lower()]
+    for f in rows[:20]:
+        print(f"{f.get('at', '?'):>11}  {f.get('size', '?'):>7}  {f['name']}")
+    print(f"({len(rows)} CSV{'' if len(rows) == 1 else 's'}{' matching ' + repr(text) if text else ''})")
+    return 0
+
+
 def cmd_status(_a):
     code, st = http("GET", "/api/ctms/status")
     if code == 401:
@@ -448,6 +475,14 @@ CTMS_AT = {
     "menu_modules": (121, 37), "menu_order_mgmt": (135, 63), "menu_orders": (240, 67),
     "search_clear": (626, 226), "search_custref": (728, 123), "search_refresh": (742, 226),
     "si_end": (1000, 639), "order_save": (337, 733), "order_close": (424, 733),
+    # Administration > File Interfaces > Imports, and the Import card (File Type's list
+    # opens downward from AUTO, so NRHEAVY_Order_Import is its second line)
+    "menu_admin": (230, 37), "menu_file_ifaces": (231, 159), "menu_imports": (362, 163),
+    "imp_type_arrow": (575, 226), "imp_type_nrheavy": (217, 251), "imp_file": (357, 267),
+    "imp_import": (405, 438), "imp_close": (1030, 139),
+    # an open order's Order Items tab and its "Create, Edit or Delete Order Item" box
+    "items_tab": (136, 187), "item_edit": (200, 525), "item_weight": (182, 405),
+    "item_save": (182, 499), "item_exit": (663, 499),
 }
 
 
@@ -455,19 +490,60 @@ def _at(name):
     return {"at_px": CTMS_AT[name]}
 
 
+def _search_ref(order):
+    """What goes in Order Search's Customer Ref box, ahead of the %. An NR order is
+    searched by its 7-digit base so every line comes back (1234567-1-1 -> 1234567).
+    Any other ref - an ad hoc's AH01/01/2026/AB-CD, a DTS's - goes in whole: cut at
+    its first dash, it would bring back every other job sharing the front of it."""
+    order = str(order).strip()
+    m = re.fullmatch(r"(\d{7})(?:-\d+)*", order)
+    return m.group(1) if m else order
+
+
 RUN_STEPS = {
     # Order Management > Orders: the Order Summary page with its Order Search card
     "orders-page": lambda a: [("click", _at("menu_modules")), ("click", _at("menu_order_mgmt")),
                               ("click", _at("menu_orders")), ("wait", {"seconds": 8})],
     # the order's lines, by customer ref with a % (all its lines come back - NOT in line
-    # order, so pick the -1-1 row off the picture and double-click its Status cell)
-    "order-find": lambda a: [("click", _at("search_clear")), ("click", _at("search_custref")),
-                             ("type", {"text": a.order.split("-")[0].strip() + "%"}),
+    # order, so pick the -1-1 row off the picture and double-click its Status cell).
+    # The card's Clear empties the results, not the Customer Ref box - so select the box's
+    # text (Home, then Shift+End) and let the new ref replace it, rather than appending.
+    "order-find": lambda a: [("click", _at("search_custref")), ("key", {"key": "home"}),
+                             ("key", {"key": "shift+end"}),
+                             ("type", {"text": _search_ref(a.order) + "%"}),
                              ("click", _at("search_refresh")), ("wait", {"seconds": 4})],
     # the contact note at the END of Special Instructions on the open order
     "order-note": lambda a: [("click", _at("si_end")), ("key", {"key": "end"}), ("type", {"text": a.note})],
     "order-save": lambda a: [("click", _at("order_save")), ("wait", {"seconds": 3})],
     "order-close": lambda a: [("click", _at("order_close")), ("wait", {"seconds": 2})],
+    # Administration > File Interfaces > Imports with File Type NRHEAVY_Order_Import.
+    # Picking it fills Input file with a default c:\temp path - never import that;
+    # import-file replaces it.
+    "import-open": lambda a: [("click", _at("menu_admin")), ("click", _at("menu_file_ifaces")),
+                              ("click", _at("menu_imports")), ("wait", {"seconds": 8}),
+                              ("click", _at("imp_type_arrow")), ("wait", {"seconds": 1}),
+                              ("click", _at("imp_type_nrheavy")), ("wait", {"seconds": 2})],
+    # the CSV's full path, typed. Browse opens a file window outside CTMS that Claude
+    # can neither see nor click, and a typed path imports just the same (29/10).
+    "import-file": lambda a: [("click", _at("imp_file")), ("key", {"key": "home"}),
+                              ("key", {"key": "shift+end"}), ("type", {"text": a.path})],
+    # Import. CTMS then asks twice - send the file to the server? import it now? - and
+    # reports how many lines went in. Each answer sits where its message puts it, so
+    # they are read off the picture and clicked one at a time, never blind.
+    "import-go": lambda a: [("click", _at("imp_import")), ("wait", {"seconds": 4})],
+    "import-close": lambda a: [("click", _at("imp_close")), ("wait", {"seconds": 2})],
+    # The weight on the open order's item. CTMS's import reads no weight, so an order
+    # comes in at its quantity (upload_weights says what it should be). Typed only -
+    # the picture is checked before order-weight-save.
+    "order-weight": lambda a: [("click", _at("items_tab")), ("wait", {"seconds": 2}),
+                               ("click", _at("item_edit")), ("wait", {"seconds": 3}),
+                               ("click", _at("item_weight")), ("key", {"key": "home"}),
+                               ("key", {"key": "shift+end"}), ("type", {"text": str(a.kg)})],
+    # Save and Exit the item box, then Save the order: its Planned line and total follow
+    # the item. order-close after - no discard prompt means it saved.
+    "order-weight-save": lambda a: [("click", _at("item_save")), ("wait", {"seconds": 3}),
+                                    ("click", _at("item_exit")), ("wait", {"seconds": 2}),
+                                    ("click", _at("order_save")), ("wait", {"seconds": 3})],
 }
 
 
@@ -563,6 +639,14 @@ def main(argv=None):
                    ).add_argument("note")
     sub.add_parser("order-save", help="the open order's Save button")
     sub.add_parser("order-close", help="the open order's Close button")
+    sub.add_parser("uploads", help="the dashboard's CSVs, newest first").add_argument("text", nargs="?", default="")
+    sub.add_parser("import-open", help="Administration > File Interfaces > Imports, File Type NRHEAVY_Order_Import")
+    sub.add_parser("import-file", help="the CSV's full path on the work PC, typed into Input file"
+                   ).add_argument("path")
+    sub.add_parser("import-go", help="the Import button (its questions are answered off the picture)")
+    sub.add_parser("import-close", help="the Import card's Close button")
+    sub.add_parser("order-weight", help="type the open order's item weight (not saved)").add_argument("kg")
+    sub.add_parser("order-weight-save", help="item Save + Exit, then the order's Save")
     p = sub.add_parser("tab")
     p.add_argument("n", type=int)
     p = sub.add_parser("update")
@@ -624,6 +708,8 @@ def run(a):
         return report(c, args, *ask("drag", **args))
     if c in RUN_STEPS:
         return run_steps(c, RUN_STEPS[c](a))
+    if c == "uploads":
+        return cmd_uploads(a.text)
     if c == "type":
         if a.focused is not None:
             args = {"text": a.focused}

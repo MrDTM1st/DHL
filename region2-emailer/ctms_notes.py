@@ -14,6 +14,7 @@ he wrote by hand is never doubled.
 
     python ctms_notes.py                    the notes owed, oldest first
     python ctms_notes.py done REF "NOTE"    mark one written (the run does this after each save)
+    python ctms_notes.py skip REF "NOTE" WHY  it is not owed after all (order already scheduled/booked)
 
 Reads the tracker; never writes it.
 """
@@ -74,17 +75,28 @@ def load_done(path=None):
         return []
 
 
-def mark_done(ref, note, path=None):
-    """Record a note as written in CTMS - the run calls this after each save."""
+def _remember(ref, note, path, extra):
+    """Take a note off the owed list - written, or skipped. Matched by (ref, note)."""
     path = path or DONE
     done = load_done(path)
     if not any(d.get("ref") == ref and d.get("note") == note for d in done):
-        done.append({"ref": ref, "note": note, "at": datetime.now().isoformat(timespec="seconds")})
+        done.append(dict(ref=ref, note=note, at=datetime.now().isoformat(timespec="seconds"), **extra))
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(done[-2000:], f, indent=1)
         os.replace(tmp, path)
     return done
+
+
+def mark_done(ref, note, path=None):
+    """Record a note as written in CTMS - the run calls this after each save."""
+    return _remember(ref, note, path, {})
+
+
+def mark_skip(ref, note, why="", path=None):
+    """Take a note off the owed list without writing it - the order is already
+    scheduled on a trip (booked and dealt with), so the note is not owed."""
+    return _remember(ref, note, path, {"skipped": why or "already scheduled"})
 
 
 def main(argv=None):
@@ -96,10 +108,18 @@ def main(argv=None):
     p = sub.add_parser("done", help="mark a note written in CTMS")
     p.add_argument("ref")
     p.add_argument("note")
+    p = sub.add_parser("skip", help="the note is not owed (order already scheduled/booked)")
+    p.add_argument("ref")
+    p.add_argument("note")
+    p.add_argument("why", nargs="?", default="already scheduled")
     a = ap.parse_args(argv)
     if a.cmd == "done":
         mark_done(a.ref, a.note)
         print(f"Marked written: {a.ref} '{a.note}'")
+        return 0
+    if a.cmd == "skip":
+        mark_skip(a.ref, a.note, a.why)
+        print(f"Skipped (not owed): {a.ref} '{a.note}' - {a.why}")
         return 0
     if a.tracker:
         with open(a.tracker, encoding="utf-8") as f:
