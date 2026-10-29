@@ -44,7 +44,8 @@ Leave it running in its Command Prompt while you work. What it does:
     In a web page: click, type, choose, scroll. Either way the way you tell it
     to in the chat, and only while BOTH are true: this PC allows it
     (--allow-control, asked once at setup) and "Claude can act" is switched on
-    on the dashboard's CTMS page, which switches itself off again. The web
+    on the dashboard's CTMS page, which switches itself off again when its
+    time is up - not when the dashboard restarts for an update. The web
     page rails are in ctms_drive.py: never on the sign-in page, never into a
     password box, never anything that books, saves, submits or deletes until
     you have said go. Stop on the dashboard cuts it off at once.
@@ -293,6 +294,7 @@ class Bridge:
         self.match = (match or "").strip().lower()
         self.allow_control = bool(allow_control)   # this PC's own say-so (--allow-control)
         self.armed = False                         # the dashboard's "Claude can act", as last heard
+        self.ticket = ""     # while it is on: the dashboard's signed note of until when, handed back if it restarts
         # host AND port: the dashboard open in the automation browser must not be
         # mistaken for CTMS, but another site on the same host is not the dashboard
         self.desk_host = urlsplit(desk.base).netloc.lower()
@@ -800,13 +802,19 @@ class Bridge:
                             if self.scan_window(force=True):
                                 break
                             time.sleep(0.25)
-                        end = time.time() + 6           # a tab Edge had let sleep is blank until it draws again
+                        if self.win:
+                            # Edge draws a tab only while its window can be seen: switched behind other windows,
+                            # the tracker stayed undrawn and CTMS's old picture lingered (work PC, 29/10)
+                            ctms_act.to_front(self.win["hwnd"])
+                        end = time.time() + 8
                         while self.win and time.time() < end:
                             try:
-                                if not ctms_window.blank(self.window_picture()[0]):
-                                    break
+                                drawn = not ctms_window.blank(self.window_picture()[0])
                             except Exception:
-                                pass
+                                drawn = False
+                            # drawn, and on the tracker CTMS's Internet Explorer page is gone from the window
+                            if drawn and (want == "ctms" or not (self.win or {}).get("ie_showing")):
+                                break
                             time.sleep(0.5)
                 if not self.win:
                     self.target = was
@@ -949,7 +957,7 @@ class Bridge:
     def stop(self):
         log("stop")
         say("STOP pressed on the dashboard - recording off, queue cleared, Claude cannot act.")
-        self.armed = False
+        self.armed, self.ticket = False, ""
         try:
             self.set_net(False)
         except Exception:
@@ -1011,6 +1019,8 @@ class Bridge:
                 else "Nobody is watching any more - pictures stopped.")
             self.watched = watched
         armed = bool(resp.get("control"))
+        # kept only while it is on: switched off, run out or Stop, and it is gone for good
+        self.ticket = str(resp.get("ticket") or "")[:200] if armed else ""
         if armed != self.armed:
             self.armed = armed
             log("control", on=armed)
@@ -1042,7 +1052,8 @@ def run(bridge, desk):
                 if bridge.watched and (bridge.ws or bridge.win) else WAIT_IDLE)
         try:
             resp = desk.post("/api/ctms/poll", {"state": st, "wait": round(wait, 2),
-                                                "watched": bridge.watched, "armed": bridge.armed},
+                                                "watched": bridge.watched, "armed": bridge.armed,
+                                                "ticket": bridge.ticket},
                              timeout=wait + 25)
         except urllib.error.HTTPError as e:
             if e.code == 401:

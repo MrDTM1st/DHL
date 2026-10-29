@@ -94,6 +94,7 @@ _ctms = {
     "running": None,       # the command handed out and not yet answered
     "captures": {},        # name -> {data, size, at}, oldest first
     "control_until": 0.0,  # "Claude can act" is on until then (switched on from the dashboard only)
+    "control_touched": False,   # switched on/off, or Stop, since this start: a carried ticket counts no more
     "payloads": {},        # command id -> {data, size}: the screen an answer came back with
     "asked": {},           # command id -> who asked, for the activity list
     "polling": 0,          # check-ins being held open right now
@@ -116,6 +117,28 @@ def _ctms_armed():
 def _ctms_control_locked():
     left = _ctms["control_until"] - time.time()
     return {"armed": left > 0, "left": max(0, int(left))}
+
+
+# A deploy restarts this server and empties its memory - "Claude can act" with it, though Delali switched it on
+# until a time of his choosing (29/10: "it gets really annoying when I have to turn it back on every single time").
+# So while it is on, the bridge is handed a ticket: that time, signed with the dashboard's own key, which the
+# bridge's key cannot make. After a restart the bridge hands it back and the switch is on again until that same
+# time - never later, never once it has been switched off or Stop pressed since the restart, and the bridge
+# drops it the moment it hears the switch is off.
+def _ctms_ticket(until):
+    until = int(until)
+    return f"{until}." + hmac.new(DASH_KEY.encode(), f"ctms-control:{until}".encode(), hashlib.sha256).hexdigest()
+
+
+def _ctms_ticket_until(ticket):
+    """When a ticket the dashboard signed runs out - 0 for anything else."""
+    try:
+        until, sig = str(ticket).split(".", 1)
+        until = int(until)
+    except ValueError:
+        return 0
+    good = hmac.new(DASH_KEY.encode(), f"ctms-control:{until}".encode(), hashlib.sha256).hexdigest()
+    return until if DASH_KEY and hmac.compare_digest(sig.encode(), good.encode()) else 0
 
 
 def _ctms_result_locked(res):
@@ -1559,6 +1582,7 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 minutes = 60
             with _lock:
+                _ctms["control_touched"] = True
                 if on:
                     _ctms["control_until"] = time.time() + minutes * 60
                     _ctms_note_locked(f"'Claude can act' switched on for {minutes} min.")
@@ -1578,6 +1602,7 @@ class Handler(BaseHTTPRequestHandler):
                 if _ctms_armed():
                     _ctms_note_locked("Stop pressed - 'Claude can act' switched off.")
                 _ctms["control_until"] = 0.0
+                _ctms["control_touched"] = True
                 _ctms_cv.notify_all()
             return self._json(200, {"ok": True})
         # ---- from the work PC's bridge ----
@@ -1597,6 +1622,12 @@ class Handler(BaseHTTPRequestHandler):
             watched, armed = bool(data.get("watched")), bool(data.get("armed"))
             with _lock:
                 _ctms["seen"] = time.time()
+                if data.get("ticket") and not _ctms["control_touched"] and not _ctms_armed():
+                    until = _ctms_ticket_until(data["ticket"])        # restarted while it was on (see _ctms_ticket)
+                    if until > time.time():
+                        _ctms["control_until"], _ctms["control_touched"] = float(until), True
+                        _ctms_note_locked("'Claude can act' kept on through the dashboard restarting - "
+                                          f"{max(1, round((until - time.time()) / 60))} min left, as it was.")
                 _ctms_take_state_locked(data.get("state"))
                 _ctms_sweep_locked()
                 # Held open until there is work, or something the bridge has
@@ -1622,13 +1653,14 @@ class Handler(BaseHTTPRequestHandler):
                 stop, _ctms["stop"] = _ctms["stop"], False
                 watch = time.time() < _ctms["watch_until"]
                 control = _ctms_armed()
+                ticket = _ctms_ticket(_ctms["control_until"]) if control and DASH_KEY else ""
                 # A restart empties this memory; the bridge only sends its bulky
                 # parts when they change, so tell it to send them again.
                 resync = not _ctms["state"].get("screens")
             if cmd:
                 cmd = {k: v for k, v in cmd.items() if k != "queued_at"}
             return self._json(200, {"cmd": cmd, "watch": watch, "stop": stop, "resync": resync,
-                                    "control": control, "long": True})
+                                    "control": control, "ticket": ticket, "long": True})
         if path == "/api/ctms/shot":
             if length > 6_000_000:
                 return self._json(413, {"error": "picture too large"})

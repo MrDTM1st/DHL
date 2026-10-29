@@ -73,8 +73,8 @@ def call(path, body=None, key=DASH):
 def fresh():
     """A cloud that has just restarted."""
     S._ctms.update(seen=0.0, state={}, queue=[], results=[], shot=None, watch_until=0.0,
-                   stop=False, captures={}, running=None, control_until=0.0, payloads={}, asked={},
-                   polling=0)
+                   stop=False, captures={}, running=None, control_until=0.0, control_touched=False, payloads={},
+                   asked={}, polling=0)
 
 
 def poll(state=None):
@@ -165,6 +165,41 @@ def test_the_switch_runs_out_by_itself():
     assert st["control"]["armed"] is False and st["queued"] == []
     assert "ran out" in st["results"][0]["detail"]
     assert call("/api/ctms/command", {"action": "click", "ref": 1}, key=AGENT)[0] == 409
+
+
+def test_the_switch_outlasts_the_dashboard_restarting_but_never_a_switch_off_or_its_time():
+    fresh()
+    call("/api/ctms/control", {"on": True, "minutes": 60})
+    until = S._ctms["control_until"]
+    r = poll()[1]
+    assert r["control"] is True and r["ticket"]
+    ticket = r["ticket"]
+
+    def carried(t):
+        return call("/api/ctms/poll", {"state": {"version": "1"}, "ticket": t}, key=BRIDGE)[1]["control"]
+
+    fresh()                                                         # a deploy: the dashboard forgot
+    assert poll()[1]["control"] is False                            # nothing handed back: off, as ever
+    assert carried(ticket) is True and abs(S._ctms["control_until"] - until) < 1.5    # the same end, no later
+    assert any("restarting" in x["detail"] for x in call("/api/ctms/status")[1]["results"])
+    fresh()
+    call("/api/ctms/control", {"on": False})                        # switched off since the restart
+    assert carried(ticket) is False
+    fresh()
+    call("/api/ctms/stop", {})                                      # or Stop pressed
+    assert carried(ticket) is False
+    forged = (ticket[:-1] + ("0" if ticket[-1] != "0" else "1"), str(int(until) + 3600) + ticket[ticket.index("."):],
+              B.bridge_key(DASH), "x.y", S._ctms_ticket(time.time() - 5))
+    for bad in forged:                                              # not one the dashboard signed, or run out
+        fresh()
+        assert carried(bad) is False, bad
+    # the bridge keeps it only while the switch is on
+    b = B.Bridge(_Rec(), 1, "", allow_control=True)
+    b.confirmed = True
+    b.checked_in({}, {"control": True, "ticket": ticket})
+    assert b.armed and b.ticket == ticket
+    b.checked_in({}, {"control": False, "ticket": ticket})
+    assert not b.armed and b.ticket == ""
 
 
 def test_a_work_pc_set_to_observe_only_is_not_sent_actions():
@@ -905,7 +940,8 @@ def test_use_has_edge_bring_up_the_tab_only_while_claude_can_act_and_keys_wait_f
     drawn = _bgra([[0xFF000000 + (x * 7919 + y * 104729) % 0xFFFFFF for x in range(50)] for y in range(50)])
     W.picture = lambda win: (drawn, 50, 50, "from the window")
     B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
-    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(1))
+    fronted = []
+    A.to_front, A._send = (lambda hwnd: fronted.append(hwnd) or True), (lambda inputs: sent.append(1))
     TB.select = bring_up
     try:
         desk = _Rec()
@@ -918,6 +954,7 @@ def test_use_has_edge_bring_up_the_tab_only_while_claude_can_act_and_keys_wait_f
         body = desk.sent[-1][1]
         assert body["ok"] and asked == ["ctms"] and b.win["hwnd"] == 4242 and "Brought up" in body["detail"]
         assert "click into the page" in body["payload"]["note"]
+        assert fronted == [4242]                                    # Edge draws a tab only where it can be seen
         for i, cmd in enumerate(({"action": "key", "key": "f7"}, {"action": "type", "text": "x"})):
             b.handle(dict(cmd, id=3 + i))                              # where Edge put the focus is not known
             assert desk.sent[-1][1]["ok"] is False and "click into the page" in desk.sent[-1][1]["detail"]
