@@ -640,6 +640,8 @@ def order_update_items(a):
         raise Stop(f"--veh is one of {', '.join(VEH)}.")
     if veh == "rigid" and ("REAR STEER" in adds or "rear steer" in (comments or "").lower()):
         raise Stop("A rigid never needs rear steer (his rule 30/10) - leave it out of the comments and services.")
+    if getattr(a, "ballast", False) and "PTS" in adds:
+        raise Stop("A ballast order never gets PTS, whatever the site said (his rule 30/10) - leave it off.")
     items = ["anchor",
              # C-TMS Modules > Order Management > Orders brings up Order Summary (or does nothing when it is up
              # already) - so wait for ITS Search button to show, whichever, and press it for the card
@@ -677,6 +679,7 @@ def order_update_items(a):
                   "click 180,643 after=0.6",                                        # its Comments sub-tab
                   "click 1080,676 react timeout=10",                                # Edit, deliver side
                   "click 575,258 after=0.3", "key home after=0.05", "key shift+end after=0.05", f"type {comments}",
+                  "snap loc-box 230,220,925,300",                                   # the whole line, as typed
                   "click 470,578 react timeout=10",                                 # the box's Save
                   "snap loc-comments 30,625,1160,705"]
     if adds or removes:
@@ -975,6 +978,7 @@ def main(argv=None):
     p.add_argument("--add-service", action="append", help='a service to add, e.g. "REAR STEER" (Qty 1)')
     p.add_argument("--remove-service-row", action="append", type=int, help="a Services row to delete (1 = top)")
     p.add_argument("--veh", help="the vehicle: " + " | ".join(VEH))
+    p.add_argument("--ballast", action="store_true", help="a ballast order: PTS is never added (his rule)")
     sub.add_parser("order-save-close", help="the open order's Save, then Close (no discard question = saved)")
     p = sub.add_parser("template", help="keep part of the latest picture (or a snap) as a find template")
     p.add_argument("name")

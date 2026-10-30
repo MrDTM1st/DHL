@@ -2267,6 +2267,12 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
                 assert False, bad
             except R.Stop as e:
                 assert "rigid" in str(e).lower()
+        b = types.SimpleNamespace(**dict(vars(a), veh="artic", add_service=["pts"], ballast=True))
+        try:
+            R.order_update_items(b)                                       # ballast: PTS never added
+            assert False
+        except R.Stop as e:
+            assert "ballast" in str(e).lower()
     finally:
         R.load_state, R.TEMPLATES = keep
 
