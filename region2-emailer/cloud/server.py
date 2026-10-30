@@ -65,7 +65,8 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
 CTMS_ADMIN = ("update", "fields_setup")
-CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste")   # what one of a batch's steps can be
+CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
+                     "anchor", "waitfor", "check", "snap", "settle")   # ... and the batch looking between them
 # The bridge refuses anything else on its own side as well; this list only
 # stops something queuing that would just come back refused.
 CTMS_ACTIONS = CTMS_OBSERVE + CTMS_READ + CTMS_DRIVE + CTMS_ADMIN
@@ -199,7 +200,8 @@ def _ctms_args(action, data):
     if action == "capture":
         name = re.sub(r"[^A-Za-z0-9 ._-]+", "-", str(data.get("name") or ""))[:48].strip(" .-")
         out["name"] = name or "screen"
-    for k in ("on", "commit", "enter", "append", "paste", "double", "right", "accept", "marks", "picture"):
+    for k in ("on", "commit", "enter", "append", "paste", "double", "right", "accept", "marks", "picture",
+              "react", "not"):
         if k in data:
             out[k] = bool(data[k])
     num("ref", 1, 100000, int)
@@ -207,13 +209,27 @@ def _ctms_args(action, data):
     num("amount", 1, 20000, int)
     num("seconds", 0, 30)
     num("timeout", 0, 60)
-    for k in ("at", "to"):                 # a point, and a drag's end point
+    num("quiet", 0, 5)                     # a reacting step: how long the screen must hold still
+    num("after", 0, 10)                    # a step's own pause instead of the usual one
+    num("tol", 0, 255, int)                # how near a waited-for colour must be
+    # a point (at/to: fractions; px/px2: the picture's own pixels, which the bridge moves by its anchor)
+    for k in ("at", "to", "px", "px2"):
         pt = data.get(k)
         if isinstance(pt, (list, tuple)) and len(pt) == 2:
             try:
                 out[k] = [max(0.0, min(float(pt[0]), 20000.0)), max(0.0, min(float(pt[1]), 20000.0))]
             except (TypeError, ValueError):
                 pass
+    box = data.get("box")                  # a part of the screen: watched by react, kept by snap
+    if isinstance(box, (list, tuple)) and len(box) == 4:
+        try:
+            out["box"] = [max(0.0, min(float(v), 20000.0)) for v in box]
+        except (TypeError, ValueError):
+            pass
+    if re.fullmatch(r"#?[0-9A-Fa-f]{6}", str(data.get("color") or "")):
+        out["color"] = "#" + str(data["color"]).lstrip("#").upper()
+    if action == "snap":
+        out["name"] = re.sub(r"[^A-Za-z0-9._-]+", "-", str(data.get("name") or ""))[:30].strip(".-") or "snap"
     for k, n in (("text", 2000), ("key", 40), ("option", 200), ("url", 2000)):
         if data.get(k) is not None:
             out[k] = str(data[k])[:n]

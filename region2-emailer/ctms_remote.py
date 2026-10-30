@@ -247,12 +247,16 @@ def trace(action, args, result, payload):
         now = datetime.now()
         d = os.path.join(OUT, "trace", now.strftime("%Y-%m-%d"))
         os.makedirs(d, exist_ok=True)
-        stem = os.path.join(d, now.strftime("%H%M%S") + f"-{action}")
+        # no ':' in the name - "steps:steps" on Windows made a hidden stream, not a file (found 30/10)
+        stem = os.path.join(d, now.strftime("%H%M%S") + "-" + re.sub(r"[^A-Za-z0-9._-]+", "-", action))
         if payload and payload.get("img"):
             with open(stem + _ext(payload), "wb") as f:
                 f.write(base64.b64decode(payload["img"]))
+        screen = {k: v for k, v in (payload or {}).items() if k not in ("img", "snaps")}
+        if (payload or {}).get("snaps"):
+            screen["snaps"] = [s.get("name") for s in payload["snaps"]]
         rec = {"at": now.isoformat(timespec="seconds"), "action": action, "args": args, "result": result,
-               "screen": {k: v for k, v in (payload or {}).items() if k != "img"}}
+               "screen": screen}
         with open(stem + ".json", "w", encoding="utf-8") as f:
             json.dump(rec, f, indent=1)
     except Exception as e:
@@ -569,6 +573,59 @@ RUN_STEPS = {
 }
 
 
+# ---- the fast recipes: a whole job as ONE batch, with no picture in between ---------------------
+# Points are on the pictures measured 29-30/10 (the menu bar's bottom row at 50); the batch's anchor moves
+# them to wherever CTMS sits now, so a scrolled page no longer sends a click astray (30/10). A step that waits
+# on CTMS waits for the part of the screen its answer lands in to change, then for the screen to hold still -
+# so nothing is clicked before the window it belongs to is up, and nothing waits longer than CTMS takes.
+# Each recipe keeps small snaps of what it did; the save is a separate recipe, run once they have been read.
+def _when(text, flag):
+    """(from date, from time, to date, to time) from "DD/MM/YY HH:MM-HH:MM" or "DD/MM/YY HH:MM-DD/MM/YY HH:MM"."""
+    m = re.fullmatch(r"\s*(\d{2}/\d{2}/\d{2})\s+(\d{1,2}:\d{2})\s*-\s*(?:(\d{2}/\d{2}/\d{2})\s+)?(\d{1,2}:\d{2})\s*",
+                     text or "")
+    if not m:
+        raise Stop(f'{flag} takes "DD/MM/YY HH:MM-HH:MM", or "DD/MM/YY HH:MM-DD/MM/YY HH:MM" past midnight.')
+    d1, t1, d2, t2 = m.groups()
+    return d1, t1.zfill(5), d2 or d1, t2.zfill(5)
+
+
+def order_update_items(a):
+    """Open an order by its whole customer ref and type the site's details in - collection and delivery times,
+    the Order Comments - keeping a snap of each part. Does NOT save (order-save-close does, once read)."""
+    if a.comments and "," in a.comments:
+        raise Stop("No commas in CTMS comments - his habit (30/10): ' - ' between the parts.")
+    items = ["anchor",
+             # C-TMS Modules > Order Management > Orders brings up Order Summary; its Search button the card
+             "click 121,36 after=0.3", "click 135,63 after=0.3",
+             "click 245,67 react box=440,100,1230,200 timeout=25",
+             "click 392,640 after=1.2",
+             "waitfor 728,122 #FFFFFF tol=10 timeout=12",
+             # the order by its whole customer ref: the one line comes back alone, first
+             "click 626,226 after=0.4",
+             "click 728,122 after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {a.order}",
+             "click 742,226 react box=30,228,395,250 timeout=20",
+             "double 267,238 react box=20,121,1250,171 timeout=20",
+             "snap order 15,120,1255,166"]
+    for flag, val, y in (("--collect", a.collect, 357), ("--deliver", a.deliver, 380)):
+        if val:
+            for x, v in zip((185, 250, 333, 398), _when(val, flag)):
+                items += [f"click {x},{y} after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {v}"]
+    items.append("snap times 15,345,520,392")
+    if a.comments:
+        items += ["click 288,187 react box=20,200,1250,700 timeout=10",
+                  "click 602,657 after=0.2", "key end after=0.05", f"type {a.comments}",
+                  "snap comments 15,615,1250,690"]
+    items += ["click 750,186 react box=20,200,1250,700 timeout=10", "snap services 60,250,1100,420"]
+    return items
+
+
+def order_save_close_items(a):
+    """The open order's Save, then Close: CTMS answers a save by moving the cursor (no message), and a Close
+    with no 'discard your changes?' box means it saved."""
+    return ["anchor", "click 337,733 after=2.5", "snap saved 15,120,1215,420",
+            "click 424,733 react timeout=15", "snap closed 15,100,1215,400"]
+
+
 def run_steps(name, steps):
     """A fixed sequence of steps in CTMS's own window, sent as ONE batch (send_batch)."""
     batch = []
@@ -585,23 +642,57 @@ def _unescape(text):
     return str(text or "").replace("\\t", "\t").replace("\\n", "\n")
 
 
+def _step_opts(item, words):
+    """The options a step can carry after its point: react (wait for CTMS to answer it), not, quiet=S,
+    after=S, timeout=S, tol=N, box=X0,Y0,X1,Y1."""
+    out = {}
+    for w in words:
+        k, eq, v = w.partition("=")
+        k = k.lower()
+        try:
+            if not eq and k in ("react", "not"):
+                out[k] = True
+            elif eq and k in ("quiet", "after", "timeout"):
+                out[k] = float(v)
+            elif eq and k == "tol":
+                out[k] = int(v)
+            elif eq and k == "box" and len(v.split(",")) == 4:
+                out["box"] = [float(n) for n in v.split(",")]
+            else:
+                raise ValueError
+        except ValueError:
+            raise Stop(f"steps: '{item}' - '{w}' is not an option (react, not, quiet=S, after=S, timeout=S, "
+                       f"tol=N, box=X0,Y0,X1,Y1).")
+    return out
+
+
 def parse_steps(items, commit=False):
     """The steps command's shorthand, one step an item: "click X,Y", "double X,Y", "right X,Y",
     "drag X,Y X,Y", "key K", "type TEXT", "wait S", "paste TEXT" - points off the latest picture,
-    as for click --at."""
+    as for click --at. Points go both as the fraction (at) and as the picture's own pixels (px), which
+    a batch that starts with "anchor" moves to wherever CTMS sits now.
+
+    Looking between the steps, on the work PC: "anchor", "waitfor X,Y #RRGGBB [tol=N] [timeout=S] [not]",
+    "check X,Y #RRGGBB [tol=N] [not]", "snap NAME X0,Y0,X1,Y1", "settle [quiet=S] [timeout=S]"; and a
+    click, drag or key can end with options: react [box=X0,Y0,X1,Y1] [quiet=S] [timeout=S], after=S."""
     out = []
     for item in items:
         verb, _, rest = str(item).strip().partition(" ")
         verb = verb.lower()
-        if verb in ("click", "double", "right"):
-            step = {"action": "click", "at": _window_point(*_xy(rest, verb))}
+        words = rest.split()
+        if verb in ("click", "double", "right") and words:
+            x, y = _xy(words[0], verb)
+            step = {"action": "click", "at": _window_point(x, y), "px": [x, y]}
             if verb != "click":
                 step[verb] = True
-        elif verb == "drag" and len(rest.split()) == 2:
-            start, end = rest.split()
-            step = {"action": "drag", "at": _window_point(*_xy(start, "drag")), "to": _window_point(*_xy(end, "drag"))}
-        elif verb == "key" and rest.strip():
-            step = {"action": "key", "key": rest.strip(), "commit": commit}
+            step.update(_step_opts(item, words[1:]))
+        elif verb == "drag" and len(words) >= 2:
+            s, e = _xy(words[0], "drag"), _xy(words[1], "drag")
+            step = {"action": "drag", "at": _window_point(*s), "to": _window_point(*e), "px": list(s), "px2": list(e)}
+            step.update(_step_opts(item, words[2:]))
+        elif verb == "key" and words:
+            step = {"action": "key", "key": words[0], "commit": commit}
+            step.update(_step_opts(item, words[1:]))
         elif verb == "type":
             step = {"action": "type", "text": rest}
         elif verb == "wait":
@@ -611,11 +702,44 @@ def parse_steps(items, commit=False):
                 raise Stop(f"steps: '{item}' - wait how many seconds?")
         elif verb == "paste" and rest:
             step = {"action": "paste", "text": _unescape(rest)}
+        elif verb == "anchor" and not words:
+            step = {"action": "anchor"}
+        elif verb in ("waitfor", "check") and len(words) >= 2 and re.fullmatch(r"#?[0-9A-Fa-f]{6}", words[1]):
+            step = {"action": verb, "px": list(_xy(words[0], verb)), "color": "#" + words[1].lstrip("#").upper()}
+            step.update(_step_opts(item, words[2:]))
+        elif verb == "snap" and len(words) == 2 and len(words[1].split(",")) == 4:
+            try:
+                step = {"action": "snap", "name": words[0], "box": [float(n) for n in words[1].split(",")]}
+            except ValueError:
+                raise Stop(f"steps: '{item}' - snap NAME X0,Y0,X1,Y1.")
+        elif verb == "settle":
+            step = {"action": "settle"}
+            step.update(_step_opts(item, words))
         else:
             raise Stop(f"steps: '{item}' - each is click|double|right X,Y, drag X,Y X,Y, key K, type TEXT, "
-                       f"wait S or paste TEXT.")
+                       f"wait S, paste TEXT, anchor, waitfor|check X,Y #RRGGBB, snap NAME X0,Y0,X1,Y1 or settle.")
         out.append(step)
     return out
+
+
+def print_batch(payload):
+    """What a batch brings back besides its picture: how long it took, step by step, and the snaps it kept
+    (saved next to the picture so they can be read)."""
+    if not payload:
+        return
+    if payload.get("took") is not None:
+        times = payload.get("times") or []
+        print(f"Took {payload['took']}s on the work PC - step times: {times}")
+    snaps = payload.get("snaps") or []
+    if snaps:
+        d = os.path.join(OUT, "snaps")
+        os.makedirs(d, exist_ok=True)
+        stamp = datetime.now().strftime("%H%M%S")
+        for s in snaps:
+            path = os.path.join(d, f"{stamp}-{re.sub(r'[^A-Za-z0-9._-]+', '-', s.get('name') or 'snap')}.png")
+            with open(path, "wb") as f:
+                f.write(base64.b64decode(s.get("img") or ""))
+            print(f"Snap {s.get('name')}: {path}  ({s.get('w')}x{s.get('h')})")
 
 
 def send_batch(name, batch):
@@ -630,12 +754,13 @@ def send_batch(name, batch):
         return _one_by_one(name, batch)
     if not result.get("ok") and "is not something this bridge does" in str(result.get("detail")):
         return _one_by_one(name, batch)
-    trace(f"{name}:steps", {"steps": batch}, result, payload)
+    trace(f"{name}-steps", {"steps": batch}, result, payload)
     if payload and payload.get("kind") == "window":
         save_state(payload)
     print(("DONE  " if result.get("ok") else "STOPPED  ") + f"{name}: {result.get('detail')}")
     if payload:
         print_screen(payload, name)
+        print_batch(payload)
     return 0 if result.get("ok") else 3
 
 
@@ -740,6 +865,13 @@ def main(argv=None):
     sub.add_parser("order-weight-save", help="item Save + Exit, then the order's Save")
     sub.add_parser("planning-open", help="C-TMS Modules > Trip Management > Planning")
     sub.add_parser("planning-save", help="Planning's Save button")
+    p = sub.add_parser("order-update", help="open an order by its customer ref and type the site's details in "
+                                            "(one batch, snaps of each part, NOT saved)")
+    p.add_argument("order", help="the whole customer ref, e.g. 1234567-1-1")
+    p.add_argument("--collect", help='"DD/MM/YY HH:MM-HH:MM"')
+    p.add_argument("--deliver", help='"DD/MM/YY HH:MM-HH:MM"')
+    p.add_argument("--comments", help="the Order Comments, no commas")
+    sub.add_parser("order-save-close", help="the open order's Save, then Close (no discard question = saved)")
     p = sub.add_parser("steps", help="several steps run on the work PC in one go, one picture at the end")
     p.add_argument("items", nargs="+", help='"click X,Y" "key tab" "type 977.50" "wait 1.5" ...')
     p.add_argument("--commit", action="store_true")
@@ -809,6 +941,10 @@ def run(a):
         return run_steps(c, RUN_STEPS[c](a))
     if c == "steps":
         return send_batch("steps", parse_steps(a.items, commit=a.commit))
+    if c == "order-update":
+        return send_batch(c, parse_steps(order_update_items(a)))
+    if c == "order-save-close":
+        return send_batch(c, parse_steps(order_save_close_items(a)))
     if c == "paste":
         if a.file:
             with open(a.file, encoding="utf-8") as f:

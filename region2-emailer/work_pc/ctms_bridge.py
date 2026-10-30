@@ -81,6 +81,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import cdp
 import ctms_act
 import ctms_drive
+import ctms_fast
 import ctms_jab
 import ctms_tabs
 import ctms_update
@@ -109,7 +110,12 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "steps", "paste")   # Claude acting: this PC AND the dashboard must allow it
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
+# ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
+# where CTMS sits now, waiting for it to answer, a pixel it must show, a small picture kept for the answer.
+BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle")
 STEPS_MAX = 60
+SNAPS_MAX = 8
+REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
 ADMIN = ("update", "fields_setup")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
@@ -322,6 +328,7 @@ class Bridge:
         self.screens_sent = False
         self.long_poll = False       # the dashboard holds a check-in open until there is work
         self.restart_after = False   # an update was laid down: exit so the supervisor restarts us
+        self.batch = {"off": (0, 0), "snaps": []}   # the batch being run: its anchor offset and kept pictures
         self.confirmed = False
         self.rolled_back = ctms_update.rolled_back()
         # CTMS's own window in his normal Edge (ctms_window.py). CTMS runs in
@@ -676,11 +683,140 @@ class Bridge:
                         + (" Edge has just switched tabs: click into the page before any keys."
                            if self.click_first else "")}
 
+    # -- looking between the steps of a batch (ctms_fast) --
+    def _frame(self):
+        """(BGRA, w, h) of the window being worked, now - the window the batch started on, found afresh only if
+        it has gone. Fast enough to look several times a second."""
+        try:
+            bgra, w, h, _ = ctms_window.picture(self.win)
+        except Exception:
+            bgra, w, h, _ = self.window_picture()
+        self.batch["size"] = (w, h)
+        return bgra, w, h
+
+    def _point(self, args, at_key="at", px_key="px"):
+        """Where a step aims, as the fraction ctms_act takes. A px point - the picture's own pixels, as the recipes
+        were measured - moves by the batch's anchor and is taken of the window as it is now (Forms lays its windows
+        out from the top left, so pixels hold where fractions would stretch); an at point is a fraction already."""
+        px = args.get(px_key)
+        if isinstance(px, (list, tuple)) and len(px) == 2:
+            w, h = self.batch.get("size") or self._frame()[1:]
+            dx, dy = self.batch.get("off", (0, 0))
+            return [(float(px[0]) + dx) / w, (float(px[1]) + dy) / h]
+        return args.get(at_key)
+
+    def _react(self, before, args):
+        """Wait for CTMS to answer the step just taken: the watched box (or the whole screen) changes from how it
+        was before the step, then the screen holds still for `quiet` seconds. The box is what makes a server round
+        trip safe to wait on - a menu closing or a button going down is not the answer, the window or the rows
+        that box covers arriving is. Returns the seconds it took; raises if CTMS did not answer in time."""
+        timeout = min(float(args.get("timeout") or REACT_TIMEOUT), 60.0)
+        quiet = min(float(args["quiet"]) if args.get("quiet") is not None else 0.5, 5.0)
+        base, w0, h0 = before
+        box = args.get("box")
+        box = (ctms_fast.shift_box(box, self.batch.get("off", (0, 0)))
+               if isinstance(box, (list, tuple)) and len(box) == 4 else None)
+        enough = 0 if box else ctms_fast.QUIET_BLOCKS     # anything in the box; more than a caret on the screen
+        t0 = time.time()
+        moved, last, still = False, base, 0.0
+        while time.time() - t0 < timeout:
+            cur, w, h = self._frame()
+            if (w, h) != (w0, h0):                      # the window was resized under us: start again from here
+                base, last, w0, h0, moved, still = cur, cur, w, h, True, time.time()
+            elif not moved:
+                if ctms_fast.changed(base, cur, w, h, box) > enough:
+                    moved, still = True, time.time()
+            elif ctms_fast.changed(last, cur, w, h) > ctms_fast.QUIET_BLOCKS:
+                still = time.time()
+            elif time.time() - still >= quiet:
+                return round(time.time() - t0, 2)
+            last = cur
+            time.sleep(0.03)
+        raise RuntimeError(f"CTMS did not answer within {timeout:g}s - "
+                           + ("nothing changed where it should have" if not moved else "the screen never settled"))
+
+    def batch_step(self, action, args):
+        """A step only a batch has: anchor, waitfor, check, snap or settle. They look; none of them touches CTMS."""
+        off = self.batch.get("off", (0, 0))
+        if action == "anchor":
+            bgra, w, h = self._frame()
+            found = ctms_fast.anchor(bgra, w, h)
+            if found is None:
+                raise RuntimeError("Could not find CTMS's grey menu bar on the picture - a window is over it, or "
+                                   "the page has scrolled past it.")
+            self.batch["off"] = found
+            return f"CTMS sits {found[0]:+d},{found[1]:+d} px from where the recipes were measured"
+        if action in ("waitfor", "check"):
+            px = args.get("px")
+            if not (isinstance(px, (list, tuple)) and len(px) == 2):
+                raise RuntimeError(f"{action} needs a point: {action} X,Y #RRGGBB.")
+            want = ctms_fast.parse_color(args.get("color"))
+            tol = int(args["tol"]) if args.get("tol") is not None else 24
+            hold = not args.get("not")
+            timeout = 0.0 if action == "check" else min(float(args.get("timeout") or 10), 60.0)
+            x, y = int(px[0] + off[0]), int(px[1] + off[1])
+            t0 = time.time()
+            while True:
+                bgra, w, h = self._frame()
+                if not (0 <= x < w and 0 <= y < h):
+                    raise RuntimeError(f"{int(px[0])},{int(px[1])} is off CTMS's picture.")
+                seen = ctms_fast.rgb_at(bgra, w, x, y)
+                if ctms_fast.near(seen, want, tol) == hold:
+                    return (f"{'Saw' if hold else 'Gone:'} {ctms_fast.hex_color(want)} at {int(px[0])},{int(px[1])}"
+                            + (f" after {time.time() - t0:.2f}s" if timeout else ""))
+                if time.time() - t0 >= timeout:
+                    raise RuntimeError(f"Expected {'' if hold else 'anything but '}{ctms_fast.hex_color(want)} at "
+                                       f"{int(px[0])},{int(px[1])} but it is {ctms_fast.hex_color(seen)}"
+                                       + (f" after {timeout:g}s" if timeout else "") + ".")
+                time.sleep(0.03)
+        if action == "snap":
+            box = args.get("box")
+            if not (isinstance(box, (list, tuple)) and len(box) == 4):
+                raise RuntimeError("snap needs the part of the screen to keep: snap NAME x0,y0,x1,y1.")
+            if len(self.batch["snaps"]) >= SNAPS_MAX:
+                raise RuntimeError(f"At most {SNAPS_MAX} snaps in one batch.")
+            x0, y0, x1, y1 = (int(v) for v in ctms_fast.shift_box(box, off))
+            if not (x1 > x0 and y1 > y0) or (x1 - x0) * (y1 - y0) > 1200 * 600:
+                raise RuntimeError("A snap is a small part of the screen - at most 1200 x 600 pixels.")
+            bgra, w, h = self._frame()
+            data, cw, ch = ctms_window.crop(bgra, w, h, (x0, y0, x1, y1))
+            name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(args.get("name") or "")).strip("-.")[:30]
+            name = name or f"snap{len(self.batch['snaps']) + 1}"
+            self.batch["snaps"].append({"name": name, "w": cw, "h": ch,
+                                        "img": base64.b64encode(ctms_window.png(data, cw, ch)).decode()})
+            return f"Kept '{name}' ({cw}x{ch})"
+        if action == "settle":
+            quiet = min(float(args["quiet"]) if args.get("quiet") is not None else 0.5, 5.0)
+            timeout = min(float(args.get("timeout") or 10), 60.0)
+            last, w, h = self._frame()
+            t0 = still = time.time()
+            while time.time() - t0 < timeout:
+                time.sleep(0.03)
+                cur, w2, h2 = self._frame()
+                if (w2, h2) != (w, h) or ctms_fast.changed(last, cur, w, h) > ctms_fast.QUIET_BLOCKS:
+                    still, w, h = time.time(), w2, h2
+                elif time.time() - still >= quiet:
+                    return f"Still after {time.time() - t0:.2f}s"
+                last = cur
+            raise RuntimeError(f"The screen kept changing for {timeout:g}s.")
+        raise RuntimeError(f"'{action}' is not a step in CTMS's window.")
+
     def window_step(self, action, args):
         """One step in the window being worked - click, drag, key, type, wait or paste - with the same rails
-        alone or in a batch. Returns what was done; anything refused raises."""
+        alone or in a batch. Returns what was done; anything refused raises.
+
+        In a batch a step can also carry react (wait for CTMS to answer it, see _react) and after (seconds to
+        pause instead of the usual 0.4 after a click / 0.3 after a key), and aim with px instead of at."""
+        if action in BATCH_STEPS:
+            return self.batch_step(action, args)
+        react = bool(args.get("react")) and action != "wait"
+        if react and self.click_first and action not in ("click", "drag"):
+            raise RuntimeError("Edge has just switched tabs, and where its keyboard focus landed is Edge's "
+                               "choice - click into the page first (click --at X,Y), then the keys.")
+        before = self._frame() if react else None
+        after = args.get("after")
         if action in ("click", "drag"):
-            at = args.get("at")
+            at = self._point(args)
             if action == "click":
                 if not (isinstance(at, (list, tuple)) and len(at) == 2):
                     raise RuntimeError("In CTMS's window, click a point on the picture: click --at X,Y. "
@@ -688,54 +824,70 @@ class Bridge:
                 detail = ctms_act.click(self.win["hwnd"], at[0], at[1], ctms_window.content_area(self.win),
                                         double=bool(args.get("double")), right=bool(args.get("right")))
             else:
-                to = args.get("to")
+                to = self._point(args, "to", "px2")
                 if not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in (at, to)):
                     raise RuntimeError("A drag needs where to press and where to let go, both points on the "
                                        "picture: drag --from X,Y --to X,Y.")
                 detail = ctms_act.drag(self.win["hwnd"], at, to, ctms_window.content_area(self.win))
             self.click_first = False
-            time.sleep(0.4)
-            return detail
-        if action == "wait":
+            pause = 0.4
+        elif action == "wait":
             s = min(max(float(args.get("seconds") or 2), 0.0), 30.0)
             time.sleep(s)
             return f"Waited {s:g}s"
-        if self.click_first:
-            raise RuntimeError("Edge has just switched tabs, and where its keyboard focus landed is Edge's "
-                               "choice - click into the page first (click --at X,Y), then the keys.")
-        if action == "key":
-            detail = ctms_act.press(self.win["hwnd"], args.get("key") or "",
-                                    commit=bool(args.get("commit")), page=self.win.get("kind") == "page")
-        elif action == "type":
-            detail = ctms_act.type_text(self.win["hwnd"], args.get("text") or "",
-                                        enter=bool(args.get("enter")), commit=bool(args.get("commit")))
-        elif action == "paste":
-            detail = ctms_act.paste_text(self.win["hwnd"], args.get("text") or "")
         else:
-            raise RuntimeError(f"'{action}' is not a step in CTMS's window.")
-        time.sleep(0.3)
+            if self.click_first:
+                raise RuntimeError("Edge has just switched tabs, and where its keyboard focus landed is Edge's "
+                                   "choice - click into the page first (click --at X,Y), then the keys.")
+            if action == "key":
+                detail = ctms_act.press(self.win["hwnd"], args.get("key") or "",
+                                        commit=bool(args.get("commit")), page=self.win.get("kind") == "page")
+            elif action == "type":
+                detail = ctms_act.type_text(self.win["hwnd"], args.get("text") or "",
+                                            enter=bool(args.get("enter")), commit=bool(args.get("commit")))
+            elif action == "paste":
+                detail = ctms_act.paste_text(self.win["hwnd"], args.get("text") or "")
+            else:
+                raise RuntimeError(f"'{action}' is not a step in CTMS's window.")
+            pause = 0.3
+        if react:
+            return f"{detail} - CTMS answered in {self._react(before, args)}s"
+        time.sleep(min(max(float(after), 0.0), 10.0) if after is not None else pause)
         return detail
 
     def window_steps(self, steps, done):
         """A batch of steps run here one after another, with ONE picture at the end - each step a round
         trip through the dashboard with a picture of its own was most of a booking's time (29/10). Stops
-        at the first step that is refused or fails, and says which; the picture shows where it stopped."""
+        at the first step that is refused or fails, and says which; the picture shows where it stopped.
+        The answer also carries how long each step took and any snaps the batch kept."""
         if not isinstance(steps, list) or not steps:
             raise RuntimeError("steps needs a list of steps.")
         if len(steps) > STEPS_MAX:
             raise RuntimeError(f"At most {STEPS_MAX} steps in one go.")
-        last = ""
+        self.batch = {"off": (0, 0), "snaps": []}
+        t0, times, last = time.time(), [], ""
         for i, step in enumerate(steps, 1):
             action = str((step or {}).get("action") or "") if isinstance(step, dict) else ""
+            ts = time.time()
             try:
-                if action not in WINDOW_STEPS:
+                if action not in WINDOW_STEPS + BATCH_STEPS:
                     raise RuntimeError(f"'{action[:20]}' is not a step in CTMS's window.")
                 last = self.window_step(action, step)
+                times.append(round(time.time() - ts, 2))
             except Exception as e:
                 why = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit)) else friendly(e)
+                times.append(round(time.time() - ts, 2))
                 return done(False, f"Stopped at step {i} of {len(steps)} ({action or '?'}): {why}"
-                                   + (f" Done before it: {i - 1} step(s)." if i > 1 else ""), self.window_look())
-        return done(True, f"Ran {len(steps)} step(s); the last: {last}", self.window_look())
+                                   + (f" Done before it: {i - 1} step(s)." if i > 1 else ""),
+                            self._batch_look(times, t0))
+        return done(True, f"Ran {len(steps)} step(s) in {time.time() - t0:.1f}s; the last: {last}",
+                    self._batch_look(times, t0))
+
+    def _batch_look(self, times, t0):
+        """The picture at the end of a batch, with the step times and the snaps it kept."""
+        p = self.window_look()
+        p.update(times=times, took=round(time.time() - t0, 1), snaps=self.batch.get("snaps") or [])
+        return p
 
     def capture_window(self, name):
         """A walkthrough capture of CTMS's own window: the picture and where it came from."""

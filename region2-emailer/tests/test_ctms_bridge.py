@@ -39,6 +39,7 @@ os.environ["AGENT_KEY"] = "agent-test-key"
 import server as S                      # noqa: E402  (reads the keys at import)
 import ctms_bridge as B                 # noqa: E402
 import ctms_drive as D                  # noqa: E402
+import ctms_fast as F                   # noqa: E402
 import ctms_update as U                 # noqa: E402
 import ctms_window as W                 # noqa: E402
 import ctms_act as A                    # noqa: E402
@@ -1481,7 +1482,7 @@ def test_the_home_pc_sends_steps_as_one_batch_and_falls_back_one_by_one():
     try:
         batch = R.parse_steps(["click 500,250", "right 100,50", "key shift+end", "type 977.50", "wait 1.5",
                                "paste MAN-1\\tPASS_DH"])
-        assert batch[0] == {"action": "click", "at": [0.5, 0.5]} and batch[1]["right"] is True
+        assert batch[0] == {"action": "click", "at": [0.5, 0.5], "px": [500.0, 250.0]} and batch[1]["right"] is True
         assert batch[4] == {"action": "wait", "seconds": 1.5} and batch[5]["text"] == "MAN-1\tPASS_DH"
         for bad in (["shout 1,2"], ["click nowhere"], ["wait soon"]):
             try:
@@ -1998,6 +1999,148 @@ def test_reading_fields_needs_no_switch_and_its_setup_is_an_admin_job():
     assert [c["action"] for c in S._ctms["queue"]] == ["fields", "fields_setup"]
     assert "fields" in B.READ and "fields_setup" in B.ADMIN            # the bridge's own list agrees
 
+
+# ---- fast steps: where CTMS sits, waiting on the screen, snaps (ctms_fast) ---------------------
+GREY = 0xFF666666                       # CTMS's menu bar, (102, 102, 102)
+
+
+def _ctms_frame(w, h, top, left=15, bar_rows=30, extra=None):
+    """A white picture w x h with CTMS's grey menu bar from row `top`, `bar_rows` tall, from column `left`."""
+    rows = [[GREY if top <= y < top + bar_rows and x >= left else 0xFFFFFFFF for x in range(w)] for y in range(h)]
+    for (x, y), p in (extra or {}).items():
+        rows[y][x] = p
+    return _bgra(rows)
+
+
+def test_the_anchor_reads_how_far_ctms_has_moved_off_its_menu_bar():
+    w, h = 320, 120
+    assert F.anchor(_ctms_frame(w, h, top=21), w, h) == (0, 0)          # as measured: bottom row 50, left 15
+    assert F.anchor(_ctms_frame(w, h, top=0), w, h) == (0, -21)         # page scrolled: the bar's top is gone
+    assert F.anchor(_ctms_frame(w, h, top=21, left=40), w, h) == (25, 0)
+    assert F.anchor(_ctms_frame(w, h, top=21, bar_rows=0), w, h) is None   # no bar: says so, never guesses
+
+
+def test_the_screen_is_compared_in_blocks_and_a_blinking_caret_is_not_an_answer():
+    w, h = 200, 100
+    white = [[0xFFFFFFFF] * w for _ in range(h)]
+    a = _bgra(white)
+    assert F.changed(a, a, w, h) == 0
+    caret = [row[:] for row in white]
+    caret[5][5] = 0xFF000000
+    assert F.changed(a, _bgra(caret), w, h) == 1 <= F.QUIET_BLOCKS
+    assert F.changed(a, _bgra(caret), w, h, box=(100, 0, 200, 100)) == 0      # outside the watched box
+    window = [[0xFF000000 if 40 <= x < 160 else 0xFFFFFFFF for x in range(w)] for _ in range(h)]
+    assert F.changed(a, _bgra(window), w, h) > F.QUIET_BLOCKS                 # a window drawing: an answer
+    assert F.shift_box([10, 20, 30, 40], (5, -21)) == [15, -1, 35, 19]
+    assert F.parse_color("#00ff7F") == (0, 255, 127) and F.hex_color((0, 255, 127)) == "#00FF7F"
+
+
+def test_a_fast_batch_anchors_its_points_waits_for_ctms_and_keeps_snaps():
+    keep = (W.find_windows, W.picture, B.LOG, A.click, A.to_front, A._send, B.time.sleep)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    w, h = 320, 200
+    base = _ctms_frame(w, h, top=0)                                     # the page scrolled: CTMS sits 21 px up
+    answered = _ctms_frame(w, h, top=0, extra={(x, y): 0xFF0000FF for x in range(100, 220) for y in range(120, 160)})
+    frames = {"now": base}
+    W.picture = lambda win: (frames["now"], w, h, "from the window")
+    clicks = []
+
+    def click(hwnd, fx, fy, area, double=False, right=False):
+        clicks.append((round(fx * w), round(fy * h)))
+        frames["now"] = answered                                        # CTMS answers the click
+        return "Clicked"
+    A.click, A.to_front, A._send = click, (lambda hwnd: True), (lambda inputs: None)
+    B.time.sleep = lambda s: None
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        steps = [{"action": "anchor"},
+                 {"action": "click", "px": [150, 161], "at": [0.9, 0.9], "react": True, "quiet": 0.05,
+                  "box": [100, 141, 220, 181]},
+                 {"action": "waitfor", "px": [150, 161], "color": "#0000FF", "timeout": 1},
+                 {"action": "snap", "name": "answer", "box": [100, 141, 220, 181]}]
+        b.handle({"id": 1, "action": "steps", "steps": steps})
+        body = desk.sent[-1][1]
+        assert body["ok"], body["detail"]
+        assert clicks == [(150, 140)]                    # px moved up by the anchor - the stale 'at' not used
+        snap = body["payload"]["snaps"][0]
+        assert snap["name"] == "answer" and (snap["w"], snap["h"]) == (120, 40) and snap["img"]
+        assert len(body["payload"]["times"]) == 4 and body["payload"]["took"] is not None
+        frames["now"] = base                             # a colour that is not there stops the batch, saying why
+        b.handle({"id": 2, "action": "steps", "steps": [{"action": "anchor"},
+                                                        {"action": "check", "px": [150, 161], "color": "#0000FF"},
+                                                        {"action": "key", "key": "tab"}]})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "step 2 of 3" in body["detail"] and "#FFFFFF" in body["detail"]
+        A.click = lambda *a, **k: "Clicked"              # CTMS not answering: stop, never click on blind
+        b.handle({"id": 3, "action": "steps", "steps": [{"action": "click", "px": [10, 10], "react": True,
+                                                         "timeout": 0.2}, {"action": "key", "key": "tab"}]})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "did not answer" in body["detail"] and "step 1 of 2" in body["detail"]
+        b.handle({"id": 4, "action": "steps", "steps": [{"action": "snap", "box": [0, 0, 5000, 5000]}]})
+        assert desk.sent[-1][1]["ok"] is False                                  # a snap is a small part
+    finally:
+        W.find_windows, W.picture, B.LOG, A.click, A.to_front, A._send, B.time.sleep = keep
+
+
+def test_the_dashboard_lets_the_fast_steps_through_with_their_fields_and_nothing_else():
+    fresh()
+    call("/api/ctms/control", {"on": True, "minutes": 15})
+    steps = [{"action": "anchor", "junk": 1},
+             {"action": "click", "px": [150, 161], "at": [0.5, 0.5], "react": True, "box": [1, 2, 3, 4],
+              "quiet": 0.4, "after": 0.1, "timeout": 12},
+             {"action": "waitfor", "px": [1, 2], "color": "ffffff", "tol": 10, "not": True, "timeout": 5},
+             {"action": "snap", "name": "two words!", "box": [0, 0, 10, 10]},
+             {"action": "settle", "quiet": 9}]
+    assert call("/api/ctms/command", {"action": "steps", "steps": steps}, key=AGENT)[0] == 200
+    q = S._ctms["queue"][-1]["steps"]
+    assert [s["action"] for s in q] == ["anchor", "click", "waitfor", "snap", "settle"] and "junk" not in q[0]
+    assert q[1]["px"] == [150.0, 161.0] and q[1]["react"] is True and q[1]["box"] == [1.0, 2.0, 3.0, 4.0]
+    assert q[1]["quiet"] == 0.4 and q[1]["after"] == 0.1 and q[1]["timeout"] == 12
+    assert q[2]["color"] == "#FFFFFF" and q[2]["tol"] == 10 and q[2]["not"] is True
+    assert q[3]["name"] == "two-words" and "quiet" not in q[4]          # 9 s is past what a settle may ask
+    assert set(B.BATCH_STEPS) <= set(S.CTMS_STEP_ACTIONS)               # the bridge's list agrees
+
+
+def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
+    import types
+    keep = R.load_state
+    R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
+    try:
+        b = R.parse_steps(["anchor", "click 245,67 react box=440,100,1230,200 timeout=25", "key tab after=0.05",
+                           "waitfor 728,122 ffffff tol=10 timeout=12", "check 5,6 #00FF00 not",
+                           "snap order 15,120,1255,166", "settle quiet=0.3"])
+        assert b[0] == {"action": "anchor"} and b[1]["px"] == [245.0, 67.0] and b[1]["react"] is True
+        assert b[1]["box"] == [440.0, 100.0, 1230.0, 200.0] and b[1]["timeout"] == 25.0
+        assert b[2] == {"action": "key", "key": "tab", "commit": False, "after": 0.05}
+        assert b[3] == {"action": "waitfor", "px": [728.0, 122.0], "color": "#FFFFFF", "tol": 10, "timeout": 12.0}
+        assert b[4]["not"] is True and b[5]["box"] == [15.0, 120.0, 1255.0, 166.0] and b[6]["quiet"] == 0.3
+        for bad in (["click 1,2 maybe"], ["waitfor 1,2 red"], ["snap x 1,2,3"], ["anchor now"]):
+            try:
+                R.parse_steps(bad)
+                assert False, bad
+            except R.Stop:
+                pass
+        a = types.SimpleNamespace(order="1234567-1-1", collect="04/11/26 08:00-16:00", deliver="05/11/26 8:00-12:00",
+                                  comments="05/11/26 08:00 - Sam Example 07700900123 - HIAB required")
+        steps = R.parse_steps(R.order_update_items(a))
+        assert len(steps) <= 60 and steps[0] == {"action": "anchor"}
+        assert [s["text"] for s in steps if s["action"] == "type"] == [
+            "1234567-1-1", "04/11/26", "08:00", "04/11/26", "16:00", "05/11/26", "08:00", "05/11/26", "12:00",
+            a.comments]
+        assert [337.0, 733.0] not in [s.get("px") for s in steps]                   # the update never saves
+        a.comments = "a, b"
+        try:
+            R.order_update_items(a)
+            assert False
+        except R.Stop:
+            pass
+        save = R.parse_steps(R.order_save_close_items(a))
+        assert [s["px"] for s in save if s["action"] == "click"] == [[337.0, 733.0], [424.0, 733.0]]
+    finally:
+        R.load_state = keep
 
 
 if __name__ == "__main__":
