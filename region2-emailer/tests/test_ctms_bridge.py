@@ -2129,10 +2129,12 @@ def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
         a = types.SimpleNamespace(order="1234567-1-1", collect="04/11/26 08:00-16:00", deliver="05/11/26 8:00-12:00",
                                   comments="05/11/26 08:00 - Sam Example 07700900123 - HIAB required")
         steps = R.parse_steps(R.order_update_items(a))
-        assert len(steps) <= 60 and steps[0] == {"action": "anchor"}
+        assert len(steps) <= B.STEPS_MAX and steps[0] == {"action": "anchor"}
         assert [s["text"] for s in steps if s["action"] == "type"] == [
             "1234567-1-1", "04/11/26", "08:00", "04/11/26", "16:00", "05/11/26", "08:00", "05/11/26", "12:00",
-            a.comments]
+            a.comments, a.comments]              # Order Comments AND the deliver side's location comments
+        pts = [s.get("px") for s in steps]
+        assert pts.index([1080.0, 676.0]) < pts.index([470.0, 578.0])     # deliver-side Edit, then the box's Save
         assert [337.0, 733.0] not in [s.get("px") for s in steps]                   # the update never saves
         a.comments = "a, b"
         try:
@@ -2141,8 +2143,8 @@ def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
         except R.Stop:
             pass
         save = R.parse_steps(R.order_save_close_items(a))
-        assert [s["px"] for s in save if s["action"] == "click"] == [[337.0, 733.0], [424.0, 733.0]]
-        assert save[0] == {"action": "anchor", "window": True}
+        assert [s["px"] for s in save if s["action"] == "click"] == [[1000.0, 37.0], [337.0, 733.0], [424.0, 733.0]]
+        assert save[0] == {"action": "anchor"} and save[2] == {"action": "anchor", "window": True}
     finally:
         R.load_state, R.TEMPLATES = keep
 

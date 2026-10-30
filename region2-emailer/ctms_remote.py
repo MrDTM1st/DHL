@@ -671,7 +671,15 @@ def order_update_items(a):
     if comments:
         items += ["click 288,187 react box=20,200,1250,700 timeout=10",
                   "click 602,657 after=0.2", "key home after=0.05", "key shift+end after=0.05", f"type {comments}",
-                  "snap comments 15,615,1250,690"]
+                  "snap comments 15,615,1250,690",
+                  # AND where he reads them (his correction 30/10): LOC Detail > Comments > the DELIVER side's
+                  # Edit - an "Order Information" box whose first line takes them, saved by its own Save
+                  "click 365,187 react box=20,200,1250,700 timeout=10",            # LOC Detail tab
+                  "click 180,643 after=0.6",                                        # its Comments sub-tab
+                  "click 1080,676 react timeout=10",                                # Edit, deliver side
+                  "click 575,258 after=0.3", "key home after=0.05", "key shift+end after=0.05", f"type {comments}",
+                  "click 470,578 react timeout=10",                                 # the box's Save
+                  "snap loc-comments 30,625,1160,705"]
     if adds or removes:
         items.append("click 750,186 react box=20,200,1250,700 timeout=10")      # Services tab
         for row in removes:                                                        # bottom first: rows move up
@@ -695,7 +703,8 @@ def order_update_items(a):
 def order_save_close_items(a):
     """The open order's Save, then Close: CTMS answers a save by moving the cursor (no message), and a Close
     with no 'discard your changes?' box means it saved."""
-    return ["anchor window", "click 337,733 react quiet=1 timeout=15", "snap saved 15,120,1215,420",
+    return ["anchor", "click 1000,37 after=0.4",          # the focus click: a first click only focuses Java
+            "anchor window", "click 337,733 react quiet=1 timeout=15", "snap saved 15,120,1215,420",
             "click 424,733 react timeout=15", "snap closed 15,100,1215,400"]
 
 
