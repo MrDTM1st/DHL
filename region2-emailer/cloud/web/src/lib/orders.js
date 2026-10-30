@@ -130,110 +130,185 @@ export function siteContactOf(r) {
   return { name: c.name || (r && r.site_contact) || '', calls, from };
 }
 
+// What a job can need from a haulier, in the contact sheet's OWN capability
+// names, matched EXACTLY. A need is met by ANY one of its `any` list. Matching
+// on bits of words is how "artic" found Artic Tipper and "rigid" found Rigid
+// Tipper, so firms that run nothing but tippers were offered
+// bagged ballast and pallets they cannot carry (Delali, 30/10: "some of the
+// hauliers that are listed for certain orders are not even supposed to be on
+// there").
+const needOf = (label, ...any) => ({ label, any });
+const TIPPER = needOf('tipper', 'Rigid Tipper', 'Artic Tipper');
+const RIGID_TIPPER = needOf('rigid tipper', 'Rigid Tipper');
+const HIAB = needOf('rigid or artic hiab', 'Rigid Hiab', 'Artic Hiab');
+const RIGID_HIAB = needOf('rigid hiab', 'Rigid Hiab');
+const ARTIC_HIAB = needOf('artic hiab', 'Artic Hiab');
+const HIAB_OR_MOFFETT = needOf('hiab or moffett', 'Rigid Hiab', 'Artic Hiab', 'Moffett');
+const MOFFETT = needOf('moffett', 'Moffett');
+// a hiab wagon is a flatbed with a crane, so it carries flat work too
+const RIGID_FLAT = needOf('rigid flat', 'Short Flat', 'Rigid Hiab');
+const ARTIC_FLAT = needOf('artic flat', 'Artic Flat', 'Artic Hiab', '60ft Flat', 'Trombone (80ft +)');
+const FLAT_60 = needOf('60ft flat', '60ft Flat', 'Trombone (80ft +)');
+const TROMBONE = needOf('trombone (80ft+)', 'Trombone (80ft +)');
+const ANY_FLAT = needOf('flatbed', 'Artic Flat', 'Short Flat', '60ft Flat', 'Rigid Hiab', 'Artic Hiab', 'Wagon & Drag');
+// no stated material or vehicle: still a load on a flatbed, a curtain or a
+// van - never a tipper-only or log-grab-only firm
+const GENERAL = needOf('flatbed, curtain or van', ...ANY_FLAT.any, 'Artic Curtain', 'Vans', '7.5T', 'Trombone (80ft +)');
+// a luton or a tail-lift wagon: a van or a 7.5-tonner
+const SMALL = needOf('van or 7.5t', 'Vans', '7.5T');
+const RAIL = needOf('rail / S&C', 'Rail / S&C');
+const WHEELSETS = needOf('wheelsets', 'Wheelsets');
+const REAR_STEER = needOf('rear steer', 'Rear Steer', 'Remote Rear Steer');
+const PTS = needOf('PTS', 'PTS');
+
 // CTMS vehicle codes, decoded. Delali (24/07): "NR_ART_40_CT means artic
 // curtain". The codes compose: ART(IC)=artic, CT=curtain, FL=flat,
-// TAIL=tail-lift, a bare number = trailer length in ft, <n>T = tonnage.
-// Known examples: NR_ART_40_CT (artic curtain 40ft), NR_ARTIC_FL (artic
-// flat), NR_60_ART_FL (artic flat 60ft), NR_7.5T_TAIL (7.5t tail-lift).
-// `need` is the matching capability-sheet term - only set when the pair is
-// certain, because needsFor treats it as a HARD filter.
+// TAIL=tail-lift, TIP=tipper, TROM=trombone, RIG=rigid, a bare number =
+// trailer length in ft, <n>T = tonnage. Known examples: NR_ART_40_CT (artic
+// curtain 40ft), NR_ARTIC_FL / NR_40ft Artic Flatbed (artic flat),
+// NR_60_ART_FL (artic flat 60ft), NR_TROM_80ft (trombone), NR_FLAT_RIG (rigid
+// flat), NR_7.5T_TAIL (7.5t tail-lift), NR_R_TIP26_8 (26t rigid tipper - the
+// stoneblower wagon), NR_TRANSIT. A reply's own word ("rigid", "18t") lands
+// here too. `need` is only set when the code says exactly which vehicle,
+// because needsFor treats it as a HARD filter.
 export function vehicleInfo(code) {
   const c = String(code || '').toUpperCase().trim();
-  if (!c) return { label: '', need: null, weight: null };
+  if (!c) return { label: '', need: null, weight: null, rigid: false, artic: false };
   const artic = /ART/.test(c);
   const curtain = /(^|_)CT(_|$)|CURT/.test(c);
   const flat = /(^|_)FL(_|$)|FLAT/.test(c);
   const tail = /TAIL|_TL(_|$)/.test(c);
-  const weight = (c.match(/(\d+(?:\.\d+)?)T(_|$)/) || [])[1] || null;
-  const len = (c.match(/(^|_)(\d{2})(_|$)/) || [])[2] || null;
+  const trombone = /TROM/.test(c);
+  const tipper = /TIP/.test(c);
+  const van = /TRANSIT|(^|_)VAN/.test(c);
+  const weight = (c.match(/(\d+(?:\.\d+)?)\s?T(_|$|\s)/) || [])[1] || null;
+  const len = (c.match(/(^|_)(\d{2})(_|$|FT)/) || [])[2] || null;
+  // a tonnage is a rigid's (7.5t, 18t, 26t) - artics are never coded by weight
+  const rigid = !artic && !van && (/RIG|R_TIP/.test(c) || !!weight);
   const bits = [];
   if (weight) bits.push(weight + 't');
   if (artic) bits.push('artic');
-  if (curtain) bits.push('curtain');
+  else if (rigid && !weight) bits.push('rigid');
+  if (trombone) bits.push('trombone');
+  else if (tipper) bits.push('tipper');
+  else if (curtain) bits.push('curtain');
   else if (flat) bits.push('flat');
+  if (van) bits.push('van');
   if (len && !weight) bits.push(len + 'ft');
   if (tail) bits.push('tail-lift');
-  const label = bits.join(' ');
-  let need = null;
-  if (artic && curtain) need = 'artic curtain';
-  else if (artic && flat) need = (len === '60') ? '60ft flat' : 'artic flat';
-  else if (weight && tail) need = weight + 't with t/l';
-  else if (weight && curtain) need = weight + 't curtain';
-  else if (weight === '7.5') need = '7.5t';
-  else if (/TRANSIT/.test(c)) need = 'transit';
-  return { label, need, weight };
+  let vneed = null;
+  if (trombone || (len && +len >= 80)) vneed = TROMBONE;
+  else if (tipper) vneed = rigid ? RIGID_TIPPER : TIPPER;
+  else if (artic && curtain) vneed = needOf('artic curtain', 'Artic Curtain');
+  else if (artic && flat) vneed = len === '60' ? FLAT_60 : ARTIC_FLAT;
+  else if (van) vneed = needOf('van', 'Vans');
+  else if (weight === '7.5') vneed = needOf('7.5t', '7.5T');
+  else if (rigid && !weight) vneed = RIGID_FLAT;      // NR_FLAT_RIG, NR_Rigid, "rigid"
+  return { label: bits.join(' '), need: vneed, weight, rigid, artic };
 }
 
-// Bagged ballast goes on any normal flatbed - rigid or artic - and that is all
-// it needs. It used to demand the 'bags' capability, which only 29 of the 55
-// hauliers are flagged with, so the ring-round left out two dozen firms who
-// could carry the job perfectly well. Loose is the one with a real constraint:
-// it is tipped, so it still requires a tipper.
-//
-// An entry that is an ARRAY means "any of these", unlike the plain strings
-// which must all match. 'flat' is in the list because a rigid flatbed is
-// spelled "short flat" in the capability sheet and contains neither word.
-const BAGS_NEED = ['artic', 'rigid', 'flat'];
+// "72x ballast", "15x ballast, 7x aggregate", "10x 1t bags of ballast" ->
+// how many 1t bags. 0 when the summary gives no count.
+function bagsIn(mats) {
+  let n = 0;
+  for (const m of mats.matchAll(/(\d+)\s*x\s*[^,;]*?(ballast|aggregate|bag)/g)) n += +m[1];
+  return n;
+}
 
-// Sleepers and bearers are neither rails nor S&C. Both travel on a flatbed
-// with a hiab - rigid or artic - so asking for "Rail / S&C" filtered these
-// jobs down to the 21 hauliers carrying that flag and left out the 35 with a
-// Rigid Hiab and the 32 with an Artic Hiab, which is who actually runs them.
-// Delali (15/09): "sleepers go on rigids and artics, rigid hiabs and artic
-// hiabs", and then "bearers go on rigids and artics too, move them" - so a
-// bearer being an S&C component does not change what carries it, which is
-// the only thing this filter is deciding.
-// Either axle count will do, so like BAGS_NEED this is an "any of these".
-const SLEEPER_NEED = ['rigid hiab', 'artic hiab'];
+// The longest length named in the materials, in metres ("18.288m", "36 m",
+// "60ft"), or null.
+function longestMetres(mats) {
+  const ms = [...mats.matchAll(/(\d+(?:\.\d+)?)\s*m\b/g)].map((m) => +m[1]);
+  const fs = [...mats.matchAll(/(\d+(?:\.\d+)?)\s*(?:ft|feet)\b/g)].map((m) => +m[1] * 0.3048);
+  const all = ms.concat(fs).filter((x) => x > 0 && x < 200);
+  return all.length ? Math.max(...all) : null;
+}
 
-// What a job needs, from its materials + parsed customer details. Drives the
-// haulier capability match. Ported verbatim from the original browser logic.
-export function needsFor(r) {
-  const need = [], d = r.details || {};
+// Which vehicle a job needs, from its materials and the site's answers - the
+// way Delali books them:
+//   * bagged ballast/aggregate: a HIAB wagon (the site offloads it with ours),
+//     and over 20 bags it is artics - "an artic HIAB only takes 20 bags; the
+//     booking splits it later" (30/10). Bags never needed the 'Bags' flag
+//     (only 27 firms carry it - two dozen able firms were being left out).
+//   * loose ballast and stoneblower stone: TIPPED, so a tipper. Stoneblowers
+//     book on NR_R_TIP26_8, the 26t rigid tipper (29/10).
+//   * sleepers, bearers and troughing: "sleepers go on rigids and artics,
+//     rigid hiabs and artic hiabs" (15/09) - a hiab of either size, or any
+//     flatbed when the site offloads them itself.
+//   * rails and S&C: the Rail / S&C fleet. Over 60ft (18.3m) only a trombone
+//     takes them.
+//   * wheelsets: the firms flagged for wheelsets.
+//   * PTS never for ballast (his rule, 30/10); rear steer never on a rigid
+//     (his rule, 30/10) - it is an artic thing.
+// Returns the needs ({label, any[]}) plus what the job is, for the ranking.
+export function jobOf(r) {
+  const d = r.details || {};
   const mats = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toLowerCase();
-  // A job carrying rails AND sleepers still needs a rail-capable haulier, so
-  // the two tests below are not an either/or.
-  const sleepers = /sleeper|bearer/.test(mats);     // carried the same way
-  if (/rail|s&c|switch|crossing/.test(mats)) need.push('rail / s&c');
-  // LOOSE ballast is tipped, not bagged, so it needs a TIPPER - and only the
-  // 20 hauliers carrying one can physically take it. Asking for 'bags' here
-  // would rank the bagged-ballast fleet, none of whom can tip a load, and the
-  // ring-round would start with people guaranteed to say no. 'tipper'
-  // substring-matches Rigid Tipper and Artic Tipper both, so it filters to
-  // the right fleet without narrowing to one axle count the job never stated.
-  // Mirrors is_loose_ballast() in build_drafts.py: ballast AND loose.
-  // The stock code is the last resort and the only one that works on records
-  // written before the summary kept the word: the tracker keeps
-  // product_codes even when materials has collapsed to "80x ballast".
-  // Verified against Synergy_DHL_Haulier_Extract_260826a:
-  //     0057/100500/001 = Track ballast (50mm) - Loose
-  //     0057/100500/002 = Track ballast (50mm) - 1 tonne bags
-  const looseCode = (r.product_codes || []).some(
-    (c) => String(c).trim().endsWith('100500/001'));
-  const loose = !!r.loose_ballast
-    || (/ballast/.test(mats) && /loose/.test(mats))
-    || looseCode;
-  if (loose) need.push('tipper');
-  else if (/ballast|bag/.test(mats)) need.push(BAGS_NEED);
-  // a stated vehicle type is a requirement too - an artic-curtain job only
-  // fits hauliers who run artic curtains (need names mirror the caps sheet)
   const vi = vehicleInfo((d.vehicle || {}).value || '');
   const off = (d.offloading || {}).value || '';
-  if (off === 'MOFFETT') need.push('moffett');
-  else if (off === 'HIAB') {
-    // a tonnage-coded vehicle (7.5t/18t/26t) is a rigid - its hiab is a
-    // rigid hiab regardless of what the site's artic access is
-    const rigid = !!vi.weight || ((d.artic_access || {}).value === 'no');
-    need.push(rigid ? 'rigid hiab' : 'artic hiab');
+  const noArtics = (d.artic_access || {}).value === 'no';
+  const rigid = vi.rigid || noArtics;
+  // Mirrors is_loose_ballast() in build_drafts.py: ballast AND loose. The stock
+  // code is the last resort and the only one that works on records written
+  // before the summary kept the word: the tracker keeps product_codes even when
+  // materials has collapsed to "80x ballast". Verified against
+  // Synergy_DHL_Haulier_Extract_260826a:
+  //     0057/100500/001 = Track ballast (50mm) - Loose
+  //     0057/100500/002 = Track ballast (50mm) - 1 tonne bags
+  const looseCode = (r.product_codes || []).some((c) => String(c).trim().endsWith('100500/001'));
+  const stoneblower = /stone\s*-?\s*blower/.test(mats);
+  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats)) || looseCode;
+  const ballast = /ballast|aggregate/.test(mats) || stoneblower;
+  const bagged = !loose && !stoneblower && /ballast|aggregate|\bbags?\b/.test(mats);
+  const bags = bagged ? bagsIn(mats) : 0;
+  // each line on its own: a sleeper's stock line can name the rail it is for
+  // ("... BASEPLATE FOR INCLINED CEN56 RAIL", "GUARD RAIL SLEEPER", "SWITCH
+  // BEARER") and is still a sleeper
+  const items = String(r.materials || '').split(/[,;]/).concat(r.product_codes || [])
+    .map((x) => String(x).toLowerCase());
+  const isSleeper = (x) => /sleeper|bearer|trough/.test(x);
+  const sleepers = items.some(isSleeper);
+  const railItems = items.filter((x) => !isSleeper(x) && /\brails?\b|s&c|switch|crossing|half set/.test(x));
+  const rails = railItems.length > 0;
+  const metres = rails ? longestMetres(railItems.join(' ')) : null;
+  const wheelsets = /wheelset/.test(mats);
+  const out = [];
+  if (loose || stoneblower) out.push(vi.need === RIGID_TIPPER ? RIGID_TIPPER : TIPPER);
+  if (rails) {
+    out.push(RAIL);
+    if (metres !== null && metres > 18.3) out.push(TROMBONE);
+    else if (metres !== null && metres > 13.6) out.push(FLAT_60);    // longer than a normal trailer
   }
-  // Sleepers and bearers with no offloading stated still need lifting gear.
-  // Where the reply DOES state it, the HIAB branch above has already picked the
-  // precise one and the MOFFETT branch means no hiab is wanted at all.
-  if (sleepers && !off) need.push(SLEEPER_NEED);
-  if (((d.rear_steer || {}).value) === 'yes') need.push('rear steer');
-  if (((d.pts || {}).value) === 'yes') need.push('pts');
-  if (vi.need && !need.includes(vi.need)) need.push(vi.need);
-  return need;
+  if (wheelsets) out.push(WHEELSETS);
+  // offloading - what lifts it off at the site
+  if (!loose && !stoneblower) {
+    // more than an artic hiab's 20 bags, or an artic named outright
+    const big = (bags > 20 && !noArtics) || vi.artic;
+    const hiab = big ? ARTIC_HIAB : (rigid ? RIGID_HIAB : (rails && !noArtics ? ARTIC_HIAB : HIAB));
+    if (off === 'MOFFETT') out.push(MOFFETT);
+    else if (off === 'BOTH') out.push(HIAB_OR_MOFFETT);
+    else if (off === 'HIAB') out.push(hiab);
+    else if (off === 'SITE/NONE') {
+      if (bagged || sleepers) out.push(big ? ARTIC_FLAT : (rigid ? RIGID_FLAT : ANY_FLAT));
+    } else if (bagged || sleepers) out.push(hiab);   // not said: they need our lifting gear
+  }
+  if (((d.rear_steer || {}).value) === 'yes' && !rigid) out.push(REAR_STEER);
+  if (((d.pts || {}).value) === 'yes' && !ballast) out.push(PTS);
+  // a stated vehicle is a requirement too - unless a need already there is
+  // stricter (an artic hiab is an artic flat with a crane)
+  if (vi.need && !out.some((n) => n.any.every((c) => vi.need.any.includes(c)))) out.push(vi.need);
+  // an ad hoc form often names its vehicle in the free text instead
+  // ("3.5 - 7.5 tonne luton with tail lift required")
+  const said = (mats + ' ' + String(r.weight || '') + ' ' + String(r.product || '')).toLowerCase();
+  if (!vi.need && /luton|tail\s*-?\s*lift/.test(said)) out.push(SMALL);
+  if (!out.length) out.push(GENERAL);
+  return { need: out, rails, metres, rearSteer: out.includes(REAR_STEER) };
+}
+
+// What a job needs from a haulier - [{label, any[]}], each met by ANY of its
+// capabilities. Drives the haulier capability match.
+export function needsFor(r) {
+  return jobOf(r).need;
 }
 
 // Which NR materials team owns this order's product - the escalation route
@@ -318,8 +393,23 @@ export function milesBetween(a, b) {
 // (they can run empty to collect, or be coming back that way), so ranking only
 // off the collection end hides good local options. `nearEnd` says which one it
 // is, so the reason a haulier is near is never a mystery.
+//
+// DHL NOC (our fleet) is left off - not just ranked lower - where it cannot take
+// the job (Delali, 02/10): rails over 18.3m, rear steer, night or weekend work.
+// `leftOff` says who was left off and why, so the drawer can say so.
 export function recommendFor(r, hauliers, geo) {
-  const need = needsFor(r);
+  const job = jobOf(r);
+  const need = job.need;
+  const nw = nightWeekendFor(r);
+  const fleetCant = (h) => {
+    if (!h.fleet && !h.avoid_nw) return '';
+    if (h.avoid_nw && nw.length) return nw.join(' & ') + ' work';
+    if (!h.fleet) return '';
+    if (job.rearSteer) return 'rear steer';
+    if (job.metres !== null && job.metres > 18.3) return 'rails over 18.3m';
+    return '';
+  };
+  const leftOff = [];
   const colls = collectionsOf(r);
   const cgs = colls.map((c) => geo[pcNorm(c.pc || '')]).filter(Boolean);
   const dg = geo[pcNorm(r.postcode || '')];
@@ -342,11 +432,12 @@ export function recommendFor(r, hauliers, geo) {
   const out = (hauliers || []).filter((h) => {
     if (h.parcel) return false;   // Parcel Pass is a booking service, never ranked
     if (outsideCoverage(h)) return false;
-    const caps = (h.caps || []).map((c) => c.toLowerCase());
-    // a plain need must match; an array of alternatives needs any one of them
-    return need.every((n) => (Array.isArray(n)
-      ? n.some((alt) => caps.some((c) => c.includes(alt)))
-      : caps.some((c) => c.includes(n))));
+    // every need met by one of its capabilities, named exactly as the sheet does
+    const caps = new Set((h.caps || []).map((c) => String(c).trim().toLowerCase()));
+    if (!need.every((n) => n.any.some((c) => caps.has(c.toLowerCase())))) return false;
+    const why = fleetCant(h);
+    if (why) leftOff.push({ name: h.name, why });
+    return !why;
   }).map((h) => {
     const g = geo[pcNorm(h.pc || '')];
     // nearest of the collection points - the run starts wherever suits them
@@ -362,10 +453,6 @@ export function recommendFor(r, hauliers, geo) {
     });
   });
   out.forEach((h) => { h.rank = h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2); });
-  // A night/weekend job flags carriers that avoid that work (DHL NOC) and
-  // drops them to the bottom - still listed, but never the first call.
-  const nw = nightWeekendFor(r);
-  out.forEach((h) => { h.nwAvoid = !!(h.avoid_nw && nw.length); });
   // Band order is the order of APPROACH, but a haulier that is much closer than
   // everyone ahead of it is worth surfacing rather than burying - a tier 2 at
   // 18mi against tier 1s at 115mi+ is usually the cheaper run, and you'd want
@@ -381,7 +468,7 @@ export function recommendFor(r, hauliers, geo) {
   // that is what it is compared with. (Once quote history is deep enough,
   // cheapest supersedes distance here.)
   const bandBest = (rank) => {
-    const m = out.filter((h) => h.rank === rank && !h.nwAvoid && h.miles !== null).map((h) => h.miles);
+    const m = out.filter((h) => h.rank === rank && h.miles !== null).map((h) => h.miles);
     return m.length ? Math.min(...m) : null;
   };
   const best = [bandBest(0), bandBest(1), bandBest(2)];
@@ -391,11 +478,28 @@ export function recommendFor(r, hauliers, geo) {
     for (let b = h.rank - 1; b >= 0 && above === null; b -= 1) above = best[b];
     if (above !== null && h.miles < above) h.closerThanAbove = true;
   });
-  out.sort((a, b) => (a.nwAvoid - b.nwAvoid)
-    || a.rank - b.rank
+  out.sort((a, b) => a.rank - b.rank
     || (a.miles === null) - (b.miles === null)
-    || (a.miles || 9e9) - (b.miles || 9e9));
-  return { need, list: out, nw };
+    || (a.miles || 9e9) - (b.miles || 9e9)
+    || a.name.localeCompare(b.name));
+  return { need, list: out, nw, leftOff };
+}
+
+// The map's order list: soonest delivery first (so the urgent ones lead), then
+// orders with no date, then those already past their delivery date - most
+// recent first - which still sit on the map until someone presses Booked.
+// Delali (30/10): shown to his manager, "it looks pretty embarrassing because
+// things weren't in order".
+export function byDeliveryDate(records) {
+  const key = (r) => {
+    const n = wlDays(r.delivery_date || r.date);
+    if (n === null) return [1, 0];
+    return n >= 0 ? [0, n] : [2, -n];
+  };
+  return [...records].sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    return ka[0] - kb[0] || ka[1] - kb[1] || ordLabel(a).localeCompare(ordLabel(b));
+  });
 }
 
 export const RANK_TAG = ['fleet', 't1', 't2'];

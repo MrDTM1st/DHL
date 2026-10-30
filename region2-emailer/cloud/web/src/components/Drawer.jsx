@@ -240,7 +240,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const d = r.details || {};
   const v = (k) => detVal(k, d[k]);
-  const { need, list, nw } = recommendFor(r, hauliers, geo);
+  const { need, list, leftOff } = recommendFor(r, hauliers, geo);
   // Who has ALREADY been emailed about this job, keyed by haulier name. Worked
   // out from Sent Items on the home PC, so it counts the ones sent by hand -
   // which is most of them. An order can carry several numbers; any of them
@@ -511,7 +511,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
           <div className="lbl" style={{ margin: '6px 0 8px' }}>This job needs</div>
           <div className="needchips">
-            {need.length ? need.map((n, i) => <span className="needchip" key={i}>{n}</span>)
+            {need.length ? need.map((n, i) => <span className="needchip" key={i} title={n.any.join(' / ')}>{n.label}</span>)
               : <span className="needchip" style={{ background: 'var(--seg)', color: 'var(--muted)', borderColor: 'var(--line2)' }}>general haulage</span>}
           </div>
 
@@ -546,6 +546,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             Who to contact — {recs.length} fit this job <span style={{ color: 'var(--faint)', fontWeight: 600 }}>
               · timed from the top pick — tap another to compare</span>
           </div>
+          {leftOff.length > 0 && (
+            <div className="statusdetail" style={{ margin: '-4px 0 10px', fontSize: 12.5, color: 'var(--muted)' }}>
+              Left off: {leftOff.map((x) => `${x.name} (${x.why})`).join(', ')}
+            </div>
+          )}
           {recs.length ? recs.map((h, i) => {
             const picked = activeHaulier && activeHaulier.name === h.name;
             return (
@@ -568,7 +573,6 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
                   </span>
                 )}
                 {h.closerThanAbove && <span className="htag near">CLOSER</span>}
-                {h.nwAvoid && <span className="htag near">AVOIDS {nw.join(' & ').toUpperCase()} WORK</span>}
                 <div>{[h.loc, (h.caps || []).join(', ')].filter(Boolean).join(' · ')}</div>
                 {picked && (
                   <div className="hjourney">
@@ -600,7 +604,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             );
           }) : (
             <div className="statusdetail" style={{ fontSize: 12.5, color: 'var(--muted)' }}>
-              No haulier in the list matches {need.join(', ') || 'this job'}.
+              No haulier in the list matches {need.map((n) => n.label).join(', ') || 'this job'}.
             </div>
           )}
 

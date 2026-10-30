@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useRef } from 'react';
 import { I } from '../icons.jsx';
-import { ordLabel, isUrgent, within3, dateShort, recommendFor, parcelPassFor, siteContactOf } from '../lib/orders.js';
+import { ordLabel, isUrgent, within3, dateShort, recommendFor, parcelPassFor, siteContactOf, byDeliveryDate, wlDays } from '../lib/orders.js';
 import { geoCache } from '../lib/geo.js';
 import { command } from '../api.js';
 import CallButton from './CallButton.jsx';
@@ -201,7 +201,10 @@ function BookedCheck({ status }) {
 // (the toggle is hidden there).
 export default function OrdersPanel({ records, hauliers, onSelect, selectedId, status, onCall, open, onToggle }) {
   const geo = geoCache();
-  const list = [...records].sort((a, b) => (isUrgent(b) - isUrgent(a)) || 0);
+  const list = byDeliveryDate(records);
+  // where the orders already past their delivery date start - they keep a line
+  // of their own so they never read as this week's work
+  const firstPast = list.findIndex((o) => (wlDays(o.delivery_date || o.date) ?? 0) < 0);
   const urgent = records.filter(isUrgent).length;
   return (
     <div className={'uploadpanel orderspanel' + (open ? ' open' : '')}>
@@ -224,13 +227,20 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
               Nothing tracked yet.
             </div>
           )}
-          {list.map((o) => {
+          {list.map((o, i) => {
             const { list: recs } = recommendFor(o, hauliers, geo);
             const best = recs[0];
             const pp = parcelPassFor(o);
             const site = siteContactOf(o).calls[0];
             return (
-              <div className={'orow' + (selectedId === o.id ? ' sel' : '')} key={o.id} onClick={() => onSelect(o)}>
+              <Fragment key={o.id}>
+              {i === firstPast && (
+                <div style={{ padding: '10px 12px 4px', fontSize: 11, fontWeight: 700, letterSpacing: '.04em',
+                  textTransform: 'uppercase', color: 'var(--muted)' }}>
+                  Past their delivery date
+                </div>
+              )}
+              <div className={'orow' + (selectedId === o.id ? ' sel' : '')} onClick={() => onSelect(o)}>
                 <span className="pdot2" style={isUrgent(o)
                   ? { background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }
                   : { background: 'var(--faint)' }} />
@@ -254,6 +264,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
                   <CallButton compact number={site.number} who={site.name || o.worksite || o.site} onCall={onCall} />
                 )}
               </div>
+              </Fragment>
             );
           })}
         </div>
