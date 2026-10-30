@@ -670,12 +670,10 @@ def order_update_items(a):
                 items += [f"click {x},{y} after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {v}"]
     items.append("snap times 15,345,520,392")
     if comments:
-        items += ["click 288,187 react box=20,200,1250,700 timeout=10",
-                  "click 602,657 after=0.2", "key home after=0.05", "key shift+end after=0.05", f"type {comments}",
-                  "snap comments 15,615,1250,690",
-                  # AND where he reads them (his correction 30/10): LOC Detail > Comments > the DELIVER side's
-                  # Edit - an "Order Information" box whose first line takes them, saved by its own Save
-                  "click 365,187 react box=20,200,1250,700 timeout=10",            # LOC Detail tab
+        # where he reads them (his correction 30/10): LOC Detail > Comments > the DELIVER side's Edit - an
+        # "Order Information" box whose first line takes them, saved by its own Save. Only there: Add Detail's
+        # Order Comments is not needed ("it makes it slightly quicker for you").
+        items += ["click 365,187 react box=20,200,1250,700 timeout=10",            # LOC Detail tab
                   "click 180,643 after=0.6",                                        # its Comments sub-tab
                   "click 1080,676 react timeout=10",                                # Edit, deliver side
                   "click 575,258 after=0.3", "key home after=0.05", "key shift+end after=0.05", f"type {comments}",
