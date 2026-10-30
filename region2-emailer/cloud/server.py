@@ -181,7 +181,7 @@ def _ctms_sweep_locked():
             keep.append(c)
     _ctms["queue"] = keep
     if not _ctms_armed() and any(c["action"] in CTMS_DRIVE for c in keep):
-        _ctms_cancel_locked("Cancelled - 'Claude can act' ran out before the work PC got to it.",
+        _ctms_cancel_locked("Cancelled - Look mum, no hands mode ran out before the work PC got to it.",
                             only=CTMS_DRIVE)
 
 
@@ -1559,10 +1559,10 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _ctms_sweep_locked()
                 if action in CTMS_DRIVE and not _ctms_armed():
-                    refused = ("Claude can't act in CTMS right now: 'Claude can act' is off on the "
-                               "dashboard's CTMS page. Only Delali can switch it on, from there.", "control")
+                    refused = ("The haulage desk can't run CTMS right now: Look mum, no hands mode is off on the "
+                               "dashboard's CTMS page. Only Delali can turn it on, from there.", "control")
                 elif action in CTMS_DRIVE and _ctms["state"].get("control") is False:
-                    refused = ("The work PC is set to observe only. To let Claude act, run this on the "
+                    refused = ("The work PC is set to look only. To let the haulage desk run CTMS, run this on the "
                                "work PC:  python ctms_bridge.py --allow-control", "allow")
                 else:
                     # one picture request in the queue is plenty
@@ -1581,7 +1581,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(409, {"error": refused[0], "need": refused[1]})
             return self._json(200, {"ok": True, "id": cmd["id"], "online": online})
         if path == "/api/ctms/control":
-            # "Claude can act" - the dashboard's switch, and nobody else's
+            # "Look mum, no hands" (once "Claude can act") - the dashboard's switch, and nobody else's
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
             on = bool(data.get("on"))
@@ -1593,11 +1593,11 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms["control_touched"] = True
                 if on:
                     _ctms["control_until"] = time.time() + minutes * 60
-                    _ctms_note_locked(f"'Claude can act' switched on for {minutes} min.")
+                    _ctms_note_locked(f"Look mum, no hands mode switched on for {minutes} min.")
                 else:
                     _ctms["control_until"] = 0.0
-                    _ctms_cancel_locked("Cancelled - 'Claude can act' was switched off.", only=CTMS_DRIVE)
-                    _ctms_note_locked("'Claude can act' switched off.")
+                    _ctms_cancel_locked("Cancelled - Look mum, no hands mode was switched off.", only=CTMS_DRIVE)
+                    _ctms_note_locked("Look mum, no hands mode switched off.")
                 _ctms_cv.notify_all()
                 out = {"ok": True, "control": _ctms_control_locked()}
             return self._json(200, out)
@@ -1608,7 +1608,7 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms_cancel_locked("Cancelled - Stop was pressed.")
                 _ctms["stop"] = True
                 if _ctms_armed():
-                    _ctms_note_locked("Stop pressed - 'Claude can act' switched off.")
+                    _ctms_note_locked("Stop pressed - Look mum, no hands mode switched off.")
                 _ctms["control_until"] = 0.0
                 _ctms["control_touched"] = True
                 _ctms_cv.notify_all()
@@ -1634,7 +1634,7 @@ class Handler(BaseHTTPRequestHandler):
                     until = _ctms_ticket_until(data["ticket"])        # restarted while it was on (see _ctms_ticket)
                     if until > time.time():
                         _ctms["control_until"], _ctms["control_touched"] = float(until), True
-                        _ctms_note_locked("'Claude can act' kept on through the dashboard restarting - "
+                        _ctms_note_locked("Look mum, no hands mode kept on through the dashboard restarting - "
                                           f"{max(1, round((until - time.time()) / 60))} min left, as it was.")
                 _ctms_take_state_locked(data.get("state"))
                 _ctms_sweep_locked()

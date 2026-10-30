@@ -704,7 +704,7 @@ def test_claude_sees_numbers_acts_on_them_and_every_step_is_kept():
             assert os.path.exists(os.path.join(tmp, "latest.jpg"))
             assert json.load(open(R.STATE))["snap"] == "s5"
             rc, out = _cli("click", "1")
-            assert rc == 5 and "Only Delali can switch it on" in out, out     # the switch is off
+            assert rc == 5 and "Only Delali can turn it on" in out, out       # the switch is off
             call("/api/ctms/control", {"on": True})
             rc, out = _cli("click", "1")
             assert rc == 0 and seen[-1]["snap"] == "s5" and seen[-1]["ref"] == 1, (rc, out, seen[-1:])

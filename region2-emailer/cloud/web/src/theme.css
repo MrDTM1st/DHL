@@ -601,32 +601,6 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .ctms-steps li{ margin-bottom:6px; }
 .ctms-steps .mono{ font-size:12px; background:var(--input); border:1px solid var(--line); border-radius:5px; padding:0 5px; }
 
-.ctms-shotrow{ display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--line); }
-.ctms-shotrow.key{ background:linear-gradient(90deg, var(--yellow-t), transparent 70%); margin:0 -18px; padding:9px 18px; }
-.ctms-tick{ width:20px; height:20px; border-radius:50%; border:1.5px solid var(--line2); display:flex; align-items:center;
-      justify-content:center; flex:none; color:#fff; }
-.ctms-tick svg{ width:12px; height:12px; }
-.ctms-shotrow.got .ctms-tick{ background:var(--go); border-color:var(--go); }
-.ctms-shotinfo{ flex:1; min-width:0; }
-.ctms-shotname{ font-size:12px; font-weight:700; display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
-.ctms-shothint{ font-size:11.5px; color:var(--muted); margin-top:1px; }
-.ctms-shotrow .btn{ flex:none; min-width:82px; }
-.ctms-other{ display:flex; gap:7px; padding-top:11px; border-top:1px solid var(--line); }
-.ctms-other input{ padding:7px 10px; font-size:12.5px; }
-
-.ctms-verdict{ font-size:12.5px; font-weight:600; padding:9px 11px; border-radius:9px; background:var(--input);
-      border:1px solid var(--line); color:var(--ink2); margin-bottom:10px; }
-.ctms-verdict.go{ background:#e9f6ee; border-color:#cfe9d9; color:#18804a; }
-.ctms-verdict.warn{ background:var(--yellow-t); border-color:#f3e2a0; color:#7a5d00; }
-.ctms-net{ border:1px solid var(--line); border-radius:9px; max-height:250px; overflow:auto; margin-bottom:8px; }
-.ctms-netrow{ display:grid; grid-template-columns:48px minmax(0,1fr) 38px 64px; gap:8px; align-items:center;
-      padding:6px 10px; font-size:11.5px; border-bottom:1px solid var(--line); }
-.ctms-netrow:last-child{ border-bottom:none; }
-.ctms-netrow .m{ font-weight:800; font-size:10.5px; color:var(--ink2); }
-.ctms-netrow .u{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-.ctms-netrow .st{ color:var(--muted); font-size:11px; }
-.ctms-netrow .mi{ color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
 .ctms-act{ display:flex; gap:9px; align-items:baseline; padding:7px 0; border-top:1px solid var(--line); font-size:12px; }
 .ctms-act:first-of-type{ border-top:none; }
 .ctms-actdot{ width:7px; height:7px; border-radius:50%; flex:none; position:relative; top:-1px; }
@@ -636,7 +610,7 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 
 .switch:disabled{ opacity:.5; cursor:not-allowed; }
 
-/* "Claude can act": amber while it is on, so nobody mistakes it for the resting state */
+/* "Look mum, no hands": amber while it is on, so nobody mistakes it for the resting state */
 .ctms-mode.act{ background:var(--yellow-t); border-color:#f3e2a0; color:#7a5d00; }
 .ctms-control.on{ border-color:#f0d878; box-shadow:0 0 0 3px var(--yellow-t); }
 .ctms-control .switch.on{ background:var(--yellow-t); border-color:#f0d878; color:#7a5d00; }
@@ -668,7 +642,6 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 @media (max-width:680px){
   .ctms-headbtns{ width:100%; justify-content:space-between; }
   .ctms-host{ display:none; }
-  .ctms-netrow{ grid-template-columns:42px minmax(0,1fr) 34px; } .ctms-netrow .mi{ display:none; }
 }
 /* A phone could not fit the nav: the bell and half the home-PC pill sat off the
    right edge (worse once CTMS got its own link). The bell duplicates the

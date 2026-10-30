@@ -125,7 +125,7 @@ export async function downloadCtmsSetup(allow, autostart) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-// "Claude can act" - on for a set number of minutes, or off. Only the
+// "Look mum, no hands" - on for a set number of minutes, or off. Only the
 // dashboard's own key can do this; the home PC's cannot.
 export async function ctmsControl(on, minutes) {
   const r = await req('/api/ctms/control', {
@@ -136,10 +136,4 @@ export async function ctmsControl(on, minutes) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
   return d;
-}
-
-export async function downloadCtmsCapture(name) {
-  const d = await getJSON('/api/ctms/capture?name=' + encodeURIComponent(name));
-  if (!d.data) throw new Error('gone');
-  saveB64(name, d.data);
 }
