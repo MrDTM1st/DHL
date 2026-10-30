@@ -375,6 +375,9 @@ def parse_w3w(text):
 
 
 _PHONE = re.compile(r"(?:\+44|0)\s*\d[\d\s]{8,14}")
+_PHONE_LABEL = r"(?:m|t|p|w|tel|telephone|mob|mobile|phone|cell|direct|dd|office|number|no|num)\.?"
+_MOBILE = re.compile(r"^(?:\+44|0)7")
+_FROM_LINE = re.compile(r"^\s*from:\s*(.+?)\s*(?:<[^>\n]*>)?\s*$", re.I | re.M)   # a quoted mail's From:
 # leading words that aren't part of a name: "contact delivery will be darren..."
 _FILLER = re.compile(
     r"^\W*(?:the|a|our|site|delivery|for|on|is|are|will\s+be|contacts?|person|name|"
@@ -394,7 +397,39 @@ def parse_contact(text):
     ph = _PHONE.search(s)
     phone = re.sub(r"\s+", "", ph.group(0)) if ph else None
     name = _strip_filler(_clean(s[:ph.start()] if ph else s).strip(" -,:"))
+    # "M 07700 900123" or "Sam | Mob: 07..." - a footer's label in front of its number is not a name
+    name = re.sub(r"(?:^|[\s|/]+)" + _PHONE_LABEL + r"\s*:?\s*$", "", name, flags=re.I).strip(" -,:|/")
     return (name or None), phone, (HIGH if (name and phone) else AMBER)
+
+
+def sender_name(sender):
+    """Outlook's display name as the person's name: 'Example, Sam' -> 'Sam Example', '(Company)' dropped,
+    an address's own part ('sam.example@...') -> 'Sam Example'."""
+    s = re.sub(r"\([^)]*\)", "", str(sender or "")).strip(" '\"")
+    if "@" in s:
+        s = re.sub(r"[._]+", " ", s.split("@", 1)[0]).title()
+    elif "," in s:
+        last, first = (p.strip() for p in s.split(",", 1))
+        s = f"{first} {last}"
+    return " ".join(s.split()) or None
+
+
+def sender_phone(body, sender):
+    """The sender's own number: from what they wrote and their footer first (a mobile over a landline), else
+    from an earlier mail of theirs quoted further down. Never a number from anyone else's mail in the thread -
+    our own signature is quoted in every reply."""
+    s = str(body or "")
+    toks = (sender_name(sender) or "").lower().split()
+    parts = [_top(s)]
+    for m in _FROM_LINE.finditer(s):
+        if toks and all(t in m.group(1).lower() for t in toks):      # their own earlier mail
+            nxt = _FROM_LINE.search(s, m.end())
+            parts.append(s[m.end():nxt.start() if nxt else len(s)])
+    for part in parts:
+        phones = [re.sub(r"\s+", "", p.group(0)) for p in _PHONE.finditer(part)]
+        if phones:
+            return next((p for p in phones if _MOBILE.match(p)), phones[0])
+    return None
 
 
 # ---------------------------------------------------------------- the templates
@@ -480,9 +515,10 @@ def extract_fields(body):
     return out
 
 
-def parse_reply(body, product_type=None, consolidatable=None):
+def parse_reply(body, product_type=None, consolidatable=None, sender=None):
     """Free-text reply -> the structured details CTMS needs, each with a
-    confidence. AMBER fields are the ones to put in front of Delali."""
+    confidence. AMBER fields are the ones to put in front of Delali.
+    sender is the reply's From name - the contact when the reply names nobody."""
     labelled = extract_fields(body)
     prose = _prose(body)
     f = {k: (labelled.get(k) or prose.get(k) or "")            # template wins, prose fills gaps
@@ -530,6 +566,11 @@ def parse_reply(body, product_type=None, consolidatable=None):
     cn, cp, cconf = parse_contact(f.get("contact") or f.get("altcontact") or "")
     d["contact"] = {"name": cn, "phone": cp, "confidence": cconf,
                     "raw": f.get("contact") or f.get("altcontact") or ""}
+    if not cn and sender_name(sender):
+        # Nobody named: the contact is whoever sent the reply, on the number in their footer - or anywhere
+        # else in their mail (Delali's rule, 30/10)
+        cp = cp or sender_phone(body, sender)
+        d["contact"].update(name=sender_name(sender), phone=cp, confidence=HIGH if cp else AMBER, source="sender")
 
     d["notes"] = {"value": f.get("notes") or None, "confidence": HIGH, "raw": f.get("notes", "")}
     return d

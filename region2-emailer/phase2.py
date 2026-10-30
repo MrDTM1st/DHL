@@ -519,7 +519,11 @@ def build_brief(ns, record, reply_item):
         reply_body = str(reply_item.Body or "")
     except Exception:
         reply_body = ""
-    det = record.get("details") or dd.parse_reply(reply_body, product_type=product_type_of(record))
+    try:
+        sender = str(reply_item.SenderName or "")
+    except Exception:
+        sender = ""
+    det = record.get("details") or dd.parse_reply(reply_body, product_type=product_type_of(record), sender=sender)
     lines = brief_lines(record, det, coll, deliv, cdate, mats)
 
     outlook = win32com.client.Dispatch("Outlook.Application")
@@ -646,7 +650,8 @@ def check(ns=None):
             # brief is pre-filled and the chaser can ask for ONLY what's missing
             try:
                 pt = product_type_of(r)
-                r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt)
+                r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt,
+                                              sender=str(getattr(item, "SenderName", "") or ""))
                 r["missing"] = dd.missing(r["details"], pt)
                 metrics.log("reply_parsed", orders=r.get("orders", []),
                             missing=len(r["missing"]))
