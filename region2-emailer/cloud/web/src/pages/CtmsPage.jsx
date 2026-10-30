@@ -113,7 +113,12 @@ function SetupSteps() {
   );
 }
 
-export default function CtmsPage({ onAuthFail, pushToast }) {
+// What CTMS still owes, as the desk remembers it (ctms_todo on the home PC): the notes each email and chase leaves,
+// escalations, orders to update from a site's reply, bookings. "Execute on CTMS" in the chat works through them.
+const TODO_KIND = { note: 'Note', update: 'Update', booking: 'Book', other: 'To do' };
+const ddmm = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? m[3] + '/' + m[2] : ''; };
+
+export default function CtmsPage({ onAuthFail, pushToast, todo = [] }) {
   const visible = usePageVisible();
   const [st, setSt] = useState(null);
   const [shot, setShot] = useState(null);
@@ -380,6 +385,25 @@ export default function CtmsPage({ onAuthFail, pushToast }) {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="card statuscard">
+            <div className="statushd">
+              <span className="lbl">To do on CTMS</span>
+              <span className={'ctms-todo-n' + (todo.length ? ' some' : '')}>{todo.length}</span>
+            </div>
+            {todo.slice(0, 30).map((t) => (
+              <div className="ctms-act ctms-todo" key={t.id}>
+                <span className={'ctms-todo-kind ' + t.kind}>{TODO_KIND[t.kind] || t.kind}</span>
+                <span className="d"><b className="mono">{(t.orders || []).join(' / ')}</b> {t.what}</span>
+                <span className="t mono">{ddmm(t.added)}</span>
+              </div>
+            ))}
+            {todo.length > 30 && <div className="ctms-muted">… and {todo.length - 30} more.</div>}
+            <div className="ctms-muted" style={{ marginTop: todo.length ? 8 : 0 }}>
+              {todo.length ? 'Say "execute on CTMS" in the chat and the haulage desk works through these.'
+                : 'Nothing owed - CTMS is up to date with every email, chase and reply.'}
+            </div>
           </div>
 
           <div className="card statuscard">

@@ -652,6 +652,11 @@ def check(ns=None):
                             missing=len(r["missing"]))
             except Exception as e:
                 r["details_note"] = str(e)[:140]
+            try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list
+                import ctms_todo
+                ctms_todo.replied(r)
+            except Exception:
+                pass
             if r.get("kind") == "collection":
                 continue   # supplier replied with collection details - no delivery send-off brief
             try:

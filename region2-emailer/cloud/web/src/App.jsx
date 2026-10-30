@@ -284,7 +284,7 @@ export default function App() {
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
         )}
-        {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} />}
+        {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} todo={panel.ctms_todo || []} />}
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}

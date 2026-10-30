@@ -446,9 +446,19 @@ def push_panel():
             "pins": _pins(),
             "asks": _asks(),
             "mat_teams": _mat_teams(),
+            "ctms_todo": _ctms_todo(),
         })
     except Exception:
         pass
+
+
+def _ctms_todo():
+    """What CTMS still owes - notes, updates from replies, bookings (ctms_todo) - for the CTMS page's list."""
+    try:
+        import ctms_todo
+        return [{k: v for k, v in it.items() if k != "details"} for it in ctms_todo.listing()][:60]
+    except Exception:
+        return []
 
 
 def run(args):

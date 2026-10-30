@@ -397,10 +397,16 @@ def send_haulier(ns):
         # Remember WHO was asked, so the brief can show it and the same haulier
         # doesn't get asked twice. The Sent Items sweep would find this anyway,
         # but not until the next refresh - and the double-ask usually happens in
-        # the same sitting.
+        # the same sitting. A materials-team escalation is not a haulier ask (a
+        # stand-down must never tell a team to "disregard" a job): it leaves CTMS
+        # a " - Escalated DO dd/mm" note to write instead (his rule, 30/10).
         try:
-            import haulier_asks
-            haulier_asks.record(e.get("orders", []), e.get("haulier") or to, to)
+            if e.get("what") == "alt_contact":
+                import ctms_todo
+                ctms_todo.escalated(e.get("orders", []))
+            else:
+                import haulier_asks
+                haulier_asks.record(e.get("orders", []), e.get("haulier") or to, to)
         except Exception:
             pass
         os.remove(PENDING_HAULIER)   # done - never resendable by accident
