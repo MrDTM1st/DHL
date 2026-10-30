@@ -76,13 +76,16 @@ CANON_TITLE_GAP = 25        # its last row, counted from the menu bar's last row
 def window_offset(bgra, w, h, menu_bottom):
     """How far CTMS's own window area has scrolled - its windows move together inside it, the menu bar does not
     (30/10: the area scrolled 8 px while the page did not, and the Services tab click missed). Read off the last
-    title-bar row under the menu bar; 0 when no title bar shows there."""
+    title-bar row under the menu bar - the title bar ends where the window's red band or grey border starts (a
+    button's teal edge further down is not it, 30/10); 0 when no title bar shows there."""
     x = 600 if w > 600 else w // 2
     last = None
     for y in range(max(0, menu_bottom + 1), min(h, menu_bottom + 45)):
         c = rgb_at(bgra, w, x, y)
         if any(near(c, t, 8) for t in TITLE_TEALS):
             last = y
+        elif last is not None and (near(c, (202, 2, 2), 30) or near(c, (225, 225, 225), 4)):
+            break
     return 0 if last is None else (last - menu_bottom) - CANON_TITLE_GAP
 
 

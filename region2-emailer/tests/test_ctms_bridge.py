@@ -2106,8 +2106,11 @@ def test_the_dashboard_lets_the_fast_steps_through_with_their_fields_and_nothing
 
 def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
     import types
-    keep = R.load_state
+    keep = R.load_state, R.TEMPLATES
     R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
+    R.TEMPLATES = os.path.join(tempfile.gettempdir(), "ctms_templates_test.json")
+    with open(R.TEMPLATES, "w", encoding="utf-8") as f:
+        json.dump({"os-search": {"w": 2, "h": 1, "rgb": "AAAAAAAA"}}, f)
     try:
         b = R.parse_steps(["anchor", "click 245,67 react box=440,100,1230,200 timeout=25", "key tab after=0.05",
                            "waitfor 728,122 ffffff tol=10 timeout=12", "check 5,6 #00FF00 not",
@@ -2141,7 +2144,7 @@ def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
         assert [s["px"] for s in save if s["action"] == "click"] == [[337.0, 733.0], [424.0, 733.0]]
         assert save[0] == {"action": "anchor", "window": True}
     finally:
-        R.load_state = keep
+        R.load_state, R.TEMPLATES = keep
 
 
 TEAL = 0xFF364C4C                       # an active window's title bar, (54, 76, 76)
@@ -2154,6 +2157,18 @@ def test_the_window_anchor_reads_how_far_ctms_s_own_area_has_scrolled():
     assert F.window_offset(_bgra(rows(75)), w, h, 50) == 0               # title bar ends 25 under the menu bar
     assert F.window_offset(_bgra(rows(67)), w, h, 50) == -8              # its area scrolled 8 px (30/10)
     assert F.window_offset(_bgra(rows(0)), w, h, 50) == 0                # no title bar: no guess
+    red, light = 0xFFCA0202, 0xFFE1E1E1
+    live = rows(75)
+    for y in (76, 77):
+        live[y] = [light] * w                                            # the window's grey border
+    for y in range(78, 84):
+        live[y] = [red] * w                                              # its red band
+    live[84] = [TEAL] * w                                                # a button's teal edge: not the title
+    assert F.window_offset(_bgra(live), w, h, 50) == 0
+    dotted = rows(75)
+    for y in (60, 61, 62):
+        dotted[y] = [0xFFCCCCCC] * w                                     # the title bar's dotted texture
+    assert F.window_offset(_bgra(dotted), w, h, 50) == 0
 
 
 def test_find_spots_an_exact_picture_and_nothing_like_it():
@@ -2229,7 +2244,8 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
     R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
     R.TEMPLATES = os.path.join(tempfile.gettempdir(), "ctms_templates_test.json")
     with open(R.TEMPLATES, "w", encoding="utf-8") as f:
-        json.dump({"veh-rigid-40ft": {"w": 2, "h": 1, "rgb": "AAAAAAAA"}}, f)
+        json.dump({"veh-rigid-40ft": {"w": 2, "h": 1, "rgb": "AAAAAAAA"},
+                   "os-search": {"w": 2, "h": 1, "rgb": "AAAAAAAA"}}, f)
     try:
         a = types.SimpleNamespace(order="1234567-1-1", collect=None, deliver=None,
                                   comments="05/11/26 08:00 - Sam Example 07700900123 - HIAB required",
@@ -2239,7 +2255,7 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
         assert pts.index([509.0, 226.0]) < pts.index([267.0, 238.0])     # the card shut before the order opens
         assert [174.0, 318.0] in pts and [734.0, 648.0] in pts            # row 2 picked, then Delete
         found = [s for s in steps if s["action"] == "find"]
-        assert found and found[0]["click"] is True and found[0]["name"] == "veh-rigid-40ft"
+        assert [s["name"] for s in found] == ["os-search", "veh-rigid-40ft"] and all(s["click"] for s in found)
         assert len(steps) <= 120
         for bad in (dict(comments="05/11/26 - Rear steer required"), dict(add_service=["REAR STEER"])):
             b = types.SimpleNamespace(**dict(vars(a), **bad))

@@ -641,11 +641,18 @@ def order_update_items(a):
     if veh == "rigid" and ("REAR STEER" in adds or "rear steer" in (comments or "").lower()):
         raise Stop("A rigid never needs rear steer (his rule 30/10) - leave it out of the comments and services.")
     items = ["anchor",
-             # C-TMS Modules > Order Management > Orders brings up Order Summary; its Search button the card
-             "click 121,36 after=0.3", "click 135,63 after=0.3",
-             "click 245,67 react box=440,100,1230,200 timeout=25",
+             # C-TMS Modules > Order Management > Orders brings up Order Summary (or does nothing when it is up
+             # already) - so wait for ITS Search button to show, whichever, and press it for the card
+             # an empty bit of the menu bar first: the first click after CTMS comes to the front only gives
+             # its Java the focus, and it closes any menu left open (30/10)
+             "click 1000,37 after=0.4",
+             # each menu click waits for its dropdown to draw - Java's menus take longer than 0.3 s (30/10)
+             "click 121,36 react box=60,45,300,150 quiet=0.2 timeout=5",
+             "click 135,63 react box=280,50,460,170 quiet=0.2 timeout=5",
+             "click 245,67 after=0.3",
              "anchor window",              # CTMS's own area can scroll its windows (8 px, 30/10)
-             "click 392,640 after=1.2",
+             "find os-search click react box=300,600,500,680 timeout=25",
+             "anchor window",
              "waitfor 728,122 #FFFFFF tol=10 timeout=12",
              # the order by its whole customer ref: the one line comes back alone, first
              "click 626,226 after=0.4",
