@@ -86,6 +86,9 @@ from urllib.parse import urlsplit
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "ctms_remote")          # gitignored
 STATE = os.path.join(OUT, "state.json")          # the latest picture's snap id
+# Small pictures of CTMS's own words (a list item, a label), cut from its screen: a batch's find step clicks
+# wherever one appears. CTMS draws in one font, so they match pixel for pixel. UI text only - no order data.
+TEMPLATES = os.path.join(HERE, "ctms_templates.json")
 NEEDS_SNAP = ("click", "type", "select", "scroll", "hover")
 
 
@@ -589,40 +592,103 @@ def _when(text, flag):
     return d1, t1.zfill(5), d2 or d1, t2.zfill(5)
 
 
+def load_templates():
+    try:
+        with open(TEMPLATES, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def cut_template(name, box, src=None):
+    """Keep part of a picture of CTMS (the latest one, or a snap) as a template - X0,Y0,X1,Y1 in that picture's
+    own pixels. Only ever CTMS's own words: a list item, a label - never an order's data."""
+    try:
+        from PIL import Image
+    except ImportError:
+        raise Stop("Cutting a template needs Pillow on this PC (pip install pillow).")
+    if not re.fullmatch(r"[A-Za-z0-9._()-]{1,40}", name or ""):
+        raise Stop("A template's name is letters, digits and . _ ( ) - only.")
+    im = Image.open(src or os.path.join(OUT, "latest.png")).convert("RGB").crop(tuple(int(v) for v in box))
+    w, h = im.size
+    if not (0 < w <= 400 and 0 < h <= 200):
+        raise Stop("A template is a small part of the screen - at most 400 x 200.")
+    t = load_templates()
+    t[name] = {"w": w, "h": h, "rgb": base64.b64encode(im.tobytes()).decode()}
+    with open(TEMPLATES, "w", encoding="utf-8") as f:
+        json.dump(t, f, indent=1, sort_keys=True)
+    return w, h
+
+
+# Vehicle types: the template of each one's line in an order's Veh Type list, and how many presses of the list's
+# down arrow (after its thumb is dragged up the list) bring that line into view - found live 29-30/10.
+VEH = {"rigid": ("veh-rigid-40ft", 20), "artic": ("veh-artic-40ft-flatbed", 6)}
+SERVICE_ROW_Y = 295            # the Services grid's first row; each next row 23 px lower
+
+
 def order_update_items(a):
-    """Open an order by its whole customer ref and type the site's details in - collection and delivery times,
-    the Order Comments - keeping a snap of each part. Does NOT save (order-save-close does, once read)."""
-    if a.comments and "," in a.comments:
+    """Open an order by its whole customer ref and put the site's details in - collection and delivery times,
+    the Order Comments (replaced whole), services off and on, the vehicle - keeping a snap of each part. Does NOT
+    save (order-save-close does, once the snaps have been read)."""
+    comments = getattr(a, "comments", None)
+    adds = [s.strip().upper() for s in (getattr(a, "add_service", None) or [])]
+    removes = sorted({int(r) for r in (getattr(a, "remove_service_row", None) or [])}, reverse=True)
+    veh = (getattr(a, "veh", None) or "").lower()
+    if comments and "," in comments:
         raise Stop("No commas in CTMS comments - his habit (30/10): ' - ' between the parts.")
+    if veh and veh not in VEH:
+        raise Stop(f"--veh is one of {', '.join(VEH)}.")
+    if veh == "rigid" and ("REAR STEER" in adds or "rear steer" in (comments or "").lower()):
+        raise Stop("A rigid never needs rear steer (his rule 30/10) - leave it out of the comments and services.")
     items = ["anchor",
              # C-TMS Modules > Order Management > Orders brings up Order Summary; its Search button the card
              "click 121,36 after=0.3", "click 135,63 after=0.3",
              "click 245,67 react box=440,100,1230,200 timeout=25",
+             "anchor window",              # CTMS's own area can scroll its windows (8 px, 30/10)
              "click 392,640 after=1.2",
              "waitfor 728,122 #FFFFFF tol=10 timeout=12",
              # the order by its whole customer ref: the one line comes back alone, first
              "click 626,226 after=0.4",
              "click 728,122 after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {a.order}",
              "click 742,226 react box=30,228,395,250 timeout=20",
+             # the card closed BEFORE the order opens: left open it sits over the order's tabs (30/10)
+             "click 509,226 after=0.5",
              "double 267,238 react box=20,121,1250,171 timeout=20",
+             "anchor window",
              "snap order 15,120,1255,166"]
-    for flag, val, y in (("--collect", a.collect, 357), ("--deliver", a.deliver, 380)):
+    for flag, val, y in (("--collect", getattr(a, "collect", None), 357), ("--deliver", getattr(a, "deliver", None), 380)):
         if val:
             for x, v in zip((185, 250, 333, 398), _when(val, flag)):
                 items += [f"click {x},{y} after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {v}"]
     items.append("snap times 15,345,520,392")
-    if a.comments:
+    if comments:
         items += ["click 288,187 react box=20,200,1250,700 timeout=10",
-                  "click 602,657 after=0.2", "key end after=0.05", f"type {a.comments}",
+                  "click 602,657 after=0.2", "key home after=0.05", "key shift+end after=0.05", f"type {comments}",
                   "snap comments 15,615,1250,690"]
-    items += ["click 750,186 react box=20,200,1250,700 timeout=10", "snap services 60,250,1100,420"]
+    if adds or removes:
+        items.append("click 750,186 react box=20,200,1250,700 timeout=10")      # Services tab
+        for row in removes:                                                        # bottom first: rows move up
+            items += [f"click 174,{SERVICE_ROW_Y + 23 * (row - 1)} after=0.2",
+                      "click 734,648 react timeout=8"]                            # Delete
+        for code in adds:
+            items += ["click 378,648 react box=100,270,1100,600 timeout=8",        # New: a blank row, in Service Id
+                      f"type {code}", "key tab react timeout=8",                   # CTMS fills its name and value
+                      "type 1", "key tab after=0.2"]                               # Qty 1
+        items.append("snap services 90,250,1150,420")
+    if veh:
+        name, downs = VEH[veh]
+        items += ["click 57,187 react box=20,200,1250,700 timeout=10",            # Detail tab
+                  "click 1212,310 react timeout=8",                                # the Veh Type list opens
+                  "drag 1195,299 1195,228 after=0.4"]
+        items += ["click 1195,312 after=0.08"] * downs
+        items += [f"find {name} click react box=880,100,1235,330 timeout=3", "snap vehtype 900,295,1240,325"]
     return items
 
 
 def order_save_close_items(a):
     """The open order's Save, then Close: CTMS answers a save by moving the cursor (no message), and a Close
     with no 'discard your changes?' box means it saved."""
-    return ["anchor", "click 337,733 after=2.5", "snap saved 15,120,1215,420",
+    return ["anchor window", "click 337,733 react quiet=1 timeout=15", "snap saved 15,120,1215,420",
             "click 424,733 react timeout=15", "snap closed 15,100,1215,400"]
 
 
@@ -650,7 +716,7 @@ def _step_opts(item, words):
         k, eq, v = w.partition("=")
         k = k.lower()
         try:
-            if not eq and k in ("react", "not"):
+            if not eq and k in ("react", "not", "click", "double"):
                 out[k] = True
             elif eq and k in ("quiet", "after", "timeout"):
                 out[k] = float(v)
@@ -702,8 +768,16 @@ def parse_steps(items, commit=False):
                 raise Stop(f"steps: '{item}' - wait how many seconds?")
         elif verb == "paste" and rest:
             step = {"action": "paste", "text": _unescape(rest)}
-        elif verb == "anchor" and not words:
-            step = {"action": "anchor"}
+        elif verb == "anchor" and words in ([], ["window"]):
+            step = {"action": "anchor", "window": True} if words else {"action": "anchor"}
+        elif verb == "find" and words:
+            tpl = load_templates().get(words[0])
+            if not tpl:
+                raise Stop(f"steps: '{item}' - no template called '{words[0]}' (cut one with: template NAME X0,Y0,X1,Y1).")
+            step = {"action": "find", "name": words[0], "tpl": tpl["rgb"], "tw": tpl["w"], "th": tpl["h"]}
+            step.update(_step_opts(item, words[1:]))
+            if "box" not in step:
+                raise Stop(f"steps: '{item}' - find needs box=X0,Y0,X1,Y1, the part of the screen to look in.")
         elif verb in ("waitfor", "check") and len(words) >= 2 and re.fullmatch(r"#?[0-9A-Fa-f]{6}", words[1]):
             step = {"action": verb, "px": list(_xy(words[0], verb)), "color": "#" + words[1].lstrip("#").upper()}
             step.update(_step_opts(item, words[2:]))
@@ -870,8 +944,15 @@ def main(argv=None):
     p.add_argument("order", help="the whole customer ref, e.g. 1234567-1-1")
     p.add_argument("--collect", help='"DD/MM/YY HH:MM-HH:MM"')
     p.add_argument("--deliver", help='"DD/MM/YY HH:MM-HH:MM"')
-    p.add_argument("--comments", help="the Order Comments, no commas")
+    p.add_argument("--comments", help="the Order Comments (replaces what is there), no commas")
+    p.add_argument("--add-service", action="append", help='a service to add, e.g. "REAR STEER" (Qty 1)')
+    p.add_argument("--remove-service-row", action="append", type=int, help="a Services row to delete (1 = top)")
+    p.add_argument("--veh", help="the vehicle: " + " | ".join(VEH))
     sub.add_parser("order-save-close", help="the open order's Save, then Close (no discard question = saved)")
+    p = sub.add_parser("template", help="keep part of the latest picture (or a snap) as a find template")
+    p.add_argument("name")
+    p.add_argument("box", help="X0,Y0,X1,Y1 in that picture's own pixels")
+    p.add_argument("--from", dest="src", help="a snap's file instead of the latest picture")
     p = sub.add_parser("steps", help="several steps run on the work PC in one go, one picture at the end")
     p.add_argument("items", nargs="+", help='"click X,Y" "key tab" "type 977.50" "wait 1.5" ...')
     p.add_argument("--commit", action="store_true")
@@ -945,6 +1026,16 @@ def run(a):
         return send_batch(c, parse_steps(order_update_items(a)))
     if c == "order-save-close":
         return send_batch(c, parse_steps(order_save_close_items(a)))
+    if c == "template":
+        try:
+            box = [int(float(v)) for v in a.box.split(",")]
+        except ValueError:
+            box = []
+        if len(box) != 4:
+            raise Stop("template NAME X0,Y0,X1,Y1")
+        w, h = cut_template(a.name, box, a.src)
+        print(f"Kept template '{a.name}' ({w}x{h}) in {TEMPLATES}")
+        return 0
     if c == "paste":
         if a.file:
             with open(a.file, encoding="utf-8") as f:

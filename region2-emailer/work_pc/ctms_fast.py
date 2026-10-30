@@ -69,6 +69,68 @@ def anchor(bgra, w, h):
     return None
 
 
+TITLE_TEALS = ((54, 76, 76), (120, 186, 186))   # a window's title bar in CTMS, active and not
+CANON_TITLE_GAP = 25        # its last row, counted from the menu bar's last row, when CTMS's own area is not scrolled
+
+
+def window_offset(bgra, w, h, menu_bottom):
+    """How far CTMS's own window area has scrolled - its windows move together inside it, the menu bar does not
+    (30/10: the area scrolled 8 px while the page did not, and the Services tab click missed). Read off the last
+    title-bar row under the menu bar; 0 when no title bar shows there."""
+    x = 600 if w > 600 else w // 2
+    last = None
+    for y in range(max(0, menu_bottom + 1), min(h, menu_bottom + 45)):
+        c = rgb_at(bgra, w, x, y)
+        if any(near(c, t, 8) for t in TITLE_TEALS):
+            last = y
+    return 0 if last is None else (last - menu_bottom) - CANON_TITLE_GAP
+
+
+def _opaque(data):
+    """The same pixels with every alpha byte 255: a picture straight from the window and one read off a PNG can
+    disagree on alpha, never on colour."""
+    b = bytearray(data)
+    b[3::4] = b"\xff" * (len(b) // 4)
+    return bytes(b)
+
+
+def rgb_to_bgra(rgb, w, h):
+    """BGRA bytes from RGB bytes (the way a template travels: three bytes a pixel)."""
+    if len(rgb) != w * h * 3:
+        raise ValueError("The picture's size does not match its pixels.")
+    out = bytearray(w * h * 4)
+    out[0::4], out[1::4], out[2::4] = rgb[2::3], rgb[1::3], rgb[0::3]
+    out[3::4] = b"\xff" * (w * h)
+    return bytes(out)
+
+
+def find(bgra, w, h, box, tpl, tw, th):
+    """Where an exact small picture (tpl: BGRA, tw x th) sits inside box (x0, y0, x1, y1) of the window's picture -
+    the top left of the first match, or None. CTMS draws its words in one font, so a list item or a label looks
+    the same pixel for pixel every time it is drawn on the same background: an exact match is a reliable 'find
+    this text'. The search runs on the template's busiest row, so a blank first row does not match everywhere."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
+    if x1 - x0 < tw or y1 - y0 < th or len(tpl) != tw * th * 4:
+        return None
+    tpl = _opaque(tpl)
+    rows = [tpl[r * tw * 4:(r + 1) * tw * 4] for r in range(th)]
+    k = max(range(th), key=lambda r: len({rows[r][i:i + 4] for i in range(0, tw * 4, 4)}))
+    stride = w * 4
+    region = [_opaque(bgra[y * stride + x0 * 4:y * stride + x1 * 4]) for y in range(y0, y1)]
+    for ry in range(k, (y1 - y0) - (th - 1 - k)):
+        line, start = region[ry], 0
+        while True:
+            i = line.find(rows[k], start)
+            if i < 0:
+                break
+            top = ry - k
+            if i % 4 == 0 and all(region[top + r][i:i + tw * 4] == rows[r] for r in range(th)):
+                return x0 + i // 4, y0 + top
+            start = i + 1
+    return None
+
+
 def changed(a, b, w, h, box=None):
     """How many BLOCK_W x BLOCK_H blocks differ between two pictures of the same size, inside box
     (x0, y0, x1, y1) - the whole picture when box is None. Rows that match are skipped whole, so a screen

@@ -66,7 +66,8 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
 CTMS_ADMIN = ("update", "fields_setup")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
-                     "anchor", "waitfor", "check", "snap", "settle")   # ... and the batch looking between them
+                     "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
+                     "find")                                           # (find clicks only what it finds)
 # The bridge refuses anything else on its own side as well; this list only
 # stops something queuing that would just come back refused.
 CTMS_ACTIONS = CTMS_OBSERVE + CTMS_READ + CTMS_DRIVE + CTMS_ADMIN
@@ -201,7 +202,7 @@ def _ctms_args(action, data):
         name = re.sub(r"[^A-Za-z0-9 ._-]+", "-", str(data.get("name") or ""))[:48].strip(" .-")
         out["name"] = name or "screen"
     for k in ("on", "commit", "enter", "append", "paste", "double", "right", "accept", "marks", "picture",
-              "react", "not"):
+              "react", "not", "window", "click"):
         if k in data:
             out[k] = bool(data[k])
     num("ref", 1, 100000, int)
@@ -228,8 +229,14 @@ def _ctms_args(action, data):
             pass
     if re.fullmatch(r"#?[0-9A-Fa-f]{6}", str(data.get("color") or "")):
         out["color"] = "#" + str(data["color"]).lstrip("#").upper()
-    if action == "snap":
-        out["name"] = re.sub(r"[^A-Za-z0-9._-]+", "-", str(data.get("name") or ""))[:30].strip(".-") or "snap"
+    if action in ("snap", "find"):
+        out["name"] = re.sub(r"[^A-Za-z0-9._()-]+", "-", str(data.get("name") or ""))[:40].strip(".-") or action
+    if action == "find":                   # the small picture to find: RGB, base64, w x h
+        num("tw", 1, 400, int)
+        num("th", 1, 200, int)
+        tpl = str(data.get("tpl") or "")
+        if re.fullmatch(r"[A-Za-z0-9+/=]{4,320000}", tpl):
+            out["tpl"] = tpl
     for k, n in (("text", 2000), ("key", 40), ("option", 200), ("url", 2000)):
         if data.get(k) is not None:
             out[k] = str(data[k])[:n]
@@ -249,7 +256,7 @@ def _ctms_args(action, data):
         out["text"] = str(data["text"])[:6000]          # rows for the tracker, tabs and line breaks kept
     if action == "steps" and isinstance(data.get("steps"), list):
         # each step checked like a command of its own; nothing but the window's own steps goes through
-        out["steps"] = [dict(_ctms_args(s["action"], s), action=s["action"]) for s in data["steps"][:60]
+        out["steps"] = [dict(_ctms_args(s["action"], s), action=s["action"]) for s in data["steps"][:120]
                         if isinstance(s, dict) and s.get("action") in CTMS_STEP_ACTIONS]
     return out
 

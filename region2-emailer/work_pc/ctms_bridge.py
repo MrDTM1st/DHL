@@ -112,8 +112,8 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
 # where CTMS sits now, waiting for it to answer, a pixel it must show, a small picture kept for the answer.
-BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle")
-STEPS_MAX = 60
+BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle", "find")
+STEPS_MAX = 120         # a whole order update - times, comments, services, vehicle - is ~90 steps
 SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
 ADMIN = ("update", "fields_setup")
@@ -736,7 +736,8 @@ class Bridge:
                            + ("nothing changed where it should have" if not moved else "the screen never settled"))
 
     def batch_step(self, action, args):
-        """A step only a batch has: anchor, waitfor, check, snap or settle. They look; none of them touches CTMS."""
+        """A step only a batch has: anchor, waitfor, check, snap, settle or find. They look - only find touches
+        CTMS, and only when told to click what it found, with a click's rails."""
         off = self.batch.get("off", (0, 0))
         if action == "anchor":
             bgra, w, h = self._frame()
@@ -744,8 +745,46 @@ class Bridge:
             if found is None:
                 raise RuntimeError("Could not find CTMS's grey menu bar on the picture - a window is over it, or "
                                    "the page has scrolled past it.")
-            self.batch["off"] = found
-            return f"CTMS sits {found[0]:+d},{found[1]:+d} px from where the recipes were measured"
+            dx, dy = found
+            extra = ""
+            if args.get("window"):           # CTMS's own area scrolls its windows; the menu bar stays put
+                wy = ctms_fast.window_offset(bgra, w, h, ctms_fast.CANON_MENU_BOTTOM + dy)
+                dy += wy
+                extra = f" (its windows {wy:+d} of that)"
+            self.batch["off"] = (dx, dy)
+            return f"CTMS sits {dx:+d},{dy:+d} px from where the recipes were measured{extra}"
+        if action == "find":
+            name = re.sub(r"[^A-Za-z0-9._()-]+", "-", str(args.get("name") or "picture"))[:40]
+            box = args.get("box")
+            try:
+                tw, th = int(args.get("tw") or 0), int(args.get("th") or 0)
+                tpl = ctms_fast.rgb_to_bgra(base64.b64decode(str(args.get("tpl") or "")), tw, th)
+            except Exception:
+                raise RuntimeError(f"find '{name}' came without its picture - ctms_remote sends it from its templates.")
+            if not (isinstance(box, (list, tuple)) and len(box) == 4):
+                raise RuntimeError(f"find '{name}' needs the part of the screen to look in: box=X0,Y0,X1,Y1.")
+            area = ctms_fast.shift_box(box, off)
+            timeout = min(float(args.get("timeout") or 0), 60.0)
+            t0 = time.time()
+            while True:
+                bgra, w, h = self._frame()
+                hit = ctms_fast.find(bgra, w, h, area, tpl, tw, th)
+                if hit or time.time() - t0 >= timeout:
+                    break
+                time.sleep(0.05)
+            if not hit:
+                raise RuntimeError(f"'{name}' is not on the screen where it should be"
+                                   + (f" (looked for {timeout:g}s)." if timeout else "."))
+            if not (args.get("click") or args.get("double")):
+                return f"Found '{name}' at {hit[0]},{hit[1]}"
+            cx, cy = hit[0] + tw / 2, hit[1] + th / 2
+            detail = ctms_act.click(self.win["hwnd"], cx / w, cy / h, ctms_window.content_area(self.win),
+                                    double=bool(args.get("double")))
+            self.click_first = False
+            if args.get("react"):
+                return f"{detail} on '{name}' - CTMS answered in {self._react((bgra, w, h), args)}s"
+            time.sleep(min(max(float(args["after"]), 0.0), 10.0) if args.get("after") is not None else 0.4)
+            return f"{detail} on '{name}'"
         if action in ("waitfor", "check"):
             px = args.get("px")
             if not (isinstance(px, (list, tuple)) and len(px) == 2):

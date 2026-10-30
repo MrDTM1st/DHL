@@ -1453,13 +1453,13 @@ def test_paste_puts_only_claudes_text_in_and_the_clipboard_back():
 def test_the_dashboard_lets_steps_and_paste_through_only_with_the_switch_and_only_window_steps():
     fresh()
     steps = [{"action": "click", "at": [0.5, 0.5], "junk": 1}, {"action": "reload"}, {"action": "steps"},
-             {"action": "paste", "text": "a\tb\nc"}, "nonsense"] + [{"action": "key", "key": "tab"}] * 70
+             {"action": "paste", "text": "a\tb\nc"}, "nonsense"] + [{"action": "key", "key": "tab"}] * 130
     for action, body in (("steps", {"steps": steps}), ("paste", {"text": "x"})):
         assert call("/api/ctms/command", dict(body, action=action), key=AGENT)[0] == 409   # switched off
     call("/api/ctms/control", {"on": True, "minutes": 15})
     assert call("/api/ctms/command", {"action": "steps", "steps": steps}, key=AGENT)[0] == 200
     queued = S._ctms["queue"][-1]["steps"]
-    assert [s["action"] for s in queued[:3]] == ["click", "paste", "key"] and len(queued) <= 60
+    assert [s["action"] for s in queued[:3]] == ["click", "paste", "key"] and len(queued) <= 120
     assert "junk" not in queued[0] and queued[1]["text"] == "a\tb\nc"
     rows = "MAN-1\tPASS_DH\t325\tDelali\t\tY\n" * 100                            # past the 2000 a type takes
     assert call("/api/ctms/command", {"action": "paste", "text": rows}, key=AGENT)[0] == 200
@@ -2139,8 +2139,117 @@ def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
             pass
         save = R.parse_steps(R.order_save_close_items(a))
         assert [s["px"] for s in save if s["action"] == "click"] == [[337.0, 733.0], [424.0, 733.0]]
+        assert save[0] == {"action": "anchor", "window": True}
     finally:
         R.load_state = keep
+
+
+TEAL = 0xFF364C4C                       # an active window's title bar, (54, 76, 76)
+
+
+def test_the_window_anchor_reads_how_far_ctms_s_own_area_has_scrolled():
+    w, h = 320, 120
+    rows = lambda title_last: [[GREY if 21 <= y <= 50 and x >= 15 else
+                                (TEAL if 52 <= y <= title_last else 0xFFFFFFFF) for x in range(w)] for y in range(h)]
+    assert F.window_offset(_bgra(rows(75)), w, h, 50) == 0               # title bar ends 25 under the menu bar
+    assert F.window_offset(_bgra(rows(67)), w, h, 50) == -8              # its area scrolled 8 px (30/10)
+    assert F.window_offset(_bgra(rows(0)), w, h, 50) == 0                # no title bar: no guess
+
+
+def test_find_spots_an_exact_picture_and_nothing_like_it():
+    w, h = 60, 30
+    words = [[0xFFFFFFFF] * 6, [0xFF000000, 0xFFFFFFFF, 0xFF000000, 0xFF000000, 0xFFFFFFFF, 0xFF000000],
+             [0xFFFFFFFF] * 6]                                            # blank top row: the busiest row is searched
+    screen = [[0xFFFFFFFF] * w for _ in range(h)]
+    for r, row in enumerate(words):
+        screen[12 + r][30:36] = row
+    tpl = _bgra(words)
+    assert F.find(_bgra(screen), w, h, (0, 0, w, h), tpl, 6, 3) == (30, 12)
+    assert F.find(_bgra(screen), w, h, (0, 0, 30, h), tpl, 6, 3) is None   # outside the box: not looked at
+    screen[13][32] = 0xFFFFFFFF                                           # one pixel different: not it
+    assert F.find(_bgra(screen), w, h, (0, 0, w, h), tpl, 6, 3) is None
+    rgb = bytes([0, 0, 255, 255, 255, 255])
+    assert F.rgb_to_bgra(rgb, 2, 1) == bytes([255, 0, 0, 255, 255, 255, 255, 255])
+
+
+def test_find_clicks_the_middle_of_what_it_found_and_the_window_anchor_moves_points():
+    keep = (W.find_windows, W.picture, B.LOG, A.click, B.time.sleep)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    w, h = 320, 200
+    words = [[0xFF000000, 0xFFFFFFFF, 0xFF000000, 0xFF000000]] * 2
+    rows = [[GREY if y <= 29 and x >= 15 else (TEAL if 31 <= y <= 46 else 0xFFFFFFFF) for x in range(w)]
+            for y in range(h)]                       # page scrolled 21 up, CTMS's area 8 more
+    for r, row in enumerate(words):
+        rows[100 + r][200:204] = row
+    W.picture = lambda win: (_bgra(rows), w, h, "from the window")
+    clicks = []
+    A.click = lambda hwnd, fx, fy, area, double=False, right=False: clicks.append((fx * w, fy * h)) or "Clicked"
+    B.time.sleep = lambda s: None
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    tpl = base64.b64encode(b"".join(bytes([(p >> 16) & 255, (p >> 8) & 255, p & 255]) for row in words for p in row))
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        b.handle({"id": 1, "action": "steps", "steps": [
+            {"action": "anchor", "window": True},
+            {"action": "find", "name": "word", "tpl": tpl.decode(), "tw": 4, "th": 2, "box": [150, 120, 300, 140],
+             "click": True},
+            {"action": "click", "px": [100, 129]}]})
+        body = desk.sent[-1][1]
+        assert body["ok"], body["detail"]
+        assert b.batch["off"] == (0, -29)                          # -21 page, -8 its own area
+        assert clicks[0] == (202.0, 101.0) and clicks[1] == (100.0, 100.0)
+        b.handle({"id": 2, "action": "steps", "steps": [
+            {"action": "find", "name": "word", "tpl": tpl.decode(), "tw": 4, "th": 2, "box": [0, 0, 100, 50],
+             "click": True}]})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "not on the screen" in body["detail"] and len(clicks) == 2
+    finally:
+        W.find_windows, W.picture, B.LOG, A.click, B.time.sleep = keep
+
+
+def test_the_dashboard_passes_find_and_the_window_anchor():
+    fresh()
+    call("/api/ctms/control", {"on": True, "minutes": 15})
+    steps = [{"action": "anchor", "window": True},
+             {"action": "find", "name": "veh rigid", "tpl": "AAAA", "tw": 4, "th": 2, "box": [1, 2, 3, 4],
+              "click": True, "react": True},
+             {"action": "find", "name": "x", "tpl": "<script>", "tw": 999}]
+    assert call("/api/ctms/command", {"action": "steps", "steps": steps}, key=AGENT)[0] == 200
+    q = S._ctms["queue"][-1]["steps"]
+    assert q[0] == {"action": "anchor", "window": True}
+    assert q[1]["tpl"] == "AAAA" and q[1]["tw"] == 4 and q[1]["click"] is True and q[1]["name"] == "veh-rigid"
+    assert "tpl" not in q[2] and "tw" not in q[2]                      # not a picture, not a size
+
+
+def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
+    import types
+    keep = (R.load_state, R.TEMPLATES)
+    R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
+    R.TEMPLATES = os.path.join(tempfile.gettempdir(), "ctms_templates_test.json")
+    with open(R.TEMPLATES, "w", encoding="utf-8") as f:
+        json.dump({"veh-rigid-40ft": {"w": 2, "h": 1, "rgb": "AAAAAAAA"}}, f)
+    try:
+        a = types.SimpleNamespace(order="1234567-1-1", collect=None, deliver=None,
+                                  comments="05/11/26 08:00 - Sam Example 07700900123 - HIAB required",
+                                  add_service=None, remove_service_row=[2], veh="rigid")
+        steps = R.parse_steps(R.order_update_items(a))
+        pts = [s.get("px") for s in steps]
+        assert pts.index([509.0, 226.0]) < pts.index([267.0, 238.0])     # the card shut before the order opens
+        assert [174.0, 318.0] in pts and [734.0, 648.0] in pts            # row 2 picked, then Delete
+        found = [s for s in steps if s["action"] == "find"]
+        assert found and found[0]["click"] is True and found[0]["name"] == "veh-rigid-40ft"
+        assert len(steps) <= 120
+        for bad in (dict(comments="05/11/26 - Rear steer required"), dict(add_service=["REAR STEER"])):
+            b = types.SimpleNamespace(**dict(vars(a), **bad))
+            try:
+                R.order_update_items(b)
+                assert False, bad
+            except R.Stop as e:
+                assert "rigid" in str(e).lower()
+    finally:
+        R.load_state, R.TEMPLATES = keep
 
 
 if __name__ == "__main__":
