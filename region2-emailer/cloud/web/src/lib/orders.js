@@ -9,6 +9,7 @@
 // index). Re-exported here so existing importers don't have to change - two
 // copies is exactly how cache keys drift apart and pins go missing.
 import { pcNorm } from './geo.js';
+import { namedPhones, phonesIn } from './phone.js';
 export { pcNorm };
 
 // Every collection point on the record, one shape regardless of age: newer
@@ -110,6 +111,23 @@ export function detVal(k, v) {
   if (k === 'time') return v.earliest ? (v.latest ? v.earliest + '-' + v.latest : v.earliest) : '';
   if (k === 'contact') return [v.name, v.phone].filter(Boolean).join(' ');
   return v.value || '';
+}
+
+// Who to ring at the site, and on which numbers: { name, calls: [{number, name}], from }.
+// The site's REPLY wins - that is the person who answered, often with a better
+// number or a second contact. Before a reply, the contact on the order itself
+// (site_phone / site_contact, which the home PC adds from the extract). Ad hocs
+// carry the request form's contact in details.contact, the same as a reply.
+export function siteContactOf(r) {
+  const c = (r && r.details && r.details.contact) || {};
+  let calls = namedPhones([c.raw, c.phone].filter(Boolean).join(' / '));
+  let from = 'reply';
+  if (calls.length && c.name) calls[0] = { ...calls[0], name: c.name };
+  if (!calls.length) {
+    calls = phonesIn(r && r.site_phone).map((number) => ({ number, name: (r && r.site_contact) || '' }));
+    from = calls.length ? 'order' : '';
+  }
+  return { name: c.name || (r && r.site_contact) || '', calls, from };
 }
 
 // CTMS vehicle codes, decoded. Delali (24/07): "NR_ART_40_CT means artic

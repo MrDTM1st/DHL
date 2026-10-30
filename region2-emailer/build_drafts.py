@@ -14,6 +14,7 @@ Usage:
 import sys, os, json, re, html as _html
 from collections import defaultdict, OrderedDict
 import postcodes
+import site_contacts
 import tracker
 import waitlist
 
@@ -1007,6 +1008,8 @@ def load_rows(path):
         return None
     C = dict(
         order=ci("customer order no"), dpc=ci("d postcode"), dcon=ci("d contact name"),
+        # the site's number, for the dashboard's Call button (the contact cell often repeats it)
+        dphone=ci("ship to contact phone", "d telephone no"),
         prod=ci("product / service code"), prod_code=ci("product / description"),
         qty=ci("product qty"), date=ci("delivery date"),
         daddr=ci("d address1", "d address 1"),
@@ -1186,6 +1189,14 @@ def build_emails_multi(files):
                          if C['prod_code'] is not None and r[C['prod_code']]})
         sources = " + ".join(sorted({s for _, _, s in bundle if s}))
         colls = collections_of(bundle)
+        scon = sphone = ""
+        for r, C, _ in bundle:   # the first line that gives a number
+            n, p = site_contacts.contact_of(r[C["dcon"]],
+                                            r[C["dphone"]] if C.get("dphone") is not None else "")
+            scon = scon or n
+            if p:
+                scon, sphone = n or scon, p
+                break
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, orders=orders,
                            po=dict(pos),
@@ -1195,6 +1206,7 @@ def build_emails_multi(files):
                            loose_ballast=any(is_loose_ballast(d) for _, d in items),
                            site=clean(r0[C0['daddr']]), worksite=worksite_of(wsite),
                            postcode=dpc, source=sources,
+                           site_contact=scon, site_phone=sphone,
                            collections=colls,
                            collection_site=colls[0]["site"] if colls else "",
                            collection_pc=colls[0]["pc"] if colls else ""))
@@ -1332,6 +1344,7 @@ def main():
 
     total_rows = sum(len(rows) for rows, _, _ in files)
     emails, collection_emails, rails, stoneblowers, region = build_emails_multi(files)
+    site_contacts.remember(emails)            # each order's site number -> the dashboard's Call button
     cons = consolidation_candidates(emails)   # same-day, same/near area -> share a vehicle?
     coll_kept = list(collection_emails)       # default (passed-file): send them all
     skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []

@@ -188,8 +188,12 @@ export default function App() {
     setTimeout(refreshTracker, 2500);
   }, [onCommand, refreshTracker]);
 
-  const onCall = useCallback((h) => {
-    pushToast('Calling ' + h.name, (h.phone || '') + ' — opening in your dialler…');
+  // what a Call button did: dialled (a phone), or copied the number (a computer)
+  const onCall = useCallback(({ who, number, how }) => {
+    if (how === 'dial') pushToast('Calling ' + (who || number), number, 'go');
+    else if (how === 'copied') pushToast('Number copied', (who ? who + ' · ' : '') + number
+      + ' — paste it into your phone or Teams.', 'go');
+    else pushToast(who || 'Phone number', number);
   }, [pushToast]);
 
   // download an ad hoc's upload CSV straight from its brief
@@ -271,11 +275,11 @@ export default function App() {
         )}
         {page === 'map' && (
           <MapPage records={mapRecords} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
-            pickedHaulier={pickedHaulier} status={status} />
+            pickedHaulier={pickedHaulier} status={status} onCall={onCall} />
         )}
         {page === 'tracker' && (
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn}
-            onBookedCall={onBookedCall} autoChase={!!(panel && panel.auto_chase)} />
+            onBookedCall={onBookedCall} onCall={onCall} autoChase={!!(panel && panel.auto_chase)} />
         )}
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />

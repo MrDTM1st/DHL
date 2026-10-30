@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { I } from '../icons.jsx';
 import { RegionBadge } from '../components/RegionBadge.jsx';
+import CallButton from '../components/CallButton.jsx';
 import {
   isUrgent, within3, ordLabel, statusLabel, isAmberStatus, dueText, dateShort,
-  stageOf, DFIELDS, detVal,
+  stageOf, DFIELDS, detVal, siteContactOf,
 } from '../lib/orders.js';
 
 // Pipeline: Drafted -> Emailed -> Reply -> Sent off, coloured from the real
@@ -57,7 +58,7 @@ function DetailChips({ r, onLearn }) {
   );
 }
 
-export default function TrackerPage({ records, onSelect, onCommand, onLearn, onBookedCall, autoChase }) {
+export default function TrackerPage({ records, onSelect, onCommand, onLearn, onBookedCall, onCall, autoChase }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
 
@@ -128,34 +129,41 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
         <div className="emptybox">{I.search}<div className="big">Nothing matches</div><div>Try a different filter or search.</div></div>
       )}
 
-      {list.map((r) => (
-        <div className={'tkitem' + (isUrgent(r) ? ' urgent' : '')} key={r.id} onClick={() => onSelect(r)}>
-          <div className="tkmeta">
-            <div className="ord">
-              {ordLabel(r)}
-              {r.materials && <span className="mat">· {r.materials}</span>}
-              {r.loose_ballast && <span className="lbadge">LOOSE BALLAST</span>}
-              {within3(r.delivery_date) && <span className="ubadge">≤3 DAYS</span>}
-              {(r.chases || 0) > 0 && <span className="chases">{r.chases} chase{r.chases > 1 ? 's' : ''}</span>}
+      {list.map((r) => {
+        const site = siteContactOf(r).calls[0];
+        return (
+          <div className={'tkitem' + (isUrgent(r) ? ' urgent' : '')} key={r.id} onClick={() => onSelect(r)}>
+            <div className="tkmeta">
+              <div className="ord">
+                {ordLabel(r)}
+                {r.materials && <span className="mat">· {r.materials}</span>}
+                {r.loose_ballast && <span className="lbadge">LOOSE BALLAST</span>}
+                {within3(r.delivery_date) && <span className="ubadge">≤3 DAYS</span>}
+                {(r.chases || 0) > 0 && <span className="chases">{r.chases} chase{r.chases > 1 ? 's' : ''}</span>}
+              </div>
+              <div className="sub">
+                {[r.worksite || r.site, r.postcode].filter(Boolean).join(', ')}
+                <RegionBadge pc={r.postcode} />
+                {r.to ? ' · ' + r.to : ''}
+              </div>
             </div>
-            <div className="sub">
-              {[r.worksite || r.site, r.postcode].filter(Boolean).join(', ')}
-              <RegionBadge pc={r.postcode} />
-              {r.to ? ' · ' + r.to : ''}
+            <div className="tkright">
+              <div className={'tkstatus' + (isAmberStatus(r) ? ' amber' : '')}>{statusLabel(r)}</div>
+              <div className={'tkdue' + (isUrgent(r) ? ' red' : '')}>{dueText(r)}{r.delivery_date ? ' · ' + dateShort(r.delivery_date) : ''}</div>
+            </div>
+            <div className="pipewrap"><Pipeline r={r} /></div>
+            <DetailChips r={r} onLearn={onLearn} />
+            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+              <button className="btn mini" onClick={(e) => { e.stopPropagation(); onSelect(r); }}>View brief</button>
+              <button className="btn mini" onClick={(e) => { e.stopPropagation(); onBookedCall(r); }}>Booked via call</button>
+              {site && (
+                <CallButton number={site.number} who={site.name || r.worksite || r.site} onCall={onCall}
+                  label={'Call ' + ((site.name || '').split(' ')[0] || 'site')} />
+              )}
             </div>
           </div>
-          <div className="tkright">
-            <div className={'tkstatus' + (isAmberStatus(r) ? ' amber' : '')}>{statusLabel(r)}</div>
-            <div className={'tkdue' + (isUrgent(r) ? ' red' : '')}>{dueText(r)}{r.delivery_date ? ' · ' + dateShort(r.delivery_date) : ''}</div>
-          </div>
-          <div className="pipewrap"><Pipeline r={r} /></div>
-          <DetailChips r={r} onLearn={onLearn} />
-          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn mini" onClick={(e) => { e.stopPropagation(); onSelect(r); }}>View brief</button>
-            <button className="btn mini" onClick={(e) => { e.stopPropagation(); onBookedCall(r); }}>Booked via call</button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div></div>
   );
 }

@@ -501,7 +501,7 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
   h1.h1{ font-size:22px; }
   .sitegrid{ grid-template-columns:1fr; }
 }
-@media (max-width:520px){ .metrics{ grid-template-columns:1fr 1fr; } .uploadpanel{ width:calc(100% - 24px); left:12px; right:12px; } }
+@media (max-width:520px){ .metrics{ grid-template-columns:1fr 1fr; } }
 
 /* ---- map order search: pin an order you emailed by hand ---- */
 /* In normal flow inside the orders card - NOT absolutely positioned over the
@@ -681,4 +681,93 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 @media (max-width:680px){
   .navlink .navbadge{ display:flex; position:absolute; top:1px; right:1px; margin:0; min-width:15px; height:15px; font-size:9.5px; }
   .navlink .navdot{ display:block; position:absolute; top:6px; right:6px; margin:0; width:6px; height:6px; }
+}
+
+/* ---------- one-tap Call buttons (CallButton.jsx) ---------- */
+/* A Call button is a tel: LINK now (a phone dials it), so it must not pick up
+   the red link colour - it should look like the button it always was. */
+a.callbtn{ color:var(--ink2); line-height:1.2; }
+a.callbtn:hover{ color:var(--red); }
+.callbtn.icon{ width:32px; height:32px; padding:0; justify-content:center; flex:none; border-radius:9px; }
+.callbtn.big{ background:var(--go); border-color:var(--go); color:#fff; padding:9px 14px; font-size:13px;
+      border-radius:10px; justify-content:center; flex:none; }
+.callbtn.big:hover{ color:#fff; border-color:var(--go); filter:brightness(1.06); }
+.drawer-acts{ display:flex; gap:8px; margin-top:12px; }
+.drawer-acts .drawer-act{ flex:1; min-width:0; margin:0; }
+.sitecalls{ display:flex; flex-direction:column; gap:6px; }
+.sc-line{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.sc-from{ font-size:11px; font-weight:500; color:var(--muted); }
+
+/* the orders card on the map: top-left on a computer, a bottom sheet on a phone */
+.mapwrap .orderspanel{ left:16px; right:auto; }
+.orderspanel .parsed{ max-height:62vh; padding:6px 8px 8px; }
+/* phone-only pieces: the sheet's handle, the folded Layers button, the key
+   inside it, and the brief's full-screen pull */
+.sheet-toggle, .lt-btn, .legend-inline, .drawer-grab{ display:none; }
+
+/* ---------- phones ---------- */
+@media (max-width:680px){
+  /* The map: nothing parked over it but a Layers button and the orders bar.
+     The legend card and the 322px orders card used to cover two thirds of it. */
+  .legend{ display:none; }
+  .layertoggle{ top:10px; right:10px; padding:0; border-radius:99px; }
+  .layertoggle.open{ border-radius:14px; padding:0 14px 12px; width:220px; max-height:calc(100% - 96px); overflow:auto; }
+  .layertoggle:not(.open) .lt-body{ display:none; }
+  .lt-btn{ display:block; border:0; background:transparent; font:inherit; font-size:12.5px; font-weight:700;
+        color:var(--ink2); padding:10px 15px; cursor:pointer; }
+  .layertoggle.open .lt-btn{ width:calc(100% + 28px); margin:0 -14px; text-align:right; color:var(--red); }
+  .legend-inline{ display:block; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+  .mapwrap .leaflet-bottom.leaflet-left{ margin-left:10px; margin-bottom:calc(62px + env(safe-area-inset-bottom)); }
+  .mapwrap.withbrief .leaflet-bottom.leaflet-left{ margin-bottom:6px; }   /* no orders bar under a brief */
+
+  .mapwrap .orderspanel{ top:auto; left:0; right:0; bottom:0; width:100%; max-width:none; max-height:78%;
+        border-radius:18px 18px 0 0; border-bottom:0; display:flex; flex-direction:column;
+        padding-bottom:env(safe-area-inset-bottom); }
+  .sheet-toggle{ display:flex; align-items:center; gap:10px; width:100%; flex:none; border:0; background:transparent;
+        padding:14px 16px 12px; position:relative; cursor:pointer; font:inherit; font-size:14px; color:var(--ink); text-align:left; }
+  .sheet-toggle .grab{ position:absolute; top:5px; left:50%; transform:translateX(-50%); width:38px; height:4px;
+        border-radius:99px; background:var(--line2); }
+  .sheet-toggle .st-t{ display:flex; align-items:center; gap:8px; flex:1; min-width:0; }
+  .sheet-toggle .st-u{ font-size:11px; font-weight:700; color:#fff; background:var(--red); border-radius:99px; padding:2px 8px; }
+  .sheet-toggle .st-c{ font-size:12.5px; font-weight:700; color:var(--red); }
+  .orderspanel:not(.open) .op-body{ display:none; }
+  .orderspanel .op-body{ display:flex; flex-direction:column; flex:1; min-height:0; border-top:1px solid var(--line); }
+  .orderspanel .up-head{ padding:10px 16px; }
+  .orderspanel .up-head .t{ display:none; }   /* the sheet's own bar already says it */
+  .orderspanel .parsed{ max-height:none; flex:1; min-height:0; }
+
+  /* The brief: a sheet under the map instead of a full-screen cover, so the run
+     stays in view above it. "Full brief" pulls it up when there's reading to do. */
+  .mapwrap.withbrief .leafletmap{ height:42%; }
+  .drawer{ top:42%; width:100%; border-radius:18px 18px 0 0; animation:sheetup .3s cubic-bezier(.2,.9,.3,1) both; }
+  .drawer.full{ top:0; border-radius:0; }
+  .drawer-grab{ display:flex; flex-direction:column; align-items:center; gap:4px; width:100%; border:0; background:transparent;
+        padding:0 0 6px; font:inherit; font-size:11px; font-weight:700; color:var(--muted); cursor:pointer; }
+  .drawer-grab span{ width:38px; height:4px; border-radius:99px; background:var(--line2); }
+  .drawer-h{ padding:8px 16px 12px; }
+  .drawer-h h2{ font-size:17px; }
+  .drawer-b{ padding:14px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .kv{ grid-template-columns:92px minmax(0,1fr); }
+  .kv dd{ overflow-wrap:anywhere; }
+  /* a haulier's Call/Email buttons go in a row underneath, or the name and
+     distance get squeezed into a word per line beside them */
+  .hrec{ flex-wrap:wrap; padding:10px 12px; gap:8px 10px; }
+  .hrec .hm{ width:48px; font-size:12px; }
+  .hbtns{ flex-direction:row; width:100%; }
+  .hbtns > *{ flex:1; justify-content:center; }
+
+  /* toasts drop from the top - the bottom of the screen is where the sheets are */
+  .toasts{ top:calc(var(--topbar-h) + 8px); bottom:auto; left:12px; right:12px; width:auto; max-width:none; }
+}
+@keyframes sheetup{ from{ transform:translateY(100%); } to{ transform:none; } }
+
+/* Touch screens: fingers, not a mouse pointer. */
+@media (pointer:coarse){
+  /* pinch to zoom - the +/- buttons only take up map */
+  .mapwrap .leaflet-control-zoom{ display:none; }
+  .callbtn{ min-height:38px; padding:8px 12px; font-size:13px; }
+  .callbtn.icon{ width:38px; height:38px; min-height:0; padding:0; }
+  /* an iPhone zooms the whole page into any box with text under 16px, and
+     leaves it zoomed - so every box gets 16px on a touch screen */
+  input, select, textarea{ font-size:16px !important; }
 }

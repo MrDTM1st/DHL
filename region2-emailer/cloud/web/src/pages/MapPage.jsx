@@ -46,6 +46,7 @@ function FitBounds({ points, fitToken }) {
     if (!count) return;
     if (done.current && !fitToken) return;   // already framed; leave the view alone
     done.current = true;
+    map.invalidateSize({ animate: false });  // closing a brief on a phone has just regrown the map
     if (count === 1) { map.setView(points[0], 11); return; }
     map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 12 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -77,6 +78,7 @@ function FlyToPoint({ id, pos }) {
     // and blank the whole app for any order with no collection on record.
     map.whenReady(() => {
       if (!live) return;
+      map.invalidateSize({ animate: false });   // see FlyToRoute
       try { map.flyTo(pos, 11, { duration: 0.9 }); }
       catch { try { map.setView(pos, 11); } catch { /* map not ready - skip the glide */ } }
     });
@@ -101,6 +103,10 @@ function FlyToRoute({ id, line, from, to }) {
     let live = true;
     map.whenReady(() => {   // same pre-layout guard as FlyToPoint
       if (!live) return;
+      // The brief opening has just resized the map (narrower on a computer, the
+      // top part of the screen on a phone). Measure it NOW, or the run is framed
+      // for the old size and half of it lands under the brief.
+      map.invalidateSize({ animate: false });
       const b = L.latLngBounds(pts);
       try { map.flyToBounds(b, { padding: [70, 70], maxZoom: 11, duration: 0.9 }); }
       catch { try { map.fitBounds(b, { padding: [70, 70], maxZoom: 11 }); } catch { /* not ready */ } }
@@ -111,9 +117,22 @@ function FlyToRoute({ id, line, from, to }) {
   return null;
 }
 
-export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier, status }) {
+// The overview's key. On a computer it is its own card in the corner; on a
+// phone it folds into the Layers panel, so the map is not hidden behind cards.
+const NETWORK_KEY = (
+  <>
+    <div className="legrow"><span className="ld" style={{ background: 'var(--red)' }} />Tracked delivery</div>
+    <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Urgent · ≤3 days</div>
+    <div className="legrow"><span className="ld sq" style={{ background: 'var(--depot)' }} />Collection depot</div>
+    <div className="legrow"><span className="ld" style={{ background: 'var(--yellow)', border: '1.5px solid #8a6d00' }} />Haulier base</div>
+  </>
+);
+
+export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier, status, onCall }) {
   const [tick, setTick] = useState(0);
   const [layers, setLayers] = useState({ orders: true, depots: true, hauliers: true, routes: true });
+  const [toolsOpen, setToolsOpen] = useState(false);   // the phone's folded Layers panel
+  const [sheetOpen, setSheetOpen] = useState(false);   // the phone's orders sheet
   const [routes, setRoutes] = useState({});
   const [fitToken, setFitToken] = useState(0);   // bumped only by the Fit-all button
   const fetching = useRef(new Set());
@@ -338,16 +357,25 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
       </MapContainer>
 
       {!focused && (
-        <div className="layertoggle">
-          <div className="lt">Layers</div>
-          <button className="fitbtn" onClick={() => setFitToken((n) => n + 1)}
-            title="Re-frame the map around everything">Fit all</button>
-          {[['orders', 'Delivery stops'], ['depots', 'Collection depots'], ['hauliers', 'Haulier bases'], ['routes', 'Routes']].map(([k, label]) => (
-            <label key={k} className="lyrow">
-              <input type="checkbox" checked={layers[k]} onChange={() => toggle(k)} />
-              {label}
-            </label>
-          ))}
+        <div className={'layertoggle' + (toolsOpen ? ' open' : '')}>
+          <button className="lt-btn" onClick={() => setToolsOpen((o) => !o)} aria-expanded={toolsOpen}>
+            {toolsOpen ? 'Close' : 'Layers & key'}
+          </button>
+          <div className="lt-body">
+            <div className="lt">Layers</div>
+            <button className="fitbtn" onClick={() => setFitToken((n) => n + 1)}
+              title="Re-frame the map around everything">Fit all</button>
+            {[['orders', 'Delivery stops'], ['depots', 'Collection depots'], ['hauliers', 'Haulier bases'], ['routes', 'Routes']].map(([k, label]) => (
+              <label key={k} className="lyrow">
+                <input type="checkbox" checked={layers[k]} onChange={() => toggle(k)} />
+                {label}
+              </label>
+            ))}
+            <div className="legend-inline">
+              <div className="lt">Key</div>
+              {NETWORK_KEY}
+            </div>
+          </div>
         </div>
       )}
 
@@ -363,17 +391,14 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
         ) : (
           <>
             <div className="lt">Region 2 network</div>
-            <div className="legrow"><span className="ld" style={{ background: 'var(--red)' }} />Tracked delivery</div>
-            <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Urgent · ≤3 days</div>
-            <div className="legrow"><span className="ld sq" style={{ background: 'var(--depot)' }} />Collection depot</div>
-            <div className="legrow"><span className="ld" style={{ background: 'var(--yellow)', border: '1.5px solid #8a6d00' }} />Haulier base</div>
+            {NETWORK_KEY}
           </>
         )}
       </div>
 
       {!focused && (
         <OrdersPanel records={records} hauliers={hauliers} onSelect={onSelect} selectedId={selectedId}
-          status={status} />
+          status={status} onCall={onCall} open={sheetOpen} onToggle={() => setSheetOpen((o) => !o)} />
       )}
     </div>
   );

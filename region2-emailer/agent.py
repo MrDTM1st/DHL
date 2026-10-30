@@ -78,7 +78,13 @@ def heartbeat():
 def push_tracker():
     try:
         with open(os.path.join(HERE, "tracker.json"), encoding="utf-8") as f:
-            _req("/api/tracker", json.load(f))
+            data = json.load(f)
+        try:   # each order's site number, for the map's Call button - the push goes ahead without it
+            import site_contacts
+            site_contacts.enrich(data)
+        except Exception:
+            pass
+        _req("/api/tracker", data)
     except Exception:
         pass
 

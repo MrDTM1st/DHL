@@ -1,12 +1,23 @@
 import { useState, useEffect } from 'react';
-import { I } from '../icons.jsx';
 import {
   ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
-  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor,
+  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, siteContactOf,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
+import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
 import { RegionBadge } from './RegionBadge.jsx';
+import CallButton from './CallButton.jsx';
+
+// A haulier's Call buttons - the contact sheet sometimes holds two numbers in
+// the one cell ("01632 960102 / 07700 900102"), and both are worth a button.
+function HaulierCalls({ h, onCall }) {
+  const calls = namedPhones(h.phone).slice(0, 2);
+  const labels = callLabels(calls);
+  return calls.map((c, i) => (
+    <CallButton key={c.number} number={c.number} who={h.name} onCall={onCall} label={labels[i]} />
+  ));
+}
 
 // Full order brief: the job, the run distance, delivery details, and who to
 // ring — hauliers ranked by fit + distance from the collection end, exactly as
@@ -147,6 +158,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const [draft, setDraft] = useState({ to: '', cc: '', subject: '', message: '', what: '' });
   const [kind, setKind] = useState('');        // 'haulier' | 'team' - only haulier edits are kept
   const [remembered, setRemembered] = useState(false);
+  // On a phone the brief is a sheet under the map; this pulls it up to full height.
+  const [full, setFull] = useState(false);
+  useEffect(() => { setFull(false); }, [r.id]);
 
   const defaultSubject = () => `${(r.orders || []).join(' / ')} Delivery`;
 
@@ -302,6 +316,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const team = (canEscalate && mtype && matTeams) ? matTeams[mtype] : null;
   const teamChoices = canEscalate && !team
     ? Object.values(matTeams || {}).filter((t) => t && t.name && t.email) : [];
+  // the site's number(s) - from their reply, else from the order itself
+  const site = siteContactOf(r);
+  const siteLabels = callLabels(site.calls);
+  const siteWho = (c) => c.name || site.name || r.worksite || r.site || 'the site';
 
   // the inline cover-request compose, shared by the haulier rows and the
   // Parcel Pass card - one open compose at a time, keyed by name
@@ -371,7 +389,17 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
         <RegionBadge pc={r.postcode} />
       </span>
     )],
-    ['Site contact', v('contact')],
+    ['Site contact', site.calls.length ? (
+      <span className="sitecalls">
+        {site.calls.map((c, i) => (
+          <span className="sc-line" key={c.number}>
+            <span>{[c.name || (i === 0 ? site.name : ''), fmtPhone(c.number)].filter(Boolean).join(' · ')}</span>
+            <CallButton number={c.number} who={siteWho(c)} onCall={onCall} label={siteLabels[i]} />
+          </span>
+        ))}
+        {site.from === 'order' && <span className="sc-from">from the order — no reply yet</span>}
+      </span>
+    ) : v('contact')],
     ['Assigned to', r.to],
     ['Offloading', v('offloading')],
     ['Artic access', v('artic_access')],
@@ -385,8 +413,12 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
     <>
       {/* No scrim: the brief sits BESIDE the map, not over a dimmed one - the
           whole point is reading the job while looking at where it is. */}
-      <div className="drawer">
+      <div className={'drawer' + (full ? ' full' : '')}>
         <div className="drawer-h">
+          <button className="drawer-grab" onClick={() => setFull((f) => !f)}
+            aria-label={full ? 'Show the map again' : 'Pull the brief up to full screen'}>
+            <span />{full ? 'Show map' : 'Full brief'}
+          </button>
           <button className="x" onClick={onClose}>×</button>
           <h2>{ordLabel(r)}</h2>
           <div className="ds">
@@ -398,16 +430,23 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               was the last thing in a long scrolling body - past the haulier
               list, so it meant scrolling to the bottom every single time. It
               belongs where you can always reach it. */}
-          {onBookedCall && !oneOff && (
-            <button className="btn block drawer-act" onClick={() => onBookedCall(r)}>
-              Mark booked over the phone
-            </button>
-          )}
-          {onAdhocBooked && oneOff && (
-            <button className="btn block drawer-act" onClick={() => onAdhocBooked(r)}>
-              Booked — remove from the map
-            </button>
-          )}
+          {/* ringing the site sits beside it - one tap from opening the brief */}
+          <div className="drawer-acts">
+            {site.calls[0] && (
+              <CallButton big number={site.calls[0].number} who={siteWho(site.calls[0])} onCall={onCall}
+                label={'Call ' + (siteWho(site.calls[0]).split(' ')[0] || 'site')} />
+            )}
+            {onBookedCall && !oneOff && (
+              <button className="btn drawer-act" onClick={() => onBookedCall(r)}>
+                Mark booked over the phone
+              </button>
+            )}
+            {onAdhocBooked && oneOff && (
+              <button className="btn drawer-act" onClick={() => onAdhocBooked(r)}>
+                Booked — remove from the map
+              </button>
+            )}
+          </div>
         </div>
         <div className="drawer-b">
           <dl className="kv">
@@ -485,7 +524,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               {parcelH && (
                 <div className="ppbtns">
                   <span className="mono">{parcelH.phone}</span>
-                  <button className="callbtn" onClick={() => onCall(parcelH)}>{I.phone} Call</button>
+                  <HaulierCalls h={parcelH} onCall={onCall} />
                   {parcelH.email && (
                     <button className="callbtn mail"
                       onClick={() => (composing === parcelH.name ? setComposing(null) : startCompose(parcelH))}>
@@ -547,7 +586,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
                 )}
               </div>
               <div className="hbtns" onClick={(e) => e.stopPropagation()}>
-                <button className="callbtn" onClick={() => onCall(h)}>{I.phone} Call</button>
+                <HaulierCalls h={h} onCall={onCall} />
                 {h.email && (
                   <button className="callbtn mail"
                     onClick={() => (composing === h.name ? setComposing(null) : startCompose(h))}>
