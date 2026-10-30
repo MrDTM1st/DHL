@@ -653,7 +653,8 @@ def order_update_items(a):
              "anchor window",              # CTMS's own area can scroll its windows (8 px, 30/10)
              "find os-search click react box=300,600,500,680 timeout=25",
              "anchor window",
-             "waitfor 728,122 #FFFFFF tol=10 timeout=12",
+             # the card's Customer Ref box: white, or light cyan (#DAFFFF) when it has the focus (30/10)
+             "waitfor 728,122 #FFFFFF tol=40 timeout=12",
              # the order by its whole customer ref: the one line comes back alone, first
              "click 626,226 after=0.4",
              "click 728,122 after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {a.order}",
