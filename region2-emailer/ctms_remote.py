@@ -646,6 +646,10 @@ def order_update_items(a, card_open=False):
         raise Stop("A rigid never needs rear steer (his rule 30/10) - leave it out of the comments and services.")
     if getattr(a, "ballast", False) and "PTS" in adds:
         raise Stop("A ballast order never gets PTS, whatever the site said (his rule 30/10) - leave it off.")
+    if any(s.startswith("STOR") for s in adds) and getattr(a, "collect", None) and getattr(a, "deliver", None) \
+            and _when(a.collect, "--collect")[0] == _when(a.deliver, "--deliver")[0]:
+        raise Stop("Storage is for a load collected before its delivery day - this one is collected and delivered "
+                   "the same day (the AP06-B clean up sent eleven of those back). Leave it off.")
     items = ["anchor",
              # an empty bit of the menu bar first: the first click after CTMS comes to the front only gives
              # its Java the focus, and it closes any menu left open (30/10)

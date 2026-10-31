@@ -2305,6 +2305,15 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
             assert False
         except R.Stop as e:
             assert "ballast" in str(e).lower()
+        same = dict(vars(a), veh=None, add_service=["STORAGE"], comments=None)
+        try:                                                              # same day: no storage
+            R.order_update_items(types.SimpleNamespace(**dict(same, collect="05/11/26 08:00-10:00",
+                                                                deliver="05/11/26 12:00-14:00")))
+            assert False
+        except R.Stop as e:
+            assert "same day" in str(e)
+        R.order_update_items(types.SimpleNamespace(**dict(same, collect="04/11/26 08:00-16:00",
+                                                          deliver="05/11/26 08:00-12:00")))   # the day before: fine
     finally:
         R.load_state, R.TEMPLATES = keep
 
