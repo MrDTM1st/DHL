@@ -21,6 +21,8 @@ itself, at once, into Downloads.
   - then that tab is closed, by its own close button, and CTMS's tab brought
     back: left open, CTMS's window shows its blank page and the bridge cannot
     see CTMS ("you need to remove this tab off of Edge", 31/10)
+  - a Short Rail Report goes on to the home PC, which builds the rail plan
+    from it as a PREVIEW - sending stays his Build & send
 
 Standard library only, like everything else in work_pc\\.
 """
@@ -34,6 +36,8 @@ import pip_here
 import shared_folder
 
 EXPORT_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::\d{1,5})?/[^\s?#]*?/export/([A-Za-z0-9_.-]{1,120}\.csv)", re.I)
+# The Short Rail Report - the export the rail plan is built from: sent on to the home PC for a preview.
+RAIL_EXPORT = re.compile(r"short_rail_rep_[0-9_-]{1,40}\.csv")
 MAX_BYTES = 20_000_000
 DOWNLOADS = os.path.join(os.path.expanduser("~"), "Downloads")
 
@@ -105,4 +109,4 @@ def take(names, want=""):
     saved_as, written = shared_folder.file_one(DOWNLOADS, name, data)
     lines = [ln for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
     return {"name": name, "url": url, "saved_as": saved_as, "written": written, "bytes": len(data),
-            "rows": max(0, len(lines) - 1), "header": lines[0][:240] if lines else "", "how": how}
+            "rows": max(0, len(lines) - 1), "header": lines[0][:240] if lines else "", "how": how, "data": data}

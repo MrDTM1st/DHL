@@ -40,6 +40,10 @@ _UPLOAD_CSV = re.compile(r"NR_[A-Za-z0-9_-]{0,120}?\d{14}\.csv")
 # A rail plan as rail_plan.py names it ("Rail Plan wc 02.11 v2 BS.xlsx"). Only one
 # the agent marks "file" went out by email - a preview is never filed.
 _RAIL_PLAN = re.compile(r"Rail Plan wc \d{2}\.\d{2} v\d{1,2}(?: [A-Za-z]+){0,4}\.xlsx")
+# The Short Rail Report the work PC took straight from a CTMS export (work_pc/ctms_export.py): a rail plan
+# PREVIEW for the home PC, the file riding in the command - never a send, and never the browser's upload slot.
+_RAIL_EXPORT = re.compile(r"short_rail_rep_[0-9_-]{1,40}\.csv")
+_RAIL_EXPORT_MAX = 8_000_000            # base64 characters
 try:
     _QUEUE_TTL = int(os.environ.get("QUEUE_TTL", "600"))   # seconds an unclaimed command stays queued
 except ValueError:
@@ -1669,6 +1673,20 @@ class Handler(BaseHTTPRequestHandler):
                 lst = [{"name": n, "size": f["size"], "at": f["at"], "sha": f.get("sha", "")}
                        for n, f in _to_file.items()]
             return self._json(200, {"files": lst})
+        if path == "/api/ctms/export":
+            # a Short Rail Report the bridge took from CTMS: the home PC builds the rail plan, as a preview
+            name, b64 = str(data.get("name") or ""), data.get("data")
+            if not (_RAIL_EXPORT.fullmatch(name) and isinstance(b64, str) and 0 < len(b64) <= _RAIL_EXPORT_MAX):
+                return self._json(400, {"error": "not a Short Rail Report export"})
+            with _lock:
+                _queue.append({"action": "rail_plan", "mode": "preview", "export": {"name": name, "data": b64},
+                               "queued_at": time.time()})
+                det = f"Rail plan from the CTMS export {name} queued"
+                if not _agent_online():
+                    det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
+                _status.update(state="queued", detail=det, at=datetime.now().strftime("%H:%M:%S"), output="",
+                               email=None)
+            return self._json(200, {"ok": True})
         if path == "/api/ctms/upload":
             # one of them - and nothing else from the Files list
             with _lock:
@@ -1913,6 +1931,8 @@ class Handler(BaseHTTPRequestHandler):
                                # the Auto follow-ups switch's on/off - it was
                                # left out, so every click arrived as "off"
                                "on": data.get("on"),
+                               # Rail plan: Build & send with no file = the plan last previewed
+                               "source": "last" if data.get("source") == "last" else None,
                                "queued_at": time.time()})
                 det = f"{data.get('action')} queued"
                 if not _agent_online():

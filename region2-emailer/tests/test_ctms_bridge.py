@@ -2505,7 +2505,8 @@ def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_bri
     X.take = lambda names, want="": (asked.append((names, want)) or
                                      {"name": "short_rail_rep_2026-10-31_221330.csv", "url": EXP, "saved_as":
                                       "short_rail_rep_2026-10-31_221330.csv", "written": True, "bytes": 2048,
-                                      "rows": 12, "header": "Schedule,Trip Number", "how": "straight from CTMS's server"})
+                                      "rows": 12, "header": "Schedule,Trip Number", "how": "straight from CTMS's server",
+                                      "data": b"Schedule,Trip Number\r\n261102,T1\r\n"})
     try:
         desk = _Rec()
         b = B.Bridge(desk, 1, "", allow_control=True)
@@ -2520,6 +2521,10 @@ def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_bri
         assert closed == [[EXP]] and selected == ["ctms"]           # only the tab it took; then CTMS's tab
         assert pressed == [("Internet Explorer Download - Security Warning", "Cancel")]   # not the other box
         assert "Closed 1 export tab; CTMS's tab is the one showing again" in r["detail"], r["detail"]
+        assert "builds the rail plan from it as a preview" in r["detail"] and "data" not in r["payload"]
+        onward = [body for path, body in desk.sent if path == "/api/ctms/export"]
+        assert onward == [{"name": "short_rail_rep_2026-10-31_221330.csv",
+                           "data": base64.b64encode(b"Schedule,Trip Number\r\n261102,T1\r\n").decode()}]
         assert b.click_first is True                                # Edge put the keyboard focus where it chose
         stuck[0] = True                                             # a tab that will not close: said so
         b.handle({"id": 3, "action": "export_close"})
@@ -2539,6 +2544,32 @@ def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_bri
     call("/api/ctms/control", {"on": True, "minutes": 15})
     assert call("/api/ctms/command", {"action": "export_fetch", "option": "x.csv"}, key=AGENT)[0] == 200
     assert call("/api/ctms/command", {"action": "export_close"}, key=AGENT)[0] == 200
+
+
+def test_a_short_rail_report_from_the_bridge_queues_only_a_rail_plan_preview_for_the_home_pc():
+    fresh()
+    S._queue.clear()
+    good = {"name": "short_rail_rep_2026-10-31_223746.csv", "data": base64.b64encode(b"Schedule\r\n1\r\n").decode()}
+    for key in (DASH, AGENT, ""):                                   # the bridge's route alone
+        assert call("/api/ctms/export", good, key=key)[0] == 401
+    for bad in (dict(good, name="..\\short_rail_rep_1.csv"), dict(good, name="nr_finance_extract_1.csv"),
+                dict(good, name="short_rail_rep_1.csv.exe"), dict(good, data=""), dict(good, data=None),
+                dict(good, data="x" * (S._RAIL_EXPORT_MAX + 1))):
+        assert call("/api/ctms/export", bad, key=BRIDGE)[0] == 400, bad["name"]
+    assert S._queue == []
+    assert call("/api/ctms/export", dict(good, mode="send", source="last"), key=BRIDGE)[0] == 200
+    q = S._queue[-1]
+    assert q["action"] == "rail_plan" and q["mode"] == "preview" and "source" not in q      # never a send
+    assert q["export"] == {"name": good["name"], "data": good["data"]}
+    assert call("/api/next", key=AGENT)[1]["export"]["name"] == good["name"]
+    # the card's Build & send with no file: the plan last previewed, and nothing else rides through
+    assert call("/api/command", {"action": "rail_plan", "mode": "send", "week": "next", "source": "last",
+                                 "export": good})[0] == 200
+    q = S._queue[-1]
+    assert q["source"] == "last" and "export" not in q
+    call("/api/command", {"action": "rail_plan", "mode": "send", "source": "anything"})
+    assert S._queue[-1]["source"] is None
+    S._queue.clear()
 
 
 def test_closing_presses_only_the_export_tabs_own_close_button():

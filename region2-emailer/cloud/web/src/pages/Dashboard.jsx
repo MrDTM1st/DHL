@@ -154,7 +154,14 @@ function RailPlanCard({ onUpload, onCommand }) {
   const [file, setFile] = useState(null);
   const [week, setWeek] = useState('next');
   const run = async (mode) => {
-    if (!file) { window.alert('Pick the CTMS rail-plan CSV first.'); return; }
+    if (!file) {
+      // no file picked: Build & send sends the plan last previewed - the one a CTMS export the work PC took
+      // builds by itself, or the last CSV previewed here
+      if (mode !== 'send') { window.alert('Pick the CTMS rail-plan CSV first.'); return; }
+      if (!window.confirm('No CSV picked — SEND the rail plan last previewed (from the CTMS export, or the CSV you last previewed) to all suppliers, hauliers and your DHL colleagues?')) return;
+      onCommand({ action: 'rail_plan', mode, week, source: 'last' });
+      return;
+    }
     if (mode === 'send' && !window.confirm('Build and SEND the rail plan to all suppliers, hauliers and your DHL colleagues?')) return;
     // no command unless the file actually landed - see onUpload in App.jsx
     if (!await onUpload(file)) return;
@@ -163,7 +170,7 @@ function RailPlanCard({ onUpload, onCommand }) {
   return (
     <div className="cmd">
       <div className="top"><div className="ci">{I.rail}</div><h3>Rail plan</h3></div>
-      <div className="desc">Build the weekly plan from a CTMS CSV.</div>
+      <div className="desc">Build the weekly plan from a CTMS CSV. A CTMS export the work PC takes is previewed by itself — Build &amp; send with no file sends that.</div>
       <input ref={fileRef} type="file" accept=".csv" style={{ marginBottom: 7 }} onChange={(e) => setFile(e.target.files[0])} />
       <select value={week} onChange={(e) => setWeek(e.target.value)} style={{ marginBottom: 7 }}>
         <option value="next">Next week — new plan</option>

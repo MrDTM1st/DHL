@@ -1126,12 +1126,21 @@ class Bridge:
                 # then that tab closed and CTMS's brought back, so the bridge sees CTMS again
                 names = ([self.win["title"]] if self.win else []) + ctms_tabs.names(ctms_export.is_export)
                 got = ctms_export.take(names, cmd.get("option") or "")
+                data = got.pop("data")
                 back = self.export_tabs_away(lambda n: got["url"] in (n or ""))
+                onward = ""
+                if ctms_export.RAIL_EXPORT.fullmatch(got["name"]):     # the rail plan's own report: home builds it
+                    try:
+                        self.desk.post("/api/ctms/export", {"name": got["name"],
+                                                            "data": base64.b64encode(data).decode()}, timeout=60)
+                        onward = " Sent to the home PC, which builds the rail plan from it as a preview."
+                    except Exception as e:
+                        onward = f" Not sent to the home PC ({friendly(e)}) - it is in Downloads."
                 return done(True, (f"Took {got['name']} {got['how']} into Downloads"
                                    + ("" if got["saved_as"] == got["name"] else f" as {got['saved_as']}")
                                    + ("" if got["written"] else " - it was there already, left as it was")
                                    + f": {got['rows']} row(s), {got['bytes']:,} bytes. Header: {got['header']}. "
-                                   + back),
+                                   + back + onward),
                             dict(got, kind="export"))
             if action == "export_close":
                 # export tabs left open - each one blanks CTMS's window for the bridge

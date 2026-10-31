@@ -110,6 +110,47 @@ def snap_outbox():
 
 
 RAIL_SENT = os.path.join(HERE, "_rail_sent.json")   # rail_plan.py notes each plan it emails here
+RAIL_RAW = os.path.join(HERE, "_rail_raw.csv")      # the CSV the last rail plan was built from
+RAIL_LAST = os.path.join(HERE, "_rail_last.json")   # ... what it was, and whether it was built as an update
+
+
+def rail_plan_input(cmd):
+    """The CSV a rail plan is built from -> (path, update?, what it was). ValueError says why there is none.
+
+    Three places: a CTMS export the work PC took ("export" - the file rides in the command, and the plan is
+    built as an update: compared with the latest plan that went round for its week, so a week nothing has
+    gone round for yet is greened nowhere); the one last previewed ("source": "last" - Build & send with no
+    file picked sends what he has just looked at, built the same way); or the file picked on the card."""
+    import base64
+    if cmd.get("source") == "last":
+        try:
+            with open(RAIL_LAST, encoding="utf-8") as f:
+                last = json.load(f)
+        except Exception:
+            last = None
+        if not (isinstance(last, dict) and os.path.exists(RAIL_RAW)):
+            raise ValueError("No rail plan has been previewed yet — pick the CTMS CSV, or export it from CTMS.")
+        return RAIL_RAW, bool(last.get("update")), str(last.get("what") or "the CSV last previewed")
+    up = cmd.get("export")
+    if isinstance(up, dict) and up.get("data"):
+        update, what = True, f"the CTMS export {str(up.get('name') or '')[:120]}"
+    else:
+        try:
+            up = _req("/api/pull_upload")
+        except Exception:
+            up = None
+        if not up or not up.get("data"):
+            raise ValueError("No rail-plan CSV received — pick the file and try again.")
+        update = (cmd.get("week") or "next").strip().lower() == "current"
+        what = str(up.get("name") or "the CSV you picked")[:120]
+    with open(RAIL_RAW, "wb") as f:
+        f.write(base64.b64decode(up["data"]))
+    try:
+        with open(RAIL_LAST, "w", encoding="utf-8") as f:
+            json.dump({"what": what, "update": update, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+    except OSError:
+        pass
+    return RAIL_RAW, update, what
 
 
 def push_new_files(before):
@@ -886,31 +927,24 @@ def main():
                 push_tracker()
                 report("done", f"Noted — {fld} = {val}. I'll remember that wording.", tail(out, 6))
             elif action == "rail_plan":
-                mode = (cmd.get("mode") or "preview").lower()
-                week = (cmd.get("week") or "next").strip().lower()
-                report("running", f"Rail plan — {mode}"
-                       + (" (current-week update)" if week == "current" else "") + "…")
-                up = None
+                # the work PC's CTMS export is only ever previewed - sending is Build & send, his click
+                mode = "preview" if cmd.get("export") else (cmd.get("mode") or "preview").lower()
+                report("running", f"Rail plan — {mode}…")
                 try:
-                    up = _req("/api/pull_upload")
-                except Exception:
-                    up = None
-                if not up or not up.get("data"):
-                    report("error", "No rail-plan CSV received — pick the file and try again.")
+                    raw, update, what = rail_plan_input(cmd)
+                except ValueError as e:
+                    report("error", str(e))
                 else:
-                    import base64
-                    raw = os.path.join(HERE, "_rail_raw.csv")
-                    with open(raw, "wb") as f:
-                        f.write(base64.b64decode(up["data"]))
                     before = snap_outbox()
                     args = (["rail_plan.py", "send", raw]
                             + (["go"] if mode == "send" else [])
-                            + (["--update"] if week == "current" else []))
+                            + (["--update"] if update else []))
                     out = run(args)
                     push_new_files(before)
                     verb = "sent" if mode == "send" else "previewed (nothing sent)"
-                    extra = " New manifests are highlighted green." if week == "current" else ""
-                    report("done", f"Rail plan {verb} — plans are in Files below.{extra}", tail(out, 34))
+                    extra = " New manifests are highlighted green." if update else ""
+                    report("done", f"Rail plan {verb} from {what} — plans are in Files below.{extra}",
+                           tail(out, 34))
             elif action == "order_upload":
                 report("running", "Processing order upload…")
                 up = None

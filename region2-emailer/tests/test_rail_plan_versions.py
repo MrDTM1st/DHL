@@ -195,6 +195,41 @@ def test_only_a_plan_that_went_out_by_email_is_marked_for_the_shared_folder():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_a_rail_plan_is_built_from_the_ctms_export_the_upload_or_the_one_last_previewed():
+    import base64
+    tmp = tempfile.mkdtemp(prefix="rp-test-")
+    keep = A.RAIL_RAW, A.RAIL_LAST, A._req
+    pulled = []
+    try:
+        A.RAIL_RAW, A.RAIL_LAST = os.path.join(tmp, "_rail_raw.csv"), os.path.join(tmp, "_rail_last.json")
+        A._req = lambda path, data=None, timeout=15: pulled.append(path) or {}
+        try:                                            # nothing previewed yet: Build & send with no file says so
+            A.rail_plan_input({"source": "last"})
+            assert False
+        except ValueError as e:
+            assert "previewed yet" in str(e)
+        try:                                            # no file on the card either
+            A.rail_plan_input({"week": "next"})
+            assert False
+        except ValueError as e:
+            assert "No rail-plan CSV received" in str(e)
+        exp = {"name": "short_rail_rep_2026-10-31_223746.csv", "data": base64.b64encode(b"Schedule\r\n1\r\n").decode()}
+        pulled.clear()
+        raw, update, what = A.rail_plan_input({"export": exp, "week": "next"})
+        assert pulled == [] and update is True and "short_rail_rep_2026-10-31_223746.csv" in what
+        assert open(raw, "rb").read() == b"Schedule\r\n1\r\n"   # the export, never the card's upload slot
+        assert A.rail_plan_input({"source": "last", "week": "next"}) == (raw, True, what)   # sent as it was built
+        A._req = lambda path, data=None, timeout=15: (pulled.append(path) or
+                                                       {"name": "picked.csv", "data": base64.b64encode(b"x").decode()})
+        raw, update, what = A.rail_plan_input({"week": "next"})
+        assert pulled == ["/api/pull_upload"] and update is False and what == "picked.csv"
+        assert A.rail_plan_input({"source": "last"})[1:] == (False, "picked.csv")
+        assert A.rail_plan_input({"week": "current"})[1] is True
+    finally:
+        A.RAIL_RAW, A.RAIL_LAST, A._req = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
