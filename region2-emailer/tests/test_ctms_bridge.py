@@ -2360,6 +2360,18 @@ def test_the_browsers_box_is_seen_without_the_switch_and_only_ever_saved_never_o
         b.handle({"id": 4, "action": "prompt_press", "option": "save"})
         assert desk.sent[-1][1]["ok"] and "Pressed Save" in desk.sent[-1][1]["detail"]
         assert sent == [(77, 0x0111, 2, 82)]       # WM_COMMAND to the box: BN_CLICKED from button id 2
+        clicks = []
+        keep_click, A.click = A.click, lambda *a, **k: clicks.append(a) or "Clicked CTMS at 50% across, 50% down"
+        try:                                       # a box with named buttons: never a point (it could be Run)
+            b.handle({"id": 41, "action": "prompt_click", "at": [0.5, 0.5]})
+            assert desk.sent[-1][1]["ok"] is False and "prompt-press" in desk.sent[-1][1]["detail"] and not clicks
+            boxes[0]["buttons"], was = [], boxes[0]["buttons"]
+            b.handle({"id": 42, "action": "prompt_click", "at": [0.5, 0.5]})
+            assert desk.sent[-1][1]["ok"] and "the prompt" in desk.sent[-1][1]["detail"] and len(clicks) == 1
+            assert clicks[0][0] == 77 and clicks[0][3] == [100, 100, 500, 300]   # on the box's own frame
+            boxes[0]["buttons"] = was
+        finally:
+            A.click = keep_click
         boxes[0]["buttons"] = []                   # a box with nothing to name: says to aim on its picture
         b.handle({"id": 5, "action": "prompt_press", "option": "Save"})
         assert desk.sent[-1][1]["ok"] is False and "prompt-click" in desk.sent[-1][1]["detail"]

@@ -1090,6 +1090,10 @@ class Bridge:
                 if action == "prompt_press":
                     detail = ctms_act.press_button(p, cmd.get("option"))
                 else:
+                    if p["buttons"]:            # a point could land on Run or Open: its buttons go by name only
+                        raise RuntimeError("This box has buttons to press by what they say ("
+                                           + ", ".join(b["text"] for b in p["buttons"]) + ") - prompt-press Save. "
+                                           "A point is only for a box with none to name.")
                     at = cmd.get("at")
                     if not (isinstance(at, (list, tuple)) and len(at) == 2):
                         raise RuntimeError("Aim at a point on the prompt's picture: prompt-click --at X,Y.")
