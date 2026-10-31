@@ -15,11 +15,12 @@ sys.path.insert(0, os.path.dirname(HERE))
 import nr_csv as N  # noqa: E402
 
 
-def order(material, account="NRADHOC", code="", serial="", ref="AH01/01/26EXEX"):
-    return {"Customer Order No": ref, "Site Name - Collection": "Example Depot", "Contact Name": "Sam Example",
-            "Postcode": "EX1 1AA", "Delivery Point": "Example Siding", "D Contact Name": "Jo Example",
-            "D Postcode": "EX2 2BB", "Product / Description": material, "Product / Service Code": code,
-            "Product Qty": 2, "Serial Number": serial, "Raised by": "planner@example.com", "Account": account}
+def order(material, account="NRADHOC", code="", serial="", ref="AH01/01/26EXEX", **more):
+    return dict({"Customer Order No": ref, "Site Name - Collection": "Example Depot", "Contact Name": "Sam Example",
+                 "Postcode": "EX1 1AA", "Delivery Point": "Example Siding", "D Contact Name": "Jo Example",
+                 "D Postcode": "EX2 2BB", "Product / Description": material, "Product / Service Code": code,
+                 "Product Qty": 2, "Serial Number": serial, "Raised by": "planner@example.com",
+                 "Account": account}, **more)
 
 
 def lines(o):
@@ -27,6 +28,55 @@ def lines(o):
         recs = N.transform([o])
     by = {r[0]: r for r in recs}
     return by["ORD_LINES"], by["ITEMS"], out.getvalue()
+
+
+def upload(o):
+    """(the ORDER row, the task names, what was printed)."""
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        recs = N.transform([o])
+    return next(r for r in recs if r[0] == "ORDER"), [r[1] for r in recs if r[0] == "ORD_TASKS"], out.getvalue()
+
+
+def test_postcodes_go_up_with_their_space():
+    row, _, _ = upload(order("Pallet", Postcode="OL113AU", **{"D Postcode": "le27st"}))
+    assert (row[11], row[23]) == ("OL11 3AU", "LE2 7ST"), row
+    assert upload(order("Pallet", Postcode="TBC"))[0][11] == "TBC"          # not a postcode: as it came
+
+
+def test_the_account_follows_his_rules():
+    acct = lambda **kw: upload(order(kw.pop("material", "Pallet"), **kw))[0][28]
+    assert acct(**{"Cost Centre": "GBMD30.10000.100000.100"}) == "NR_OTHER"   # a DHL cost centre
+    assert acct(material="Shift Work") == "NRADHOC_NS"
+    assert acct(**{"Delivery Instructions": "Material Container Weight - 10000kg"}) == "NRADHOC_NS"
+    assert acct(**{"Delivery Instructions": "Material Pallet Weight - 3000kg"}) == "NRADHOC"
+    assert acct(account="NRADHOC_NH", **{"Delivery Instructions": "Weight - 6000kg"}) == "NRADHOC_NH"
+    assert acct(account="HEAVY", code="X", **{"Cost Centre": "GBMD30"}) == "NRHEAVY"   # never off an ad hoc's
+    assert "account NRADHOC -> NRADHOC_NS, shift work" in upload(order("Shift Work"))[2]
+    assert lines(order("Box", account="NRADHOC_NS"))[0][1] == "BOX"           # every form account is an ad hoc
+
+
+def test_services_fit_the_vehicle():
+    tasks = lambda m="Pallet", **kw: upload(order(m, **kw))[1]
+    assert "HIAB" not in tasks(HIAB="Y", **{"Vehicle Type": "NR_R_TIP26_8"})
+    assert "HIAB" not in tasks("Loose ballast", HIAB="Y")                       # tipped, vehicle not named yet
+    assert "HIAB" in tasks(HIAB="Y", **{"Vehicle Type": "NR_ARTIC_FL"})
+    assert "MOFFETT" not in tasks(Moffett="Y", **{"Vehicle Type": "NR_CS_MOF"})
+    assert "ESCORTS" not in tasks("Rail", **{"Vehicle Escort": "Y", "Vehicle Type": "NR_60_ART_FL"})
+    assert "ESCORTS" in tasks("Rail", **{"Vehicle Type": "NR_TROM_80ft"})
+    assert "ESCORTS" in tasks("Rail", **{"Vehicle Escort": "Y"})                  # no vehicle yet: as asked
+    said = upload(order("Rail", **{"Vehicle Escort": "Y", "Vehicle Type": "NR_60_ART_FL"}))[2]
+    assert "ESCORTS off - only a trombone has one, not NR_60_ART_FL" in said
+
+
+def test_the_upload_finds_its_night_and_weekend_legs():
+    recs = N.transform([order("Pallet", **{"collection time": "06/11/2026 21:00",
+                                            "collection time end": "06/11/2026 22:00",
+                                            "delivery time": "07/11/2026 08:00",
+                                            "delivery time end": "07/11/2026 12:00"})])
+    (ref, legs), = N.order_windows(recs)
+    assert ref == "AH01/01/26EXEX" and [leg for leg, _, _ in legs] == ["collect", "deliver"]
+    import ctms_todo
+    assert ctms_todo.services_owed(legs) == ["NIGHT", "SATURDAY"]
 
 
 def test_every_form_option_uploads_its_item_and_product_type():

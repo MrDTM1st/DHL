@@ -23,8 +23,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import ctms_notes
 
@@ -43,8 +44,15 @@ def _id(*parts):
 
 
 def _bases(orders):
-    """1234567-1-1 -> 1234567, order kept, no repeats."""
-    return list(dict.fromkeys(str(o).split("-")[0].strip() for o in orders or [] if str(o).strip()))
+    """1234567-1-1 -> 1234567, order kept, no repeats. Any other ref stays whole - an ad hoc's AH29/10/2026/GU-M1
+    or a fleet job's FS-990-261102 cut at its first dash would be somebody else's job."""
+    out = []
+    for o in orders or []:
+        o = str(o).strip()
+        m = re.fullmatch(r"(\d{7})(?:-\d+)*(?:_\w+)?", o)
+        if o:
+            out.append(m.group(1) if m else o)
+    return list(dict.fromkeys(out))
 
 
 def load(path=None):
@@ -99,7 +107,8 @@ def escalated(orders, when=None, path=None):
 
 def replied(rec, path=None, when=None):
     """A site answered: the order is to be updated from the reply. Its parsed answers ride along, so the run has
-    what it needs without reading the email again."""
+    what it needs without reading the email again - and a delivery the reply puts at night or on a weekend is
+    remembered for its Night / Saturday / Sunday as well."""
     if rec.get("kind", "delivery") != "delivery" or not rec.get("orders"):
         return None
     who = rec.get("name") or rec.get("to") or "The site"
@@ -108,10 +117,88 @@ def replied(rec, path=None, when=None):
         day = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m")
     except ValueError:
         pass
-    return add("update", rec["orders"], f"{who} replied {day} - update the order from it",
-               details={"details": rec.get("details"), "missing": rec.get("missing"),
-                        "site": rec.get("site"), "to": rec.get("to")},
-               source="reply", path=path, when=when)
+    it = add("update", rec["orders"], f"{who} replied {day} - update the order from it",
+             details={"details": rec.get("details"), "missing": rec.get("missing"),
+                      "site": rec.get("site"), "to": rec.get("to")},
+             source="reply", path=path, when=when)
+    services_due(rec["orders"], _reply_legs(rec.get("details")), path=path, when=when)
+    return it
+
+
+# ---- Night / Saturday / Sunday ---------------------------------------------
+# The upload never puts these on (nr_csv.transform: nothing is charged for a service nobody chose), and the period-end
+# clean ups kept finding them missing - nine orders across Aug-Oct 2026. His ask 31/10: "that should be on the CTMS
+# to-do list" - and done BEFORE the booking: "if you do it after we book it, we'd have to then unbook it and then
+# put it back on to then book it again". So the order gets them before Create New Trip, like its delivery type.
+# A leg is night work when it starts 20:00-05:59 or runs past midnight,
+# as the dashboard's map reads it; a leg that starts or ends on a Saturday or Sunday needs that day's service. Bank
+# holidays are not known here.
+NIGHT_FROM, NIGHT_TO = "20:00", "06:00"
+
+
+def services_owed(legs):
+    """The services a job's legs need, of NIGHT / SATURDAY / SUNDAY - legs as [(leg, start, end)] datetimes or None."""
+    owed = set()
+    for _, start, end in legs:
+        if start is None:
+            continue
+        hm = start.strftime("%H:%M")
+        past_midnight = end is not None and end.date() > start.date() and end.strftime("%H:%M") != "00:00"
+        if hm >= NIGHT_FROM or hm < NIGHT_TO or past_midnight:
+            owed.add("NIGHT")
+        for t in (start, end):
+            if t is not None and t.weekday() == 5:
+                owed.add("SATURDAY")
+            if t is not None and t.weekday() == 6:
+                owed.add("SUNDAY")
+    return [s for s in ("NIGHT", "SATURDAY", "SUNDAY") if s in owed]
+
+
+def services_due(orders, legs, path=None, when=None):
+    """Remember the Night / Saturday / Sunday an order needs before it is booked - one open reminder per order,
+    replaced when it comes back with other times. None when it needs none."""
+    owed = services_owed(legs)
+    orders = _bases(orders)
+    if not owed or not orders:
+        return None
+    times = ", ".join(f"{leg} {start:%a %d/%m %H:%M}" for leg, start, _ in legs if start is not None)
+    what = f"Add {' + '.join(owed)} before it's booked ({times})"
+    d = load(path)
+    stale = [it for it in d["items"] if not it.get("done_at") and it.get("source") == "services"
+             and it["orders"] == orders and it.get("what") != what]
+    if stale:
+        d["items"] = [it for it in d["items"] if it not in stale]
+        _save(d, path)
+    return add("other", orders, what, source="services", path=path, when=when)
+
+
+def _reply_legs(details):
+    """The delivery leg a site's reply gives - its date, and its time window when it gave one. The parser's shape
+    ({"value": ...}, {"earliest", "latest"}) or plain text ("13/11/26", "08:00-10:00"); [] when there is no date."""
+    details = details if isinstance(details, dict) else {}
+    date, t = details.get("date"), details.get("time")
+    date = str((date.get("value") if isinstance(date, dict) else date) or "").strip()
+    day = None
+    for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+        try:
+            day = datetime.strptime(date, fmt)
+            break
+        except ValueError:
+            continue
+    if day is None:
+        return []
+    if isinstance(t, dict):
+        lo, hi = t.get("earliest"), t.get("latest")
+    else:
+        lo, _, hi = str(t or "").partition("-")
+
+    def at(hm):
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(hm or "").strip())
+        return day.replace(hour=int(m.group(1)), minute=int(m.group(2))) if m else None
+    start, end = at(lo), at(hi)
+    if start and end and end < start:
+        end += timedelta(days=1)             # 23:00-01:00 runs into the next day
+    return [("deliver", start or day.replace(hour=12), end)]
 
 
 def _tracker_records(tracker_path=None):

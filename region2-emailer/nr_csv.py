@@ -112,7 +112,7 @@ NOT_ORDERED = ("", "N", "NO", "0", "-", "--", "N/A", "NA", "NONE", "FALSE",
 # The accounts the Haulage Request Form raises under. The pick-list below is
 # keyed on that form's Material options, so it is applied only to these - a
 # Synergy or seasonal product must never be rewritten by it.
-ADHOC_ACCOUNTS = ("NRADHOC", "NRADHOC_NH", "NR_OTHER")
+ADHOC_ACCOUNTS = ("NRADHOC", "NRADHOC_H", "NRADHOC_NH", "NRADHOC_NS", "NR_OTHER")
 
 # The Haulage Request Form's own Material drop-down: its hidden Products
 # sheet, which the form's upload row (RHPC Admin) reads with a VLOOKUP - each
@@ -301,6 +301,94 @@ def line_length(v):
     return v if 0 < n < 1000 else ""
 
 
+# ---- what the period-end clean ups kept sending back ------------------------
+# Kelly Hembling's and Will Annetts' data clean ups (AP05-D to AP08-26A,
+# Aug-Oct 2026) returned the same faults period after period. Each rule below
+# is one of them, with Delali's answer (31/10/2026).
+
+_UK_PC = re.compile(r"[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}")
+
+
+def spaced_postcode(v):
+    """'OL113AU' -> 'OL11 3AU'. CTMS keeps a postcode as it was sent, and the
+    clean ups flagged every one without its space - seven orders in five of
+    them, Synergy's as well as ad hocs. Anything that is not a postcode goes
+    out as it came."""
+    return postcodes.norm(v) if _UK_PC.fullmatch(postcodes.compact(v)) else v
+
+
+# DHL's own cost centres start GBMD: "if yes this should be on NR DHL account
+# as it's a DHL cost centre" (AP06-A). CTMS's NR DHL is the account NR_OTHER.
+_DHL_COST_CENTRE = re.compile(r"\s*GBMD", re.I)
+# "the weight is above 4 tons. That's the rule for ad hocs above 4 tons" -
+# Delali; "Should this be Adhoc NS as over 4T lift" (AP06-A).
+NON_STANDARD_KG = 4000
+
+
+def upload_account(o, acct, ptype):
+    """(account, why) for an ad hoc, by Delali's rules - why is "" when the
+    form's own account stands. A DHL cost centre goes on NR_OTHER; shift work,
+    or a load over 4 t, takes NRADHOC to NRADHOC_NS."""
+    if acct.upper() not in ADHOC_ACCOUNTS:
+        return acct, ""
+    cc = str(o.get("Cost Centre") or "").strip()
+    if _DHL_COST_CENTRE.match(cc) and acct.upper() != "NR_OTHER":
+        return "NR_OTHER", f"a DHL cost centre ({cc})"
+    if acct.upper() == "NRADHOC":
+        if ptype == "SHIFT":
+            return "NRADHOC_NS", "shift work"
+        import upload_weights
+        kg, _ = upload_weights.kg(o.get("Delivery Instructions"))
+        if kg and kg > NON_STANDARD_KG:
+            return "NRADHOC_NS", f"over 4 t ({kg:g} kg)"
+    return acct, ""
+
+
+_TIPPED = re.compile(r"stone\W*blow|\bloose\b.*\bballast|\bballast\b.*\bloose\b", re.I)
+
+
+def fitted_tasks(o, tasks):
+    """(the ORD_TASKS the job keeps, why each changed) once its vehicle is known.
+
+    A HIAB never rides a tipper, nor a load that is tipped - loose ballast,
+    stoneblower stone: "Hiab on incorrect vehicle type please remove" (AP06-A,
+    AP08-26A). A curtain-sider with Moffett brings its own: "if Curtain
+    Moffett vehicle type then you need to remove Moffett surcharge" (AP05-D).
+    And an escort is the 80ft trombone's alone - "it'll only be the 80ft
+    trombones that needs to have an escort" (Delali, 31/10/2026): a trombone
+    gets one, and no other vehicle keeps one. With no vehicle named yet, the
+    escort stays as asked.
+    """
+    veh = str(o.get("Vehicle Type") or "").strip().upper()
+    load = f"{o.get('Product / Description') or ''} {o.get('Product / Service Code') or ''}"
+    kept, why = list(tasks), []
+    if "HIAB" in kept and ("TIP" in veh or _TIPPED.search(load)):
+        kept.remove("HIAB")
+        why.append("HIAB off - " + (f"{veh} is a tipper" if "TIP" in veh else "a tipped load"))
+    if "MOFFETT" in kept and veh.endswith("_MOF"):
+        kept.remove("MOFFETT")
+        why.append(f"MOFFETT off - {veh} carries its own")
+    if "TROM" in veh and "ESCORTS" not in kept:
+        kept.append("ESCORTS")
+        why.append(f"ESCORTS on - {veh}")
+    elif veh and "TROM" not in veh and "ESCORTS" in kept:
+        kept.remove("ESCORTS")
+        why.append(f"ESCORTS off - only a trombone has one, not {veh}")
+    return kept, why
+
+
+def order_windows(records):
+    """[(order ref, [(leg, start, end)])] - each ORDER row's collection and
+    delivery windows as datetimes, None where a time is not a date."""
+    def at(v):
+        try:
+            return datetime.strptime(str(v).strip(), "%d/%m/%Y %H:%M")
+        except ValueError:
+            return None
+    return [(r[1], [("collect", at(r[13]), at(r[14])), ("deliver", at(r[25]), at(r[26]))])
+            for r in records if r and r[0] == "ORDER"]
+
+
 def transform(rows):
     """rows: list of dicts in Imported_Orders column shape. Returns list of
     35-field records, ordered like the Final query (OrdSort, SEQ)."""
@@ -308,6 +396,7 @@ def transform(rows):
     W = 35
     fellback = []
     unplaced = []
+    adjusted = []
 
     def rec(seq, ordsort, vals):
         r = [""] * W
@@ -319,6 +408,8 @@ def transform(rows):
         ordno = o.get("Customer Order No")
         site = o.get("Site Name - Collection") or ""
         acct = (o.get("Account") or "").strip()
+        acct, why = upload_account(o, acct, line_product(o, acct))
+        changed = [f"account {o.get('Account')} -> {acct}, {why}"] if why else []
         # ORDER row (SEQ 1) - Final's column order
         rec(1, ordno, {
             0: "ORDER", 1: ordno, 2: Keep(site[:7]), 3: site,
@@ -326,12 +417,12 @@ def transform(rows):
             6: o.get("Notes for Collection Location Comments"),
             7: o.get("Address 1"), 8: o.get("Address 2"),
             9: (o.get("Address 3") or "").upper(), 10: region_of(o.get("Postcode")),
-            11: o.get("Postcode"), 12: o.get("Telephone No"),
+            11: spaced_postcode(o.get("Postcode")), 12: o.get("Telephone No"),
             13: o.get("collection time"), 14: o.get("collection time end"),
             15: dp_short(o.get("Delivery Point")), 16: o.get("Delivery Point"),
             17: first_name(o.get("D Contact Name")), 18: last_name(o.get("D Contact Name")),
             19: o.get("D Address 1"), 20: o.get("D Address 2"), 21: o.get("D Address 3"),
-            22: region_of(o.get("D Postcode")), 23: o.get("D Postcode"),
+            22: region_of(o.get("D Postcode")), 23: spaced_postcode(o.get("D Postcode")),
             # The [-12:] fallback is our own slice, so any space it starts with
             # is an artefact of where the cut landed, not something the source
             # wrote - and 0 of 216 genuine phone numbers begin with a space.
@@ -353,18 +444,21 @@ def transform(rows):
             33: o.get("Shipment No") or ordno, 34: "",
         })
         # ORD_TASKS rows (SEQ 2..8): col1=task name, col2=1  (Final positional swap)
-        for field, label, seq in (("Banksman", "BANKSMAN", 2), ("HIAB", "HIAB", 3),
-                                  ("Log Grab", "LOG GRAB", 4), ("Moffett", "MOFFETT", 5),
-                                  ("PTS", "PTS", 6), ("Rear Steer", "REAR STEER", 7),
-                                  ("Vehicle Escort", "ESCORTS", 8)):
-            v = o.get(field)
-            # The test used to be "anything that is not the single string N",
-            # which made an EMPTY cell order the service: a form that left HIAB
-            # blank got a HIAB task, and a HIAB is a chargeable extra. Only an
-            # affirmative value asks for the task now. Every genuine ORD_TASKS
-            # row carries a real code and the value 1; 117 of 216 genuine orders
-            # (54%) carry no task row at all, so "absent" is the normal case.
-            if str("" if v is None else v).strip().upper() not in NOT_ORDERED:
+        tasks = (("Banksman", "BANKSMAN", 2), ("HIAB", "HIAB", 3), ("Log Grab", "LOG GRAB", 4),
+                 ("Moffett", "MOFFETT", 5), ("PTS", "PTS", 6), ("Rear Steer", "REAR STEER", 7),
+                 ("Vehicle Escort", "ESCORTS", 8))
+        # The test used to be "anything that is not the single string N",
+        # which made an EMPTY cell order the service: a form that left HIAB
+        # blank got a HIAB task, and a HIAB is a chargeable extra. Only an
+        # affirmative value asks for the task now. Every genuine ORD_TASKS
+        # row carries a real code and the value 1; 117 of 216 genuine orders
+        # (54%) carry no task row at all, so "absent" is the normal case.
+        asked = [label for field, label, _ in tasks
+                 if str("" if o.get(field) is None else o.get(field)).strip().upper() not in NOT_ORDERED]
+        kept, why = fitted_tasks(o, asked)
+        changed += why
+        for _, label, seq in tasks:
+            if label in kept:
                 rec(seq, ordno, {0: "ORD_TASKS", 1: label, 2: "1"})
         # No NIGHT / SATURDAY / SUN_BANK_HOL rows. This used to derive them from
         # the delivery time and add one to every upload; it does not any more,
@@ -422,6 +516,8 @@ def transform(rows):
         # on - everything else passes through. See ADHOC_ITEMS.
         prod = adhoc_item(prod, acct)
         rec(13, ordno, {0: "ITEMS", 1: prod, 2: o.get("Product Qty")})
+        if changed:
+            adjusted.append(f"{ordno}: {'; '.join(changed)}")
     out.sort(key=lambda t: (t[0], t[1]))
     global LAST_RAISED_BY_FALLBACK
     LAST_RAISED_BY_FALLBACK = fellback
@@ -437,6 +533,8 @@ def transform(rows):
         # reading - say which, so the product can be checked in CTMS.
         print(f"  NOTE: nothing in the material names a CTMS product, so it goes up as "
               f"{PRODUCT_FALLBACK}: {', '.join(unplaced)}")
+    for a in adjusted:
+        print(f"  NOTE: changed from what was asked - {a}")
     return [r for _, _, r in out]
 
 
@@ -681,6 +779,20 @@ def write_csv(records, out_path):
         for c in LAST_COMPLAINTS:
             print(f"       {c}")
     print(f"  CONFORMANT {0 if LAST_COMPLAINTS else 1}")
+
+    # Night, Saturday and Sunday never go on the upload (see transform), and
+    # the clean ups kept finding them missing - so a job that needs one is
+    # remembered on the CTMS to-do list for its booking instead: "that should
+    # be on the CTMS to-do list" (Delali, 31/10/2026). Here, not in transform,
+    # because this is where an upload is really made.
+    try:
+        import ctms_todo
+        for ref, legs in order_windows(records):
+            it = ctms_todo.services_due([ref], legs)
+            if it:
+                print(f"  CTMS to-do: {it['what']}")
+    except Exception:
+        pass
     return out_path
 
 

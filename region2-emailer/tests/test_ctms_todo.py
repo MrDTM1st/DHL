@@ -27,6 +27,33 @@ def test_an_escalation_leaves_an_escalated_note_per_order_and_never_twice():
     assert again[0]["id"] == a[0]["id"] and len(T.load(store)["items"]) == 2
 
 
+def test_night_and_weekend_legs_are_remembered_for_the_booking():
+    from datetime import datetime as D
+    store, _, _ = _paths()
+    leg = lambda a, b: [("deliver", D.strptime(a, "%d/%m/%Y %H:%M"), D.strptime(b, "%d/%m/%Y %H:%M"))]
+    assert T.services_owed(leg("05/11/2026 08:00", "05/11/2026 16:00")) == []                  # a Thursday day
+    assert T.services_owed(leg("05/11/2026 23:30", "06/11/2026 01:30")) == ["NIGHT"]
+    assert T.services_owed(leg("06/11/2026 23:00", "07/11/2026 01:00")) == ["NIGHT", "SATURDAY"]
+    assert T.services_owed(leg("08/11/2026 03:00", "08/11/2026 04:00")) == ["NIGHT", "SUNDAY"]
+    assert T.services_owed(leg("05/11/2026 08:00", "06/11/2026 00:00")) == []                  # ends at midnight
+    it = T.services_due(["AH01/11/26EX-EX"], leg("07/11/2026 09:00", "07/11/2026 12:00"), path=store)
+    assert it["orders"] == ["AH01/11/26EX-EX"] and it["what"].startswith("Add SATURDAY before it's booked")
+    T.services_due(["AH01/11/26EX-EX"], leg("08/11/2026 09:00", "08/11/2026 12:00"), path=store)  # new times
+    left = [i for i in T.load(store)["items"] if not i.get("done_at")]
+    assert len(left) == 1 and left[0]["what"].startswith("Add SUNDAY"), left                       # one, the latest
+    assert T.services_due(["1234567-1-1"], leg("05/11/2026 08:00", "05/11/2026 16:00"), path=store) is None
+
+
+def test_a_reply_at_night_owes_its_night_service():
+    store, _, _ = _paths()
+    rec = {"orders": ["1234567-1-1"], "name": "Sam Example", "reply_at": "2026-10-30 11:00",
+           "details": {"date": {"value": "05/11/2026"}, "time": {"earliest": "23:30", "latest": "01:30"}}}
+    T.replied(rec, path=store)
+    whats = sorted(i["what"] for i in T.load(store)["items"])
+    assert any(w.startswith("Add NIGHT before it's booked") for w in whats), whats
+    assert [i["orders"] for i in T.load(store)["items"]] == [["1234567"], ["1234567"]]
+
+
 def test_a_reply_becomes_an_order_to_update_with_its_answers():
     store, _, _ = _paths()
     rec = {"orders": ["1234567"], "name": "Sam Example", "reply_at": "2026-10-30 13:23", "kind": "delivery",
