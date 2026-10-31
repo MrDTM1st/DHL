@@ -716,8 +716,25 @@ class Bridge:
 
     def export_tabs_away(self, want):
         """Close the export tab(s) `want` names, by their own close buttons, and see CTMS's tab is the one showing
-        again - Edge shows a neighbouring tab when one closes, which may be any. Says what was done."""
-        n = ctms_tabs.close(want)
+        again - Edge shows a neighbouring tab when one closes, which may be any. Says what was done.
+
+        The tab's own "Internet Explorer Download" box (Open / Save / Save as / Cancel) is answered Cancel first:
+        the file is taken already, and while that box is up the tab will not close (31/10: a close was pressed,
+        the tab stayed, and went only once Cancel was). Closed is counted from the tabs really gone."""
+        before = len(ctms_tabs.names(want))
+        for _ in range(2 if before else 0):
+            for p in ctms_window.prompts():
+                if "download" in (p.get("title") or "").lower():
+                    try:
+                        ctms_act.press_button(p, "Cancel")
+                    except ctms_drive.Refused:
+                        pass
+            ctms_tabs.close(want)
+            time.sleep(0.6)
+            if not ctms_tabs.names(want):
+                break
+        left = len(ctms_tabs.names(want)) if before else 0
+        n = before - left
         said = ""
         if not ctms_tabs.is_ctms((self.scan_window(force=True) or {}).get("title")):
             ok, said = ctms_tabs.select("ctms")
@@ -728,7 +745,9 @@ class Bridge:
                     break
                 time.sleep(0.25)
         back = ctms_tabs.is_ctms((self.win or {}).get("title"))
-        return ((f"Closed {n} export tab{'' if n == 1 else 's'}" if n else "No export tab to close")
+        return ((f"Closed {n} export tab{'' if n == 1 else 's'}" if n else
+                 "No export tab to close" if not before else "The export tab did not close")
+                + (f" ({left} still open - close {'it' if left == 1 else 'them'} yourself)" if left and n else "")
                 + ("; CTMS's tab is the one showing again." if back
                    else f"; CTMS's tab is not showing - {said or 'select it yourself'}."))
 

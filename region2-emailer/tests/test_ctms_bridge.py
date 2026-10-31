@@ -2477,18 +2477,26 @@ def test_the_export_goes_into_downloads_only_ever_adding_and_a_sign_in_page_is_n
 
 
 def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_brings_ctms_back():
-    keep = (W.find_windows, W.picture, B.LOG, TB.names, TB.close, TB.select, X.take)
+    keep = (W.find_windows, W.picture, W.prompts, B.LOG, TB.names, TB.close, TB.select, X.take, A.press_button)
     showing = [EXP + " and 3 more pages - Work - Microsoft Edge"]     # Edge's title: the selected tab's
     W.find_windows = lambda: [dict(FAKE_WIN, title=showing[-1])]
     W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
     B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
-    TB.names = lambda want, timeout=10.0: [n for n in (OLD, "Inbox - Outlook") if want(n)]
-    closed, selected = [], []
+    tabs = [EXP, OLD, "Oracle Fusion Middleware Forms Services", "Inbox - Outlook", "Haulage Desk"]
+    TB.names = lambda want, timeout=10.0: [n for n in tabs if want(n)]
+    ie_box = dict(SAVE_BOX, title="Internet Explorer Download - Security Warning",
+                  buttons=[{"text": t, "hwnd": 90 + i, "id": i} for i, t in enumerate(("Open", "Save", "Save as",
+                                                                                      "Cancel"))])
+    W.prompts = lambda: [dict(ie_box), dict(SAVE_BOX, title="Open File - Security Warning")]
+    pressed, closed, selected, stuck = [], [], [], [False]
+    A.press_button = lambda box, name: pressed.append((box["title"], name)) or f"Pressed {name}"
 
-    def close(want, timeout=10.0):                     # the tabs it would close, out of what Edge has open
-        hit = [n for n in (EXP, OLD, "Oracle Fusion Middleware Forms Services", "Haulage Desk") if want(n)]
+    def close(want, timeout=10.0):                     # Edge closes them - unless one will not go
+        hit = [n for n in tabs if want(n)]
         closed.append(hit)
-        showing.append("Haulage Desk - Work - Microsoft Edge")     # Edge shows a neighbour, not necessarily CTMS
+        if not stuck[0]:
+            tabs[:] = [n for n in tabs if n not in hit]
+            showing.append("Haulage Desk - Work - Microsoft Edge")     # Edge shows a neighbour, not necessarily CTMS
         return len(hit)
     TB.close = close
     TB.select = lambda target, timeout=10.0: (selected.append(target) or showing.append(
@@ -2510,12 +2518,21 @@ def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_bri
         assert "12 row(s)" in r["detail"] and r["payload"]["kind"] == "export"
         assert asked[0][0][0].startswith(EXP) and OLD in asked[0][0] and "Inbox - Outlook" not in asked[0][0]
         assert closed == [[EXP]] and selected == ["ctms"]           # only the tab it took; then CTMS's tab
+        assert pressed == [("Internet Explorer Download - Security Warning", "Cancel")]   # not the other box
         assert "Closed 1 export tab; CTMS's tab is the one showing again" in r["detail"], r["detail"]
         assert b.click_first is True                                # Edge put the keyboard focus where it chose
-        b.handle({"id": 3, "action": "export_close"})               # leftovers: every export tab, nothing else
-        assert desk.sent[-1][1]["ok"] and closed[-1] == [EXP, OLD], closed
+        stuck[0] = True                                             # a tab that will not close: said so
+        b.handle({"id": 3, "action": "export_close"})
+        assert desk.sent[-1][1]["ok"] and "The export tab did not close" in desk.sent[-1][1]["detail"]
+        stuck[0] = False
+        b.handle({"id": 4, "action": "export_close"})               # leftovers: every export tab, nothing else
+        assert closed[-1] == [OLD] and "Closed 1 export tab" in desk.sent[-1][1]["detail"]
+        assert tabs == ["Oracle Fusion Middleware Forms Services", "Inbox - Outlook", "Haulage Desk"]
+        b.handle({"id": 5, "action": "export_close"})
+        assert "No export tab to close" in desk.sent[-1][1]["detail"]
     finally:
-        W.find_windows, W.picture, B.LOG, TB.names, TB.close, TB.select, X.take = keep
+        (W.find_windows, W.picture, W.prompts, B.LOG, TB.names, TB.close, TB.select, X.take,
+         A.press_button) = keep
     fresh()
     for action in ("export_fetch", "export_close"):
         assert call("/api/ctms/command", {"action": action}, key=AGENT)[0] == 409       # switched off
