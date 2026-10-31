@@ -741,6 +741,7 @@ class Bridge:
         t = ctms_import.templates()
         self.batch = {"off": (0, 0), "snaps": []}
         t0, times = time.time(), []
+        said = ""                                   # what was done before the card opened - first in every answer
 
         def run(steps):
             for step in steps:
@@ -756,7 +757,7 @@ class Bridge:
 
         def stopped(stage, e, imported, closed=""):
             why = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
-            return done(False, f"Stopped while {stage}: {why} "
+            return done(False, said + f"Stopped while {stage}: {why} "
                         + (closed or "Nothing more was touched - the picture shows where."),
                         dict(self._batch_look(times, t0), imported=imported))
 
@@ -769,6 +770,11 @@ class Bridge:
                 return "Nothing went into CTMS. The Import card's Close was not where it should be, so it was " \
                        "left as it is - the picture shows where."
         try:
+            run([{"action": "anchor"}])
+            said = self.order_filters_away(t)
+        except Exception as e:
+            return stopped("making sure nothing is in the way of the Import card", e, False)
+        try:
             run(ctms_import.open_and_type(path, t))
         except Exception as e:
             return stopped("opening the Import card and typing the path", e, False, close_it())
@@ -777,8 +783,8 @@ class Bridge:
                 run(ctms_import.close_card(t))
             except Exception as e:
                 return stopped("closing the Import card (dry run)", e, False)
-            return done(True, f"Dry run: the Import card opened, NRHEAVY_Order_Import chosen and {path} typed - "
-                              "Import not pressed (no go-ahead), and the card closed.",
+            return done(True, said + f"Dry run: the Import card opened, NRHEAVY_Order_Import chosen and {path} "
+                                     "typed - Import not pressed (no go-ahead), and the card closed.",
                         dict(self._batch_look(times, t0), imported=False))
         try:
             run(ctms_import.import_and_answer(t))
@@ -794,10 +800,32 @@ class Bridge:
             run(ctms_import.finish(t))
         except Exception as e:
             return stopped("closing CTMS's answer and the Import card - the import itself ran", e, True)
-        return done(clean, f"Uploaded {name} into CTMS: " + (
+        return done(clean, said + f"Uploaded {name} into CTMS: " + (
             "no lines failed and none were invalid." if clean else
             "SOME LINES FAILED OR WERE INVALID - CTMS's own answer is in the picture.")
             + " OK pressed and the Import card closed.", dict(self._batch_look(times, t0), imported=True))
+
+    def order_filters_away(self, t):
+        """His Order Filters panel floats over every CTMS card, and on 31/10 it sat right over the Import card's
+        Import button. His word: "If you see it there, close it" - so before the card opens it is closed by its own
+        X, and left alone when it is parked out of the way. The picture is looked at again after each click: the
+        first may only bring the panel to the front (it did, 31/10), and while its title is still there its X is
+        where it was - the pointer resting on it may have drawn a box round it by then. Says what it did ('' if
+        nothing); raises when the panel will not close."""
+        at = None
+        for clicks in range(3):
+            bgra, w, h = self._frame()
+            if not at:
+                at = ctms_import.order_filters_x(bgra, w, h, t, self.batch.get("off", (0, 0)))
+                if not at:
+                    return ""
+            elif not ctms_import.order_filters(bgra, w, h, t):
+                return "Order Filters was over the Import card, so it was closed first. "
+            if clicks < 2:
+                self.window_step("click", {"action": "click", "at": [at[0] / w, at[1] / h],
+                                           "name": "Order Filters' X", "after": 0.8})
+        raise RuntimeError("Order Filters is over the Import card and did not close - close it yourself, then "
+                           "Upload again.")
 
     def export_tabs_away(self, want):
         """Close the export tab(s) `want` names, by their own close buttons, and see CTMS's tab is the one showing

@@ -2686,9 +2686,11 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
 def test_the_import_templates_are_ctmss_own_words_and_every_step_has_one_it_needs():
     t = CI.templates()
     for name in ("imp-card", "imp-nrheavy", "imp-button", "imp-close", "imp-ask-server", "imp-ask-now",
-                 "imp-done", "imp-failed-0", "imp-invalid-0"):
+                 "imp-done", "imp-failed-0", "imp-invalid-0", "of-title", "of-title-on") + CI.OF_XS:
         tp = t[name]
         assert len(base64.b64decode(tp["rgb"])) == tp["w"] * tp["h"] * 3 and tp["w"] <= 400 and tp["h"] <= 200
+    # Order Filters' X in every look is the same size, its middle the X's own
+    assert {(t[x]["w"], t[x]["h"]) for x in CI.OF_XS} == {(14, 14)}
     for s in CI.open_and_type("C:\\x.csv", t) + CI.import_and_answer(t) + CI.clean_checks(t) + CI.finish(t):
         assert s["action"] in B.WINDOW_STEPS + B.BATCH_STEPS, s
     # the Close is pressed only straight after its own label is seen
@@ -2698,6 +2700,102 @@ def test_the_import_templates_are_ctmss_own_words_and_every_step_has_one_it_need
     for q, yes in (("imp-ask-server", [1069, 519]), ("imp-ask-now", [953, 505])):
         i = next(n for n, s in enumerate(steps) if s.get("name") == q)
         assert steps[i + 1] == {"action": "click", "px": yes, "after": 0.5}
+
+
+def _of_frame(spots, w=1910, h=915):
+    """CTMS's window as a picture, with Order Filters' title and X pasted where spots says: {template: (x, y)}."""
+    t = CI.templates()
+    buf = bytearray(b"\x40\x40\x40\xff" * (w * h))
+    for name, (x, y) in spots.items():
+        tpl, tw, th = CI._tpl(t, name)
+        for r in range(th):
+            s = ((y + r) * w + x) * 4
+            buf[s:s + tw * 4] = tpl[r * tw * 4:(r + 1) * tw * 4]
+    return bytes(buf), w, h
+
+
+USUAL = {"of-title": (23, 398), "of-x": (393, 397)}            # bottom left, over the Import button (31/10)
+FRONT = {"of-title-on": (23, 398), "of-x-on": (393, 397)}      # brought to the front by a first click
+
+
+def test_order_filters_in_the_way_is_found_by_its_title_and_only_its_own_x_is_ever_pressed():
+    t = CI.templates()
+    assert CI.order_filters_x(*_of_frame(USUAL), t) == (400, 404)
+    assert CI.order_filters_x(*_of_frame(FRONT), t) == (400, 404)
+    # moved over a little, in front, the pointer resting on its X - a box round it (29/10)
+    assert CI.order_filters_x(*_of_frame({"of-title-on": (63, 398), "of-x-on-hot": (433, 397)}), t) == (440, 404)
+    assert CI.order_filters_x(*_of_frame({}), t) is None                                             # not open
+    assert CI.order_filters_x(*_of_frame({"of-title": (1440, 398), "of-x": (1810, 397)}), t) is None   # parked right
+    assert CI.order_filters_x(*_of_frame({"of-title": (23, 830), "of-x": (393, 829)}), t) is None      # below the card
+    assert CI.order_filters_x(*_of_frame({"of-x": (807, 57)}), t) is None      # another window's X: never pressed
+    try:                                                                       # its title, no X along its row
+        CI.order_filters_x(*_of_frame({"of-title": (23, 398), "of-x": (807, 57)}), t)
+        raise AssertionError("Order Filters without its X was let through")
+    except RuntimeError as e:
+        assert "close it yourself" in str(e)
+
+
+def test_the_upload_closes_order_filters_first_when_it_is_in_the_way_and_stops_if_it_will_not_close():
+    tmp = tempfile.mkdtemp(prefix="imp-test-")
+    keep = (W.find_windows, W.picture, B.LOG, X.DOWNLOADS)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    X.DOWNLOADS = tmp
+
+    class Desk(_Rec):
+        def post(self, path, body, timeout=20):
+            if path == "/api/ctms/upload":
+                return {"name": body["name"], "data": base64.b64encode(b"ORD,1\r\n").decode()}
+            return super().post(path, body, timeout)
+    try:
+        desk = Desk()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        ran, frames, xs = [], [], []
+
+        def step(action, args):
+            what = args.get("name") or (tuple(args["px"]) if "px" in args else args.get("key") or args.get("text"))
+            ran.append((action, what))
+            if what == "Order Filters' X":
+                xs.append((round(args["at"][0] * 1910), round(args["at"][1] * 915)))
+                if len(frames) > 1:
+                    frames.pop(0)                       # what CTMS shows after that click
+            return "ok"
+        b.window_step = step
+        b._batch_look = lambda times, t0: {"kind": "window", "times": times}
+        b._frame = lambda: frames[0]
+
+        def go(n, *shown, **cmd):
+            ran.clear()
+            xs.clear()
+            frames[:] = [_of_frame(s) for s in shown]
+            b.handle(dict({"id": n, "action": "import_csv", "option": UP}, **cmd))
+            return desk.sent[-1][1]
+        x = ("click", "Order Filters' X")
+        r = go(1, USUAL, FRONT, {})                 # 31/10: the first click only brought it to the front
+        assert r["ok"] and r["detail"].startswith("Order Filters was over the Import card, so it was closed first. "
+                                                  "Dry run"), r["detail"]
+        assert xs == [(400, 404), (400, 404)] and ran.index(x) < ran.index(("find", "imp-card"))
+        r = go(2, USUAL, {})                        # closed by the first click
+        assert r["ok"] and xs == [(400, 404)] and "closed first" in r["detail"]
+        # a second look sees only its title - its X may have a box round it by now - and presses the same point
+        r = go(3, USUAL, {"of-title-on": (23, 398)}, {})
+        assert r["ok"] and xs == [(400, 404), (400, 404)]
+        r = go(4, {"of-title": (1440, 398), "of-x": (1810, 397)})      # parked out of the way: left alone
+        assert r["ok"] and x not in ran and r["detail"].startswith("Dry run"), r["detail"]
+        r = go(5, {})                                                  # not open: nothing said about it
+        assert r["ok"] and x not in ran and r["detail"].startswith("Dry run")
+        r = go(6, USUAL, commit=True)                                  # it will not close: stopped before the card
+        assert r["ok"] is False and r["payload"]["imported"] is False and len(xs) == 2, r["detail"]
+        assert "did not close - close it yourself, then Upload again" in r["detail"]
+        assert ("find", "imp-card") not in ran and ("click", (405, 438)) not in ran
+        r = go(7, USUAL, FRONT, {}, commit=True)                       # the real thing, Order Filters out of the way
+        assert r["ok"] and r["payload"]["imported"] is True and "closed first. Uploaded" in r["detail"]
+        assert ran.index(x) < ran.index(("click", (405, 438)))
+    finally:
+        W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_closing_presses_only_the_export_tabs_own_close_button():
