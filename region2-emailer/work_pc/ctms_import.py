@@ -19,8 +19,11 @@ job (ctms_bridge's import_csv):
   6. OK, and the Import card's Close
 
 Each step waits for CTMS to answer, and the run stops - touching nothing more -
-at anything not on the screen where it should be. Without his go-ahead
-(commit) it is a dry run: everything up to Import, then the card closed.
+at anything not on the screen where it should be. Stopped before Import, it
+closes the card it opened (its Close seen first). The Import button is seen
+before it is pressed: another CTMS window over it (his Order Filters, 31/10)
+would take the click. Without his go-ahead (commit) it is a dry run:
+everything up to Import, then the card closed.
 
 Points are pixels of the work PC's own pictures of 29/10 (the window 1910 x
 915); the templates were cut from those pictures - CTMS's own words only.
@@ -37,10 +40,13 @@ def templates():
         return json.load(f)
 
 
-def _find(t, name, box, timeout):
+def _find(t, name, box, timeout, why=""):
     tp = t[name]
-    return {"action": "find", "name": name, "box": list(box), "tpl": tp["rgb"], "tw": tp["w"], "th": tp["h"],
+    step = {"action": "find", "name": name, "box": list(box), "tpl": tp["rgb"], "tw": tp["w"], "th": tp["h"],
             "timeout": timeout}
+    if why:
+        step["why"] = why                       # said instead of "not on the screen", should it not be found
+    return step
 
 
 def _click(x, y, **extra):
@@ -64,6 +70,11 @@ def open_and_type(path, t):
         {"action": "key", "key": "shift+end", "after": 0.05},       # all of the default c:\temp path
         {"action": "type", "text": path, "after": 0.3},
         {"action": "snap", "name": "path", "box": [55, 255, 680, 282]},
+        # the Import button itself in view: on 31/10 his Order Filters panel sat over it, and a click there would
+        # have landed in Order Filters
+        _find(t, "imp-button", (340, 420, 480, 460), 2,
+              why="Something is over the Import card's Import button - another CTMS window (Order Filters, say). "
+                  "Close or move it, then Upload again."),
     ]
 
 
@@ -85,10 +96,11 @@ def clean_checks(t):
     return [_find(t, "imp-failed-0", (850, 420, 1080, 465), 0), _find(t, "imp-invalid-0", (850, 440, 1140, 485), 0)]
 
 
-def finish():
-    return [_click(1074, 519, after=0.8),                           # OK on CTMS's answer
-            _click(1030, 139, after=1.2)]                           # the Import card's Close
+def finish(t):
+    return [_click(1074, 519, after=0.8)] + close_card(t)          # OK on CTMS's answer, then the card closed
 
 
-def close_card():
-    return [_click(1030, 139, after=1.2)]
+def close_card(t):
+    """The Import card's Close - pressed only once its own label is seen there (31/10: a stopped run closes the
+    card it opened, so nothing is left over his work - and never clicks blind if the card is not up)."""
+    return [_find(t, "imp-close", (980, 120, 1090, 160), 3), _click(1030, 139, after=1.2)]

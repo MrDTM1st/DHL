@@ -2645,15 +2645,23 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
         b.armed = True
         r = go(2)                                                    # no go-ahead: a dry run
         assert r["ok"] and "Dry run" in r["detail"] and r["payload"]["imported"] is False, r
-        assert ("click", (405, 438)) not in ran and ran[-1] == ("click", (1030, 139))   # Import never pressed
+        assert ("click", (405, 438)) not in ran                      # Import never pressed - the card closed,
+        assert ran[-2:] == [("find", "imp-close"), ("click", (1030, 139))]     # its Close seen first
         assert ("type", os.path.join(tmp, UP)) in ran and os.path.exists(os.path.join(tmp, UP))
         r = go(3, commit=True)                                       # the real thing, clean
         assert r["ok"] and "no lines failed" in r["detail"] and r["payload"]["imported"] is True, r
         i = ran.index(("click", (405, 438)))
+        assert ran[i - 1] == ("find", "imp-button")                  # the button seen before it is pressed
         assert ran[i + 1:i + 5] == [("find", "imp-ask-server"), ("click", (1069, 519)),
                                     ("find", "imp-ask-now"), ("click", (953, 505))]
         assert ran[ran.index(("find", "imp-card")) + 1] == ("click", (575, 226))
-        assert ran[-2:] == [("click", (1074, 519)), ("click", (1030, 139))]
+        assert ran[-3:] == [("click", (1074, 519)), ("find", "imp-close"), ("click", (1030, 139))]
+        fail_at[0] = ("find", "imp-button")                          # Order Filters over the Import button (31/10)
+        r = go(31, commit=True)
+        assert r["ok"] is False and r["payload"]["imported"] is False and ("click", (405, 438)) not in ran
+        assert "Something is over the Import card's Import button" in r["detail"], r["detail"]
+        assert "Nothing went into CTMS, and the Import card is closed again" in r["detail"]
+        assert ran[-2:] == [("find", "imp-close"), ("click", (1030, 139))]
         fail_at[0] = ("find", "imp-failed-0")                        # a line failed: said, and still closed
         r = go(4, commit=True)
         assert r["ok"] is False and "SOME LINES FAILED" in r["detail"] and r["payload"]["imported"] is True
@@ -2665,6 +2673,7 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
         fail_at[0] = ("find", "imp-card")                            # the card never came: Import never pressed
         r = go(6, commit=True)
         assert r["ok"] is False and r["payload"]["imported"] is False and ("click", (405, 438)) not in ran
+        assert "Nothing went into CTMS" in r["detail"]
         fail_at[0] = None
         for bad in ("..\\" + UP, "report.csv", ""):
             r = go(7, option=bad, commit=True)
@@ -2676,12 +2685,14 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
 
 def test_the_import_templates_are_ctmss_own_words_and_every_step_has_one_it_needs():
     t = CI.templates()
-    for name in ("imp-card", "imp-nrheavy", "imp-ask-server", "imp-ask-now", "imp-done", "imp-failed-0",
-                 "imp-invalid-0"):
+    for name in ("imp-card", "imp-nrheavy", "imp-button", "imp-close", "imp-ask-server", "imp-ask-now",
+                 "imp-done", "imp-failed-0", "imp-invalid-0"):
         tp = t[name]
         assert len(base64.b64decode(tp["rgb"])) == tp["w"] * tp["h"] * 3 and tp["w"] <= 400 and tp["h"] <= 200
-    for s in CI.open_and_type("C:\\x.csv", t) + CI.import_and_answer(t) + CI.clean_checks(t) + CI.finish():
+    for s in CI.open_and_type("C:\\x.csv", t) + CI.import_and_answer(t) + CI.clean_checks(t) + CI.finish(t):
         assert s["action"] in B.WINDOW_STEPS + B.BATCH_STEPS, s
+    # the Close is pressed only straight after its own label is seen
+    assert [s.get("name") or s.get("px") for s in CI.close_card(t)] == ["imp-close", [1030, 139]]
     # every Yes comes straight after the find that sees its own question
     steps = CI.import_and_answer(t)
     for q, yes in (("imp-ask-server", [1069, 519]), ("imp-ask-now", [953, 505])):

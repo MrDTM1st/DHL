@@ -745,20 +745,36 @@ class Bridge:
         def run(steps):
             for step in steps:
                 ts = time.time()
-                self.window_step(step["action"], step)
-                times.append(round(time.time() - ts, 2))
+                try:
+                    self.window_step(step["action"], step)
+                except Exception as e:
+                    if step.get("why"):                 # the step says what its miss means
+                        raise RuntimeError(step["why"]) from e
+                    raise
+                finally:
+                    times.append(round(time.time() - ts, 2))
 
-        def stopped(stage, e, imported):
-            why = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit)) else friendly(e)
-            return done(False, f"Stopped while {stage}: {why} Nothing more was touched - the picture shows where.",
+        def stopped(stage, e, imported, closed=""):
+            why = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
+            return done(False, f"Stopped while {stage}: {why} "
+                        + (closed or "Nothing more was touched - the picture shows where."),
                         dict(self._batch_look(times, t0), imported=imported))
+
+        def close_it():
+            """Before Import nothing went in: close the card this opened - only if its Close is seen there."""
+            try:
+                run(ctms_import.close_card(t))
+                return "Nothing went into CTMS, and the Import card is closed again."
+            except Exception:
+                return "Nothing went into CTMS. The Import card's Close was not where it should be, so it was " \
+                       "left as it is - the picture shows where."
         try:
             run(ctms_import.open_and_type(path, t))
         except Exception as e:
-            return stopped("opening the Import card and typing the path", e, False)
+            return stopped("opening the Import card and typing the path", e, False, close_it())
         if not cmd.get("commit"):
             try:
-                run(ctms_import.close_card())
+                run(ctms_import.close_card(t))
             except Exception as e:
                 return stopped("closing the Import card (dry run)", e, False)
             return done(True, f"Dry run: the Import card opened, NRHEAVY_Order_Import chosen and {path} typed - "
@@ -775,7 +791,7 @@ class Bridge:
         except Exception:
             clean = False
         try:
-            run(ctms_import.finish())
+            run(ctms_import.finish(t))
         except Exception as e:
             return stopped("closing CTMS's answer and the Import card - the import itself ran", e, True)
         return done(clean, f"Uploaded {name} into CTMS: " + (
