@@ -244,6 +244,7 @@ _PRODUCT_WORDS = (
     # the sleeper woods before Timbers, which is the form's HARD_BEARERS
     (r"\b(hardwood|timber|wooden) sleepers?\b", "HARD_SLEEPER"),
     (r"\bsoftwood sleepers?\b", "SOFT_SLEEPER"),
+    (r"\bsleepers?\b", "CONC_SLEEPER"),            # a sleeper of no stated kind is concrete - Delali 31/10
     (r"\bhardwood bearers?\b|\btimbers?\b", "HARD_BEARERS"),
     (r"\btrack materials?\b", "MATERIALS"),
     (r"\bdrums?\b", "CABLE_DRUMS"),

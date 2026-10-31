@@ -43,6 +43,7 @@ def test_the_requesters_own_words():
                            ("water jetter", "MACHINERY"), ("2x crane", "CRANE"), ("X1 DRUM", "CABLE_DRUMS"),
                            ("72x bagged ballast", "BAG_BALLAST"), ("BALLAST 20MM - Loose", "LOOSE_BALLAS"),
                            ("21x stone-blower", "LOOSE_STONEB"), ("hardwood sleepers", "HARD_SLEEPER"),
+                           ("27x sleepers", "CONC_SLEEPER"), ("Sleeper", "CONC_SLEEPER"),
                            ("Concrete troughing", "CONC_TROUGH"), ("Rail clips", "RAIL_COMP"), ("Pallet", "PALLETS"),
                            ("Pallet_NDC", "PRO_SH_NDS"), ("WHEELSETS", "WHEELSETS"), ("wheel sets", "WHEELSETS")):
         got = lines(order(material))[0][1]
