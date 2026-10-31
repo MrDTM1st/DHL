@@ -89,6 +89,10 @@ _OVERRIDES = {
     # recommend them anywhere else" - Delali, 31/10/2026. The delivery end
     # again: a Scottish drop is often loaded in England.
     "tennant": {"only_areas": SCOTLAND_AREAS, "only_scope": "delivery"},
+    # William Hamilton & Sons are in Lanarkshire too, and the contact sheet
+    # allocates them to Region 1 only, as it does Tennant - asked whether they
+    # should be limited the same way: "Yes, Scotland only" - Delali, 31/10/2026.
+    "william hamilton": {"only_areas": SCOTLAND_AREAS, "only_scope": "delivery"},
     # "DHL NOC doesn't like doing night jobs and weekend jobs" - Delali,
     # 2026-07-24. Not a hard no: they stay on the list, but a night/weekend
     # job flags them and drops them below the external hauliers so the first
