@@ -242,10 +242,10 @@ _PRODUCT_WORDS = (
     (r"\bsteel sleepers?\b", "STEE_SLEEPER"),
     # CTMS product types the form has no option for, by CTMS's own names -
     # the sleeper woods before Timbers, which is the form's HARD_BEARERS
-    (r"\b(hardwood|timber|wooden) sleepers?\b", "HARD_SLEEPER"),
+    (r"\bhardwood sleepers?\b", "HARD_SLEEPER"),
     (r"\bsoftwood sleepers?\b", "SOFT_SLEEPER"),
+    (r"\b(timbers?|wooden)\b|\bhardwood bearers?\b", "HARD_BEARERS"),   # "timber would be hard bearers" - Delali 31/10
     (r"\bsleepers?\b", "CONC_SLEEPER"),            # a sleeper of no stated kind is concrete - Delali 31/10
-    (r"\bhardwood bearers?\b|\btimbers?\b", "HARD_BEARERS"),
     (r"\btrack materials?\b", "MATERIALS"),
     (r"\bdrums?\b", "CABLE_DRUMS"),
     (r"\bwheel\W*sets?\b", "WHEELSETS"),
