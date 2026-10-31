@@ -46,6 +46,7 @@ An upload into CTMS, and the weight after it (CTMS's import reads no weight):
     python ctms_remote.py order-weight 12         the open order's item weight, typed (check the picture)
     python ctms_remote.py order-weight-save       item Save + Exit, then the order's Save; then order-close
     python ctms_remote.py update [--branch B] [--all]    the work PC pulls new code from GitHub
+    python ctms_remote.py shared-folder [FOLDER] [--off] where the work PC files each new upload CSV
 
 A booking, from the order well (Planning):
     python ctms_remote.py planning-open           C-TMS Modules > Trip Management > Planning
@@ -453,6 +454,10 @@ def cmd_status(_a):
           + (f", since {s['code_at']}" if s.get("code_at") else ""))
     if s.get("rolled_back"):
         print("ROLLED BACK: " + s["rolled_back"])
+    f = s.get("filing") or {}
+    if f.get("on"):
+        print("Shared folder: " + (f"NOT FILING - {f['error']}" if f.get("error") else "filing the upload CSVs")
+              + (f" (last in: {f['last']} at {f['at']})" if f.get("last") else ""))
     if st.get("running"):
         r = st["running"]
         print(f"Doing now: {r['action']} ({r.get('age', 0)}s)")
@@ -1037,6 +1042,9 @@ def main(argv=None):
     p = sub.add_parser("update")
     p.add_argument("--branch", default="main")
     p.add_argument("--all", action="store_true", help="the whole toolkit, not just the bridge's folder")
+    p = sub.add_parser("shared-folder", help="where the work PC files the upload CSVs - no FOLDER: where it does now")
+    p.add_argument("folder", nargs="?", default="")
+    p.add_argument("--off", action="store_true", help="stop filing (what is there stays)")
     a = ap.parse_args(argv)
     try:
         BASE, KEY = _desk()
@@ -1186,6 +1194,9 @@ def run(a):
         return report(c, args, *ask("tab", **args))
     if c == "update":
         return cmd_update(a)
+    if c == "shared-folder":
+        args = {"on": False} if a.off else {"folder": a.folder} if a.folder else {}
+        return report(c, args, *ask("shared_folder", wait_total=120, **args))
     raise Stop(f"Unknown command {c}")
 
 

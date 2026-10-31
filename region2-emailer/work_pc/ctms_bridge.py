@@ -52,6 +52,10 @@ Leave it running in its Command Prompt while you work. What it does:
   - UPDATES ITSELF when the dashboard or the home PC asks - from GitHub only,
     tried out before it is used, and put back by itself if the new code will
     not start (ctms_update.py). Nothing to copy across by hand.
+  - FILES THE UPLOAD CSVs in the team's shared folder, once one is set
+    (shared_folder.py): each new one the dashboard holds goes in under its
+    own name, about a minute after it is made. Only ever adds - nothing there
+    is replaced or deleted.
 
 Standard library only, like everything else in work_pc\\. Ctrl+C stops it.
 """
@@ -87,6 +91,7 @@ import ctms_tabs
 import ctms_update
 import ctms_window
 import pip_here
+import shared_folder
 from ctms_capture import SCREENS
 from ctms_probe import DEBUG_PORT, find_browser, port_open
 from start_here import PROFILE, launch, wait_for_port
@@ -116,12 +121,12 @@ BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle", "find")
 STEPS_MAX = 120         # a whole order update - times, comments, services, vehicle - is ~90 steps
 SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
-ADMIN = ("update", "fields_setup")
+ADMIN = ("update", "fields_setup", "shared_folder")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
 LOGGED = ("name", "on", "ref", "at", "to", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
-          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target", "steps")
+          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target", "steps", "folder")
 RESTART = 75            # the child's exit code for "updated - start me again"
 
 SHOT_EVERY = 1.5        # seconds between pictures while the CTMS page is open
@@ -1012,6 +1017,8 @@ class Bridge:
                 return done(False, "Refused: 'Claude can act' is switched off on the dashboard's CTMS page.")
         if action == "update":
             return self.update(cmd, done)
+        if action == "shared_folder":
+            return self.shared_folder(cmd, done)
         self.refresh(force=True)
         self.scan_window(force=True)
         try:
@@ -1179,6 +1186,23 @@ class Bridge:
                           + ", ".join(names[:8]) + (" ..." if len(names) > 8 else "")
                           + ". Restarting on the new code - back in a few seconds.")
 
+    def shared_folder(self, cmd, done):
+        """Where the upload CSVs are filed (shared_folder.py), set from the dashboard or the home PC."""
+        folder = str(cmd.get("folder") or "").strip()
+        if cmd.get("on") is False:
+            return done(True, shared_folder.stop())
+        if not folder:
+            return done(True, shared_folder.describe())
+        try:
+            said = shared_folder.set_folder(folder)
+        except ValueError as e:
+            return done(False, str(e))
+        try:        # one look now: the dashboard's list answers, and anything waiting goes in
+            went = shared_folder.tick(self.desk)
+        except Exception as e:
+            return done(True, f"{said} First look: {shared_folder.why(e)}.")
+        return done(True, said + (f" Filed {len(went)} just now." if went else " Nothing new to file yet."))
+
     def stop(self):
         log("stop")
         say("STOP pressed on the dashboard - recording off, queue cleared, Claude cannot act.")
@@ -1218,7 +1242,8 @@ class Bridge:
               "dialog": f"{d.get('type')}: {d.get('message', '')}"[:300] if d else "",
               "autostart": autostart_on(),
               "match": self.match,
-              "machine": platform.node()}
+              "machine": platform.node(),
+              "filing": shared_folder.state()}
         if self.rolled_back:
             rb = self.rolled_back
             st["rolled_back"] = (f"{rb.get('branch')} {str(rb.get('commit') or '')[:7]} was rolled back "
@@ -1540,6 +1565,8 @@ def child(args):
     say(f"Bridge v{VERSION}{' (' + code_label() + ')' if code_label() else ''} checking in with "
         f"{desk.base}. " + ("Claude may act when you switch it on from the dashboard."
                             if bridge.allow_control else "Observe only."))
+    shared_folder.start(desk, say=say, log=log)
+    say(shared_folder.describe())
     try:
         return run(bridge, desk)
     except KeyboardInterrupt:

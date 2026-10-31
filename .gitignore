@@ -44,6 +44,8 @@ region2-emailer/work_pc/ctms_attach_report.txt
 region2-emailer/work_pc/ctms_workpc_report.txt
 region2-emailer/work_pc/ctms_capture/
 region2-emailer/work_pc/ctms_bridge.json
+region2-emailer/work_pc/shared_folder.json
+region2-emailer/work_pc/shared_folder.json.tmp
 region2-emailer/work_pc/ctms_bridge_log.jsonl
 region2-emailer/work_pc/ctms_bridge_crash.txt
 region2-emailer/work_pc/_update_backups/

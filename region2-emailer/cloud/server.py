@@ -29,6 +29,13 @@ _upload = None       # one pending browser->agent file upload {name, data(b64), 
 _agent_seen = 0.0
 _files = {}          # name -> {"data": b64, "size": int, "at": str}
 _MAX_FILES = 12
+# The upload CSVs, held apart for the work PC's bridge to file in the team's
+# shared folder (work_pc/shared_folder.py). Not just the Files list: that keeps
+# the newest 12 of everything, and the agent's re-push after a redeploy goes in
+# name order - an upload CSV not yet filed could drop off the end of it.
+_to_file = {}        # name -> the same entry as in _files
+_MAX_TO_FILE = 60
+_UPLOAD_CSV = re.compile(r"NR_[A-Za-z0-9_-]{0,120}?\d{14}\.csv")
 try:
     _QUEUE_TTL = int(os.environ.get("QUEUE_TTL", "600"))   # seconds an unclaimed command stays queued
 except ValueError:
@@ -64,7 +71,7 @@ CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking
 CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / Claude's own text pasted
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
-CTMS_ADMIN = ("update", "fields_setup")
+CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
                      "find")                                           # (find clicks only what it finds)
@@ -237,7 +244,7 @@ def _ctms_args(action, data):
         tpl = str(data.get("tpl") or "")
         if re.fullmatch(r"[A-Za-z0-9+/=]{4,320000}", tpl):
             out["tpl"] = tpl
-    for k, n in (("text", 2000), ("key", 40), ("option", 200), ("url", 2000)):
+    for k, n in (("text", 2000), ("key", 40), ("option", 200), ("url", 2000), ("folder", 400)):
         if data.get(k) is not None:
             out[k] = str(data[k])[:n]
     snap = str(data.get("snap") or "")
@@ -314,6 +321,10 @@ def _ctms_take_state_locked(s):
                         if str(w.get("java") or "0").isdigit() else 0,
                         "showing": bool(w.get("showing")), "minimized": bool(w.get("minimized")),
                         "foreground": bool(w.get("foreground"))}
+    if isinstance(s.get("filing"), dict):         # the shared folder: on, the last pass went through, what went in
+        f = s["filing"]
+        st["filing"] = dict({k: bool(f.get(k)) for k in ("on", "ok")},
+                            **{k: str(f.get(k) or "")[:n] for k, n in (("last", 160), ("at", 20), ("error", 300))})
     if isinstance(s.get("net_tail"), list):
         st["net_tail"] = [{k: str(e.get(k) or "")[:300] for k in ("at", "method", "url", "status", "type", "mime")}
                           for e in s["net_tail"][-20:] if isinstance(e, dict)]
@@ -1643,6 +1654,18 @@ class Handler(BaseHTTPRequestHandler):
             # the setup asking "can this PC reach the dashboard?" - nothing
             # handed out, nothing marked as running
             return self._json(200, {"ok": True})
+        if path == "/api/ctms/uploads":
+            # the upload CSVs for the shared folder - the work PC remembers which it has filed
+            with _lock:
+                lst = [{"name": n, "size": f["size"], "at": f["at"]} for n, f in _to_file.items()]
+            return self._json(200, {"files": lst})
+        if path == "/api/ctms/upload":
+            # one of them - an upload CSV and nothing else from the Files list
+            with _lock:
+                f = _to_file.get(str(data.get("name") or ""))
+            if not f:
+                return self._json(404, {"error": "gone"})
+            return self._json(200, {"name": data["name"], "data": f["data"]})
         if path == "/api/ctms/poll":
             if length > 200_000:
                 return self._json(413, {"error": "check-in too large"})
@@ -1947,12 +1970,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "auth"})
             name = str(data.get("name", ""))[:120]
             if name and data.get("data"):
+                f = {"data": data["data"], "size": int(data.get("size", 0)),
+                     "at": datetime.now().strftime("%d/%m %H:%M")}
                 with _lock:
                     _files.pop(name, None)
-                    _files[name] = {"data": data["data"], "size": int(data.get("size", 0)),
-                                    "at": datetime.now().strftime("%d/%m %H:%M")}
+                    _files[name] = f
                     while len(_files) > _MAX_FILES:
                         _files.pop(next(iter(_files)))
+                    if _UPLOAD_CSV.fullmatch(name):
+                        _to_file.pop(name, None)
+                        _to_file[name] = f
+                        while len(_to_file) > _MAX_TO_FILE:
+                            _to_file.pop(next(iter(_to_file)))
             self._json(200, {"ok": True})
         else:
             self._json(404, {"error": "not found"})
