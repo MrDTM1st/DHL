@@ -2318,6 +2318,95 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
         R.load_state, R.TEMPLATES = keep
 
 
+# ---- the browser's "open or save?" box after an export (31/10) -------------------------------
+SAVE_BOX = {"hwnd": 77, "title": "Internet Explorer", "process": "iexplore.exe", "frame": [100, 100, 500, 300],
+            "foreground": True, "words": ["Do you want to open or save short_rail_rep_x.csv?"],
+            "parts": ["Button", "Static"], "buttons": [{"text": "Open", "hwnd": 81, "id": 1},
+                                                       {"text": "Save", "hwnd": 82, "id": 2},
+                                                       {"text": "Cancel", "hwnd": 83, "id": 3}]}
+
+
+def test_only_a_standard_dialog_of_ctmss_own_browser_is_its_box():
+    assert W.is_prompt("#32770", "iexplore.exe") and W.is_prompt("#32770", "MSEDGE.EXE")
+    for cls, exe in (("#32770", "outlook.exe"), ("#32770", "ms-teams.exe"), ("#32770", "explorer.exe"),
+                     ("Chrome_WidgetWin_1", "msedge.exe"), ("IEFrame", "iexplore.exe"), ("#32770", "")):
+        assert not W.is_prompt(cls, exe), (cls, exe)
+
+
+def test_the_browsers_box_is_seen_without_the_switch_and_only_ever_saved_never_opened():
+    import types
+    keep = (W.prompts, W.prompt_picture, W.front, W.find_windows, A.user32, B.LOG)
+    boxes = [dict(SAVE_BOX)]
+    W.prompts = lambda: [dict(b) for b in boxes]
+    W.prompt_picture = lambda p: (_bgra([[0xFFFFFFFF] * 4] * 3), 4, 3, "from the window")
+    W.front = lambda: {"process": "outlook.exe", "class": "rctrl_renwnd32", "title": ""}
+    W.find_windows = lambda: []
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    sent = []
+    A.user32 = types.SimpleNamespace(SendMessageTimeoutW=lambda *a: sent.append(a[:4]) or 1)
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.handle({"id": 1, "action": "prompt"})                         # looking: no switch needed
+        body = desk.sent[-1][1]
+        assert body["ok"] and body["payload"]["kind"] == "prompt" and body["payload"]["img"], body
+        assert "Open, Save, Cancel" in body["detail"] and "short_rail_rep_x.csv" in body["detail"]
+        b.handle({"id": 2, "action": "prompt_press", "option": "Save"})   # acting off: not even attempted
+        assert desk.sent[-1][1]["ok"] is False and sent == []
+        b.armed = True
+        for name in ("Open", "Run", "", "open "):                       # an export is saved, never opened
+            b.handle({"id": 3, "action": "prompt_press", "option": name})
+            assert desk.sent[-1][1]["ok"] is False and sent == [], name
+        b.handle({"id": 4, "action": "prompt_press", "option": "save"})
+        assert desk.sent[-1][1]["ok"] and "Pressed Save" in desk.sent[-1][1]["detail"]
+        assert sent == [(77, 0x0111, 2, 82)]       # WM_COMMAND to the box: BN_CLICKED from button id 2
+        boxes[0]["buttons"] = []                   # a box with nothing to name: says to aim on its picture
+        b.handle({"id": 5, "action": "prompt_press", "option": "Save"})
+        assert desk.sent[-1][1]["ok"] is False and "prompt-click" in desk.sent[-1][1]["detail"]
+        boxes.clear()                              # no box: says what is in front - its program, never a title
+        b.handle({"id": 6, "action": "prompt"})
+        assert desk.sent[-1][1]["ok"] and "outlook.exe" in desk.sent[-1][1]["detail"]
+        b.handle({"id": 7, "action": "prompt_press", "option": "Save"})
+        assert desk.sent[-1][1]["ok"] is False and "No box from CTMS's browser" in desk.sent[-1][1]["detail"]
+        assert len(sent) == 1
+    finally:
+        W.prompts, W.prompt_picture, W.front, W.find_windows, A.user32, B.LOG = keep
+
+
+def test_the_dashboard_lets_the_box_be_seen_freely_and_answered_only_with_the_switch():
+    fresh()
+    assert call("/api/ctms/command", {"action": "prompt"}, key=AGENT)[0] == 200
+    for body in ({"action": "prompt_press", "option": "Save"}, {"action": "prompt_click", "at": [0.5, 0.5]}):
+        assert call("/api/ctms/command", body, key=AGENT)[0] == 409      # switched off
+    call("/api/ctms/control", {"on": True, "minutes": 15})
+    assert call("/api/ctms/command", {"action": "prompt_press", "option": "Save"}, key=AGENT)[0] == 200
+    assert S._ctms["queue"][-1]["option"] == "Save"
+    assert call("/api/ctms/command", {"action": "prompt_click", "at": [0.5, 0.25]}, key=AGENT)[0] == 200
+    assert S._ctms["queue"][-1]["at"] == [0.5, 0.25]
+
+
+def test_the_home_pc_aims_on_the_boxs_own_picture():
+    import types
+    seen = {}
+    keep = (R.load_state, R.ask, R.trace)
+    R.ask = lambda action, **a: (seen.update(action=action, args=a) or ({"ok": True, "detail": "ok"}, None))
+    R.trace = lambda *a, **k: None
+    try:
+        R.load_state = lambda: {"kind": "prompt", "img_w": 400, "img_h": 200}
+        assert R.run(types.SimpleNamespace(cmd="prompt-click", at="300,50")) == 0
+        assert seen == {"action": "prompt_click", "args": {"at": [0.75, 0.25]}}
+        assert R.run(types.SimpleNamespace(cmd="prompt-press", button="Save")) == 0
+        assert seen == {"action": "prompt_press", "args": {"option": "Save"}}
+        R.load_state = lambda: {"kind": "window", "img_w": 1000, "img_h": 500}   # CTMS's picture, not the box's
+        try:
+            R.run(types.SimpleNamespace(cmd="prompt-click", at="300,50"))
+            assert False, "aimed on the wrong picture"
+        except R.Stop as e:
+            assert "prompt" in str(e)
+    finally:
+        R.load_state, R.ask, R.trace = keep
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

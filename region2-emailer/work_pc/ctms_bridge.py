@@ -40,7 +40,9 @@ Leave it running in its Command Prompt while you work. What it does:
     in front, a click only ever landing on CTMS itself, and F10 / Ctrl+S (save)
     only after you have said go. While acting is on, `use ctms` / `use tracker`
     also has Edge bring up CTMS's tab or the tracker's, by its name
-    (ctms_tabs.py) - never any other tab.
+    (ctms_tabs.py) - never any other tab. Outside CTMS, only the "open or
+    save?" box its own browser puts up after an export ("prompt"): seen, and
+    answered Save (or Cancel / Close) - never Open, never another program.
     In a web page: click, type, choose, scroll. Either way the way you tell it
     to in the chat, and only while BOTH are true: this PC allows it
     (--allow-control, asked once at setup) and "Claude can act" is switched on
@@ -110,10 +112,12 @@ LOCK_PORT = 8792
 
 # Everything this bridge will do, by who may ask and what it takes.
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking: no switch needed
+READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking: no switch needed
+        "prompt")            # ... at the "open or save?" box CTMS's browser puts up (ctms_window.prompts)
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab", "drag",
-         "steps", "paste")   # Claude acting: this PC AND the dashboard must allow it
+         "steps", "paste",
+         "prompt_press", "prompt_click")   # Claude acting: this PC AND the dashboard must allow it
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -689,6 +693,32 @@ class Bridge:
                         + (" Edge has just switched tabs: click into the page before any keys."
                            if self.click_first else "")}
 
+    # -- the "open or save?" box CTMS's browser puts up (31/10) --
+    def prompt_look(self):
+        """(what it says, the picture) of the box CTMS's browser has up - or, with none, what is in front."""
+        ps = ctms_window.prompts()
+        if not ps:
+            return "No box from CTMS's browser is up. " + self.front_said(), {"kind": "prompt", "prompts": []}
+        p = ps[0]
+        bgra, w, h, how = ctms_window.prompt_picture(p)
+        said = (f"The browser's box '{p['title'] or 'untitled'}'" + ("" if p["foreground"] else " (behind other windows)")
+                + (": " + " / ".join(p["words"][:3]) if p["words"] else "")
+                + (" - buttons: " + ", ".join(b["text"] for b in p["buttons"]) if p["buttons"]
+                   else " - no buttons it can press by name (aim at them on the picture)"))
+        return said, {"kind": "prompt", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
+                      "mime": "image/png", "img_w": w, "img_h": h, "title": p["title"], "how": how,
+                      "prompts": [dict({k: q[k] for k in ("title", "process", "foreground", "words", "parts")},
+                                       buttons=[b["text"] for b in q["buttons"]]) for q in ps[:3]],
+                      "note": "The browser's own box: prompt-press Save (never Open), or aim with prompt-click "
+                              "--at X,Y on this picture."}
+
+    def front_said(self):
+        f = ctms_window.front()
+        if not f:
+            return "Nothing is in front."
+        return f"In front: {f.get('process') or '?'} ({f.get('class') or '?'}" + (
+            f", '{f['title']}'" if f.get("title") else "") + ")."
+
     # -- looking between the steps of a batch (ctms_fast) --
     def _frame(self):
         """(BGRA, w, h) of the window being worked, now - the window the batch started on, found afresh only if
@@ -1050,6 +1080,23 @@ class Bridge:
                 return done(True, ctms_jab.summary(p), dict(p, kind="fields", title=self.win["title"]))
             if action == "fields_setup":
                 return done(True, ctms_jab.setup())
+            if action == "prompt":
+                return done(True, *self.prompt_look())
+            if action in ("prompt_press", "prompt_click"):
+                ps = ctms_window.prompts()
+                if not ps:
+                    raise RuntimeError("No box from CTMS's browser is up. " + self.front_said())
+                p = ps[0]
+                if action == "prompt_press":
+                    detail = ctms_act.press_button(p, cmd.get("option"))
+                else:
+                    at = cmd.get("at")
+                    if not (isinstance(at, (list, tuple)) and len(at) == 2):
+                        raise RuntimeError("Aim at a point on the prompt's picture: prompt-click --at X,Y.")
+                    detail = ctms_act.click(p["hwnd"], at[0], at[1], p["frame"]).replace(" CTMS ", " the prompt ")
+                time.sleep(0.6)                     # the box goes, or the next one comes
+                said, payload = self.prompt_look()
+                return done(True, f"{detail}. Now: {said}", payload)
             if action == "use":
                 # which window to work - CTMS's, or the tracker's page. Its tab not the selected one: while
                 # Claude can act, Edge brings it up by its name (ctms_tabs). Not found even so: stay where we were.

@@ -28,6 +28,10 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
                                                   (also double/right X,Y, drag X,Y X,Y, paste TEXT)
     python ctms_remote.py paste "MAN-1\\tPASS_DH\\t325\\tDelali\\t\\tY"   rows into the tracker at the
                                                   cursor (\\t cells, \\n rows) - or --file ROWS.txt
+    python ctms_remote.py prompt                  the "open or save?" box CTMS's browser puts up after an
+                                                  export - its picture, words and buttons
+    python ctms_remote.py prompt-press Save       press Save on it (Cancel / Close too - never Open)
+    python ctms_remote.py prompt-click --at X,Y   ...or a point on its picture, when it has no buttons to name
 
 The CTMS note run (CTMS's own window; each answers with a picture to check):
     python ctms_remote.py orders-page             C-TMS Modules > Order Management > Orders
@@ -270,6 +274,18 @@ def trace(action, args, result, payload):
 
 
 def print_screen(p, action, full=False, words=2500):
+    if p.get("kind") == "prompt":
+        # the browser's own "open or save?" box: a picture, and what it says (prompt-click --at X,Y aims on it)
+        if p.get("img"):
+            save_state(p)
+            pic = save_picture(p, action)
+            print(f"\nThe browser's box: {p.get('title') or '?'}")
+            print(f"Picture: {pic}  ({p.get('img_w')}x{p.get('img_h')}, taken {p.get('how')})")
+        for q in p.get("prompts") or []:
+            print(f"  {q.get('process')}: '{q.get('title')}'{'' if q.get('foreground') else ' (behind)'}"
+                  f"  buttons: {', '.join(q.get('buttons') or []) or '-'}  |  {' / '.join(q.get('words') or [])}")
+        print(p.get("note") or "")
+        return
     if p.get("kind") == "window":
         # CTMS's own window in his Edge: a picture, read by eye - no numbered list.
         # Saved so a following click --at X,Y knows the picture its X,Y are from.
@@ -492,6 +508,15 @@ def _window_point(x, y):
     iw, ih = st.get("img_w") or 0, st.get("img_h") or 0
     if st.get("kind") != "window" or not (iw and ih):
         raise Stop("Take a picture of CTMS's window first (see), then aim at a point on it.")
+    return [max(0.0, min(1.0, x / iw)), max(0.0, min(1.0, y / ih))]
+
+
+def _prompt_point(x, y):
+    """A point read off the latest picture of the browser's box (prompt), as the fraction the bridge takes."""
+    st = load_state()
+    iw, ih = st.get("img_w") or 0, st.get("img_h") or 0
+    if st.get("kind") != "prompt" or not (iw and ih):
+        raise Stop("Take a picture of the browser's box first (prompt), then aim at a point on it.")
     return [max(0.0, min(1.0, x / iw)), max(0.0, min(1.0, y / ih))]
 
 
@@ -946,6 +971,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="ctms_remote.py", description="CTMS on the work PC, from the home PC.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
+    sub.add_parser("prompt", help="the browser's \"open or save?\" box after an export")
+    p = sub.add_parser("prompt-press", help="press a button on it by what it says: Save, Cancel or Close")
+    p.add_argument("button")
+    p = sub.add_parser("prompt-click", help="click a point on its picture")
+    p.add_argument("--at", required=True, help="X,Y on the latest picture of the box")
     p = sub.add_parser("see")
     p.add_argument("--all", action="store_true", help="list what is out of view too")
     p.add_argument("--no-marks", action="store_true", help="a picture without the numbers drawn on")
@@ -1064,6 +1094,14 @@ def run(a):
     c = a.cmd
     if c == "status":
         return cmd_status(a)
+    if c == "prompt":
+        return report(c, {}, *ask("prompt"))
+    if c == "prompt-press":
+        args = {"option": a.button}
+        return report(c, args, *ask("prompt_press", **args))
+    if c == "prompt-click":
+        args = {"at": _prompt_point(*_xy(a.at, "--at"))}
+        return report(c, args, *ask("prompt_click", **args))
     if c == "see":
         args = {"marks": not a.no_marks}
         return report(c, args, *ask("see", **args), full=a.all)

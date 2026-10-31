@@ -26,6 +26,10 @@ person would; at this step only by looking:
             Java's Access Bridge - the channel screen readers use with Oracle
             Forms. The live check runs in a separate Python process, so a
             fault in native code there cannot take the bridge down.
+  prompts   the one thing outside CTMS's window it may see (31/10): a
+            standard Windows dialog of CTMS's own browser - the "open or
+            save?" box a CTMS export brings up. Never another program's
+            window; of anything else in front, only its program is said.
 
 Read-only: nothing here clicks, types or changes anything on the PC.
 Standard library (ctypes) only.
@@ -74,6 +78,8 @@ if IS_WIN:
     user32.WindowFromPoint.restype = wintypes.HWND
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
     user32.GetAncestor.restype = wintypes.HWND
+    user32.GetDlgCtrlID.argtypes = [wintypes.HWND]
+    user32.GetDlgCtrlID.restype = ctypes.c_int
     user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
     user32.GetDC.argtypes = [wintypes.HWND]
     user32.GetDC.restype = wintypes.HDC
@@ -199,6 +205,58 @@ def _enum(parent=None):
 
 # Extra window classes to treat as CTMS's own - the tests' stand-in window only.
 TEST_CLASSES = tuple(c for c in os.environ.get("CTMS_WINDOW_TEST_CLASS", "").split(",") if c)
+
+# ---- the box CTMS's browser puts up (31/10) ------------------------------------------
+# A CTMS export opens its file in a new tab, and the Internet Explorer engine CTMS runs in asks "open or save?"
+# in a box of its own, in front of everything - Edge's own "ask me what to do" is off on the work PC, IE mode does
+# not go by it. Outside CTMS's window, so the bridge could neither see nor answer it, and the file goes bad if it
+# waits. He gave it that much ("you just save it, you don't open it"): a standard Windows dialog of CTMS's own
+# browser. Never another program's window - an email or a chat is never seen.
+DIALOG_CLASS = "#32770"
+BROWSER_EXES = ("msedge.exe", "iexplore.exe")     # Edge, and the Internet Explorer engine its IE mode runs
+
+
+def is_prompt(cls, exe):
+    """Is a top-level window CTMS's browser's own box? A standard dialog of Edge or its IE engine - nothing else:
+    not a browser window, not another program's dialog."""
+    return cls == DIALOG_CLASS and str(exe or "").lower() in BROWSER_EXES
+
+
+def prompts():
+    """The standard dialogs CTMS's browser has up, front-most first: [{hwnd, title, process, frame, foreground,
+    buttons: [{text, hwnd, id}], words, parts}]. Nothing else is described."""
+    if not IS_WIN:
+        return []
+    dpi_aware()
+    fg = user32.GetForegroundWindow()
+    out = []
+    for h in _enum():                       # EnumWindows goes from the front backwards
+        if not user32.IsWindowVisible(h) or _cls(h) != DIALOG_CLASS or not is_prompt(DIALOG_CLASS, _exe(h)):
+            continue
+        buttons, words, parts = [], [], set()
+        for k in _enum(h):
+            c = _cls(k)
+            parts.add(c)
+            t = _text(k).strip() if user32.IsWindowVisible(k) else ""
+            if c == "Button" and t:
+                buttons.append({"text": t.replace("&", ""), "hwnd": int(k), "id": int(user32.GetDlgCtrlID(k))})
+            elif c == "Static" and t:
+                words.append(t[:200])
+        out.append({"hwnd": int(h), "title": _text(h)[:120], "process": _exe(h), "frame": _frame(h),
+                    "foreground": h == fg, "buttons": buttons[:10], "words": words[:10], "parts": sorted(parts)[:12]})
+    return out
+
+
+def front():
+    """What is in front, said only as far as it is CTMS's browser: its program and kind of window - a title only
+    for the browser's own (another program's could be an email's subject)."""
+    if not IS_WIN:
+        return {}
+    h = user32.GetForegroundWindow()
+    if not h:
+        return {}
+    exe = _exe(h)
+    return {"process": exe, "class": _cls(h), "title": _text(h)[:120] if exe in BROWSER_EXES else ""}
 
 
 def is_page(cls, title):
@@ -463,6 +521,24 @@ def picture(win):
             raise RuntimeError("Windows would not give a picture of CTMS's window.")
         if whole:
             data = round_corners(data, w, h, 8 * win.get("scale", 1.0))
+    return data, w, h, how
+
+
+def prompt_picture(p):
+    """(BGRA pixels, width, height, how) of one of prompts() - its own window and nothing else."""
+    rect = _rect(p["hwnd"])
+    area = p.get("frame") or rect
+    data, w, h = _grab(p["hwnd"], rect, from_screen=False)
+    how = "from the window"
+    if data is not None:
+        data, w, h = crop(data, w, h, (area[0] - rect[0], area[1] - rect[1], area[2] - rect[0], area[3] - rect[1]))
+    if data is None or blank(data):
+        if not showing(p["hwnd"], area):
+            raise RuntimeError("Windows would not hand over a picture of the prompt, and something is in front of it.")
+        data, w, h = _grab(p["hwnd"], area, from_screen=True)
+        how = "off the screen, where the prompt is showing"
+        if data is None:
+            raise RuntimeError("Windows would not give a picture of the prompt.")
     return data, w, h, how
 
 

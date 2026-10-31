@@ -33,6 +33,9 @@ The rails, in this order, every time:
      On the one allowed web page (the DigiHaul Job Tracker, ctms_window.
      PAGE_WORDS) the keys that would work the BROWSER instead - the address
      bar, reload, history, back/forward, other tabs - are refused as well.
+  6. Outside CTMS's window, only the "open or save?" box its own browser puts
+     up after an export (ctms_window.prompts, 31/10) - and on it only Save,
+     Cancel or Close, never Open: "you just save it, you don't open it".
 
 Reading CTMS's fields by name (so the bridge could know a box is a password box,
 or what a button says) needs Java's Access Bridge. Until that is available the
@@ -115,6 +118,9 @@ if IS_WIN:
     user32.GetKeyState.restype = ctypes.c_short
     user32.GetSystemMetrics.argtypes = [ctypes.c_int]
     user32.GetSystemMetrics.restype = ctypes.c_int
+    user32.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+                                           wintypes.UINT, wintypes.UINT, ctypes.POINTER(ULONG_PTR)]
+    user32.SendMessageTimeoutW.restype = wintypes.LPARAM
 
 # name -> (virtual-key code, is it an "extended" key)
 VK = {
@@ -366,6 +372,34 @@ def text_units_for(ch):
         return [code]
     code -= 0x10000
     return [0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)]
+
+
+# ---- the browser's "open or save?" box (31/10) --------------------------------------------------
+# The one box outside CTMS the bridge may answer (ctms_window.prompts). An export is saved, never opened.
+PROMPT_BUTTONS = ("save", "cancel", "close")
+WM_COMMAND = 0x0111
+BN_CLICKED = 0
+SMTO_ABORTIFHUNG = 0x0002
+
+
+def press_button(prompt, name):
+    """Press one of the prompt's buttons by what it says. The dialog gets the message a click on that button sends
+    it - nothing is aimed, so nothing else can take it, and it works with the box in front or not."""
+    want = str(name or "").strip().lower()
+    if want not in PROMPT_BUTTONS:
+        raise Refused(f"Only Save, Cancel or Close on the browser's prompt - not '{name}': an export is saved, "
+                      f"never opened.")
+    btn = next((b for b in prompt.get("buttons") or [] if b["text"].strip().lower() == want), None)
+    if not btn:
+        have = ", ".join(b["text"] for b in prompt.get("buttons") or []) or "none it can name"
+        raise Refused(f"The prompt has no '{name}' button to press by name (its buttons: {have}) - aim at it on "
+                      f"its picture instead: prompt-click --at X,Y.")
+    res = ULONG_PTR()
+    if not user32.SendMessageTimeoutW(prompt["hwnd"], WM_COMMAND, (BN_CLICKED << 16) | (btn["id"] & 0xFFFF),
+                                      btn["hwnd"], SMTO_ABORTIFHUNG, 3000, ctypes.byref(res)):
+        raise Refused(f"The prompt did not take the press within 3s (error {ctypes.get_last_error()}) - look "
+                      f"again: prompt.")
+    return f"Pressed {btn['text']} on the browser's prompt"
 
 
 # ---- paste: a block of Claude's own text in one go (29/10) ------------------------------------

@@ -71,10 +71,12 @@ _panel = {}          # agent-pushed persistent panel state: site decisions, hand
 CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdigest()
             if DASH_KEY else "")
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
-CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use")   # Claude looking
+CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking
+             "prompt")                   # ... at the "open or save?" box CTMS's browser puts up after an export
 CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / Claude's own text pasted
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
-              "reload", "dialog", "tab", "drag")   # Claude acting - only while the switch is on
+              "reload", "dialog", "tab", "drag",   # Claude acting - only while the switch is on
+              "prompt_press", "prompt_click")      # ... Save on that box (never Open)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
