@@ -114,28 +114,50 @@ NOT_ORDERED = ("", "N", "NO", "0", "-", "--", "N/A", "NA", "NONE", "FALSE",
 # Synergy or seasonal product must never be rewritten by it.
 ADHOC_ACCOUNTS = ("NRADHOC", "NRADHOC_NH", "NR_OTHER")
 
-# The ad hoc Material -> ITEMS pick-list, read off the 47 genuine Access
-# exports in _nr_truth/. 19 of their orders carry the Haulage Request Form
-# shape in the delivery instructions ("Material X Dimension ..."), which pairs
-# each form Material with the ITEMS value the database actually wrote.
+# The Haulage Request Form's own Material drop-down: its hidden Products
+# sheet, which the form's upload row (RHPC Admin) reads with a VLOOKUP - each
+# option, the ITEMS value it uploads, and the CTMS product type that item is.
+# Read off haulage_request_template.xlsx, 31/10/2026 - "that drop down tells
+# you what exactly would be uploaded onto CTMS" (Delali).
 #
-# Only the pairs the corpus agrees on are here. Three Materials pass straight
-# through and are deliberately absent rather than mapped to themselves - Track
-# Materials (4 rows), Timbers (1) and Cable Drums (1).
-#
-# Box is ALSO absent, and that is a judgement, not an oversight. The corpus
-# contradicts itself on it: "Box" became "Box." twice and "Box." became "BOX"
-# once. One of those adds a stray full stop and the other uppercases; there is
-# no reading where both are a rule. Passing Box through unchanged is the only
-# option that invents nothing. If CTMS wants BOX, say so and it is one line.
-ADHOC_ITEMS = {
-    "parcel": "PARCEL",
-    "rail": "ADHOC RAIL",
-    "pallet": "PALLET",
-    "pallets (van)": "PALLETS_VAN",
-    "pallets (larger than van)": "PALLET",
-    "composite sleepers": "Composite Sleeper",
-}
+# The sheet's product-type column is not always a CTMS code. Where it is not,
+# its name column says which: Machinery, Sandite Modules, train Jacks and Water
+# Jetter Modules are all named Machinery (MACHINERY - what Delali set on a
+# Sandite Module by hand), and Track Materials is the name of MATERIALS.
+# "Other - Please specify in additional information" uploads a blank item; it
+# is PRODUCT_FALLBACK below, not a row here.
+FORM_PRODUCTS = (
+    # option                      ITEMS value               product type
+    ("Bagged Ballast",            "bagged ballast",         "BAG_BALLAST"),
+    ("Box",                       "Box.",                   "BOX"),
+    ("Cable Drums",               "Cable Drums",            "CABLE_DRUMS"),
+    ("Composite Sleepers",        "Composite Sleeper",      "COMP_SLEEPER"),
+    ("Concrete Sleepers",         "Concrete Sleepers",      "CONC_SLEEPER"),
+    ("Container",                 "CONTAINER",              "CONTAINER"),
+    ("Crane",                     "CRANE",                  "CRANE"),
+    ("Crossing",                  "Crossing",               "S&C"),
+    ("Machinery",                 "APU",                    "MACHINERY"),
+    ("Pallets (Larger than van)", "PALLET",                 "PALLETS"),
+    ("Pallets (Van)",             "PALLETS_VAN",            "PALLETS_VAN"),
+    ("Parcel",                    "PARCEL",                 "PARCEL"),
+    ("Rail",                      "ADHOC RAIL",             "SHORT_RAIL"),
+    ("Sandite Module",            "Sandite Module",         "MACHINERY"),
+    ("Shift Work",                "Shift",                  "SHIFT"),
+    ("Steel Sleepers",            "Steel Sleepers",         "STEE_SLEEPER"),
+    ("Switches",                  "Switches",               "S&C"),
+    ("Timbers",                   "Timbers",                "HARD_BEARERS"),
+    ("Track Materials",           "Track Materials",        "MATERIALS"),
+    ("Train Jacks",               "train Jacks",            "MACHINERY"),
+    ("Watter Jetter Module",      "Water Jetter Modules",   "MACHINERY"),
+)
+
+# The ad hoc Material -> ITEMS pick-list: the form's own. The 47 genuine
+# Access exports in _nr_truth/ agree with it wherever they overlap - 19 of
+# their orders carry the form's "Material X Dimension ..." shape - and add
+# "Pallet", which the database wrote as PALLET. Their one Box contradiction
+# ("Box." became BOX once, where "Box" became "Box." twice) is settled by the
+# form: Box uploads as "Box.".
+ADHOC_ITEMS = dict({o.lower(): item for o, item, _ in FORM_PRODUCTS}, pallet="PALLET")
 
 
 def adhoc_item(prod, acct):
@@ -149,12 +171,142 @@ def adhoc_item(prod, acct):
     return ADHOC_ITEMS.get(str(prod or "").strip().lower(), prod)
 
 
+# ---- the product type on the ORD_LINES line -------------------------------
+# CTMS's import (Maintenance > Imports, NRHEAVY_Order_Import) reads ORD_LINES
+# column 2 as the order line's PRODUCT TYPE. This upload, like the Access
+# database before it, always left it empty, and the audit trail of every ad
+# hoc shows what that does: "Order created" at status INVALID, then "Order line
+# created - 1 HEAVY of  ordered" - no product. CTMS next looks the ITEMS word
+# up in its own item list. The old database's words are on it (PALLET, ADHOC
+# RAIL, Pallet_NDC, Box) and got a product the same minute; anything else
+# (Signal Head, Sandite Module, Half set switches) stayed INVALID until Delali
+# set the product by hand. (The audit trails of that week's ad hocs, 31/10/2026.)
+#
+# So an ad hoc now names its product type itself, spelt exactly as CTMS's
+# Maintenance > Products list has it - case included. The form's drop-down
+# (FORM_PRODUCTS) decides first, then Delali's own calls and the form's options
+# in the requester's own words, then the CTMS product types the form has no
+# option for, by CTMS's own names - nothing else is read into a material.
+# Every other upload leaves the column empty as before. Synergy's ITEMS line is
+# the NR stock number, which CTMS's item list places on its own (bagged ballast
+# arrives as BAG_BALLAST), and a guess of ours on top could only disagree with
+# it - unless the ITEMS value already IS a product type (a DTS's SUPPLIER_COL,
+# a media set's MEDIA_SETS), which goes in as itself.
+
+# The product types this upload sends, in CTMS's own spelling. Not CTMS's whole
+# list: that one names customers and projects, and stays out of this repo.
+PRODUCT_TYPES = frozenset({
+    "BAG_BALLAST", "BOX", "CABLE_DRUMS", "COMP_SLEEPER", "CONC_SLEEPER", "CONC_TROUGH",
+    "CONTAINER", "CRANE", "HARD_BEARERS", "HARD_SLEEPER", "LOOSE_BALLAS", "LOOSE_STONEB",
+    "MACHINERY", "MATERIALS", "MEDIA_SETS", "NON_SERV_MAT", "PALLETS", "PALLETS_VAN",
+    "PARCEL", "PLAS_TROUGH", "PRO_SH_NDS", "RAIL_COMP", "S&C", "SERVICE_MAT", "SHIFT",
+    "SHORT_RAIL", "SOFT_SLEEPER", "STEE_SLEEPER", "STEEL_PLATE", "SUPPLIER_COL", "WHEELSETS",
+})
+
+# What an ad hoc goes up as when nothing in its material names a product -
+# Delali's pick (31/10/2026), and what he gave a Signal Head by hand.
+PRODUCT_FALLBACK = "PARCEL"
+
+# The form's drop-down by option and by the ITEMS value it uploads ("Box." and
+# "ADHOC RAIL" as much as "Box" and "Rail") - plus Pallet_NDC, the shoot loads'
+# item, which the form has no row for and CTMS's item list placed by itself in
+# that week's audit trails.
+FORM_TYPES = dict({o.lower(): t for o, _, t in FORM_PRODUCTS},
+                  **{i.lower().strip(" ."): t for _, i, t in FORM_PRODUCTS}, pallet_ndc="PRO_SH_NDS")
+
+# A material in the requester's own words - first match wins.
+_PRODUCT_WORDS = (
+    # Delali's own calls (31/10/2026). "Serviceable materials has its own
+    # product type, so it shouldn't be put into sleepers" - non-serviceable
+    # first, as it holds the word.
+    (r"\bsupplier\W*collect", "SUPPLIER_COL"),
+    (r"\bnon\W*servic\w*able\b", "NON_SERV_MAT"),
+    (r"\bservic\w*able\b", "SERVICE_MAT"),
+    # ballast and stoneblowers as ctms_codes.product_code reads them (from
+    # build_drafts' is_stoneblower / is_loose_ballast - not imported, as
+    # build_drafts will not even load without the desk's config.json): a
+    # stoneblower first, as its line can say ballast too, and loose ballast is
+    # a type of its own - it rides a tipper. Bagged is the form's Bagged Ballast.
+    (r"stone\W*blow", "LOOSE_STONEB"),
+    (r"\bloose\b.*\bballast|\bballast\b.*\bloose\b", "LOOSE_BALLAS"),
+    (r"\bballast\b", "BAG_BALLAST"),
+    # the form's options, in the requester's own words ("that switch is
+    # supposed to be an S&C" - Delali 31/10)
+    (r"\bswitch|\bcrossings?\b|\bturnouts?\b|\bs ?& ?c\b", "S&C"),
+    (r"\bsandite\b|\bwater\W*jetter|\btrain\W*jacks?\b|\bmachinery\b|\bapu\b", "MACHINERY"),
+    (r"\bcranes?\b", "CRANE"),
+    (r"\bshift\b", "SHIFT"),
+    (r"\bcontainers?\b", "CONTAINER"),
+    (r"\bcomposite sleepers?\b", "COMP_SLEEPER"),
+    (r"\bconcrete sleepers?\b", "CONC_SLEEPER"),
+    (r"\bsteel sleepers?\b", "STEE_SLEEPER"),
+    # CTMS product types the form has no option for, by CTMS's own names -
+    # the sleeper woods before Timbers, which is the form's HARD_BEARERS
+    (r"\b(hardwood|timber|wooden) sleepers?\b", "HARD_SLEEPER"),
+    (r"\bsoftwood sleepers?\b", "SOFT_SLEEPER"),
+    (r"\bhardwood bearers?\b|\btimbers?\b", "HARD_BEARERS"),
+    (r"\btrack materials?\b", "MATERIALS"),
+    (r"\bdrums?\b", "CABLE_DRUMS"),
+    (r"\bwheel\W*sets?\b", "WHEELSETS"),
+    (r"\bconcrete trough", "CONC_TROUGH"),
+    (r"\bplastic trough", "PLAS_TROUGH"),
+    (r"\bsteel plates?\b", "STEEL_PLATE"),
+    (r"\brail (clips?|pads?|fastenings?|components?|chairs?|anchors?|joints?)\b", "RAIL_COMP"),
+    (r"\brails?\b", "SHORT_RAIL"),
+    (r"\bpallets?\b", "PALLETS"),
+    (r"\bparcels?\b", "PARCEL"),
+    (r"\bbox(es)?\b", "BOX"),
+)
+
+
+def placed_product(material):
+    """The CTMS product type an ad hoc's material names, or None when nothing
+    in it does: a product type given as itself, then the form's drop-down,
+    then the material's own words."""
+    text = str(material or "").strip()
+    if text in PRODUCT_TYPES:
+        return text
+    key = re.sub(r"\s+", " ", text.lower()).strip(" .")
+    if key in FORM_TYPES:
+        return FORM_TYPES[key]
+    for pattern, code in _PRODUCT_WORDS:
+        if re.search(pattern, key):
+            return code
+    return None
+
+
+def line_product(o, acct):
+    """ORD_LINES column 2: the order line's CTMS product type - or "" to leave
+    the ITEMS value for CTMS's own item list to place, as Synergy's stock
+    numbers always have been."""
+    desc = str(o.get("Product / Description") or "").strip()
+    code = str(o.get("Product / Service Code") or "").strip()
+    for v in (desc, code):
+        if v in PRODUCT_TYPES:
+            return v
+    if str(acct or "").strip().upper() in ADHOC_ACCOUNTS:
+        return placed_product(desc or code) or PRODUCT_FALLBACK
+    return ""
+
+
+def line_length(v):
+    """ORD_LINES column 5 is the line's LENGTH in CTMS - a rail's metres
+    (18.288 = 60ft). Only a real one goes in: a form's stray "St" and "00"
+    arrived as the length of a pallet (FS-990-261102 and 1785533, 30/10)."""
+    try:
+        n = float(str(v).strip())
+    except (TypeError, ValueError):
+        return ""
+    return v if 0 < n < 1000 else ""
+
+
 def transform(rows):
     """rows: list of dicts in Imported_Orders column shape. Returns list of
     35-field records, ordered like the Final query (OrdSort, SEQ)."""
     out = []
     W = 35
     fellback = []
+    unplaced = []
 
     def rec(seq, ordsort, vals):
         r = [""] * W
@@ -240,10 +392,14 @@ def transform(rows):
         if not cc.strip("/-. "):
             cc = ""
         rec(10, ordno, {0: "ORD_SUB_REFS", 1: "1003", 2: cc or "0"})
-        # ORD_LINES (SEQ 12): col2=class, col3=qty, col4=Serial Number
-        rec(12, ordno, {0: "ORD_LINES",
+        # ORD_LINES (SEQ 12): col1=product type, col2=class, col3=qty, col4=length
+        ptype = line_product(o, acct)
+        if ptype == PRODUCT_FALLBACK and acct.upper() in ADHOC_ACCOUNTS \
+                and not placed_product(o.get("Product / Description") or o.get("Product / Service Code")):
+            unplaced.append(f"{ordno} ({o.get('Product / Description') or o.get('Product / Service Code') or 'no material'})")
+        rec(12, ordno, {0: "ORD_LINES", 1: ptype,
                         2: "CHRG_PALLET" if acct == "NRNONHEAVY" else "HEAVY",
-                        3: o.get("Product Qty"), 4: o.get("Serial Number")})
+                        3: o.get("Product Qty"), 4: line_length(o.get("Serial Number"))})
         # ITEMS (SEQ 13): col1=Product/Description, col2=qty.
         # If the form states a product, follow it - fall back to the service
         # code, never leave the ITEMS product blank for the upload to default.
@@ -256,8 +412,7 @@ def transform(rows):
         # code untouched - 0057/100500/002 is the corpus's commonest ITEMS
         # value, on ballast orders from the same suppliers as ours - or plain
         # English like "Spent Ballast". CTMS wanting one code per type is still
-        # true; it just belongs on the booking, not on Network Rail's upload.
-        # The codes moved to ctms_codes.product_code().
+        # true; it belongs on the ORD_LINES line (line_product), never here.
         prod = str(o.get("Product / Description") or "").strip() \
             or str(o.get("Product / Service Code") or "").strip()
         # An ad hoc's Material goes through the form's own pick-list: the
@@ -276,6 +431,11 @@ def transform(rows):
               f"email. 1002 set to {raised_by_fallback()} so CTMS does not drop "
               f"them silently: {', '.join(fellback)}")
         print(f"  RAISED_BY_FALLBACK {len(fellback)}")
+    if unplaced:
+        # PARCEL keeps the order out of INVALID, but it is a fallback, not a
+        # reading - say which, so the product can be checked in CTMS.
+        print(f"  NOTE: nothing in the material names a CTMS product, so it goes up as "
+              f"{PRODUCT_FALLBACK}: {', '.join(unplaced)}")
     return [r for _, _, r in out]
 
 

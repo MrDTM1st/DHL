@@ -152,9 +152,9 @@ def pairs():
     database wrote. This runs our mapping over those same Materials and reports
     what still differs, so nr_csv.ADHOC_ITEMS cannot drift without saying so.
 
-    Three Box rows are expected to differ: the corpus contradicts itself there
-    ("Box" -> "Box." twice, "Box." -> "BOX" once) and we pass Box through
-    rather than pick one. Anything ELSE differing is a regression.
+    One Box row is expected to differ: the corpus contradicts itself there
+    ("Box" -> "Box." twice, "Box." -> "BOX" once), and the form's own
+    drop-down settles it as "Box.". Anything ELSE differing is a regression.
     """
     import nr_csv
     pat = re.compile(r"^Material\s+(.*?)\s+Dimension", re.I)
