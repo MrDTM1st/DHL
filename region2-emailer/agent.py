@@ -203,8 +203,10 @@ def _slim_hauliers():
                         "phone": (h.get("phone") or "")[:40],
                         "email": (h.get("emails") or [""])[0],
                         "fleet": bool(h.get("own_fleet")),   # DHL NOC - approached first
-                        "no_go": h.get("no_go_areas", []),   # areas they don't cover (HHL: the north)
+                        "no_go": h.get("no_go_areas", []),   # areas they don't cover
                         "no_go_scope": h.get("no_go_scope", "both"),  # which end it applies to
+                        "only": h.get("only_areas", []),     # the patch they work and nowhere else
+                        "only_scope": h.get("only_scope", "both"),
                         "avoid_nw": bool(h.get("avoid_night_weekend")),  # DHL NOC: no nights/weekends
                         "caps": h.get("caps", [])})   # capability match happens in the browser
         # booking services (Parcel Pass): published for their contact details

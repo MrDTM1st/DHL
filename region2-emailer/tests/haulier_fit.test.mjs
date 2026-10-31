@@ -103,6 +103,27 @@ test('a job with nothing to go on still never lists a tipper-only firm', () => {
   assert.ok(!got.includes('Tipper Only Ltd') && !got.includes('Log Grab Co') && got.includes('Curtain Co'), got.join());
 });
 
+test('a haulier who works one patch is listed only for drops inside it', () => {
+  const pool = [...HAULIERS,
+    H('Patch Co', 'tier1', ['Artic Hiab', 'Bags'], { only: ['SE', 'CB', 'PE15'], only_scope: 'delivery' }),
+    H('Scot Co', 'tier1', ['Artic Hiab', 'Bags'], { only: ['G', 'ML', 'EH'], only_scope: 'delivery' }),
+    H('Both Ends Co', 'tier1', ['Artic Hiab', 'Bags'], { only: ['SE', 'DN'] })];
+  const at = (pc, extra = {}) => recommendFor(job('72x ballast', {}, { postcode: pc, ...extra }), pool, {}).list.map((h) => h.name);
+  assert.ok(at('SE18 6AA').includes('Patch Co'));
+  assert.ok(at('CB7 4AA').includes('Patch Co'));     // a whole area
+  assert.ok(at('PE15 8AA').includes('Patch Co'));    // one district of a big area...
+  assert.ok(!at('PE25 1AA').includes('Patch Co'));   // ...and not the rest of it
+  assert.ok(!at('NG10 5AA').includes('Patch Co') && !at('NG10 5AA').includes('Scot Co'));
+  assert.ok(at('ML11 8AA').includes('Scot Co') && !at('ML11 8AA').includes('Patch Co'));
+  // the delivery end decides: a pick-up up north for a drop in the patch is fine...
+  assert.ok(at('SE18 6AA', { collections: [{ pc: 'DN16 1AA' }] }).includes('Patch Co'));
+  // ...unless the patch covers both ends
+  assert.ok(at('SE18 6AA', { collections: [{ pc: 'DN16 1AA' }] }).includes('Both Ends Co'));
+  assert.ok(!at('SE18 6AA', { collections: [{ pc: 'NG10 1AA' }] }).includes('Both Ends Co'));
+  // a job with no delivery postcode yet rules nobody out
+  assert.ok(at('').includes('Patch Co') && at('').includes('Scot Co'));
+});
+
 test('orders run soonest first, then no date, then past ones most recent first', () => {
   const rs = [10, -3, 2, null, -30, 0].map((d, i) => ({ id: String(i), orders: ['900000' + i],
     delivery_date: d === null ? '' : ddmmyyyy(d) }));

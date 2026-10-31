@@ -8,7 +8,7 @@
 // ONE postcode normaliser lives in geo.js (it owns the geocode cache these keys
 // index). Re-exported here so existing importers don't have to change - two
 // copies is exactly how cache keys drift apart and pins go missing.
-import { pcNorm } from './geo.js';
+import { pcNorm, outcodeOf } from './geo.js';
 import { namedPhones, phonesIn } from './phone.js';
 export { pcNorm };
 
@@ -413,20 +413,34 @@ export function recommendFor(r, hauliers, geo) {
   const colls = collectionsOf(r);
   const cgs = colls.map((c) => geo[pcNorm(c.pc || '')]).filter(Boolean);
   const dg = geo[pcNorm(r.postcode || '')];
-  // coverage is a hard filter like capability. no_go_scope says WHICH end the
-  // no-go areas apply to: HHL happily COLLECTS from the north (loads originate
-  // at the steelworks and flow south) but won't DELIVER there, so their scope
-  // is 'delivery'; the default is 'both'. A multi-collection job needs the
-  // haulier at EVERY pick-up, so one no-go collection rules them out.
+  // coverage is a hard filter like capability, from either side: no_go is the
+  // areas a haulier won't work, only the patch they DO work and nowhere else
+  // (areas like 'CB', or districts like 'PE15' where an area is too big to
+  // take whole). Each scope says WHICH end it applies to: HHL happily COLLECTS
+  // from the north (loads originate at the steelworks and flow south) but only
+  // DELIVERS in their own patch, so their scope is 'delivery'; the default is
+  // 'both'. A multi-collection job needs the haulier at EVERY pick-up, so one
+  // collection outside them rules them out. An unknown postcode rules nobody out.
   const areaOf = (p) => { const m = pcNorm(p).match(/^[A-Z]+/); return m ? m[0] : ''; };
-  const cAreas = colls.map((c) => areaOf(c.pc || '')).filter(Boolean);
-  const dArea = areaOf(r.postcode || '');
+  // a bare district ('PE15') is its own district - outcodeOf would read P + inward
+  const districtOf = (p) => { const s = pcNorm(p).replace(/ /g, ''); return /^[A-Z]{1,2}\d[A-Z\d]?$/.test(s) ? s : outcodeOf(p); };
+  const endOf = (p) => ({ area: areaOf(p), district: districtOf(p) });
+  const cEnds = colls.map((c) => endOf(c.pc || '')).filter((e) => e.area);
+  const dEnd = endOf(r.postcode || '');
   const outsideCoverage = (h) => {
-    const areas = h.no_go || [];
-    if (!areas.length) return false;
-    const scope = h.no_go_scope || 'both';
-    if ((scope === 'both' || scope === 'collection') && cAreas.some((a) => areas.includes(a))) return true;
-    if ((scope === 'both' || scope === 'delivery') && dArea && areas.includes(dArea)) return true;
+    const no = h.no_go || [];
+    const noScope = h.no_go_scope || 'both';
+    if (no.length) {
+      if ((noScope === 'both' || noScope === 'collection') && cEnds.some((e) => no.includes(e.area))) return true;
+      if ((noScope === 'both' || noScope === 'delivery') && dEnd.area && no.includes(dEnd.area)) return true;
+    }
+    const only = h.only || [];
+    const onlyScope = h.only_scope || 'both';
+    const outside = (e) => !only.includes(e.area) && !only.includes(e.district);
+    if (only.length) {
+      if ((onlyScope === 'both' || onlyScope === 'collection') && cEnds.some(outside)) return true;
+      if ((onlyScope === 'both' || onlyScope === 'delivery') && dEnd.area && outside(dEnd)) return true;
+    }
     return false;
   };
   const out = (hauliers || []).filter((h) => {

@@ -14,6 +14,7 @@ the collection postcode, tier, and any quote history for that lane
 to rank "who's nearest", not a routing engine.
 """
 import os, re, sys, json, math
+import nr_regions
 import postcodes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,34 +46,49 @@ def _emails(v):
 _outward = postcodes.outward
 
 
+def _district(pc):
+    """The district of a full postcode or of a bare one ('PE15 8QP' or 'PE15'
+    -> 'PE15') - `find --to PE15` passes the bare kind, which outward() would
+    read as P + inward code."""
+    s = postcodes.compact(pc)
+    return s if re.fullmatch(r"[A-Z]{1,2}\d[A-Z\d]?", s) else postcodes.outward(pc)
+
+
 # ---- coverage overrides ------------------------------------------------
 # Operational facts from Delali that the contact list doesn't record. Applied
 # in load() (not baked into the store) so re-importing a newer contact sheet
 # never wipes them. Keys match by substring of the haulier name.
 #
-# Postcode AREAS considered "the north" for coverage purposes - Yorkshire/
-# Humberside, the North East, the North West and Scotland. The Midlands belt
-# (B CV DY WS WV ST TF LE DE NG LN NN...) is deliberately NOT in here.
-NORTH_AREAS = sorted({
-    # Yorkshire & Humberside
-    "S", "DN", "HU", "YO", "LS", "BD", "HX", "HD", "WF", "HG",
-    # North East
-    "NE", "SR", "DH", "TS", "DL",
-    # North West
-    "CA", "LA", "PR", "FY", "BB", "BL", "OL", "M", "SK", "WA", "WN", "L", "CH",
-    # Scotland
-    "AB", "DD", "DG", "EH", "FK", "G", "HS", "IV", "KA", "KW", "KY", "ML",
-    "PA", "PH", "TD", "ZE",
-})
+# Coverage comes two ways round, each with a scope saying which end of the job
+# it checks ('delivery', 'collection' or 'both'): no_go_areas are areas a
+# haulier won't work, only_areas the patch they DO work and nowhere else.
+# only_areas takes postcode areas ("CB") or, where an area is too big to take
+# whole, districts ("PE15").
+#
+# Scotland - the part of Region 1 north of the border.
+SCOTLAND_AREAS = ["AB", "DD", "DG", "EH", "FK", "G", "HS", "IV", "KA", "KW",
+                  "KY", "ML", "PA", "PH", "TD", "ZE"]
+# Cambridge and Ely, and the Cambridgeshire towns round them. PE runs all the
+# way from Huntingdon to Skegness and King's Lynn, so only its districts near
+# Ely and Huntingdon: March, Chatteris, St Neots, Ramsey, St Ives, Huntingdon.
+CAMBRIDGE_ELY = ["CB", "PE15", "PE16", "PE19", "PE26", "PE27", "PE28", "PE29"]
 
 _OVERRIDES = {
-    # "HHL mostly focus on the Midlands and southern/London region, so they
-    # wouldn't really be doing northern work... HHL is only for DELIVERY, not
-    # both" - Delali, 2026-07-22. Collecting FROM the north is fine (loads
-    # originate at the northern steelworks and flow south all the time); what
-    # they don't do is DELIVER up north. So the no-go only checks the
-    # delivery end.
-    "hotspur": {"no_go_areas": NORTH_AREAS, "no_go_scope": "delivery"},
+    # "Hotspur mostly does Region 4 work... Sometimes they've gone up to
+    # Cambridge and Ely... it's okay to give them things that are around that
+    # vicinity... they'll probably do something in Oxford as well... don't put
+    # it on the list for all the other regional stuff" - Delali, 31/10/2026.
+    # Oxford is in Region 4 already. This replaces July's "not the north",
+    # which still put them near the top of every Midlands job. It checks the
+    # DELIVERY end only, as July's did ("HHL is only for DELIVERY, not both"):
+    # collecting at the northern steelworks for a drop down south is normal.
+    "hotspur": {"only_areas": nr_regions.areas_in("R4") + CAMBRIDGE_ELY,
+                "only_scope": "delivery"},
+    # "Tennants are mostly just Region 1... up in Scotland. Sometimes they
+    # would come onto the edge of England, but it's not really likely... don't
+    # recommend them anywhere else" - Delali, 31/10/2026. The delivery end
+    # again: a Scottish drop is often loaded in England.
+    "tennant": {"only_areas": SCOTLAND_AREAS, "only_scope": "delivery"},
     # "DHL NOC doesn't like doing night jobs and weekend jobs" - Delali,
     # 2026-07-24. Not a hard no: they stay on the list, but a night/weekend
     # job flags them and drops them below the external hauliers so the first
@@ -330,18 +346,24 @@ def recommend(from_pc, needs=(), to_pc="", limit=None, include_couriers=False):
         pool += list(d.get("couriers", []))
     needs = [str(n).strip().lower() for n in needs if str(n).strip()]
     c_area, d_area = postcodes.area(from_pc), postcodes.area(to_pc)
+    c_ends, d_ends = {c_area, _district(from_pc)}, {d_area, _district(to_pc)}
 
     def outside_coverage(h):
-        """no_go_scope says WHICH end the no-go areas apply to: 'delivery'
-        (HHL - happy to collect up north, won't deliver there), 'collection',
-        or 'both' (the default)."""
+        """The scopes say WHICH end each list applies to: 'delivery' (HHL -
+        happy to collect up north, won't deliver there), 'collection', or
+        'both' (the default). no_go_areas rule out an end inside them,
+        only_areas an end outside them. An unknown postcode rules nobody out."""
         areas = set(h.get("no_go_areas", []))
-        if not areas:
-            return False
         scope = h.get("no_go_scope", "both")
-        if scope in ("both", "collection") and c_area and c_area in areas:
+        if areas and scope in ("both", "collection") and c_area and c_area in areas:
             return True
-        if scope in ("both", "delivery") and d_area and d_area in areas:
+        if areas and scope in ("both", "delivery") and d_area and d_area in areas:
+            return True
+        only = set(h.get("only_areas", []))
+        scope = h.get("only_scope", "both")
+        if only and scope in ("both", "collection") and c_area and not c_ends & only:
+            return True
+        if only and scope in ("both", "delivery") and d_area and not d_ends & only:
             return True
         return False
 
