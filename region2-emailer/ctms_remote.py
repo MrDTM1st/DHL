@@ -823,10 +823,15 @@ def print_batch(payload):
             print(f"Snap {s.get('name')}: {path}  ({s.get('w')}x{s.get('h')})")
 
 
-def send_batch(name, batch):
+LOGGED_RUNS = ("order-update", "order-save-close", "book")   # recipes whose every run goes in ctms_runlog
+
+
+def send_batch(name, batch, refs=None):
     """Steps the work PC runs by itself, one after another, with ONE picture at the end - a round
     trip and a picture per step was most of a booking's time (29/10). It stops at the first step that
-    is refused or fails, and says which. A bridge or dashboard from before batches gets them one by one."""
+    is refused or fails, and says which. A bridge or dashboard from before batches gets them one by one.
+    A recipe's run is logged, clean or not - the record his "make it automatic" is to be judged on."""
+    started = time.time()
     try:
         result, payload = ask("steps", wait_total=90 + 10 * len(batch), steps=batch)
     except Stop as e:
@@ -835,6 +840,13 @@ def send_batch(name, batch):
         return _one_by_one(name, batch)
     if not result.get("ok") and "is not something this bridge does" in str(result.get("detail")):
         return _one_by_one(name, batch)
+    if name.startswith(LOGGED_RUNS):
+        try:
+            import ctms_runlog
+            ctms_runlog.record(name, refs, result.get("ok"), result.get("detail"),
+                               round(time.time() - started, 1), path=os.path.join(OUT, "runs.jsonl"))
+        except Exception:
+            pass
     trace(f"{name}-steps", {"steps": batch}, result, payload)
     if payload and payload.get("kind") == "window":
         save_state(payload)
@@ -1030,7 +1042,7 @@ def run(a):
     if c == "steps":
         return send_batch("steps", parse_steps(a.items, commit=a.commit))
     if c == "order-update":
-        return send_batch(c, parse_steps(order_update_items(a)))
+        return send_batch(c, parse_steps(order_update_items(a)), refs=[a.order])
     if c == "order-save-close":
         return send_batch(c, parse_steps(order_save_close_items(a)))
     if c == "template":
