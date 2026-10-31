@@ -76,7 +76,8 @@ CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking
 CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / Claude's own text pasted
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag",   # Claude acting - only while the switch is on
-              "prompt_press", "prompt_click")      # ... Save on that box (never Open)
+              "prompt_press", "prompt_click",      # ... Save on that box (never Open)
+              "export_fetch")                      # ... or the export's file taken from its tab's address
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them

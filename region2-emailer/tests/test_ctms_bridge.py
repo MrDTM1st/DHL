@@ -2359,6 +2359,7 @@ def test_the_browsers_box_is_seen_without_the_switch_and_only_ever_saved_never_o
             assert desk.sent[-1][1]["ok"] is False and sent == [], name
         b.handle({"id": 4, "action": "prompt_press", "option": "save"})
         assert desk.sent[-1][1]["ok"] and "Pressed Save" in desk.sent[-1][1]["detail"]
+        assert "'Internet Explorer' (Do you want to open or save" in desk.sent[-1][1]["detail"]   # which box
         assert sent == [(77, 0x0111, 2, 82)]       # WM_COMMAND to the box: BN_CLICKED from button id 2
         clicks = []
         keep_click, A.click = A.click, lambda *a, **k: clicks.append(a) or "Clicked CTMS at 50% across, 50% down"
@@ -2417,6 +2418,92 @@ def test_the_home_pc_aims_on_the_boxs_own_picture():
             assert "prompt" in str(e)
     finally:
         R.load_state, R.ask, R.trace = keep
+
+
+# ---- the export's file, taken from its tab's address (31/10) ------------------------------------
+import ctms_export as X                 # noqa: E402
+
+EXP = "https://ctms.example.com/webint/app/prd/export/short_rail_rep_2026-10-31_221330.csv"
+OLD = "https://ctms.example.com/webint/app/prd/export/short_rail_rep_2026-10-31_214116.csv"
+
+
+def test_only_an_https_csv_in_an_export_folder_open_in_a_tab_is_an_export():
+    names = [OLD, EXP + " and 3 more pages - Work - Microsoft​ Edge", "Oracle Fusion Middleware Forms Services",
+             "http://ctms.example.com/webint/export/x.csv", "https://elsewhere.example.com/files/x.csv",
+             "https://ctms.example.com/export/report.pdf", "Inbox - delali - Outlook", EXP]
+    assert X.urls(names) == [EXP, OLD]                    # newest first, each once
+    assert X.is_export(OLD) and not X.is_export("https://ctms.example.com/export/x.csv.exe")
+
+
+def test_the_export_goes_into_downloads_only_ever_adding_and_a_sign_in_page_is_never_saved():
+    import types
+    tmp = tempfile.mkdtemp(prefix="exp-test-")
+    keep = X.DOWNLOADS, X._openers, X.fetch
+    X.DOWNLOADS = tmp
+    try:
+        def opener(answer):
+            def open_(url, timeout=60):
+                if isinstance(answer, Exception):
+                    raise answer
+                return contextlib.closing(types.SimpleNamespace(read=lambda n=-1: answer, close=lambda: None))
+            return types.SimpleNamespace(open=open_)
+        X._openers = lambda: iter([("straight from CTMS's server",
+                                    opener(urllib.error.HTTPError(EXP, 403, "Forbidden", {}, None))),
+                                   ("through the proxy", opener(b"<!DOCTYPE html><html>Sign in</html>"))])
+        try:
+            X.take([EXP])
+            assert False, "a sign-in page was taken as the file"
+        except RuntimeError as e:
+            assert "HTTP 403" in str(e) and "sign-in page" in str(e), e
+        assert os.listdir(tmp) == []
+        csv = b"Schedule,Trip Number,Order Reference\r\n261102,T1,A1\r\n261103,T2,A2\r\n"
+        X._openers = lambda: iter([("straight from CTMS's server", opener(csv))])
+        got = X.take(["Oracle Fusion Middleware Forms Services", OLD, EXP])
+        assert got["name"] == "short_rail_rep_2026-10-31_221330.csv" and got["written"] and got["rows"] == 2
+        assert got["header"] == "Schedule,Trip Number,Order Reference" and got["how"] == "straight from CTMS's server"
+        assert open(os.path.join(tmp, got["name"]), "rb").read() == csv
+        assert X.take([EXP])["written"] is False             # the same file again: left as it was
+        X._openers = lambda: iter([("straight from CTMS's server", opener(csv + b"261104,T3,A3\r\n"))])
+        assert X.take([EXP])["saved_as"] == "short_rail_rep_2026-10-31_221330 (2).csv"   # never replaced
+        assert X.take([OLD, EXP], want="short_rail_rep_2026-10-31_214116.csv")["name"].endswith("214116.csv")
+        try:
+            X.take(["Oracle Fusion Middleware Forms Services"])
+            assert False
+        except RuntimeError as e:
+            assert "press Export" in str(e)
+    finally:
+        X.DOWNLOADS, X._openers, X.fetch = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_bridge_takes_the_export_only_with_the_switch_and_the_dashboard_queues_it_only_then():
+    keep = (W.find_windows, W.picture, B.LOG, TB.names, X.take)
+    W.find_windows = lambda: [dict(FAKE_WIN, title=EXP + " and 3 more pages - Work - Microsoft Edge")]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    TB.names = lambda want, timeout=10.0: [n for n in (OLD, "Inbox - Outlook") if want(n)]
+    asked = []
+    X.take = lambda names, want="": (asked.append((names, want)) or
+                                     {"name": "short_rail_rep_2026-10-31_221330.csv", "saved_as":
+                                      "short_rail_rep_2026-10-31_221330.csv", "written": True, "bytes": 2048,
+                                      "rows": 12, "header": "Schedule,Trip Number", "how": "straight from CTMS's server"})
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.handle({"id": 1, "action": "export_fetch"})               # acting off: not even tried
+        assert desk.sent[-1][1]["ok"] is False and asked == []
+        b.armed = True
+        b.handle({"id": 2, "action": "export_fetch"})
+        r = desk.sent[-1][1]
+        assert r["ok"] and "Took short_rail_rep_2026-10-31_221330.csv straight from CTMS's server" in r["detail"], r
+        assert "12 row(s)" in r["detail"] and r["payload"]["kind"] == "export"
+        assert asked[0][0][0].startswith(EXP) and OLD in asked[0][0] and "Inbox - Outlook" not in asked[0][0]
+    finally:
+        W.find_windows, W.picture, B.LOG, TB.names, X.take = keep
+    fresh()
+    assert call("/api/ctms/command", {"action": "export_fetch"}, key=AGENT)[0] == 409       # switched off
+    call("/api/ctms/control", {"on": True, "minutes": 15})
+    assert call("/api/ctms/command", {"action": "export_fetch", "option": "x.csv"}, key=AGENT)[0] == 200
 
 
 if __name__ == "__main__":

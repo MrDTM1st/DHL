@@ -399,7 +399,9 @@ def press_button(prompt, name):
                                       btn["hwnd"], SMTO_ABORTIFHUNG, 3000, ctypes.byref(res)):
         raise Refused(f"The prompt did not take the press within 3s (error {ctypes.get_last_error()}) - look "
                       f"again: prompt.")
-    return f"Pressed {btn['text']} on the browser's prompt"
+    # which box it was, said every time: on 31/10 a press was reported done on a box nobody had seen
+    said = " / ".join((prompt.get("words") or [])[:2])
+    return f"Pressed {btn['text']} on the browser's box '{prompt.get('title') or 'untitled'}'" + (f" ({said})" if said else "")
 
 
 # ---- paste: a block of Claude's own text in one go (29/10) ------------------------------------

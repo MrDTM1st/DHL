@@ -88,6 +88,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import cdp
 import ctms_act
 import ctms_drive
+import ctms_export
 import ctms_fast
 import ctms_jab
 import ctms_tabs
@@ -117,7 +118,8 @@ READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking: no 
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab", "drag",
          "steps", "paste",
-         "prompt_press", "prompt_click")   # Claude acting: this PC AND the dashboard must allow it
+         "prompt_press", "prompt_click",
+         "export_fetch")   # Claude acting: this PC AND the dashboard must allow it
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -1082,6 +1084,15 @@ class Bridge:
                 return done(True, ctms_jab.setup())
             if action == "prompt":
                 return done(True, *self.prompt_look())
+            if action == "export_fetch":
+                # the file CTMS's export opened in a tab, taken from its address into Downloads (ctms_export)
+                names = ([self.win["title"]] if self.win else []) + ctms_tabs.names(ctms_export.is_export)
+                got = ctms_export.take(names, cmd.get("option") or "")
+                return done(True, (f"Took {got['name']} {got['how']} into Downloads"
+                                   + ("" if got["saved_as"] == got["name"] else f" as {got['saved_as']}")
+                                   + ("" if got["written"] else " - it was there already, left as it was")
+                                   + f": {got['rows']} row(s), {got['bytes']:,} bytes. Header: {got['header']}"),
+                            dict(got, kind="export"))
             if action in ("prompt_press", "prompt_click"):
                 ps = ctms_window.prompts()
                 if not ps:

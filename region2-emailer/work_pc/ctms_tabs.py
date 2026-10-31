@@ -7,7 +7,8 @@ reader does - Windows UI Automation, built into Windows, asked through ctypes li
 and only ever a tab whose name is CTMS's (CTMS_TAB_WORDS) or the tracker's (ctms_window.PAGE_WORDS).
 No other tab is selected, pictured or named back, nothing is clicked or typed to do it, and UI
 Automation is told to leave the keyboard focus alone, so Edge gives the tab's own page its focus back,
-as it does when the tab is clicked.
+as it does when the tab is clicked. One more is read, never selected (31/10): the tab a CTMS export opens,
+named by its file's address (ctms_export takes the file from there).
 
 Standard library only, like everything else in work_pc\\.
 """
@@ -232,6 +233,33 @@ def _select(target):
     finally:
         if hr >= 0:
             ole32.CoUninitialize()
+
+
+def _names(want):
+    hr = ole32.CoInitializeEx(None, 0)
+    try:
+        s = _Session()
+        try:
+            return [n for hwnd in _edge_windows() for _, n in s.tabs(hwnd) if want(n)]
+        finally:
+            s.close()
+    except OSError:
+        return []
+    finally:
+        if hr >= 0:
+            ole32.CoUninitialize()
+
+
+def names(want, timeout=10.0):
+    """The names of Edge's tabs that `want` says yes to - nothing else is read back (31/10: the tab a CTMS export
+    opens is named by its file's address, ctms_export). [] if Edge does not answer in time."""
+    if not IS_WIN:
+        return []
+    out = []
+    t = threading.Thread(target=lambda: out.append(_names(want)), daemon=True, name="ctms-tab-names")
+    t.start()
+    t.join(timeout)
+    return out[0] if out else []
 
 
 def select(target, timeout=10.0):
