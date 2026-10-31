@@ -2110,7 +2110,7 @@ def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
     R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
     R.TEMPLATES = os.path.join(tempfile.gettempdir(), "ctms_templates_test.json")
     with open(R.TEMPLATES, "w", encoding="utf-8") as f:
-        json.dump({"os-search": {"w": 2, "h": 1, "rgb": "AAAAAAAA"}}, f)
+        json.dump({n: {"w": 2, "h": 1, "rgb": "AAAAAAAA"} for n in ("os-search", "os-card")}, f)
     try:
         b = R.parse_steps(["anchor", "click 245,67 react box=440,100,1230,200 timeout=25", "key tab after=0.05",
                            "waitfor 728,122 ffffff tol=10 timeout=12", "check 5,6 #00FF00 not",
@@ -2143,11 +2143,43 @@ def test_the_home_pc_writes_the_fast_steps_and_the_order_update_recipe():
             assert False
         except R.Stop:
             pass
-        save = R.parse_steps(R.order_save_close_items(a))
-        assert [s["px"] for s in save if s["action"] == "click"] == [[1000.0, 37.0], [337.0, 733.0], [424.0, 733.0]]
-        assert save[0] == {"action": "anchor"} and save[2] == {"action": "anchor", "window": True}
     finally:
         R.load_state, R.TEMPLATES = keep
+
+
+def test_the_update_starts_at_a_search_card_left_open_and_the_save_answers_the_schedule_question():
+    import types
+    keep = (R.load_state, R.TEMPLATES, R.ask, R.OUT)
+    R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
+    R.TEMPLATES = os.path.join(tempfile.gettempdir(), "ctms_templates_test.json")
+    with open(R.TEMPLATES, "w", encoding="utf-8") as f:
+        json.dump({n: {"w": 2, "h": 1, "rgb": "AAAAAAAA"} for n in ("os-search", "os-card", "schedule-ask")}, f)
+    R.OUT = tempfile.mkdtemp()                                         # its traces and run log, not the real ones
+    try:
+        a = types.SimpleNamespace(order="1234567-1-1", collect=None, deliver="05/11/26 08:00-12:00", comments=None)
+        fresh = [s.get("px") for s in R.parse_steps(R.order_update_items(a))]
+        left = R.parse_steps(R.order_update_items(a, card_open=True))
+        pts = [s.get("px") for s in left]
+        assert [121.0, 36.0] in fresh and [121.0, 36.0] not in pts       # with the card up, the menu does nothing
+        assert [s["name"] for s in left if s["action"] == "find"] == ["os-card"]
+        assert not any(s["action"] == "waitfor" for s in left)            # its labels, not a box's colour (31/10)
+        assert pts.index([626.0, 226.0]) < pts.index([728.0, 122.0])       # Clear empties the last search first
+        for asks in (True, False):                                        # "Change schedule to:" up, or not
+            sent = []
+
+            def ask(action, **kw):
+                sent.append(kw["steps"])
+                return {"ok": asks if kw["steps"][-1]["action"] == "find" else True, "detail": "ok"}, None
+            R.ask = ask
+            assert R.order_save_close() == 0
+            clicks = [s["px"] for steps in sent for s in steps if s["action"] == "click"]
+            assert clicks == ([[1000.0, 37.0], [337.0, 733.0]] + ([[952.0, 505.0]] if asks else [])
+                              + [[1000.0, 37.0], [424.0, 733.0]])                 # Save, its OK, then Close
+        with open(os.path.join(R.OUT, "runs.jsonl"), encoding="utf-8") as f:
+            runs = [json.loads(line) for line in f]
+        assert [(r["kind"], r["ok"]) for r in runs] == [("order-save-close", True)] * 2   # one line a save
+    finally:
+        R.load_state, R.TEMPLATES, R.ask, R.OUT = keep
 
 
 TEAL = 0xFF364C4C                       # an active window's title bar, (54, 76, 76)
@@ -2247,8 +2279,7 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
     R.load_state = lambda: {"kind": "window", "img_w": 1910, "img_h": 915}
     R.TEMPLATES = os.path.join(tempfile.gettempdir(), "ctms_templates_test.json")
     with open(R.TEMPLATES, "w", encoding="utf-8") as f:
-        json.dump({"veh-rigid-40ft": {"w": 2, "h": 1, "rgb": "AAAAAAAA"},
-                   "os-search": {"w": 2, "h": 1, "rgb": "AAAAAAAA"}}, f)
+        json.dump({n: {"w": 2, "h": 1, "rgb": "AAAAAAAA"} for n in ("veh-rigid-40ft", "os-search", "os-card")}, f)
     try:
         a = types.SimpleNamespace(order="1234567-1-1", collect=None, deliver=None,
                                   comments="05/11/26 08:00 - Sam Example 07700900123 - HIAB required",
@@ -2258,7 +2289,8 @@ def test_the_recipe_closes_the_card_first_and_a_rigid_never_gets_rear_steer():
         assert pts.index([509.0, 226.0]) < pts.index([267.0, 238.0])     # the card shut before the order opens
         assert [174.0, 318.0] in pts and [734.0, 648.0] in pts            # row 2 picked, then Delete
         found = [s for s in steps if s["action"] == "find"]
-        assert [s["name"] for s in found] == ["os-search", "veh-rigid-40ft"] and all(s["click"] for s in found)
+        assert [(s["name"], bool(s.get("click"))) for s in found] == [
+            ("os-search", True), ("os-card", False), ("veh-rigid-40ft", True)]     # the card only looked for
         assert len(steps) <= 120
         for bad in (dict(comments="05/11/26 - Rear steer required"), dict(add_service=["REAR STEER"])):
             b = types.SimpleNamespace(**dict(vars(a), **bad))

@@ -624,12 +624,16 @@ def cut_template(name, box, src=None):
 # down arrow (after its thumb is dragged up the list) bring that line into view - found live 29-30/10.
 VEH = {"rigid": ("veh-rigid-40ft", 20), "artic": ("veh-artic-40ft-flatbed", 6)}
 SERVICE_ROW_Y = 295            # the Services grid's first row; each next row 23 px lower
+# Where the Order Search card shows, and the box CTMS asks "Change schedule to: <yymmdd>?" in (31/10).
+CARD_BOX = "430,50,830,270"
+SCHEDULE_ASK_BOX = "790,370,1100,530"
 
 
-def order_update_items(a):
+def order_update_items(a, card_open=False):
     """Open an order by its whole customer ref and put the site's details in - collection and delivery times,
     the Order Comments (replaced whole), services off and on, the vehicle - keeping a snap of each part. Does NOT
-    save (order-save-close does, once the snaps have been read)."""
+    save (order-save-close does, once the snaps have been read). `card_open`: the Order Search card is up
+    already, left from a search before - CTMS's menu does nothing then, so the run starts at the card."""
     comments = getattr(a, "comments", None)
     adds = [s.strip().upper() for s in (getattr(a, "add_service", None) or [])]
     removes = sorted({int(r) for r in (getattr(a, "remove_service_row", None) or [])}, reverse=True)
@@ -643,29 +647,31 @@ def order_update_items(a):
     if getattr(a, "ballast", False) and "PTS" in adds:
         raise Stop("A ballast order never gets PTS, whatever the site said (his rule 30/10) - leave it off.")
     items = ["anchor",
-             # C-TMS Modules > Order Management > Orders brings up Order Summary (or does nothing when it is up
-             # already) - so wait for ITS Search button to show, whichever, and press it for the card
              # an empty bit of the menu bar first: the first click after CTMS comes to the front only gives
              # its Java the focus, and it closes any menu left open (30/10)
-             "click 1000,37 after=0.4",
-             # each menu click waits for its dropdown to draw - Java's menus take longer than 0.3 s (30/10)
-             "click 121,36 react box=60,45,300,150 quiet=0.2 timeout=5",
-             "click 135,63 react box=280,50,460,170 quiet=0.2 timeout=5",
-             "click 245,67 after=0.3",
-             "anchor window",              # CTMS's own area can scroll its windows (8 px, 30/10)
-             "find os-search click react box=300,600,500,680 timeout=25",
-             "anchor window",
-             # the card's Customer Ref box: white, or light cyan (#DAFFFF) when it has the focus (30/10)
-             "waitfor 728,122 #FFFFFF tol=40 timeout=12",
-             # the order by its whole customer ref: the one line comes back alone, first
-             "click 626,226 after=0.4",
-             "click 728,122 after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {a.order}",
-             "click 742,226 react box=30,228,395,250 timeout=20",
-             # the card closed BEFORE the order opens: left open it sits over the order's tabs (30/10)
-             "click 509,226 after=0.5",
-             "double 267,238 react box=20,121,1250,171 timeout=20",
-             "anchor window",
-             "snap order 15,120,1255,166"]
+             "click 1000,37 after=0.4"]
+    if not card_open:
+        # C-TMS Modules > Order Management > Orders brings up Order Summary (or does nothing when it is up
+        # already) - so wait for ITS Search button to show, whichever, and press it for the card. Each menu click
+        # waits for its dropdown to draw - Java's menus take longer than 0.3 s (30/10)
+        items += ["click 121,36 react box=60,45,300,150 quiet=0.2 timeout=5",
+                  "click 135,63 react box=280,50,460,170 quiet=0.2 timeout=5",
+                  "click 245,67 after=0.3",
+                  "anchor window",              # CTMS's own area can scroll its windows (8 px, 30/10)
+                  "find os-search click react box=300,600,500,680 timeout=25"]
+    items += ["anchor window",
+              # the card, known by its labels: its Customer Ref box is white, light cyan with the focus - or blue,
+              # the last search's ref still in it highlighted (31/10), so the box's colour can't say it is up
+              f"find os-card box={CARD_BOX} timeout=12",
+              # the order by its whole customer ref: Clear empties the last search; the one line comes back alone
+              "click 626,226 after=0.4",
+              "click 728,122 after=0.15", "key home after=0.05", "key shift+end after=0.05", f"type {a.order}",
+              "click 742,226 react box=30,228,395,250 timeout=20",
+              # the card closed BEFORE the order opens: left open it sits over the order's tabs (30/10)
+              "click 509,226 after=0.5",
+              "double 267,238 react box=20,121,1250,171 timeout=20",
+              "anchor window",
+              "snap order 15,120,1255,166"]
     for flag, val, y in (("--collect", getattr(a, "collect", None), 357), ("--deliver", getattr(a, "deliver", None), 380)):
         if val:
             for x, v in zip((185, 250, 333, 398), _when(val, flag)):
@@ -702,12 +708,30 @@ def order_update_items(a):
     return items
 
 
-def order_save_close_items(a):
-    """The open order's Save, then Close: CTMS answers a save by moving the cursor (no message), and a Close
-    with no 'discard your changes?' box means it saved."""
-    return ["anchor", "click 1000,37 after=0.4",          # the focus click: a first click only focuses Java
-            "anchor window", "click 337,733 react quiet=1 timeout=15", "snap saved 15,120,1215,420",
-            "click 424,733 react timeout=15", "snap closed 15,100,1215,400"]
+def order_save_close():
+    """The open order's Save, then Close. A delivery moved to another day makes the Save ask "Change schedule to:
+    <yymmdd>?" - answered OK, the schedule following the delivery date (the recipe used to stop under it, 31/10). A plain save CTMS answers by moving the cursor (no message), and a Close with no 'discard your
+    changes?' box means it saved. One line in the run log, however many batches it took."""
+    name, started = "order-save-close", time.time()
+    rc, result, _ = _send(name, parse_steps(["anchor", "click 1000,37 after=0.4",    # a first click only focuses Java
+                                             "anchor window", "click 337,733 react quiet=1 timeout=15"]))
+    if rc == 0 and _on_screen("schedule-ask", SCHEDULE_ASK_BOX, timeout=1.5):
+        rc, result, _ = _send(name, parse_steps(["anchor", "anchor window", f"snap ask {SCHEDULE_ASK_BOX}",
+                                                 "click 952,505 react timeout=15"]))      # its OK
+    if rc == 0:
+        rc, result, _ = _send(name, parse_steps(["anchor", "click 1000,37 after=0.4", "anchor window",
+                                                 "snap saved 15,120,1215,420", "click 424,733 react timeout=15",
+                                                 "snap closed 15,100,1215,400"]))
+    _log_run(name, None, result, round(time.time() - started, 1))
+    return rc
+
+
+def _on_screen(name, box, timeout=0.0):
+    """Whether a template shows in that part of CTMS's screen - one look, or a short wait; neither printed nor
+    logged. How a recipe picks its way, where a batch only ever runs straight through."""
+    result, _ = ask("steps", wait_total=60,
+                    steps=parse_steps(["anchor", "anchor window", f"find {name} box={box} timeout={timeout:g}"]))
+    return bool(result.get("ok"))
 
 
 def run_steps(name, steps):
@@ -842,22 +866,23 @@ def send_batch(name, batch, refs=None):
     trip and a picture per step was most of a booking's time (29/10). It stops at the first step that
     is refused or fails, and says which. A bridge or dashboard from before batches gets them one by one.
     A recipe's run is logged, clean or not - the record his "make it automatic" is to be judged on."""
+    rc, result, seconds = _send(name, batch)
+    _log_run(name, refs, result, seconds)
+    return rc
+
+
+def _send(name, batch):
+    """One batch on the work PC: (exit code, its result, the seconds it took) - the result None from a bridge
+    that took the steps one by one."""
     started = time.time()
     try:
         result, payload = ask("steps", wait_total=90 + 10 * len(batch), steps=batch)
     except Stop as e:
         if "does not do 'steps'" not in str(e):
             raise
-        return _one_by_one(name, batch)
+        return _one_by_one(name, batch), None, 0.0
     if not result.get("ok") and "is not something this bridge does" in str(result.get("detail")):
-        return _one_by_one(name, batch)
-    if name.startswith(LOGGED_RUNS):
-        try:
-            import ctms_runlog
-            ctms_runlog.record(name, refs, result.get("ok"), result.get("detail"),
-                               round(time.time() - started, 1), path=os.path.join(OUT, "runs.jsonl"))
-        except Exception:
-            pass
+        return _one_by_one(name, batch), None, 0.0
     trace(f"{name}-steps", {"steps": batch}, result, payload)
     if payload and payload.get("kind") == "window":
         save_state(payload)
@@ -865,7 +890,19 @@ def send_batch(name, batch, refs=None):
     if payload:
         print_screen(payload, name)
         print_batch(payload)
-    return 0 if result.get("ok") else 3
+    return (0 if result.get("ok") else 3), result, round(time.time() - started, 1)
+
+
+def _log_run(name, refs, result, seconds):
+    """A recipe's run into ctms_runlog, where it ended - clean, or the step it stopped at."""
+    if result is None or not name.startswith(LOGGED_RUNS):
+        return
+    try:
+        import ctms_runlog
+        ctms_runlog.record(name, refs, result.get("ok"), result.get("detail"), seconds,
+                           path=os.path.join(OUT, "runs.jsonl"))
+    except Exception:
+        pass
 
 
 def _one_by_one(name, batch):
@@ -979,7 +1016,8 @@ def main(argv=None):
     p.add_argument("--remove-service-row", action="append", type=int, help="a Services row to delete (1 = top)")
     p.add_argument("--veh", help="the vehicle: " + " | ".join(VEH))
     p.add_argument("--ballast", action="store_true", help="a ballast order: PTS is never added (his rule)")
-    sub.add_parser("order-save-close", help="the open order's Save, then Close (no discard question = saved)")
+    sub.add_parser("order-save-close", help="the open order's Save - OK to CTMS's 'Change schedule to' when it asks - "
+                                            "then Close (no discard question = saved)")
     p = sub.add_parser("template", help="keep part of the latest picture (or a snap) as a find template")
     p.add_argument("name")
     p.add_argument("box", help="X0,Y0,X1,Y1 in that picture's own pixels")
@@ -1054,9 +1092,10 @@ def run(a):
     if c == "steps":
         return send_batch("steps", parse_steps(a.items, commit=a.commit))
     if c == "order-update":
-        return send_batch(c, parse_steps(order_update_items(a)), refs=[a.order])
+        card = _on_screen("os-card", CARD_BOX)              # left open by a search before?
+        return send_batch(c, parse_steps(order_update_items(a, card_open=card)), refs=[a.order])
     if c == "order-save-close":
-        return send_batch(c, parse_steps(order_save_close_items(a)))
+        return order_save_close()
     if c == "template":
         try:
             box = [int(float(v)) for v in a.box.split(",")]
