@@ -90,6 +90,7 @@ import ctms_act
 import ctms_drive
 import ctms_export
 import ctms_fast
+import ctms_import
 import ctms_jab
 import ctms_tabs
 import ctms_update
@@ -119,7 +120,8 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "reload", "dialog", "tab", "drag",
          "steps", "paste",
          "prompt_press", "prompt_click",
-         "export_fetch", "export_close")   # Claude acting: this PC AND the dashboard must allow it
+         "export_fetch", "export_close",
+         "import_csv")     # Claude acting: this PC AND the dashboard must allow it
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -714,6 +716,73 @@ class Bridge:
                       "note": "The browser's own box: prompt-press Save (never Open), or aim with prompt-click "
                               "--at X,Y on this picture."}
 
+    # -- an upload CSV into CTMS in one go: the map's Upload button (31/10, ctms_import) --
+    def import_csv(self, cmd, done):
+        """The CSV from the dashboard into Downloads, then CTMS's whole import - commit: the real thing (his Upload
+        click); without it a dry run up to Import, the card then closed. Stops at the first step CTMS does not
+        answer, touching nothing more. The answer's payload says whether the import ran ("imported")."""
+        name = str(cmd.get("option") or "")
+        if not shared_folder.NAME.fullmatch(name):
+            return done(False, f"'{name[:60]}' is not an upload CSV's name.", {"imported": False})
+        if not self.scan_window(force=True) or self.target != "ctms":
+            return done(False, self.not_found() if self.target == "ctms" else
+                        "The bridge is working the tracker - use ctms first.", {"imported": False})
+        try:
+            got = self.desk.post("/api/ctms/upload", {"name": name}, timeout=60)
+        except Exception as e:
+            return done(False, f"Could not get {name} from the dashboard ({friendly(e)}) - if it restarted, press "
+                               "Re-send on the Files card, then Upload again.", {"imported": False})
+        data = base64.b64decode((got or {}).get("data") or "")
+        if not data:
+            return done(False, f"{name} is not on the dashboard right now - press Re-send on the Files card, then "
+                               "Upload again.", {"imported": False})
+        saved_as, _ = shared_folder.file_one(ctms_export.DOWNLOADS, name, data)
+        path = os.path.join(ctms_export.DOWNLOADS, saved_as)
+        t = ctms_import.templates()
+        self.batch = {"off": (0, 0), "snaps": []}
+        t0, times = time.time(), []
+
+        def run(steps):
+            for step in steps:
+                ts = time.time()
+                self.window_step(step["action"], step)
+                times.append(round(time.time() - ts, 2))
+
+        def stopped(stage, e, imported):
+            why = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit)) else friendly(e)
+            return done(False, f"Stopped while {stage}: {why} Nothing more was touched - the picture shows where.",
+                        dict(self._batch_look(times, t0), imported=imported))
+        try:
+            run(ctms_import.open_and_type(path, t))
+        except Exception as e:
+            return stopped("opening the Import card and typing the path", e, False)
+        if not cmd.get("commit"):
+            try:
+                run(ctms_import.close_card())
+            except Exception as e:
+                return stopped("closing the Import card (dry run)", e, False)
+            return done(True, f"Dry run: the Import card opened, NRHEAVY_Order_Import chosen and {path} typed - "
+                              "Import not pressed (no go-ahead), and the card closed.",
+                        dict(self._batch_look(times, t0), imported=False))
+        try:
+            run(ctms_import.import_and_answer(t))
+        except Exception as e:
+            # past Import, CTMS may have taken the file: never press anything more, and never call it not done
+            return stopped("importing (CTMS may have taken it - check before uploading again)", e, True)
+        try:
+            run(ctms_import.clean_checks(t))
+            clean = True
+        except Exception:
+            clean = False
+        try:
+            run(ctms_import.finish())
+        except Exception as e:
+            return stopped("closing CTMS's answer and the Import card - the import itself ran", e, True)
+        return done(clean, f"Uploaded {name} into CTMS: " + (
+            "no lines failed and none were invalid." if clean else
+            "SOME LINES FAILED OR WERE INVALID - CTMS's own answer is in the picture.")
+            + " OK pressed and the Import card closed.", dict(self._batch_look(times, t0), imported=True))
+
     def export_tabs_away(self, want):
         """Close the export tab(s) `want` names, by their own close buttons, and see CTMS's tab is the one showing
         again - Edge shows a neighbouring tab when one closes, which may be any. Says what was done.
@@ -1145,6 +1214,8 @@ class Bridge:
             if action == "export_close":
                 # export tabs left open - each one blanks CTMS's window for the bridge
                 return done(True, self.export_tabs_away(ctms_export.is_export))
+            if action == "import_csv":
+                return self.import_csv(cmd, done)
             if action in ("prompt_press", "prompt_click"):
                 ps = ctms_window.prompts()
                 if not ps:

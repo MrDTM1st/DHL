@@ -75,7 +75,7 @@ def fresh():
     """A cloud that has just restarted."""
     S._ctms.update(seen=0.0, state={}, queue=[], results=[], shot=None, watch_until=0.0,
                    stop=False, captures={}, running=None, control_until=0.0, control_touched=False, payloads={},
-                   asked={}, polling=0)
+                   asked={}, polling=0, armed_for=None, importing={}, imported={})
 
 
 def poll(state=None):
@@ -2422,6 +2422,7 @@ def test_the_home_pc_aims_on_the_boxs_own_picture():
 
 # ---- the export's file, taken from its tab's address (31/10) ------------------------------------
 import ctms_export as X                 # noqa: E402
+import ctms_import as CI                # noqa: E402
 
 EXP = "https://ctms.example.com/webint/app/prd/export/short_rail_rep_2026-10-31_221330.csv"
 OLD = "https://ctms.example.com/webint/app/prd/export/short_rail_rep_2026-10-31_214116.csv"
@@ -2570,6 +2571,122 @@ def test_a_short_rail_report_from_the_bridge_queues_only_a_rail_plan_preview_for
     call("/api/command", {"action": "rail_plan", "mode": "send", "source": "anything"})
     assert S._queue[-1]["source"] is None
     S._queue.clear()
+
+
+# ---- the map's Upload: an upload CSV into CTMS in one go (31/10) ------------------------------------
+UP = "NR_heavy_AH31-10-2026-TEST_31102026230000.csv"
+
+
+def test_the_upload_switches_acting_on_for_that_import_only_and_never_uploads_a_csv_twice():
+    fresh()
+    S._to_file.clear()
+    S._to_file[UP] = {"data": base64.b64encode(b"ORD,1\r\n").decode(), "size": 7, "at": "31/10 23:00", "sha": ""}
+    for key in (AGENT, BRIDGE, ""):                                 # the dashboard's button alone
+        assert call("/api/ctms/import", {"name": UP}, key=key)[0] == 401
+    assert call("/api/ctms/import", {"name": "NR_heavy_X_31102026230000.csv"})[0] == 404   # not on the dashboard
+    assert call("/api/ctms/import", {"name": "..\\" + UP})[0] == 404
+    code, r = call("/api/ctms/import", {"name": UP})
+    assert code == 200 and S._ctms_armed() and S._ctms["armed_for"] == r["id"]
+    q = S._ctms["queue"][-1]
+    assert q["action"] == "import_csv" and q["option"] == UP and q["commit"] is True
+    assert call("/api/ctms/import", {"name": UP})[0] == 409          # a second click while it runs
+    assert call("/api/ctms/result", {"id": r["id"], "action": "import_csv", "ok": True, "detail": "Uploaded",
+                                     "payload": {"imported": True}}, key=BRIDGE)[0] == 200
+    assert not S._ctms_armed() and S._ctms["armed_for"] is None and UP in S._ctms["imported"]
+    code, body = call("/api/ctms/import", {"name": UP})
+    assert code == 409 and "already" in body["error"]                # never the same orders twice
+    # switched on by him already: left on after the upload - and a stopped one is not counted as taken
+    two = "NR_heavy_AH31-10-2026-TWO_31102026231000.csv"
+    S._to_file[two] = dict(S._to_file[UP])
+    call("/api/ctms/control", {"on": True, "minutes": 30})
+    code, r2 = call("/api/ctms/import", {"name": two})
+    assert code == 200 and S._ctms["armed_for"] is None
+    call("/api/ctms/result", {"id": r2["id"], "action": "import_csv", "ok": False, "detail": "Stopped",
+                              "payload": {"imported": False}}, key=BRIDGE)
+    assert S._ctms_armed() and two not in S._ctms["imported"]
+    S._ctms["state"]["control"] = False                              # the work PC set to look only
+    assert call("/api/ctms/import", {"name": two})[0] == 409
+    S._to_file.clear()
+
+
+def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_dry_runs_without_go():
+    tmp = tempfile.mkdtemp(prefix="imp-test-")
+    keep = (W.find_windows, W.picture, B.LOG, X.DOWNLOADS)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    X.DOWNLOADS = tmp
+
+    class Desk(_Rec):
+        def post(self, path, body, timeout=20):
+            if path == "/api/ctms/upload":
+                return {"name": body["name"], "data": base64.b64encode(b"ORD,1\r\n").decode()}
+            return super().post(path, body, timeout)
+    try:
+        desk = Desk()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        ran, fail_at = [], [None]
+
+        def step(action, args):
+            what = args.get("name") or (tuple(args["px"]) if "px" in args else args.get("key") or args.get("text"))
+            ran.append((action, what))
+            if fail_at[0] == (action, what):
+                raise RuntimeError("it is not on the screen where it should be.")
+            return "ok"
+        b.window_step = step
+        b._batch_look = lambda times, t0: {"kind": "window", "times": times}
+
+        def go(n, **cmd):
+            ran.clear()
+            b.handle(dict({"id": n, "action": "import_csv", "option": UP}, **cmd))
+            return desk.sent[-1][1]
+        r = go(1)                                                    # acting off: not even tried
+        assert r["ok"] is False and ran == []
+        b.armed = True
+        r = go(2)                                                    # no go-ahead: a dry run
+        assert r["ok"] and "Dry run" in r["detail"] and r["payload"]["imported"] is False, r
+        assert ("click", (405, 438)) not in ran and ran[-1] == ("click", (1030, 139))   # Import never pressed
+        assert ("type", os.path.join(tmp, UP)) in ran and os.path.exists(os.path.join(tmp, UP))
+        r = go(3, commit=True)                                       # the real thing, clean
+        assert r["ok"] and "no lines failed" in r["detail"] and r["payload"]["imported"] is True, r
+        i = ran.index(("click", (405, 438)))
+        assert ran[i + 1:i + 5] == [("find", "imp-ask-server"), ("click", (1069, 519)),
+                                    ("find", "imp-ask-now"), ("click", (953, 505))]
+        assert ran[ran.index(("find", "imp-card")) + 1] == ("click", (575, 226))
+        assert ran[-2:] == [("click", (1074, 519)), ("click", (1030, 139))]
+        fail_at[0] = ("find", "imp-failed-0")                        # a line failed: said, and still closed
+        r = go(4, commit=True)
+        assert r["ok"] is False and "SOME LINES FAILED" in r["detail"] and r["payload"]["imported"] is True
+        assert ran[-1] == ("click", (1030, 139))
+        fail_at[0] = ("find", "imp-ask-now")                         # CTMS did not ask: nothing more pressed
+        r = go(5, commit=True)
+        assert r["ok"] is False and "Stopped while importing" in r["detail"] and r["payload"]["imported"] is True
+        assert ran[-1] == ("find", "imp-ask-now")
+        fail_at[0] = ("find", "imp-card")                            # the card never came: Import never pressed
+        r = go(6, commit=True)
+        assert r["ok"] is False and r["payload"]["imported"] is False and ("click", (405, 438)) not in ran
+        fail_at[0] = None
+        for bad in ("..\\" + UP, "report.csv", ""):
+            r = go(7, option=bad, commit=True)
+            assert r["ok"] is False and ran == [], bad
+    finally:
+        W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_import_templates_are_ctmss_own_words_and_every_step_has_one_it_needs():
+    t = CI.templates()
+    for name in ("imp-card", "imp-nrheavy", "imp-ask-server", "imp-ask-now", "imp-done", "imp-failed-0",
+                 "imp-invalid-0"):
+        tp = t[name]
+        assert len(base64.b64decode(tp["rgb"])) == tp["w"] * tp["h"] * 3 and tp["w"] <= 400 and tp["h"] <= 200
+    for s in CI.open_and_type("C:\\x.csv", t) + CI.import_and_answer(t) + CI.clean_checks(t) + CI.finish():
+        assert s["action"] in B.WINDOW_STEPS + B.BATCH_STEPS, s
+    # every Yes comes straight after the find that sees its own question
+    steps = CI.import_and_answer(t)
+    for q, yes in (("imp-ask-server", [1069, 519]), ("imp-ask-now", [953, 505])):
+        i = next(n for n, s in enumerate(steps) if s.get("name") == q)
+        assert steps[i + 1] == {"action": "click", "px": yes, "after": 0.5}
 
 
 def test_closing_presses_only_the_export_tabs_own_close_button():

@@ -50,6 +50,10 @@ An upload into CTMS, and the weight after it (CTMS's import reads no weight):
     python ctms_remote.py import-file PATH        the CSV's full path on the work PC into Input file
     python ctms_remote.py import-go               Import - then its Yes / Yes / OK, read off the picture
     python ctms_remote.py import-close            the Import card's Close
+    python ctms_remote.py import-csv NAME [--commit]   all of it in one go, as the map's Upload does: the CSV
+                                                  from the dashboard into Downloads, Imports, NRHEAVY, the path,
+                                                  Import, Yes, Yes, the result, OK, Close - without --commit a
+                                                  dry run that stops before Import
     python upload_weights.py CSV                  each order's weight in the CSV, or why there isn't one
     python ctms_remote.py order-weight 12         the open order's item weight, typed (check the picture)
     python ctms_remote.py order-weight-save       item Save + Exit, then the order's Save; then order-close
@@ -980,6 +984,9 @@ def main(argv=None):
     p.add_argument("button")
     p = sub.add_parser("prompt-click", help="click a point on its picture")
     p.add_argument("--at", required=True, help="X,Y on the latest picture of the box")
+    p = sub.add_parser("import-csv", help="an upload CSV into CTMS in one go (the map's Upload)")
+    p.add_argument("name")
+    p.add_argument("--commit", action="store_true", help="really import - without it, a dry run up to Import")
     p = sub.add_parser("export-fetch", help="the export's file, from its tab's address, into Downloads")
     p.add_argument("name", nargs="?", default="")
     sub.add_parser("export-close", help="close export tabs left open, bring CTMS's tab back")
@@ -1114,6 +1121,9 @@ def run(a):
         return report(c, args, *ask("export_fetch", wait_total=180, **args))
     if c == "export-close":
         return report(c, {}, *ask("export_close", wait_total=120))
+    if c == "import-csv":
+        args = {"option": a.name, "commit": a.commit}
+        return report(c, args, *ask("import_csv", wait_total=420, **args))
     if c == "see":
         args = {"marks": not a.no_marks}
         return report(c, args, *ask("see", **args), full=a.all)

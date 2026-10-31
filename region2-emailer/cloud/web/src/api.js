@@ -103,6 +103,20 @@ export async function ctmsCommand(body) {
   return d;
 }
 
+// The map's Upload: an ad hoc's upload CSV into CTMS in one click. The server
+// switches Look mum, no hands on for this import only (when it is off) and
+// refuses a CSV that went in already - so a second click makes no duplicate.
+export async function ctmsImport(name) {
+  const r = await req('/api/ctms/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 export async function ctmsStop() {
   await req('/api/ctms/stop', { method: 'POST' });
 }

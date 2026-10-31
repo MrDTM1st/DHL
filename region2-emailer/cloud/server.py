@@ -81,7 +81,8 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag",   # Claude acting - only while the switch is on
               "prompt_press", "prompt_click",      # ... Save on that box (never Open)
-              "export_fetch", "export_close")      # ... or the export's file taken from its tab's address
+              "export_fetch", "export_close",      # ... or the export's file taken from its tab's address
+              "import_csv")                        # an upload CSV into CTMS (the map's Upload: /api/ctms/import)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
@@ -120,6 +121,11 @@ _ctms = {
     "payloads": {},        # command id -> {data, size}: the screen an answer came back with
     "asked": {},           # command id -> who asked, for the activity list
     "polling": 0,          # check-ins being held open right now
+    # The map's Upload (an ad hoc's CSV into CTMS): the import its switching on was for - switched off again when
+    # that one is answered or runs out - and the CSVs uploaded since this start, so a second click is no duplicate
+    "armed_for": None,
+    "importing": {},       # command id -> the CSV's name
+    "imported": {},        # CSV name -> when CTMS took it (HH:MM)
 }
 # Wakes a held check-in when there is work, and a held wait when its answer lands.
 _ctms_cv = threading.Condition(_lock)
@@ -182,6 +188,9 @@ def _ctms_cancel_locked(why, only=None):
         if only is None or c["action"] in only:
             _ctms_result_locked({"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                  "ok": False, "detail": why, "by": c.get("by", "")})
+            _ctms["importing"].pop(c["id"], None)
+            if _ctms["armed_for"] == c["id"]:
+                _ctms["armed_for"] = None
         else:
             keep.append(c)
     _ctms["queue"] = keep
@@ -197,12 +206,25 @@ def _ctms_sweep_locked():
                                  "detail": f"Not run - the work PC did not pick this up within "
                                            f"{_CTMS_TTL}s, so nothing was done. Ask again "
                                            f"once the bridge shows online."})
+            _ctms_upload_answered_locked(c["id"], imported=False)
         else:
             keep.append(c)
     _ctms["queue"] = keep
     if not _ctms_armed() and any(c["action"] in CTMS_DRIVE for c in keep):
         _ctms_cancel_locked("Cancelled - Look mum, no hands mode ran out before the work PC got to it.",
                             only=CTMS_DRIVE)
+
+
+def _ctms_upload_answered_locked(cid, imported):
+    """An Upload's command answered (or gone unanswered): its CSV counted as taken if CTMS ran the import, and
+    Look mum, no hands switched off again if it was switched on for this one."""
+    name = _ctms["importing"].pop(cid, None)
+    if name and imported:
+        _ctms["imported"][name] = datetime.now().strftime("%H:%M")
+    if _ctms["armed_for"] is not None and _ctms["armed_for"] == cid:
+        _ctms["armed_for"] = None
+        _ctms["control_until"] = 0.0
+        _ctms_note_locked("Look mum, no hands mode switched off again - it was on for that upload only.")
 
 
 def _ctms_args(action, data):
@@ -1638,6 +1660,7 @@ class Handler(BaseHTTPRequestHandler):
                 minutes = 60
             with _lock:
                 _ctms["control_touched"] = True
+                _ctms["armed_for"] = None           # his own switch, from now on - not an Upload's
                 if on:
                     _ctms["control_until"] = time.time() + minutes * 60
                     _ctms_note_locked(f"Look mum, no hands mode switched on for {minutes} min.")
@@ -1648,6 +1671,41 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms_cv.notify_all()
                 out = {"ok": True, "control": _ctms_control_locked()}
             return self._json(200, out)
+        if path == "/api/ctms/import":
+            # the map's Upload: an ad hoc's upload CSV into CTMS in one click - Look mum, no hands switched on for
+            # this import only when it is off (his "Yes, one click", 31/10), and off again once it is answered
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            name = str(data.get("name") or "")
+            with _lock:
+                _ctms_sweep_locked()
+                busy = [c for c in _ctms["queue"] if c["action"] == "import_csv" and c.get("option") == name] or (
+                    name in _ctms["importing"].values())
+                if not (_UPLOAD_CSV.fullmatch(name) and name in _to_file):
+                    out = (404, {"error": f"{name or 'That CSV'} is not on the dashboard right now - press Re-send "
+                                          "on the Files card, then Upload again."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it upload."})
+                elif name in _ctms["imported"]:
+                    out = (409, {"error": f"{name} went into CTMS at {_ctms['imported'][name]} already - a second "
+                                          "upload would make the orders twice. Upload it by hand if you mean to."})
+                elif busy:
+                    out = (409, {"error": f"{name} is being uploaded already."})
+                else:
+                    _ctms["next_id"] += 1
+                    cid = _ctms["next_id"]
+                    if not _ctms_armed():
+                        _ctms["control_until"] = time.time() + 10 * 60
+                        _ctms["armed_for"] = cid
+                        _ctms_note_locked(f"Look mum, no hands mode switched on for the upload of {name} only.")
+                    _ctms["queue"].append({"id": cid, "action": "import_csv", "option": name, "commit": True,
+                                           "by": "dashboard", "queued_at": time.time()})
+                    _ctms["importing"][cid] = name
+                    _ctms["asked"][cid] = "dashboard"
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "id": cid, "online": _ctms_online()})
+            return self._json(*out)
         if path == "/api/ctms/stop":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
@@ -1784,6 +1842,8 @@ class Handler(BaseHTTPRequestHandler):
                                      "detail": str(data.get("detail") or "")[:1000],
                                      "by": _ctms["asked"].get(cid, ""),
                                      "pic": bool(payload and payload.get("img"))})
+                if cid in _ctms["importing"] or (cid is not None and _ctms["armed_for"] == cid):
+                    _ctms_upload_answered_locked(cid, imported=bool(payload and payload.get("imported")))
                 if payload is not None and isinstance(cid, int):
                     held = _ctms["payloads"]
                     held.pop(cid, None)

@@ -151,7 +151,7 @@ function clearEdit(id) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
-  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onDownloadCsv, asks }) {
+  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -461,8 +461,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             <div className="csvrow">
               <span className="lbl" style={{ margin: 0, flex: 'none' }}>Upload CSV</span>
               <span className="mono csvname" title={r.csv}>{r.csv}</span>
-              {onDownloadCsv && (
-                <button className="btn mini" onClick={() => onDownloadCsv(r.csv)}>Download</button>
+              {onUploadCsv && (
+                <button className="btn mini" title="Import it into CTMS on the work PC"
+                  onClick={() => onUploadCsv(r.csv)}>Upload</button>
               )}
             </div>
           )}

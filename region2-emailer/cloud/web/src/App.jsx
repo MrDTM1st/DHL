@@ -196,17 +196,29 @@ export default function App() {
     else pushToast(who || 'Phone number', number);
   }, [pushToast]);
 
-  // download an ad hoc's upload CSV straight from its brief
-  const onDownloadCsv = useCallback(async (name) => {
+  // upload an ad hoc's CSV into CTMS from its brief - the work PC does the whole
+  // import (Imports > NRHEAVY > the file > Import > Yes > Yes) and says how it went
+  const onUploadCsv = useCallback(async (name) => {
+    let id;
     try {
-      await api.downloadFile(name);
-    } catch {
-      // Two different causes, and the old wording only named one of them - which
-      // sent you looking in the outbox for a file that was still sitting there.
-      pushToast('Download failed', name + " isn't on the cloud right now. Either the cloud "
-        + "restarted and emptied its file list — press Re-send on the Files card — or it "
-        + "aged out of the outbox after 48h.", 'warn');
+      ({ id } = await api.ctmsImport(name));
+    } catch (e) {
+      pushToast('Not uploaded', e.message, 'warn');
+      return;
     }
+    pushToast('Uploading to CTMS…', name + ' — the work PC is doing the import; this takes a minute or two.');
+    const until = Date.now() + 6 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((ok) => setTimeout(ok, 3000));
+      let st;
+      try { st = await api.ctmsStatus(false); } catch { continue; }
+      const r = (st.results || []).find((x) => x.id === id);
+      if (r) {
+        pushToast(r.ok ? 'Uploaded to CTMS' : 'Upload needs a look', r.detail || '', r.ok ? 'go' : 'warn');
+        return;
+      }
+    }
+    pushToast('Upload still going', name + ' — no answer from the work PC yet; check the CTMS page.', 'warn');
   }, [pushToast]);
 
   // booked ad hocs leave the map (they were never in the tracker)
@@ -289,7 +301,7 @@ export default function App() {
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
             onCall={onCall} onBookedCall={onBookedCall} onAdhocBooked={onAdhocBooked}
-            onCommand={onCommand} matTeams={panel.mat_teams || {}} onDownloadCsv={onDownloadCsv}
+            onCommand={onCommand} matTeams={panel.mat_teams || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
             asks={panel.asks || {}} />
         )}
