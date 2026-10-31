@@ -119,7 +119,7 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "reload", "dialog", "tab", "drag",
          "steps", "paste",
          "prompt_press", "prompt_click",
-         "export_fetch")   # Claude acting: this PC AND the dashboard must allow it
+         "export_fetch", "export_close")   # Claude acting: this PC AND the dashboard must allow it
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -714,6 +714,24 @@ class Bridge:
                       "note": "The browser's own box: prompt-press Save (never Open), or aim with prompt-click "
                               "--at X,Y on this picture."}
 
+    def export_tabs_away(self, want):
+        """Close the export tab(s) `want` names, by their own close buttons, and see CTMS's tab is the one showing
+        again - Edge shows a neighbouring tab when one closes, which may be any. Says what was done."""
+        n = ctms_tabs.close(want)
+        said = ""
+        if not ctms_tabs.is_ctms((self.scan_window(force=True) or {}).get("title")):
+            ok, said = ctms_tabs.select("ctms")
+            if ok:
+                self.click_first = True             # where Edge's keyboard focus lands is Edge's choice
+            for _ in range(12):                     # CTMS's Internet Explorer page takes a moment to come back
+                if ctms_tabs.is_ctms((self.scan_window(force=True) or {}).get("title")):
+                    break
+                time.sleep(0.25)
+        back = ctms_tabs.is_ctms((self.win or {}).get("title"))
+        return ((f"Closed {n} export tab{'' if n == 1 else 's'}" if n else "No export tab to close")
+                + ("; CTMS's tab is the one showing again." if back
+                   else f"; CTMS's tab is not showing - {said or 'select it yourself'}."))
+
     def front_said(self):
         f = ctms_window.front()
         if not f:
@@ -1085,14 +1103,20 @@ class Bridge:
             if action == "prompt":
                 return done(True, *self.prompt_look())
             if action == "export_fetch":
-                # the file CTMS's export opened in a tab, taken from its address into Downloads (ctms_export)
+                # the file CTMS's export opened in a tab, taken from its address into Downloads (ctms_export) -
+                # then that tab closed and CTMS's brought back, so the bridge sees CTMS again
                 names = ([self.win["title"]] if self.win else []) + ctms_tabs.names(ctms_export.is_export)
                 got = ctms_export.take(names, cmd.get("option") or "")
+                back = self.export_tabs_away(lambda n: got["url"] in (n or ""))
                 return done(True, (f"Took {got['name']} {got['how']} into Downloads"
                                    + ("" if got["saved_as"] == got["name"] else f" as {got['saved_as']}")
                                    + ("" if got["written"] else " - it was there already, left as it was")
-                                   + f": {got['rows']} row(s), {got['bytes']:,} bytes. Header: {got['header']}"),
+                                   + f": {got['rows']} row(s), {got['bytes']:,} bytes. Header: {got['header']}. "
+                                   + back),
                             dict(got, kind="export"))
+            if action == "export_close":
+                # export tabs left open - each one blanks CTMS's window for the bridge
+                return done(True, self.export_tabs_away(ctms_export.is_export))
             if action in ("prompt_press", "prompt_click"):
                 ps = ctms_window.prompts()
                 if not ps:

@@ -18,6 +18,9 @@ itself, at once, into Downloads.
     saved as the CSV
   - into Downloads, only ever adding: the same file already there is left
     alone, another of its name keeps its place and this goes in as "name (2)"
+  - then that tab is closed, by its own close button, and CTMS's tab brought
+    back: left open, CTMS's window shows its blank page and the bridge cannot
+    see CTMS ("you need to remove this tab off of Edge", 31/10)
 
 Standard library only, like everything else in work_pc\\.
 """
@@ -101,5 +104,5 @@ def take(names, want=""):
     data, how = fetch(url)
     saved_as, written = shared_folder.file_one(DOWNLOADS, name, data)
     lines = [ln for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
-    return {"name": name, "saved_as": saved_as, "written": written, "bytes": len(data),
+    return {"name": name, "url": url, "saved_as": saved_as, "written": written, "bytes": len(data),
             "rows": max(0, len(lines) - 1), "header": lines[0][:240] if lines else "", "how": how}

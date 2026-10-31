@@ -7,8 +7,9 @@ reader does - Windows UI Automation, built into Windows, asked through ctypes li
 and only ever a tab whose name is CTMS's (CTMS_TAB_WORDS) or the tracker's (ctms_window.PAGE_WORDS).
 No other tab is selected, pictured or named back, nothing is clicked or typed to do it, and UI
 Automation is told to leave the keyboard focus alone, so Edge gives the tab's own page its focus back,
-as it does when the tab is clicked. One more is read, never selected (31/10): the tab a CTMS export opens,
-named by its file's address (ctms_export takes the file from there).
+as it does when the tab is clicked. One more is read and then closed, never selected (31/10): the tab a CTMS
+export opens, named by its file's address - ctms_export takes the file from there, and the tab is shut by its
+own close button so CTMS's window shows CTMS again.
 
 Standard library only, like everything else in work_pc\\.
 """
@@ -38,7 +39,7 @@ EL_PATTERN_AS, EL_CONTROL_TYPE, EL_NAME, EL_CLASS = 14, 21, 23, 30
 WALK_FIRST_CHILD, WALK_NEXT = 4, 6
 SELECT, DEFAULT_ACTION, INVOKE = 3, 4, 3                  # SelectionItem.Select, LegacyIAccessible's, Invoke's
 PATTERN_INVOKE, PATTERN_SELECTION_ITEM, PATTERN_LEGACY = 10000, 10010, 10018
-TAB_ITEM, DOCUMENT = 50019, 50030
+BUTTON, TAB_ITEM, DOCUMENT = 50000, 50019, 50030
 # What a page is drawn in - never walked into: only the browser's own bars have its tabs.
 CONTENT_CLASSES = ("Chrome_RenderWidgetHostHWND", "Internet Explorer_Server", "Shell DocObject View",
                    "TabWindowClass", "Intermediate D3D Window")
@@ -80,6 +81,11 @@ def _fn(p, slot, *argtypes):
     """Method `slot` of the COM interface at p, called as f(p, *args). A failing HRESULT raises OSError."""
     vtbl = ctypes.cast(p, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
     return ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, *argtypes)(vtbl[slot])
+
+
+def is_ctms(name):
+    """Is this (a tab's name, or Edge's title - the selected tab's) CTMS's own tab?"""
+    return _matches(name, "ctms")
 
 
 def _matches(name, target):
@@ -182,6 +188,17 @@ class _Session:
                 continue
         return False
 
+    def invoke(self, el):
+        """Press a button by its Invoke pattern. False = it has none."""
+        try:
+            pat = self._get(el, EL_PATTERN_AS, (ctypes.c_int, PATTERN_INVOKE), (ctypes.POINTER(GUID), _guid(IID_INVOKE)))
+            if pat:
+                _fn(pat, INVOKE)(pat)
+                return True
+        except OSError:
+            pass
+        return False
+
     def close(self):
         for p in reversed(self.held):
             vtbl = ctypes.cast(p, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
@@ -260,6 +277,43 @@ def names(want, timeout=10.0):
     t.start()
     t.join(timeout)
     return out[0] if out else []
+
+
+def _close(want):
+    hr = ole32.CoInitializeEx(None, 0)
+    try:
+        s = _Session()
+        try:
+            n = 0
+            for hwnd in _edge_windows():
+                for el, name in s.tabs(hwnd):
+                    if not want(name):
+                        continue
+                    btn = next((c for c in s.children(el)
+                                if s.control_type(c) == BUTTON and "close" in s.name(c).lower()), None)
+                    if btn and s.invoke(btn):
+                        n += 1
+            return n
+        finally:
+            s.close()
+    except OSError:
+        return 0
+    finally:
+        if hr >= 0:
+            ole32.CoUninitialize()
+
+
+def close(want, timeout=10.0):
+    """Close the Edge tabs `want` says yes to, each by its own close button -> how many closed. Only ever the tab
+    a CTMS export opened (ctms_export), once its file is taken: left open, CTMS's window shows its blank page and
+    the bridge cannot see CTMS (31/10)."""
+    if not IS_WIN:
+        return 0
+    out = []
+    t = threading.Thread(target=lambda: out.append(_close(want)), daemon=True, name="ctms-tab-close")
+    t.start()
+    t.join(timeout)
+    return out[0] if out else 0
 
 
 def select(target, timeout=10.0):

@@ -2476,34 +2476,87 @@ def test_the_export_goes_into_downloads_only_ever_adding_and_a_sign_in_page_is_n
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_the_bridge_takes_the_export_only_with_the_switch_and_the_dashboard_queues_it_only_then():
-    keep = (W.find_windows, W.picture, B.LOG, TB.names, X.take)
-    W.find_windows = lambda: [dict(FAKE_WIN, title=EXP + " and 3 more pages - Work - Microsoft Edge")]
+def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_brings_ctms_back():
+    keep = (W.find_windows, W.picture, B.LOG, TB.names, TB.close, TB.select, X.take)
+    showing = [EXP + " and 3 more pages - Work - Microsoft Edge"]     # Edge's title: the selected tab's
+    W.find_windows = lambda: [dict(FAKE_WIN, title=showing[-1])]
     W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
     B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
     TB.names = lambda want, timeout=10.0: [n for n in (OLD, "Inbox - Outlook") if want(n)]
+    closed, selected = [], []
+
+    def close(want, timeout=10.0):                     # the tabs it would close, out of what Edge has open
+        hit = [n for n in (EXP, OLD, "Oracle Fusion Middleware Forms Services", "Haulage Desk") if want(n)]
+        closed.append(hit)
+        showing.append("Haulage Desk - Work - Microsoft Edge")     # Edge shows a neighbour, not necessarily CTMS
+        return len(hit)
+    TB.close = close
+    TB.select = lambda target, timeout=10.0: (selected.append(target) or showing.append(
+        "Oracle Fusion Middleware Forms Services and 2 more pages - Work - Microsoft Edge") or (True, "Brought up"))
     asked = []
     X.take = lambda names, want="": (asked.append((names, want)) or
-                                     {"name": "short_rail_rep_2026-10-31_221330.csv", "saved_as":
+                                     {"name": "short_rail_rep_2026-10-31_221330.csv", "url": EXP, "saved_as":
                                       "short_rail_rep_2026-10-31_221330.csv", "written": True, "bytes": 2048,
                                       "rows": 12, "header": "Schedule,Trip Number", "how": "straight from CTMS's server"})
     try:
         desk = _Rec()
         b = B.Bridge(desk, 1, "", allow_control=True)
         b.handle({"id": 1, "action": "export_fetch"})               # acting off: not even tried
-        assert desk.sent[-1][1]["ok"] is False and asked == []
+        assert desk.sent[-1][1]["ok"] is False and asked == [] and closed == []
         b.armed = True
         b.handle({"id": 2, "action": "export_fetch"})
         r = desk.sent[-1][1]
         assert r["ok"] and "Took short_rail_rep_2026-10-31_221330.csv straight from CTMS's server" in r["detail"], r
         assert "12 row(s)" in r["detail"] and r["payload"]["kind"] == "export"
         assert asked[0][0][0].startswith(EXP) and OLD in asked[0][0] and "Inbox - Outlook" not in asked[0][0]
+        assert closed == [[EXP]] and selected == ["ctms"]           # only the tab it took; then CTMS's tab
+        assert "Closed 1 export tab; CTMS's tab is the one showing again" in r["detail"], r["detail"]
+        assert b.click_first is True                                # Edge put the keyboard focus where it chose
+        b.handle({"id": 3, "action": "export_close"})               # leftovers: every export tab, nothing else
+        assert desk.sent[-1][1]["ok"] and closed[-1] == [EXP, OLD], closed
     finally:
-        W.find_windows, W.picture, B.LOG, TB.names, X.take = keep
+        W.find_windows, W.picture, B.LOG, TB.names, TB.close, TB.select, X.take = keep
     fresh()
-    assert call("/api/ctms/command", {"action": "export_fetch"}, key=AGENT)[0] == 409       # switched off
+    for action in ("export_fetch", "export_close"):
+        assert call("/api/ctms/command", {"action": action}, key=AGENT)[0] == 409       # switched off
     call("/api/ctms/control", {"on": True, "minutes": 15})
     assert call("/api/ctms/command", {"action": "export_fetch", "option": "x.csv"}, key=AGENT)[0] == 200
+    assert call("/api/ctms/command", {"action": "export_close"}, key=AGENT)[0] == 200
+
+
+def test_closing_presses_only_the_export_tabs_own_close_button():
+    class Tabs:
+        """Edge's tab strip, as UI Automation hands it: each tab with its close button."""
+        pressed = []
+
+        def __init__(self):
+            self.held = []
+
+        def tabs(self, hwnd):
+            return [("ctms", "Oracle Fusion Middleware Forms Services"), ("exp", EXP), ("mail", "Inbox - Outlook")]
+
+        def children(self, el):
+            return [f"{el}:icon", f"{el}:close"]
+
+        def control_type(self, el):
+            return TB.BUTTON if el.endswith(":close") else 50020        # a button, or an image
+
+        def name(self, el):
+            return "Close" if el.endswith(":close") else ""
+
+        def invoke(self, el):
+            Tabs.pressed.append(el)
+            return True
+
+        def close(self):
+            pass
+    keep = (TB._Session, TB._edge_windows)
+    TB._Session, TB._edge_windows = Tabs, (lambda: [1])
+    try:
+        assert TB.close(X.is_export) == 1 and Tabs.pressed == ["exp:close"]
+        assert TB.close(lambda n: False) == 0 and Tabs.pressed == ["exp:close"]
+    finally:
+        TB._Session, TB._edge_windows = keep
 
 
 if __name__ == "__main__":

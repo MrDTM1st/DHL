@@ -33,7 +33,9 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py prompt-press Save       press Save on it (Cancel / Close too - never Open)
     python ctms_remote.py prompt-click --at X,Y   ...or a point on its picture, when it has no buttons to name
     python ctms_remote.py export-fetch [NAME]     the file an export opened in a tab, taken from its address
-                                                  into the work PC's Downloads (newest, or the one called NAME)
+                                                  into the work PC's Downloads (newest, or the one called NAME);
+                                                  then its tab closed and CTMS's brought back
+    python ctms_remote.py export-close            close export tabs left open (they blank CTMS's window)
 
 The CTMS note run (CTMS's own window; each answers with a picture to check):
     python ctms_remote.py orders-page             C-TMS Modules > Order Management > Orders
@@ -980,6 +982,7 @@ def main(argv=None):
     p.add_argument("--at", required=True, help="X,Y on the latest picture of the box")
     p = sub.add_parser("export-fetch", help="the export's file, from its tab's address, into Downloads")
     p.add_argument("name", nargs="?", default="")
+    sub.add_parser("export-close", help="close export tabs left open, bring CTMS's tab back")
     p = sub.add_parser("see")
     p.add_argument("--all", action="store_true", help="list what is out of view too")
     p.add_argument("--no-marks", action="store_true", help="a picture without the numbers drawn on")
@@ -1109,6 +1112,8 @@ def run(a):
     if c == "export-fetch":
         args = {"option": a.name} if a.name else {}
         return report(c, args, *ask("export_fetch", wait_total=180, **args))
+    if c == "export-close":
+        return report(c, {}, *ask("export_close", wait_total=120))
     if c == "see":
         args = {"marks": not a.no_marks}
         return report(c, args, *ask("see", **args), full=a.all)
