@@ -1,24 +1,28 @@
-"""Plain-assert tests for filing the upload CSVs in the team's shared folder -
-no work PC, no network share.
+"""Plain-assert tests for filing the upload CSVs and the emailed rail plans in
+the team's shared folders - no work PC, no network share.
 
-Covers the places a mistake would cost something real: the team's folder
-(nothing there is ever replaced or deleted, nothing but an upload CSV is ever
-written, no name can reach outside it, a failed write leaves no half file),
-the dashboard (only the bridge's key gets the upload CSVs, and a busy Files
-list cannot drop one before the work PC has it), and filing each CSV exactly
-once - not again after the dashboard restarts, and never the ones made before
-the folder was set.
+Covers the places a mistake would cost something real: the team's folders
+(nothing there is ever replaced or deleted, nothing but an upload CSV or a
+rail plan is ever written, no name can reach outside them, a failed write
+leaves no half file), the dashboard (only the bridge's key gets them, a busy
+Files list cannot drop one before the work PC has it, and a previewed rail
+plan is never filed), filing each exactly once - not again after the
+dashboard restarts, and never the CSVs made before the folder was set - and a
+rail plan going in as the next version of that plan, the way the team numbers
+them, whatever the folder already holds.
 
 Run:  python region2-emailer/tests/test_shared_folder.py
 """
 import base64
 import errno
+import hashlib
 import json
 import os
 import shutil
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -60,24 +64,33 @@ def call(path, body=None, key=DASH):
         return e.code, json.loads(e.read() or b"{}")
 
 
-def push(name, data=b"ORD,1\r\nORD_LINES,1\r\n"):
-    """The home agent sending an outbox file up, as push_new_files does."""
-    return call("/api/files", {"name": name, "size": len(data), "data": base64.b64encode(data).decode()}, key=AGENT)
+def push(name, data=b"ORD,1\r\nORD_LINES,1\r\n", file=False):
+    """The home agent sending an outbox file up, as push_new_files does - file=True: a rail plan that was emailed."""
+    body = {"name": name, "size": len(data), "data": base64.b64encode(data).decode()}
+    return call("/api/files", dict(body, file=True) if file else body, key=AGENT)
+
+
+PLAN = "Rail Plan wc 02.11 v2 BS.xlsx"
+CHAINS = ("Hauliers", "Steel", "Askern", "Marchwood", "Steel Done")    # the chains' folders (made-up names)
+ROUTES = "master=Hauliers; BS=Steel; Inf VAS=Askern; AMS=Marchwood"
 
 
 class Place:
-    """A fresh dashboard, a share to file into, and the work PC's settings file - all thrown away after."""
+    """A fresh dashboard, shares to file into, and the work PC's settings file - all thrown away after."""
 
     def __enter__(self):
         S._files.clear()
         S._to_file.clear()
         self.root = tempfile.mkdtemp(prefix="sf-test-")
         self.share = os.path.join(self.root, "Exports", "Done")
+        self.rail = os.path.join(self.root, "Short Rail", "Rail Plans")
         os.makedirs(self.share)
+        for chain in CHAINS:
+            os.makedirs(os.path.join(self.rail, chain))
         self.keep = SF.SETTINGS, B.LOG
         SF.SETTINGS = os.path.join(self.root, "shared_folder.json")
         B.LOG = os.path.join(self.root, "bridge_log.jsonl")
-        SF._status.update(on=False, ok=False, last="", at="", error="")
+        SF._status.update(on=False, rail=False, ok=False, last="", at="", error="")
         self.desk = B.Desk(BASE, BRIDGE)
         return self
 
@@ -85,12 +98,29 @@ class Place:
         SF.SETTINGS, B.LOG = self.keep
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def files(self):
-        return sorted(os.listdir(self.share))
+    def files(self, folder=None):
+        return sorted(os.listdir(folder or self.share))
 
-    def read(self, name):
-        with open(os.path.join(self.share, name), "rb") as f:
+    def read(self, name, folder=None):
+        with open(os.path.join(folder or self.share, name), "rb") as f:
             return f.read()
+
+    def chain(self, name="Steel"):
+        return os.path.join(self.rail, name)
+
+    def put(self, name, data, chain="Steel", days_old=0):
+        """A plan someone on the team saved in a chain's folder."""
+        p = os.path.join(self.rail, chain, name)
+        with open(p, "wb") as f:
+            f.write(data)
+        if days_old:
+            t = time.time() - days_old * 86400
+            os.utime(p, (t, t))
+
+    def written(self):
+        """Every file under the Rail Plans folder, as chain/name."""
+        return sorted(os.path.relpath(os.path.join(d, n), self.rail).replace("\\", "/")
+                      for d, _, names in os.walk(self.rail) for n in names)
 
 
 # ---- the dashboard -----------------------------------------------------------
@@ -109,6 +139,20 @@ def test_only_the_bridge_gets_the_upload_csvs_and_nothing_else_from_the_files_li
             assert call("/api/ctms/upload", {"name": CSV}, key=key)[0] == 401
         assert call("/api/files", key=BRIDGE)[0] == 401  # and its key still opens nothing else
         assert call("/api/file?name=" + CSV, key=BRIDGE)[0] == 401
+
+
+def test_only_an_emailed_rail_plan_waits_for_the_work_pc_never_a_preview():
+    with Place():
+        push(PLAN, b"previewed")                        # Preview: no mark, nothing to file
+        assert call("/api/ctms/uploads", {}, key=BRIDGE)[1]["files"] == []
+        push(PLAN, b"sent", file=True)                  # Build & send
+        for name in (PLAN + ".exe", "..\\" + PLAN, "Rail Plan wc 2.11 v2 BS.xlsx", "Haulage Request - AH2.xlsx"):
+            push(name, b"x", file=True)                 # the mark alone files nothing
+        files = call("/api/ctms/uploads", {}, key=BRIDGE)[1]["files"]
+        assert [f["name"] for f in files] == [PLAN] and files[0]["sha"] == hashlib.sha256(b"sent").hexdigest()
+        push(PLAN, b"previewed again")                  # a later preview under the same name...
+        code, body = call("/api/ctms/upload", {"name": PLAN}, key=BRIDGE)
+        assert code == 200 and base64.b64decode(body["data"]) == b"sent"   # ...never takes its place
 
 
 def test_an_upload_csv_waits_for_the_work_pc_however_busy_the_files_list_gets():
@@ -152,13 +196,16 @@ def test_nothing_in_the_folder_is_ever_replaced():
         assert p.read(other) == b"same bytes" and len(p.files()) == 3
 
 
-def test_only_an_upload_csv_name_is_ever_written_and_never_outside_the_folder():
+def test_only_an_upload_csv_or_rail_plan_name_is_ever_written_and_never_outside_the_folders():
     class Hostile:
-        """A dashboard listing names that are not upload CSVs, or reach out of the folder."""
+        """A dashboard listing names that are neither, or reach out of the folder."""
         names = ["..\\NR_heavy_x_31102026093000.csv", "NR_heavy_..\\..\\x_31102026093000.csv",
                  "C:\\temp\\NR_heavy_x_31102026093000.csv", "NR_heavy_x_31102026093000.csv.exe",
                  "NR_heavy_x_31102026093000.csv:stream", "report_31102026093000.csv", "NR_heavy_x.csv",
-                 "NR_heavy_x_99999999999999.csv"]
+                 "NR_heavy_x_99999999999999.csv",
+                 "..\\" + PLAN, "Rail Plan wc 02.11 v2 ..\\..\\x.xlsx", PLAN + ".exe", PLAN + ":stream",
+                 "Rail Plan wc 02.11 v2 BS\\x.xlsx", "C:\\temp\\" + PLAN, "Rail Plan wc 2.11 v2.xlsx",
+                 "Rail Plan wc 02.11 v999 BS.xlsx", "rail plan wc 02.11 v2 bs.xlsx"]
 
         def post(self, path, body, timeout=20):
             if path == "/api/ctms/uploads":
@@ -167,8 +214,11 @@ def test_only_an_upload_csv_name_is_ever_written_and_never_outside_the_folder():
 
     with Place() as p:
         SF.set_folder(p.share, now=SET_AT)
+        SF.set_folder(p.rail, kind="rail", routes=ROUTES)
         assert SF.tick(Hostile()) == []
-        assert p.files() == [] and sorted(os.listdir(p.root)) == ["Exports", "shared_folder.json"]
+        assert p.files() == [] and p.written() == []
+        assert sorted(os.listdir(p.root)) == ["Exports", "Short Rail", "shared_folder.json"]
+        assert os.listdir(os.path.dirname(p.rail)) == ["Rail Plans"]
         assert not os.path.exists(os.path.join(os.path.dirname(p.share), "NR_heavy_x_31102026093000.csv"))
 
 
@@ -233,6 +283,89 @@ def test_a_dashboard_out_of_reach_or_not_yet_redeployed_says_so():
         assert p.files() == []
 
 
+# ---- the rail plans --------------------------------------------------------------
+def test_an_emailed_rail_plan_goes_in_its_chains_folder_as_the_next_version_of_that_plan():
+    with Place() as p:
+        SF.set_folder(p.rail, kind="rail", routes=ROUTES)
+        p.put("Rail Plan wc 02.11 v1 BS.xlsx", b"our v1")
+        p.put(PLAN, b"a colleague's v2")                 # saved here, but never reached the home PC's mailbox
+        p.put("Rail Plan wc 02.11 v5 BS.xlsx", b"last year's", days_old=364)    # same week, another year
+        p.put("Rail Plan wc 26.10 v4 BS.xlsx", b"last week's")
+        p.put("Rail Plan wc 02.11 v7 BS.xlsx", b"in the done folder", chain="Steel Done")
+        push(PLAN, b"ours", file=True)                  # the home PC saw only v1 go round
+        push("Rail Plan wc 02.11 v1.xlsx", b"master", file=True)
+        went = SF.tick(p.desk)
+        assert went == [("Rail Plan wc 02.11 v1.xlsx", "Rail Plan wc 02.11 v1.xlsx", True),
+                        (PLAN, "Rail Plan wc 02.11 v3 BS.xlsx", True)], went
+        assert p.read("Rail Plan wc 02.11 v1.xlsx", p.chain("Hauliers")) == b"master"
+        assert p.read("Rail Plan wc 02.11 v3 BS.xlsx", p.chain()) == b"ours"
+        assert p.read(PLAN, p.chain()) == b"a colleague's v2"
+        assert p.read("Rail Plan wc 02.11 v1 BS.xlsx", p.chain()) == b"our v1"
+        assert SF.tick(p.desk) == []                     # remembered
+        S._to_file.clear()                               # the dashboard restarts...
+        push(PLAN, b"ours", file=True)                   # ...and the agent's heal sends it again
+        assert SF.tick(p.desk) == []
+        push(PLAN, b"ours, put right", file=True)        # emailed again under the same name, other contents
+        assert SF.tick(p.desk) == [(PLAN, "Rail Plan wc 02.11 v4 BS.xlsx", True)]
+        assert p.written() == ["Hauliers/Rail Plan wc 02.11 v1.xlsx", "Steel Done/Rail Plan wc 02.11 v7 BS.xlsx",
+                               "Steel/Rail Plan wc 02.11 v1 BS.xlsx", "Steel/Rail Plan wc 02.11 v2 BS.xlsx",
+                               "Steel/Rail Plan wc 02.11 v3 BS.xlsx", "Steel/Rail Plan wc 02.11 v4 BS.xlsx",
+                               "Steel/Rail Plan wc 02.11 v5 BS.xlsx", "Steel/Rail Plan wc 26.10 v4 BS.xlsx"], p.written()
+        assert SF.state()["rail"] and SF.state()["last"] == "Rail Plan wc 02.11 v4 BS.xlsx"
+
+
+def test_a_rail_plan_already_in_its_folder_under_any_version_is_left_alone():
+    with Place() as p:
+        SF.set_folder(p.rail, kind="rail", routes=ROUTES)
+        p.put("Rail Plan wc 02.11 v3 Inf VAS.xlsx", b"same bytes", chain="Askern")    # saved from the email by hand
+        push("Rail Plan wc 02.11 v2 Inf VAS.xlsx", b"same bytes", file=True)
+        assert SF.tick(p.desk) == [("Rail Plan wc 02.11 v2 Inf VAS.xlsx", "Rail Plan wc 02.11 v3 Inf VAS.xlsx",
+                                    False)]
+        assert p.written() == ["Askern/Rail Plan wc 02.11 v3 Inf VAS.xlsx"]
+
+
+def test_a_rail_plan_goes_nowhere_until_its_chain_has_a_folder():
+    with Place() as p:
+        SF.set_folder(p.share, now=SET_AT)
+        push(PLAN, b"ours", file=True)
+        push("Rail Plan wc 02.11 v1 Other.xlsx", b"other", file=True)
+        push(CSV, b"csv")
+        assert SF.tick(p.desk) == [(CSV, CSV, True)] and p.files() == [CSV]      # no rail folder: CSVs only
+        said = SF.set_folder(p.rail, kind="rail")
+        assert said.startswith("Filing the rail plans that go out by email into " + p.rail), said
+        assert "The folders in it: Askern, Hauliers, Marchwood, Steel, Steel Done." in said, said
+        assert "No plan goes in yet" in said and SF.tick(p.desk) == [] and p.written() == []
+        said = SF.set_folder(p.rail, kind="rail", routes=ROUTES)
+        assert "BS -> Steel: no plans in it yet." in said and "Any other plan is not filed." in said, said
+        assert SF.tick(p.desk) == [(PLAN, PLAN, True)]   # the Other plan has no folder: not filed
+        assert p.written() == ["Steel/" + PLAN] and p.files() == [CSV]
+        assert "BS -> Steel" in SF.describe() and "master -> Hauliers" in SF.describe()
+        assert "Stopped filing the rail plans" in SF.stop("rail") and SF.state()["on"] and not SF.state()["rail"]
+        push("Rail Plan wc 02.11 v3 BS.xlsx", b"later", file=True)
+        assert SF.tick(p.desk) == [] and p.written() == ["Steel/" + PLAN]
+
+
+def test_only_folders_straight_inside_the_rail_plans_folder_are_taken_as_routes():
+    with Place() as p:
+        os.makedirs(os.path.join(p.root, "Elsewhere"))
+        for routes, words in (("BS Steel", "is not PLAN=FOLDER"), ("BS=..\\..\\Elsewhere", "is not the name"),
+                              ("BS=Steel\\Sub", "is not the name"), ("BS=C:\\Temp", "is not the name"),
+                              ("BS=Nowhere", "cannot see a folder called Nowhere"), ("BS=..", "is not the name"),
+                              ("BS/x=Steel", "is not PLAN=FOLDER"), (" ; ", "No PLAN=FOLDER")):
+            try:
+                SF.set_folder(p.rail, kind="rail", routes=routes)
+                assert False, f"{routes} was taken"
+            except ValueError as e:
+                assert words in str(e), (routes, str(e))
+        assert not os.path.exists(SF.SETTINGS)          # nothing was set
+        SF.set_folder(p.rail, kind="rail", routes="Master = Hauliers;bs=Steel")
+        assert SF.load()["rail_routes"] == {"": "Hauliers", "bs": "Steel"}
+        other = os.path.join(p.root, "Other Rail")
+        os.makedirs(other)
+        SF.set_folder(other, kind="rail")               # another folder: the old routes do not follow it
+        assert "rail_routes" not in SF.load()
+
+
 # ---- setting it --------------------------------------------------------------
 def test_the_folder_is_set_from_the_home_pc_and_only_a_folder_this_pc_sees_is_taken():
     class Rec:
@@ -273,6 +406,21 @@ def test_the_folder_is_set_from_the_home_pc_and_only_a_folder_this_pc_sees_is_ta
         b.handle({"id": 4, "action": "shared_folder", "on": False})
         assert "Stopped filing" in desk.answers[-1]["detail"] and SF.tick(p.desk) == []
         assert p.files() == []
+        code, r = call("/api/ctms/command", {"action": "shared_folder", "kind": "rail", "folder": p.rail,
+                                             "text": ROUTES}, key=AGENT)
+        cmd = next(c for c in S._ctms["queue"] if c["id"] == r["id"])
+        assert code == 200 and cmd["kind"] == "rail" and cmd["folder"] == p.rail and cmd["text"] == ROUTES, cmd
+        S._ctms["queue"].clear()
+        p.put("Rail Plan wc 26.10 v3 BS.xlsx", b"the team's")
+        b.handle(dict(cmd, id=5))
+        a = desk.answers[-1]
+        assert a["ok"] and "Filing the rail plans that go out by email into " + p.rail in a["detail"], a
+        assert "BS -> Steel: newest there Rail Plan wc 26.10 v3 BS.xlsx" in a["detail"], a
+        assert "master -> Hauliers: no plans in it yet." in a["detail"], a
+        assert b.state()["filing"]["rail"] is True and b.state()["filing"]["on"] is False
+        b.handle({"id": 6, "action": "shared_folder", "kind": "rail", "on": False})
+        assert "Stopped filing the rail plans" in desk.answers[-1]["detail"]
+        assert b.state()["filing"]["rail"] is False
 
 
 def test_the_check_in_carries_whether_filing_works_cut_to_size():
@@ -282,7 +430,8 @@ def test_the_check_in_carries_whether_filing_works_cut_to_size():
                    key=BRIDGE)
     assert code == 200
     f = S._ctms["state"]["filing"]
-    assert f == {"on": True, "ok": False, "last": "N" * 160, "at": "31/10 09:31", "error": "e" * 300}, f
+    assert f == {"on": True, "rail": False, "ok": False, "last": "N" * 160, "at": "31/10 09:31",
+                 "error": "e" * 300}, f
 
 
 if __name__ == "__main__":

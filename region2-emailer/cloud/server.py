@@ -11,7 +11,7 @@ Same dashboard as the local control plane, hardened for the internet:
 
     DASH_KEY=... AGENT_KEY=... PORT=8080 python server.py
 """
-import hashlib, hmac, json, os, re, sys, time, threading
+import base64, binascii, hashlib, hmac, json, os, re, sys, time, threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -29,13 +29,17 @@ _upload = None       # one pending browser->agent file upload {name, data(b64), 
 _agent_seen = 0.0
 _files = {}          # name -> {"data": b64, "size": int, "at": str}
 _MAX_FILES = 12
-# The upload CSVs, held apart for the work PC's bridge to file in the team's
-# shared folder (work_pc/shared_folder.py). Not just the Files list: that keeps
-# the newest 12 of everything, and the agent's re-push after a redeploy goes in
-# name order - an upload CSV not yet filed could drop off the end of it.
-_to_file = {}        # name -> the same entry as in _files
+# The upload CSVs and the emailed rail plans, held apart for the work PC's
+# bridge to file in the team's shared folders (work_pc/shared_folder.py). Not
+# just the Files list: that keeps the newest 12 of everything, and the agent's
+# re-push after a redeploy goes in name order - a file not yet filed could drop
+# off the end of it.
+_to_file = {}        # name -> the same entry as in _files, plus "sha" (the work PC tells re-sends apart by it)
 _MAX_TO_FILE = 60
 _UPLOAD_CSV = re.compile(r"NR_[A-Za-z0-9_-]{0,120}?\d{14}\.csv")
+# A rail plan as rail_plan.py names it ("Rail Plan wc 02.11 v2 BS.xlsx"). Only one
+# the agent marks "file" went out by email - a preview is never filed.
+_RAIL_PLAN = re.compile(r"Rail Plan wc \d{2}\.\d{2} v\d{1,2}(?: [A-Za-z]+){0,4}\.xlsx")
 try:
     _QUEUE_TTL = int(os.environ.get("QUEUE_TTL", "600"))   # seconds an unclaimed command stays queued
 except ValueError:
@@ -259,6 +263,8 @@ def _ctms_args(action, data):
         out["branch"] = branch
     if data.get("scope") in ("bridge", "all"):
         out["scope"] = data["scope"]
+    if data.get("kind") in ("csv", "rail"):        # which shared folder: the upload CSVs' or the rail plans'
+        out["kind"] = data["kind"]
     if action == "paste" and data.get("text") is not None:
         out["text"] = str(data["text"])[:6000]          # rows for the tracker, tabs and line breaks kept
     if action == "steps" and isinstance(data.get("steps"), list):
@@ -321,9 +327,9 @@ def _ctms_take_state_locked(s):
                         if str(w.get("java") or "0").isdigit() else 0,
                         "showing": bool(w.get("showing")), "minimized": bool(w.get("minimized")),
                         "foreground": bool(w.get("foreground"))}
-    if isinstance(s.get("filing"), dict):         # the shared folder: on, the last pass went through, what went in
+    if isinstance(s.get("filing"), dict):         # the shared folders: CSVs on, rail plans on, the last pass, what went in
         f = s["filing"]
-        st["filing"] = dict({k: bool(f.get(k)) for k in ("on", "ok")},
+        st["filing"] = dict({k: bool(f.get(k)) for k in ("on", "rail", "ok")},
                             **{k: str(f.get(k) or "")[:n] for k, n in (("last", 160), ("at", 20), ("error", 300))})
     if isinstance(s.get("net_tail"), list):
         st["net_tail"] = [{k: str(e.get(k) or "")[:300] for k in ("at", "method", "url", "status", "type", "mime")}
@@ -1655,12 +1661,13 @@ class Handler(BaseHTTPRequestHandler):
             # handed out, nothing marked as running
             return self._json(200, {"ok": True})
         if path == "/api/ctms/uploads":
-            # the upload CSVs for the shared folder - the work PC remembers which it has filed
+            # the upload CSVs and emailed rail plans for the shared folders - the work PC remembers which it has filed
             with _lock:
-                lst = [{"name": n, "size": f["size"], "at": f["at"]} for n, f in _to_file.items()]
+                lst = [{"name": n, "size": f["size"], "at": f["at"], "sha": f.get("sha", "")}
+                       for n, f in _to_file.items()]
             return self._json(200, {"files": lst})
         if path == "/api/ctms/upload":
-            # one of them - an upload CSV and nothing else from the Files list
+            # one of them - and nothing else from the Files list
             with _lock:
                 f = _to_file.get(str(data.get("name") or ""))
             if not f:
@@ -1977,7 +1984,11 @@ class Handler(BaseHTTPRequestHandler):
                     _files[name] = f
                     while len(_files) > _MAX_FILES:
                         _files.pop(next(iter(_files)))
-                    if _UPLOAD_CSV.fullmatch(name):
+                    if _UPLOAD_CSV.fullmatch(name) or (data.get("file") is True and _RAIL_PLAN.fullmatch(name)):
+                        try:
+                            f["sha"] = hashlib.sha256(base64.b64decode(f["data"])).hexdigest()
+                        except (binascii.Error, ValueError):
+                            f["sha"] = ""
                         _to_file.pop(name, None)
                         _to_file[name] = f
                         while len(_to_file) > _MAX_TO_FILE:

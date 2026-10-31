@@ -109,10 +109,21 @@ def snap_outbox():
         return {}
 
 
+RAIL_SENT = os.path.join(HERE, "_rail_sent.json")   # rail_plan.py notes each plan it emails here
+
+
 def push_new_files(before):
     """Upload outbox files created/changed since `before` to the control
-    plane, so they can be downloaded from the dashboard at work."""
-    import base64
+    plane, so they can be downloaded from the dashboard at work. A rail plan
+    that went out by email - rail_plan.py noted it, these very bytes - is
+    marked for the work PC to file in the team's Rail Plans folder; a preview
+    never is."""
+    import base64, hashlib
+    try:
+        with open(RAIL_SENT, encoding="utf-8") as f:
+            sent = json.load(f)
+    except Exception:
+        sent = {}
     d = outbox_dir()
     for n, m in snap_outbox().items():
         if n in before and m <= before.get(n, 0):
@@ -123,8 +134,12 @@ def push_new_files(before):
             if size > 8_000_000:
                 continue
             with open(p, "rb") as f:
-                _req("/api/files", {"name": n, "size": size,
-                                    "data": base64.b64encode(f.read()).decode()})
+                data = f.read()
+            body = {"name": n, "size": size, "data": base64.b64encode(data).decode()}
+            r = sent.get(n) if isinstance(sent, dict) else None
+            if isinstance(r, dict) and r.get("sha256") == hashlib.sha256(data).hexdigest():
+                body["file"] = True
+            _req("/api/files", body)
         except Exception:
             pass
 

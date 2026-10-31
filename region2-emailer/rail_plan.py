@@ -18,7 +18,7 @@ the real finished plans:
     SO40 4UT (Marchwood)  -> Arcelor Mittal
 """
 import sys, os, csv, re, json, io, codecs
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from openpyxl.styles import PatternFill, Font, Alignment
 import outbox
 
@@ -27,6 +27,21 @@ try:
     RECIP = json.load(open(os.path.join(HERE, "_rail_recipients.json"), encoding="utf-8"))
 except Exception:
     RECIP = {}
+
+# A plan as the team names it, and as build() writes it: "Rail Plan wc 02.11 v2 BS.xlsx" (no supplier =
+# the master). The version counts the issues of that plan, whatever the day: wc 19.10's BS plan went v1
+# (Thu 15/10), v2 (Tue 20/10), v3 (Thu 22/10), and wc 28.09 was on v5 by the Wednesday.
+PLAN_FILE = re.compile(r"Rail Plan wc (\d{2}\.\d{2}) v(\d{1,2})((?: [A-Za-z]+){0,4})\.xlsx", re.I)
+# The plans that went out by email - agent.py marks these (and never a preview) for the work PC to file
+# in the team's Rail Plans folder.
+SENT = os.path.join(HERE, "_rail_sent.json")
+SENT_DAYS = 7
+
+
+def plan_file(name):
+    """(week commencing 'DD.MM', version, supplier suffix - '' for the master) of a plan's file name, or None."""
+    m = PLAN_FILE.fullmatch(str(name or "").strip())
+    return (m.group(1), int(m.group(2)), m.group(3).strip()) if m else None
 
 _COMMON = {"haulage", "transport", "transports", "services", "service", "rail", "freight",
            "logistics", "hire", "ltd", "limited", "the", "of", "and", "co", "uk", "group", "sons"}
@@ -201,75 +216,129 @@ def _refs_from_plan_xlsx(path):
     return refs
 
 
-def previous_order_refs(wc):
-    """Order References from the most recent rail-plan email in Outlook for this
-    week-commencing - i.e. the latest version a colleague (or you) circulated.
-    Returns a set, or None if no prior plan is found (so we don't green a whole
-    fresh plan). Only used on a current-week UPDATE."""
+def _plan_mail(wc):
+    """Every email in the DHL mailbox with one of this week's plans attached, newest first:
+    [(when, item, [(attachment index, wc, version, suffix)])] - or None if the mailbox could not be read.
+
+    Sent Items and the whole Inbox tree. The team's own issues are filed into Inbox > ADHOC > Synergy
+    Upload, never left in the Inbox, so the old look at the Inbox and Sent Items alone found only the
+    plans sent from here - an update then compared against a plan days out of date."""
     if wc is None:
         return None
-    import tempfile, shutil
     wcs = wc.strftime("%d.%m")
-    want = f"rail plan wc {wcs}"
+    since = datetime.combine(wc, datetime.min.time()) - timedelta(days=21)   # the names carry no year
     try:
         import build_drafts as bd
-        ns = bd.get_ns()
-        dhl = bd.dhl_store(ns)
-        folders = [f for f in (bd.sub(dhl, "Inbox"), bd.sub(dhl, "Sent Items")) if f]
+        dhl = bd.dhl_store(bd.get_ns())
+        roots = [f for f in (bd.sub(dhl, "Sent Items"), bd.sub(dhl, "Inbox")) if f]
     except Exception:
         return None
-    tmpdir = tempfile.mkdtemp(prefix="railprev_")
-    best = None   # (when, [saved xlsx paths]) - the most recent matching email
-    try:
-        for fol in folders:
+    if not roots:
+        return None
+    flt = "@SQL=(\"urn:schemas:httpmail:subject\" LIKE '%rail plan%')"
+    found = []
+
+    def look(folder, depth):
+        try:
+            if depth and int(folder.DefaultItemType) != 0:
+                return                          # a calendar, contacts... - not mail
+            items = folder.Items.Restrict(flt)
+        except Exception:
+            items = []
+        for it in items:
             try:
-                items = fol.Items
-                items.Sort("[ReceivedTime]", True)
+                rt = next((v for v in (getattr(it, a, None) for a in ("ReceivedTime", "SentOn"))
+                           if v is not None and 1990 < getattr(v, "year", 0) < 2100), None)
+                if rt is None:
+                    continue
+                when = datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute, rt.second)
+                if when < since:
+                    continue
+                atts = it.Attachments
+                plans = [(j,) + p for j in range(1, atts.Count + 1)
+                         for p in [plan_file(atts.Item(j).FileName)] if p and p[0] == wcs]
+                if plans:
+                    found.append((when, it, plans))
             except Exception:
                 continue
-            n = 0
-            for it in items:
-                n += 1
-                if n > 60:
-                    break
-                try:
-                    subj = str(getattr(it, "Subject", "") or "").lower()
-                    atts = it.Attachments
-                    names = [str(atts.Item(j).FileName or "") for j in range(1, atts.Count + 1)]
-                    if want not in subj and not any(want in nm.lower() for nm in names):
-                        continue
-                    rt = None
-                    for attr in ("ReceivedTime", "SentOn", "LastModificationTime"):
-                        v = getattr(it, attr, None)
-                        if v is not None and 1990 < getattr(v, "year", 0) < 2100:
-                            rt = v
-                            break
-                    when = datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute) if rt else datetime.min
-                    if best and when <= best[0]:
-                        continue
-                    paths = []
-                    for j in range(1, atts.Count + 1):
-                        att = atts.Item(j)
-                        nm = str(att.FileName or "")
-                        if nm.lower().endswith((".xlsx", ".xlsm")):
-                            p = os.path.join(tmpdir, f"{n}_{nm}")
-                            att.SaveAsFile(p)
-                            paths.append(p)
-                    if paths:
-                        best = (when, paths)
-                except Exception:
-                    continue
-        if not best:
-            return None
-        refs = set()
-        for p in best[1]:
-            refs |= _refs_from_plan_xlsx(p)
-        return refs or None
+        if depth < 8:
+            try:
+                for i in range(1, folder.Folders.Count + 1):
+                    look(folder.Folders.Item(i), depth + 1)
+            except Exception:
+                pass
+
+    for r in roots:
+        look(r, 0)
+    found.sort(key=lambda x: x[0], reverse=True)
+    return found
+
+
+def issued(found):
+    """{suffix, lower case ('' = the master): the highest version of that plan already gone round}."""
+    top = {}
+    for _, _, plans in found or []:
+        for _, _, v, sfx in plans:
+            top[sfx.lower()] = max(top.get(sfx.lower(), 0), v)
+    return top
+
+
+def previous_order_refs(wc, found=None):
+    """Order References on the latest issue of this week's plans in Outlook - the master and each
+    supplier's, every one at its highest version, whoever sent it. A set, or None if no earlier plan
+    is found (so a whole fresh plan is never painted green). Only used on a current-week UPDATE.
+
+    Each plan at its own latest, not just the newest email: the team sends a supplier's plan on its own
+    ("RE: Rail Plan wc 19.10 - BS"), and comparing against that alone would paint every other
+    supplier's rows green."""
+    if found is None:
+        found = _plan_mail(wc)
+    latest = {}                                  # suffix -> (version, item, attachment index)
+    for _, it, plans in found or []:             # newest first: a tie on version keeps the newest
+        for j, _, v, sfx in plans:
+            if sfx.lower() not in latest or v > latest[sfx.lower()][0]:
+                latest[sfx.lower()] = (v, it, j)
+    if not latest:
+        return None
+    import tempfile, shutil
+    tmpdir = tempfile.mkdtemp(prefix="railprev_")
+    refs = set()
+    try:
+        for n, (_, it, j) in enumerate(latest.values()):
+            try:
+                p = os.path.join(tmpdir, f"{n}.xlsx")
+                it.Attachments.Item(j).SaveAsFile(p)
+                refs |= _refs_from_plan_xlsx(p)
+            except Exception:
+                continue
     finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return refs or None
+
+
+def _mark_sent(path, name, now=None):
+    """Note that a plan went out by email, these very bytes - agent.py then marks it for the work PC to
+    file in the team's Rail Plans folder. Kept a week."""
+    import hashlib
+    now = now or datetime.now()
+    try:
+        with open(path, "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()
         try:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            with open(SENT, encoding="utf-8") as f:
+                rec = json.load(f)
         except Exception:
-            pass
+            rec = {}
+        cutoff = (now - timedelta(days=SENT_DAYS)).isoformat(timespec="seconds")
+        rec = {n: r for n, r in (rec.items() if isinstance(rec, dict) else [])
+               if isinstance(r, dict) and str(r.get("at") or "") >= cutoff}
+        rec[name] = {"sha256": sha, "at": now.isoformat(timespec="seconds")}
+        tmp = SENT + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rec, f, indent=1)
+        os.replace(tmp, SENT)
+    except Exception as e:
+        print(f"   (not noted for the shared folder: {e})")
 
 
 def build(path, out_dir=None, update=False):
@@ -324,9 +393,12 @@ def build(path, out_dir=None, update=False):
         if sch and (dd is None or dd != sch):
             mism.append((r[idx["order reference"]], r[sch_i], r[dd_i]))
 
-    # UPDATE (current-week) mode: pull the previous plan a colleague circulated
-    # for this week from Outlook, so we can highlight the NEW manifests green.
-    prev_refs = previous_order_refs(wc) if update else None
+    # What has gone round for this week already (sent from here or by the team):
+    # each plan is named one version up from its last issue, and an UPDATE
+    # (current-week) highlights the manifests that are NEW since then green.
+    found = _plan_mail(wc)
+    top = issued(found)
+    prev_refs = previous_order_refs(wc, found) if update else None
 
     DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -365,7 +437,8 @@ def build(path, out_dir=None, update=False):
             mx = max((len(str(c.value)) for c in col if c.value is not None), default=8)
             ws.column_dimensions[col[0].column_letter].width = min(max(mx + 2, 10), 55)
         wcs = wc.strftime("%d.%m") if wc else "TBC"
-        name = f"Rail Plan wc {wcs} v1" + (f" {suffix}" if suffix else "") + ".xlsx"
+        name = (f"Rail Plan wc {wcs} v{top.get(suffix.lower(), 0) + 1}"
+                + (f" {suffix}" if suffix else "") + ".xlsx")
         p = os.path.join(out_dir, name) if out_dir else outbox.path(name)
         wb.save(p)
         return p, name, sum(len(v) for v in by_day.values()), carriers
@@ -383,6 +456,8 @@ def build(path, out_dir=None, update=False):
         made.append({"path": p, "name": f, "count": c, "chain": pn, "suffix": sfx, "carriers": carr})
 
     print(f"Week commencing: {wc}  |  kept {len(kept)} rows, dropped {len(dropped)} manual/non-supplier")
+    if found is None and wc:
+        print("  ! Could not read the mailbox for this week's earlier issues - every plan is named v1.")
     if update:
         wcs = wc.strftime("%d.%m") if wc else "TBC"
         if prev_refs is None:
@@ -461,6 +536,7 @@ def sendoff(path, send=False, update=False):
                 print("   ABORT: could not bind DHL account - NOT sent"); continue
             mail.Send()
             print("   SENT")
+            _mark_sent(m["path"], m["name"])         # gone out: the work PC files it in the Rail Plans folder
     if send and ns is not None:
         try:
             ns.SendAndReceive(False)

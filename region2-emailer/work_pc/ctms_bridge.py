@@ -52,10 +52,11 @@ Leave it running in its Command Prompt while you work. What it does:
   - UPDATES ITSELF when the dashboard or the home PC asks - from GitHub only,
     tried out before it is used, and put back by itself if the new code will
     not start (ctms_update.py). Nothing to copy across by hand.
-  - FILES THE UPLOAD CSVs in the team's shared folder, once one is set
-    (shared_folder.py): each new one the dashboard holds goes in under its
-    own name, about a minute after it is made. Only ever adds - nothing there
-    is replaced or deleted.
+  - FILES THE UPLOAD CSVs AND THE EMAILED RAIL PLANS in the team's shared
+    folders, once they are set (shared_folder.py): each new one the dashboard
+    holds goes in about a minute after it is made - a CSV under its own name,
+    a rail plan as the next version of that plan. Only ever adds - nothing
+    there is replaced or deleted.
 
 Standard library only, like everything else in work_pc\\. Ctrl+C stops it.
 """
@@ -1187,14 +1188,16 @@ class Bridge:
                           + ". Restarting on the new code - back in a few seconds.")
 
     def shared_folder(self, cmd, done):
-        """Where the upload CSVs are filed (shared_folder.py), set from the dashboard or the home PC."""
+        """Where the upload CSVs (kind "rail": the emailed rail plans, each into the folder its text names
+        for it) are filed (shared_folder.py), set from the dashboard or the home PC."""
         folder = str(cmd.get("folder") or "").strip()
+        kind = "rail" if cmd.get("kind") == "rail" else "csv"
         if cmd.get("on") is False:
-            return done(True, shared_folder.stop())
+            return done(True, shared_folder.stop(kind))
         if not folder:
             return done(True, shared_folder.describe())
         try:
-            said = shared_folder.set_folder(folder)
+            said = shared_folder.set_folder(folder, kind=kind, routes=cmd.get("text"))
         except ValueError as e:
             return done(False, str(e))
         try:        # one look now: the dashboard's list answers, and anything waiting goes in
