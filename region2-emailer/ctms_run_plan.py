@@ -14,7 +14,8 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
                        on an artic only; PTS never on ballast
              veh type  as stated, else by the CTMS weight - a HIAB load of 10,000 kg or less goes on a rigid. Only
                        ever NR_Rigid (Up to 40ft) or NR_40ft Artic Flatbed - never RIGID MOFFETT and the like (his
-                       rule 01/11). A Moffett job's vehicle is picked, the most a Moffett carries not being set
+                       rule 01/11). A Moffett job goes on a 40ft artic ("Moffetts are usually on 40ft artics", his
+                       01/11) - picked only when the site takes no artics
   booking, other   his to do - never run
 
 Anything it can't be sure of HOLDS the item. Each doubt names the field, the site's own words from the email (only
@@ -183,7 +184,15 @@ def plan_update(it, rec, found):
     kg = rec.get("ctms_weight")
     no_artics = _field(d, "artic_access").get("value") == "no"
     if not veh:
-        if off == "HIAB" and kg:
+        if off == "MOFFETT":
+            # "Moffetts are usually on 40ft artics" (his 01/11) - a site that takes no artics is his pick
+            if no_artics:
+                veh = doubt("veh", "Vehicle", _field(d, "artic_access").get("raw"), VEHICLES,
+                            "A Moffett usually goes on a 40ft artic, but the site takes no artics - pick the vehicle")
+            else:
+                veh = "artic"
+                explain.append("A Moffett job - on a 40ft artic (Moffetts usually are, your rule)")
+        elif off == "HIAB" and kg:
             veh = "rigid" if float(kg) <= RIGID_HIAB_KG else "artic"
             explain.append(f"{float(kg):,.0f} kg in CTMS - " + ("a rigid HIAB (up to 10,000 kg)" if veh == "rigid"
                                                                  else "an artic HIAB (over 10,000 kg)"))
@@ -201,10 +210,6 @@ def plan_update(it, rec, found):
             veh = doubt("veh", "Vehicle", "", VEHICLES,
                         (f"{float(kg):,.0f} kg in CTMS - " if kg else "") + "no HIAB: the most a rigid takes "
                         "without one isn't set")
-        elif off == "MOFFETT":
-            veh = doubt("veh", "Vehicle", "", VEHICLES,
-                        (f"{float(kg):,.0f} kg in CTMS - " if kg else "") + "a Moffett job: the most a Moffett "
-                        "carries isn't set - the Moffett itself goes in Services")
         # offloading not settled yet: the vehicle waits for it
     if veh:
         s["veh"] = veh

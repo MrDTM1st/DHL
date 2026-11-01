@@ -126,19 +126,23 @@ def test_without_a_weight_the_vehicle_is_asked_not_assumed():
     assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and "Weight not read" in c["why"]
 
 
-def test_a_moffett_job_puts_the_moffett_in_services_and_asks_for_the_vehicle():
+def test_a_moffett_job_goes_in_services_on_a_40ft_artic():
     rec = _rec("9100083", "05/11/2026", offloading={"value": "MOFFETT", "confidence": "high", "raw": "yes moffett"},
                rear_steer={"value": "no", "confidence": "high"})
     item = _item("9100083")
     p = P.plan([item], [rec], _found("9100083", "05/11/2026"))[0]
-    c = next(c for c in p["checks"] if c["field"] == "veh")
-    assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and "Moffett" in c["why"]
-    assert c["quote"] == ""                               # nothing of ours passed off as their words
-    p = P.plan([dict(item, answers={"veh": "artic"})], [rec], _found("9100083", "05/11/2026"))[0]
     assert p["status"] == "ready", p["checks"]
     assert p["set"]["services"] == {"HIAB": False, "MOFFETT": True, "REAR STEER": False, "PTS": False}
-    assert p["set"]["veh"] == "artic" and "Moffett required" in p["set"]["comments"]
-    assert "HIAB required" not in p["set"]["comments"]
+    assert p["set"]["veh"] == "artic" and any("40ft artic" in e for e in p["explain"])   # not the 5.1t's rigid
+    assert "Moffett required" in p["set"]["comments"] and "HIAB required" not in p["set"]["comments"]
+    # a site that takes no artics: his pick, the site's own words beside it
+    rec = _rec("9100083", "05/11/2026", offloading={"value": "MOFFETT", "confidence": "high", "raw": "yes moffett"},
+               artic_access={"value": "no", "confidence": "high", "raw": "no artics, tight access"})
+    p = P.plan([item], [rec], _found("9100083", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "veh")
+    assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and c["quote"] == "no artics, tight access"
+    p = P.plan([dict(item, answers={"veh": "rigid"})], [rec], _found("9100083", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "rigid" and p["set"]["services"]["MOFFETT"] is True
 
 
 if __name__ == "__main__":
