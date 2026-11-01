@@ -6,21 +6,20 @@ For every order the tool has emailed (tracker status 'sent'):
   * if it's an out-of-office / auto-reply -> FLAG it (your cue to chase someone
     else), do NOT count it as a real reply
   * if it's a genuine reply -> parse the delivery details out of it
-    (delivery_details) onto the tracker record, AND draft the send-off brief
-    into Region 2 > Send Out - a haulier-ready email with the answers in bold
-    and the signature attached.
+    (delivery_details) onto the tracker record and mark it replied
+    (sendoff_ready): ready to book, on the map and the CTMS to-do list.
+    No send-off brief any more - "that's just a dead piece of code now"
+    (Delali, 01/11): the dashboard and the CTMS run took its place.
 
 Plus 2-business-day chasers (weekends + England/Wales bank holidays skipped).
 Sending chasers is opt-in: preview by default; only sends when told to.
 
-    python phase2.py check          # replies + OOO flags + send-off drafts (no customer email sent)
+    python phase2.py check          # replies + OOO flags (no customer email sent)
     python phase2.py chase          # preview who is due a chase (sends nothing)
     python phase2.py chase send     # actually send the chasers
 """
 import os, re, sys
-import html as _html
 from datetime import datetime, date, timedelta
-import win32com.client
 import build_drafts as bd
 import delivery_details as dd
 import metrics
@@ -78,38 +77,6 @@ def _sub(f, name):
         c = f.Folders.Item(i)
         if c.Name.strip().lower() == name.strip().lower():
             return c
-
-
-def _sendout_folder(ns, create=True):
-    dhl = _dhl(ns)
-    region2 = _sub(_sub(_sub(dhl, "Inbox"), "Regions"), "Region 2")
-    if region2 is None:
-        return None
-    folder = _sub(region2, "Send out") or _sub(region2, "Send Out")
-    if folder is None and create:
-        try:
-            folder = region2.Folders.Add("Send Out")
-        except Exception:
-            folder = None
-    return folder
-
-
-def _sendout_exists(ns, orders):
-    """Is there already a 'SEND OUT: <these orders>' draft in Region 2 > Send Out?"""
-    folder = _sendout_folder(ns, create=False)
-    nums = [re.sub(r"\D", "", str(o)) for o in orders if re.sub(r"\D", "", str(o))]
-    if folder is None or not nums:
-        return False
-    try:
-        found = folder.Items.Restrict(
-            "@SQL=(\"urn:schemas:httpmail:subject\" LIKE '%SEND OUT%" + nums[0] + "%')")
-        for it in found:
-            subj = str(it.Subject or "")
-            if all(n in subj for n in nums):
-                return True
-    except Exception:
-        pass
-    return False
 
 
 def _rt_naive(rt):
@@ -173,30 +140,6 @@ def find_reply(ns, record):
     return None
 
 
-# ---------- send-off brief ----------
-def _load_full(path):
-    import openpyxl, warnings
-    warnings.filterwarnings("ignore")
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    hdr = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
-
-    def ci(*names):
-        for nm in names:
-            if nm in hdr:
-                return hdr.index(nm)
-        return None
-    C = dict(order=ci("customer order no"),
-             caddr=ci("address1", "address 1"), cpc=ci("postcode"),
-             cdate=ci("collection date"),
-             daddr=ci("d address1", "d address 1"), dpc=ci("d postcode"),
-             ddate=ci("delivery date"),
-             prod=ci("product / service code"), prodc=ci("product / description"),
-             qty=ci("product qty"))
-    return rows[1:], C
-
-
 def _answer(body, *fragments):
     """Pull the customer's answer that follows one of our questions on the same
     line, e.g. 'Do we need to bring our own offloading? HIAB required' -> the
@@ -216,7 +159,7 @@ def backfill_collections(ns, cap=12):
     """Fill in the collection location(s) on tracker records that lack them.
     Wait-list entries never carried collection until 23/07 (waitlist.add
     dropped it), and older records predate collection capture entirely - so
-    the map, briefs and cover requests had nothing to show. Rebuilds from each
+    the map and cover requests had nothing to show. Rebuilds from each
     order's extract via the order index; capped per run so check/recover stay
     quick."""
     d = tracker.load()
@@ -440,107 +383,6 @@ def product_type_of(record):
     return bd.product_type(blob)
 
 
-_OFFLOAD_WORDS = {"HIAB": "HIAB", "MOFFETT": "Moffett", "SITE/NONE": "Site offloads - none needed",
-                  "BOTH": "HIAB or Moffett"}
-
-
-def brief_lines(record, det, coll="", deliv="", cdate="", mats=""):
-    """The haulier brief as (label, value) pairs, built from the PARSED reply.
-    A field we don't have is simply left out - no [CHECK] placeholders."""
-    date_v = (det.get("date") or {}).get("value") or ""
-    lo = (det.get("time") or {}).get("earliest") or ""
-    hi = (det.get("time") or {}).get("latest") or ""
-    when = " ".join(x for x in (date_v, f"{lo} - {hi}" if lo and hi else lo) if x).strip()
-
-    acc = []
-    a = (det.get("artic_access") or {}).get("value")
-    veh = (det.get("vehicle") or {}).get("value")
-    if a == "yes":
-        acc.append("artics can access")
-    elif a == "no":
-        acc.append("no artics" + (f" - {veh} required" if veh else " - smaller vehicle required"))
-    if (det.get("rear_steer") or {}).get("value") == "yes":
-        acc.append("rear steer required")
-
-    c = det.get("contact") or {}
-    contact = " ".join(x for x in (c.get("name"), c.get("phone")) if x)
-    pts = (det.get("pts") or {}).get("value")
-    return [
-        ("Order", " / ".join(record.get("orders", []))),
-        ("Collection", coll),
-        ("Delivery", deliv),
-        ("Collection date/time", cdate),
-        ("Delivery date/time", when),
-        ("Materials", mats or record.get("materials", "")),
-        ("Vehicle", veh or "(leave with me)"),
-        ("Offloading", _OFFLOAD_WORDS.get((det.get("offloading") or {}).get("value"), "")),
-        ("Site access", ", ".join(acc)),
-        ("Site contact", contact),
-        ("What3Words", (det.get("what3words") or {}).get("value") or ""),
-        ("PTS", {"yes": "Yes - required", "no": "Not required"}.get(pts, "")),
-        ("Notes", (det.get("notes") or {}).get("value") or ""),
-    ]
-
-
-def brief_html(lines):
-    """Haulier-ready: the answers in bold so they're easy to scan, then the
-    signature. Blank fields are dropped rather than printed empty."""
-    body = "".join(f"{_html.escape(k)}: <b>{_html.escape(str(v))}</b><br>"
-                   for k, v in lines if str(v).strip())
-    return ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
-            "Hi,<br><br>Would you be able to cover the job below;<br><br>"
-            f"{body}<br>{bd.SIGNATURE_HTML}</div>")
-
-
-def build_brief(ns, record, reply_item):
-    order = record["orders"][0]
-    tmp = os.path.join(bd.HERE, "_brief.xlsx")
-    path, fn = order_index.lookup(ns, order, tmp)
-    if not path:
-        path, fn = send_order.find_extract(ns, order)
-    coll = deliv = cdate = ""
-    mats = record.get("materials", "")
-    if path:
-        try:
-            rows, C = _load_full(path)
-            target = order.split("-")[0]
-            grp = [r for r in rows if r[C["order"]] and bd.base_order(r[C["order"]]) == target]
-            if grp:
-                r0 = grp[0]
-                coll = f"{bd.clean(r0[C['caddr']])}, {bd.clean(r0[C['cpc']])}" if C['caddr'] is not None else ""
-                deliv = f"{bd.clean(r0[C['daddr']])}, {bd.clean(r0[C['dpc']])}" if C['daddr'] is not None else ""
-                cdate = bd.fdate(r0[C['cdate']]) if C['cdate'] is not None else ""
-        except Exception:
-            pass
-    if not deliv:
-        deliv = f"{record.get('site', '')}, {record.get('postcode', '')}"
-
-    try:
-        reply_body = str(reply_item.Body or "")
-    except Exception:
-        reply_body = ""
-    try:
-        sender = str(reply_item.SenderName or "")
-    except Exception:
-        sender = ""
-    det = record.get("details") or dd.parse_reply(reply_body, product_type=product_type_of(record), sender=sender)
-    lines = brief_lines(record, det, coll, deliv, cdate, mats)
-
-    outlook = win32com.client.Dispatch("Outlook.Application")
-    m = outlook.CreateItem(0)
-    m.Subject = "SEND OUT: " + " / ".join(record["orders"]) + " " + record.get("site", "")
-    bd._attach_qr(m)                      # inline QR used by the signature
-    m.HTMLBody = brief_html(lines)        # answers in bold + your signature
-    acct = send_order.dhl_account(ns)
-    if acct is not None:
-        send_order.bind_account(m, acct)
-    m.Save()
-    folder = _sendout_folder(ns)
-    if folder is not None:
-        m.Move(folder)
-    return True
-
-
 # ---------- main passes ----------
 def _collection_terms():
     """Recipient markers for the collect-first suppliers, from config."""
@@ -625,7 +467,7 @@ def check(ns=None):
     # Which orders were ALREADY finished before this run. Anything that becomes
     # finished DURING this run must survive to be saved - see the drop below.
     was_done = {r["id"] for r in d["records"] if r.get("sendoff_ready")}
-    replies = ooo = briefs = moved = 0
+    replies = ooo = moved = 0
     finder = _reply_finder(ns, [r for r in d["records"] if r.get("status") == "sent"
                                 and not r.get("reply_at") and not r.get("ooo_at")])
     for r in list(d["records"]):            # a copy: a reply's date can fold another record into this one
@@ -672,20 +514,8 @@ def check(ns=None):
             except Exception:
                 pass
             if r.get("kind") == "collection":
-                continue   # supplier replied with collection details - no delivery send-off brief
-            try:
-                if _sendout_exists(ns, r.get("orders", [])):
-                    # Already drafted - by an earlier check, or by hand. The reply
-                    # finder now sees replies filed in Completed that the old one
-                    # never did, and many of those jobs were handled long ago;
-                    # a second SEND OUT for them is clutter, not help.
-                    r["sendoff_ready"] = True
-                elif build_brief(ns, r, item):
-                    r["sendoff_ready"] = True
-                    briefs += 1
-                    metrics.log("brief_drafted", orders=r.get("orders", []))
-            except Exception as e:
-                r["sendoff_note"] = str(e)[:140]
+                continue   # supplier replied with collection details - nothing to book from it here
+            r["sendoff_ready"] = True   # replied: ready to book (the SEND OUT brief it used to get is gone)
     # remove orders YOU'VE booked yourself - your "this order has been arranged
     # with ..." email (incl. a MAN ref) in Sent Items - so they stop being tracked
     # and never get chased. This is the "if you say an order's booked, drop it"
@@ -742,10 +572,10 @@ def check(ns=None):
     removed = tracker.drop_completed(d, keep_ids=finished_now)
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
-          f"{briefs} send-off draft(s) created, {booked_removed} booked-by-you removed, "
+          f"{booked_removed} booked-by-you removed, "
           f"{removed} stale ready order(s) removed, {moved} delivery date(s) moved by a reply, "
           f"{repaired} product wording(s) repaired, {collfilled} collection(s) filled in.")
-    return replies, ooo, briefs
+    return replies, ooo
 
 
 def _due_for_chase(r):

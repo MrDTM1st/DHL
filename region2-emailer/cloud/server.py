@@ -1262,7 +1262,7 @@ async function poll(){
 }
 function refreshTracker(){
   post({action:'tracker_refresh'});
-  document.getElementById('tracker').innerHTML='<span class="hint">Checking replies & drafting send-off briefs…</span>';
+  document.getElementById('tracker').innerHTML='<span class="hint">Checking replies…</span>';
   setTimeout(loadTracker, 6000);
 }
 function runChasers(){

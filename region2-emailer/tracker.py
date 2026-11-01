@@ -6,7 +6,7 @@ upload it came from, when), and a refresh that checks Outlook to fill in whether
 reply has come back and whether the Send-out brief is ready.
 
     python tracker.py             # print the current tracker
-    python tracker.py refresh     # update reply / send-off status from Outlook
+    python tracker.py refresh     # update reply status from Outlook (replied = ready to book)
 """
 import os, json
 from datetime import datetime
@@ -227,10 +227,7 @@ def refresh():
     ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     dhl = _dhl(ns)
     inbox = _sub(dhl, "Inbox")
-    region2 = _sub(_sub(inbox, "Regions"), "Region 2")
-    sendout = _sub(region2, "Send out") or _sub(region2, "Send Out")
     inbox_subjects = _subjects(inbox)
-    sendout_subjects = _subjects(sendout)
     d = load()
     for r in d["records"]:
         orders = r["orders"]
@@ -239,7 +236,9 @@ def refresh():
                 if any(o in s for o in orders):
                     r["reply_at"] = _now()
                     break
-        r["sendoff_ready"] = any(any(o in s for o in orders) for s in sendout_subjects)
+        # replied = ready to book; it used to be read off Region 2 > Send Out's briefs, gone since 01/11
+        if r.get("reply_at") and r.get("kind", "delivery") == "delivery":
+            r["sendoff_ready"] = True
     drop_completed(d)   # a send-off order stays until it is booked - only a stale one goes
     save(d)
     return d

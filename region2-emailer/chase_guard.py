@@ -372,7 +372,7 @@ class MailIndex:
                 m["to"], m["cc"] = _recips(it)
             elif cls == _OLMAIL:
                 try:
-                    m["draft"] = not bool(it.Sent)     # SEND OUT briefs etc. - never a reply
+                    m["draft"] = not bool(it.Sent)     # a draft (old SEND OUT briefs etc.) - never a reply
                 except Exception:
                     pass
                 if not m["draft"]:

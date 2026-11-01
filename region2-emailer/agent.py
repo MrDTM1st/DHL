@@ -668,7 +668,7 @@ def _bg_jobs():
         ("chase", ["phase2.py", "chase", "send"], 10800, 1800, auto_chase_on),
         # ad hocs whose manifest has come back leave the map
         ("adhoc_sweep", ["adhoc_booked_sweep.py", "apply"], 300, 600, lambda: True),
-        # Phase 2: replies + OOO + send-off drafts. Also run when monitor_tick
+        # Phase 2: replies + OOO flags. Also run when monitor_tick
         # flags new mail (_phase2_due). A check after a backlog took 803s on
         # 02/10/2026, so it gets 30 minutes - a killed check saves nothing.
         ("phase2_check", ["phase2.py", "check"], 1200, 1800, lambda: True),
@@ -1415,14 +1415,14 @@ def main():
                             report("done", "Ad hoc form processed - CSV below; map shows the job.",
                                    tail(out, 10))
             elif action == "tracker_refresh":
-                report("running", "Checking replies & building send-off drafts…")
+                report("running", "Checking replies…")
                 out = run(["phase2.py", "check"])
                 if "SKIP phase2" in out:
                     # phase2 waits 30s for a check already running, then says so
                     report("done", "A reply check is already running in the background - "
                            "the tracker will update when it finishes.", tail(out, 4))
                 else:
-                    report("done", "Replies checked - tracker updated, briefs drafted.", tail(out, 6))
+                    report("done", "Replies checked - tracker updated.", tail(out, 6))
             elif action in ("booked_call", "adhoc_booked") and order:
                 # ONE path for "this job is booked, take it off", whatever kind
                 # of record it is. It used to be two, split by which button the

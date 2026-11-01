@@ -89,9 +89,9 @@ function coverRequest(r) {
     // Everything below is what the SITE CONTACT answered. It was all being
     // dropped: the cover request only ever carried times, vehicle and
     // offloading, so the access answers, the site contact and the PTS answer
-    // had to be retyped from the reply every time a haulier was asked. The
-    // Outlook send-off brief (phase2.brief_lines) already prints all of these -
-    // this is the same brief, so it should say the same things.
+    // had to be retyped from the reply every time a haulier was asked - so the
+    // cover request carries them all (the Outlook SEND OUT brief that once did
+    // is gone, 01/11).
     access ? `Site access: ${access}` : null,
     contact ? `Site contact: ${contact}` : null,
     w3w ? `What3Words: ${w3w}` : null,

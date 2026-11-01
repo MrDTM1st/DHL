@@ -127,7 +127,7 @@ def outlook():
         say(f"  [OK]   Outlook answered COM - {len(accounts)} account(s):")
         for a in accounts:
             say(f"         - {mask(getattr(a, 'SmtpAddress', ''))}")
-        # The engine files briefs into "Region 2 > Send Out". Finding it is the
+        # The engine files finished chains into "Region 2 > Completed". Finding it is the
         # difference between "Outlook works" and "this is the right mailbox".
         #
         # This has to RECURSE. The first version looked one level down from

@@ -194,7 +194,7 @@ def in_working_hours(now, holidays=()):
 
 # ---------- who counts ----------
 def is_ours(m, ctx):
-    """Our own mail: from us, or a draft (SEND OUT briefs are drafts)."""
+    """Our own mail: from us, or a draft (the old SEND OUT briefs were drafts)."""
     frm = str(m.get("from") or "").lower()
     return bool(m.get("draft")) or not frm or frm in ctx.get("me", ())
 
