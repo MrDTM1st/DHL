@@ -128,6 +128,7 @@ _ctms = {
     "importing": {},       # command id -> the CSV's name
     "imported": {},        # CSV name -> when CTMS took it (HH:MM)
     "looked_up": None,     # the last look-up of the map's orders in CTMS: {at, checked, of, stopped}
+    "todo_run": None,      # the CTMS page's Run: {id, ids, state, at, said, results, ...}
 }
 # Wakes a held check-in when there is work, and a held wait when its answer lands.
 _ctms_cv = threading.Condition(_lock)
@@ -316,6 +317,9 @@ def _ctms_args(action, data):
 _CHECK_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.-]{2,39}")       # an NR order, an ad hoc's AH ref
 _DDMMYYYY = re.compile(r"\d{2}/\d{2}/\d{4}")
 _CHECK_VEH_DAYS = 14        # an order due within this has its open lines' cards opened: Veh Type and weight
+_TODO_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")          # a CTMS to-do item's id
+_TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact"}
+_TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 
 
 def _check_list_locked():
@@ -1669,6 +1673,8 @@ class Handler(BaseHTTPRequestHandler):
                     "state": dict(_ctms["state"]),
                     "control": _ctms_control_locked(),
                     "looked_up": _ctms["looked_up"],          # the map's orders, last looked up in CTMS
+                    "todo_run": ({k: v for k, v in _ctms["todo_run"].items() if k not in ("before", "until")}
+                                 if _ctms["todo_run"] else None),
                     "next_check": _check_next(_uk_now()),     # ... and when they will be by themselves
                     "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                 "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
@@ -1894,6 +1900,64 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "id": cid, "orders": len(orders), "online": _ctms_online()})
             return self._json(*out)
+        if path == "/api/ctms/todo/answer":
+            # his pick from a held to-do item's drop-down (his 01/11: "tell me exactly what they said in the email
+            # and then give me like a drop down menu") - the home PC keeps it on the item (ctms_todo.answer)
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            iid, field, value = (str(data.get(k) or "").strip() for k in ("id", "field", "value"))
+            if not _TODO_ID.fullmatch(iid) or field not in _TODO_FIELDS or not value or len(value) > 200:
+                return self._json(400, {"error": "not an answer"})
+            with _lock:
+                _queue.append({"action": "ctms_todo_answer", "item": iid, "field": field, "value": value,
+                               "queued_at": time.time()})
+            return self._json(200, {"ok": True})
+        if path == "/api/ctms/todo/run":
+            # the CTMS page's Run (his ask 01/11: "turn execute CTMS into a button"): the ready to-do items typed
+            # into CTMS by the home PC (ctms_run.py), each read back. Look mum, no hands is switched on for the run
+            # and back as it was when it ends - unless he had it on for longer himself
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            ids = [str(i) for i in data.get("ids") or [] if _TODO_ID.fullmatch(str(i))][:_TODO_RUN_MAX]
+            with _lock:
+                run = _ctms["todo_run"]
+                if not ids:
+                    out = (400, {"error": "Nothing picked to run."})
+                elif run and run.get("state") == "running" and time.time() < run["until"]:
+                    out = (409, {"error": "A CTMS to-do run is going already."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it type into CTMS."})
+                else:
+                    _ctms["next_id"] += 1
+                    rid = _ctms["next_id"]
+                    before = _ctms["control_until"]
+                    until = max(before, time.time() + min(30, 3 + 3 * len(ids)) * 60)
+                    _ctms["control_until"], _ctms["armed_for"] = until, None
+                    _ctms["todo_run"] = {"id": rid, "ids": ids, "before": before, "until": until, "state": "running",
+                                         "at": datetime.now().strftime("%H:%M"), "said": "", "results": []}
+                    _ctms_note_locked(f"Look mum, no hands mode switched on for the CTMS to-do run ({len(ids)} "
+                                      "item(s)) - back as it was when it ends.")
+                    _queue.append({"action": "ctms_todo_run", "ids": ids, "run": rid, "queued_at": time.time()})
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
+            return self._json(*out)
+        if path == "/api/ctms/todo/ran":
+            # the home PC says the run ended: what it did - and the switch back as it was before it
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["todo_run"]
+                if run and run["id"] == data.get("run"):
+                    run.update(state="done", ok=bool(data.get("ok")), said=str(data.get("said") or "")[:500],
+                               ended=datetime.now().strftime("%H:%M"),
+                               results=[{"id": str(r.get("id") or "")[:40], "ok": bool(r.get("ok")),
+                                         "said": str(r.get("said") or "")[:300]}
+                                        for r in (data.get("results") or [])[:40] if isinstance(r, dict)])
+                    if _ctms["control_until"] == run["until"]:
+                        _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
+                        _ctms_note_locked("CTMS to-do run ended - Look mum, no hands mode back as it was.")
+            return self._json(200, {"ok": True})
         if path == "/api/ctms/stop":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})

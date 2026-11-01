@@ -225,9 +225,22 @@ def listing(tracker_path=None, path=None, notes_done=None):
         if it["kind"] == "note" and (it.get("ref"), it.get("note")) in written:
             continue                    # the note run has written it since
         out.append({k: it.get(k) for k in ("id", "kind", "orders", "ref", "note", "what", "source", "added",
-                                            "details")})
+                                            "details", "answers")})
     out.sort(key=lambda i: (str(i.get("added") or ""), i["id"]))
     return out
+
+
+def answer(item_id, field, value, path=None):
+    """His choice for one of an item's doubts, picked from the dashboard's drop-down (his 01/11: "tell me exactly
+    what they said in the email and then give me like a drop down menu of what to select") - kept on the item, so
+    the run plan uses it instead of asking again. None when there is no such open item."""
+    d = load(path)
+    for it in d["items"]:
+        if it["id"] == item_id and not it.get("done_at"):
+            it.setdefault("answers", {})[str(field)] = str(value)
+            _save(d, path)
+            return it
+    return None
 
 
 def done(item_id, path=None, tracker_path=None, notes_done=None):

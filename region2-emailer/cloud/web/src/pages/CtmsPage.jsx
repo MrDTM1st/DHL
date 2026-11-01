@@ -114,11 +114,49 @@ function SetupSteps() {
 }
 
 // What CTMS still owes, as the desk remembers it (ctms_todo on the home PC): the notes each email and chase leaves,
-// escalations, orders to update from a site's reply, bookings. "Execute on CTMS" in the chat works through them.
+// escalations, orders to update from a site's reply, bookings. The Run button (his ask 01/11: "turn execute CTMS into
+// a button") types the ready ones in - ctms_run_plan says what each would type, and holds whatever it can't be sure
+// of with the site's own words and a drop-down for his pick.
 const TODO_KIND = { note: 'Note', update: 'Update', booking: 'Book', other: 'To do' };
 const ddmm = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? m[3] + '/' + m[2] : ''; };
+const PLAN_STATUS = { ready: 'Ready', held: 'Needs you', yours: 'Yours', done: 'Done in CTMS' };
 
-export default function CtmsPage({ onAuthFail, pushToast, todo = [] }) {
+function planText(p) {
+  const s = p.set || {};
+  if (p.kind === 'note') return `Adds "${(s.note || '').trim()}" at the end of ${(p.lines || [])[0]}'s Special Instructions`;
+  const svc = s.services ? Object.entries(s.services).map(([k, on]) => (on ? k : 'no ' + k)).join(', ') : '';
+  return [(p.lines || []).join(' + '), s.deliver && 'deliver ' + s.deliver,
+    s.collect && 'collect ' + s.collect + (s.storage ? ' + STORAGE x' + s.storage : ''), s.veh, svc,
+    s.comments && 'comment "' + s.comments + '"'].filter(Boolean).join(' · ');
+}
+
+// One doubt on a held item: what the site said, why it's held, and his pick.
+function HeldCheck({ item, c, onAnswer, busy }) {
+  const [val, setVal] = useState('');
+  const can = (c.options || []).length > 0 || c.text;
+  return (
+    <div className="ctms-held">
+      <b>{c.label}</b>{c.quote ? <> - they said: <q>{c.quote}</q></> : null}
+      <div className="ctms-muted">{c.why}</div>
+      {can && (
+        <div className="ctms-held-pick">
+          {(c.options || []).length ? (
+            <select value={val} onChange={(e) => setVal(e.target.value)}>
+              <option value="">Pick…</option>
+              {c.options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input value={val} onChange={(e) => setVal(e.target.value)}
+              placeholder={c.field === 'time' ? 'HH:MM or HH:MM-HH:MM' : c.field === 'date' ? 'DD/MM/YYYY' : 'Name and number'} />
+          )}
+          <button className="btn mini" disabled={!val.trim() || busy} onClick={() => onAnswer(item, c, val.trim())}>Save</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }) {
   const visible = usePageVisible();
   const [st, setSt] = useState(null);
   const [shot, setShot] = useState(null);
@@ -128,6 +166,39 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [] }) {
   const [mins, setMins] = useState(60);
   const [ctlBusy, setCtlBusy] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  const [answering, setAnswering] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
+  const lastRun = st && st.todo_run;
+  const running = !!(lastRun && lastRun.state === 'running');
+  const runnable = plan.filter((p) => p.status === 'ready' || p.status === 'done');
+
+  async function answer(item, c, value) {
+    setAnswering(true);
+    try {
+      await api.ctmsTodoAnswer(item.id, c.field, value);
+      pushToast('Noted', `${c.label}: ${value} - the plan updates in a moment.`, 'go');
+    } catch (e) {
+      if (e instanceof api.AuthError) onAuthFail();
+      else pushToast('Not saved', String((e && e.message) || e), 'warn');
+    } finally {
+      setAnswering(false);
+    }
+  }
+
+  async function runTodo() {
+    if (!window.confirm(`Type ${runnable.length} to-do item(s) into CTMS now? ${MODE} switches on for the run `
+      + 'and back as it was after.')) return;
+    setRunBusy(true);
+    try {
+      await api.ctmsTodoRun(runnable.map((p) => p.id));
+      pushToast('CTMS to-do run started', `${runnable.length} item(s) - each read back before it counts.`, 'go');
+    } catch (e) {
+      if (e instanceof api.AuthError) onAuthFail();
+      else pushToast('Not started', String((e && e.message) || e), 'warn');
+    } finally {
+      setRunBusy(false);
+    }
+  }
 
   // Chained timeouts rather than setInterval: fetching a picture can take
   // longer than the gap, and overlapping polls would pile up on a phone.
@@ -392,17 +463,43 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [] }) {
               <span className="lbl">To do on CTMS</span>
               <span className={'ctms-todo-n' + (todo.length ? ' some' : '')}>{todo.length}</span>
             </div>
-            {todo.slice(0, 30).map((t) => (
-              <div className="ctms-act ctms-todo" key={t.id}>
-                <span className={'ctms-todo-kind ' + t.kind}>{TODO_KIND[t.kind] || t.kind}</span>
-                <span className="d"><b className="mono">{(t.orders || []).join(' / ')}</b> {t.what}</span>
-                <span className="t mono">{ddmm(t.added)}</span>
-              </div>
-            ))}
+            {(plan.length ? plan : todo).slice(0, 30).map((t) => {
+              const p = plan.length ? t : null;
+              return (
+                <div className="ctms-act ctms-todo" key={t.id}>
+                  <span className={'ctms-todo-kind ' + t.kind}>{TODO_KIND[t.kind] || t.kind}</span>
+                  <span className="d"><b className="mono">{(t.orders || []).join(' / ')}</b> {t.what}
+                    {p && p.status === 'ready' && <div className="ctms-plan">{planText(p)}</div>}
+                    {p && (p.explain || []).map((e) => <div className="ctms-plan why" key={e}>{e}</div>)}
+                    {p && p.status === 'held' && (p.checks || []).map((c) => (
+                      <HeldCheck key={c.field} item={p} c={c} busy={answering} onAnswer={answer} />))}
+                  </span>
+                  {p ? <span className={'ctms-plan-st ' + p.status}>{PLAN_STATUS[p.status] || p.status}</span>
+                    : <span className="t mono">{ddmm(t.added)}</span>}
+                </div>
+              );
+            })}
             {todo.length > 30 && <div className="ctms-muted">… and {todo.length - 30} more.</div>}
+            {runnable.length > 0 && (
+              <div className="ctms-run">
+                <button className="btn primary" disabled={running || runBusy} onClick={runTodo}>
+                  {running ? 'Running in CTMS…' : `Run ${runnable.length} in CTMS`}
+                </button>
+                <span className="ctms-muted">{MODE} switches on for the run and back as it was after. Each order
+                  is read back before it counts as done; the first thing not as expected stops the run.</span>
+              </div>
+            )}
+            {lastRun && lastRun.state === 'done' && (
+              <div className="ctms-runlog">
+                <b>Last run {lastRun.ended || lastRun.at}:</b> {lastRun.said}
+                {(lastRun.results || []).map((r) => (
+                  <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : '✗'} {r.said}</div>))}
+              </div>
+            )}
             <div className="ctms-muted" style={{ marginTop: todo.length ? 8 : 0 }}>
-              {todo.length ? 'Say "execute on CTMS" in the chat and the haulage desk works through these.'
-                : 'Nothing owed - CTMS is up to date with every email, chase and reply.'}
+              {!todo.length ? 'Nothing owed - CTMS is up to date with every email, chase and reply.'
+                : plan.some((p) => p.status === 'held') ? 'Held items need your pick above before the button runs them.'
+                  : ''}
             </div>
           </div>
 

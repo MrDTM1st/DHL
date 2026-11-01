@@ -515,6 +515,7 @@ def push_panel():
             "asks": _asks(),
             "mat_teams": _mat_teams(),
             "ctms_todo": _ctms_todo(),
+            "ctms_plan": _ctms_plan(),
         })
     except Exception:
         pass
@@ -529,9 +530,18 @@ def _ctms_todo():
         return []
 
 
-def run(args):
+def _ctms_plan():
+    """What the Run button would type for each to-do item, and what it is holding for him (ctms_run_plan)."""
+    try:
+        import ctms_run_plan
+        return ctms_run_plan.load()[:60]
+    except Exception:
+        return []
+
+
+def run(args, timeout=600):
     proc = subprocess.run([sys.executable] + args, cwd=HERE,
-                          capture_output=True, text=True, timeout=600)
+                          capture_output=True, text=True, timeout=timeout)
     return (proc.stdout or "") + (proc.stderr or "")
 
 
@@ -1513,6 +1523,40 @@ def main():
                            if res.get("weight") else [])
                     report("done", "CTMS looked up: " + ("; ".join(bits) if bits else "nothing has changed") + ".",
                            tail(out, 6))
+            elif action == "ctms_todo_answer":
+                # his pick from a held item's drop-down on the CTMS page - kept on the item, so the plan stops
+                # asking (his 01/11: "tell me exactly what they said ... give me like a drop down menu")
+                import ctms_todo
+                it = ctms_todo.answer(str(cmd.get("item") or ""), str(cmd.get("field") or ""),
+                                      str(cmd.get("value") or ""))
+                push_panel()
+                report("done" if it else "error",
+                       f"Noted: {cmd.get('field')} = {cmd.get('value')}." if it else
+                       "That to-do item is no longer open - nothing noted.")
+            elif action == "ctms_todo_run":
+                # the Run button: the ready items typed into CTMS one at a time, each read back (ctms_run.py);
+                # the dashboard switched Look mum, no hands on for this run, and switches it off when told it ended
+                ids = [str(i) for i in cmd.get("ids") or [] if i][:40]
+                report("running", f"Running {len(ids)} CTMS to-do item(s) on the work PC…")
+                out = run(["ctms_run.py", "run"] + ids, timeout=1800) if ids else ""
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    res = {"ok": False, "said": "The run did not finish - see the output.", "results": []}
+                try:
+                    _req("/api/ctms/todo/ran", {"run": cmd.get("run"), "ok": res["ok"], "said": res["said"],
+                                                "results": res["results"]})
+                except Exception:
+                    pass
+                push_panel()
+                push_tracker()
+                report("done" if res["ok"] else "error", "CTMS to-do run: " + res["said"] + ".", tail(out, 12))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled

@@ -319,7 +319,8 @@ export default function App() {
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
         )}
-        {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} todo={panel.ctms_todo || []} />}
+        {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} todo={panel.ctms_todo || []}
+          plan={panel.ctms_plan || []} />}
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); }}

@@ -2993,6 +2993,42 @@ def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
         S._queue.clear()
 
 
+def test_the_ctms_to_do_run_switches_acting_on_for_itself_and_puts_it_back():
+    fresh()
+    try:
+        # a pick from a held item's drop-down: checked, then handed to the home PC
+        for body in ({"id": "t1", "field": "offloading"}, {"id": "bad id!", "field": "veh", "value": "rigid"},
+                     {"id": "t1", "field": "price", "value": "500"}):
+            assert call("/api/ctms/todo/answer", body)[0] == 400
+        assert call("/api/ctms/todo/answer", {"id": "t1", "field": "veh", "value": "rigid"}, key=AGENT)[0] == 401
+        assert call("/api/ctms/todo/answer", {"id": "t1", "field": "veh", "value": "rigid"})[0] == 200
+        assert S._queue[-1]["action"] == "ctms_todo_answer" and S._queue[-1]["item"] == "t1"
+        # Run: switched on for the run, the home PC told which items; one run at a time
+        assert call("/api/ctms/todo/run", {"ids": []})[0] == 400
+        assert call("/api/ctms/todo/run", {"ids": ["a1"]}, key=AGENT)[0] == 401
+        code, r = call("/api/ctms/todo/run", {"ids": ["a1", "b2", "not ok!"]})
+        assert code == 200 and S._ctms_armed()
+        job = S._queue[-1]
+        assert job["action"] == "ctms_todo_run" and job["ids"] == ["a1", "b2"] and job["run"] == r["run"]
+        assert call("/api/ctms/todo/run", {"ids": ["c3"]})[0] == 409
+        # it ends: what it did is kept for the page, and the switch goes back off
+        assert call("/api/ctms/todo/ran", {"run": r["run"], "ok": True, "said": "2 of 2 done"}, key=DASH)[0] == 401
+        assert call("/api/ctms/todo/ran", {"run": r["run"], "ok": True, "said": "2 of 2 done",
+                                           "results": [{"id": "a1", "ok": True, "said": "added"}]}, key=AGENT)[0] == 200
+        assert not S._ctms_armed()
+        run = S._ctms["todo_run"]
+        assert run["state"] == "done" and run["said"] == "2 of 2 done" and run["results"][0]["id"] == "a1"
+        # switched on by him for longer: the run leaves it on
+        S._ctms["control_until"] = time.time() + 3 * 3600
+        code, r = call("/api/ctms/todo/run", {"ids": ["c3"]})
+        call("/api/ctms/todo/ran", {"run": r["run"], "ok": True, "said": "1 of 1 done"}, key=AGENT)
+        assert S._ctms_armed() and S._ctms["control_until"] > time.time() + 2 * 3600
+    finally:
+        S._ctms["control_until"] = 0.0
+        S._ctms["todo_run"] = None
+        S._queue.clear()
+
+
 def test_set_time_look_ups_come_at_9_12_3_and_5_on_weekdays_wait_for_a_quiet_work_pc_and_retry():
     fresh()
     keep = (S._tracker, S._panel, dict(S._check_slot))

@@ -739,9 +739,10 @@ def order_update_items(a, card_open=False):
             items += [f"click 174,{SERVICE_ROW_Y + 23 * (row - 1)} after=0.2",
                       "click 734,648 react timeout=8"]                            # Delete
         for code in adds:
+            code, _, qty = code.partition(":")                                     # "STORAGE:2" - a quantity of its own
             items += ["click 378,648 react box=100,270,1100,600 timeout=8",        # New: a blank row, in Service Id
                       f"type {code}", "key tab react timeout=8",                   # CTMS fills its name and value
-                      "type 1", "key tab after=0.2"]                               # Qty 1
+                      f"type {qty or 1}", "key tab after=0.2"]                     # Qty, 1 unless given
         items.append("snap services 90,250,1150,420")
     if veh:
         name, downs = VEH[veh]
@@ -1068,7 +1069,8 @@ def main(argv=None):
     p.add_argument("--collect", help='"DD/MM/YY HH:MM-HH:MM"')
     p.add_argument("--deliver", help='"DD/MM/YY HH:MM-HH:MM"')
     p.add_argument("--comments", help="the Order Comments (replaces what is there), no commas")
-    p.add_argument("--add-service", action="append", help='a service to add, e.g. "REAR STEER" (Qty 1)')
+    p.add_argument("--add-service", action="append", help='a service to add, e.g. "REAR STEER" (Qty 1), or '
+                                                          '"STORAGE:2" with a quantity of its own')
     p.add_argument("--remove-service-row", action="append", type=int, help="a Services row to delete (1 = top)")
     p.add_argument("--veh", help="the vehicle: " + " | ".join(VEH))
     p.add_argument("--ballast", action="store_true", help="a ballast order: PTS is never added (his rule)")
