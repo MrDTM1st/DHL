@@ -359,6 +359,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
     ['Status', statusLabel(r)],
     ['Delivery', dueText(r) + (r.date_was ? ' · moved from ' + dateShort(r.date_was)
       + (r.date_moved_by ? ' by ' + r.date_moved_by : '') : '')],
+    ['CTMS', r.ctms_at ? 'Looked up ' + r.ctms_at.slice(8, 10) + '/' + r.ctms_at.slice(5, 7) + ' ' + r.ctms_at.slice(11)
+      + (r.ctms_veh ? ' · Veh Type filled' : r.ctms_veh === false ? ' · Veh Type empty' : '') : ''],
     ['Material', r.materials],
     ['Quantity', r.qty && !(r.materials || '').includes(r.qty) ? r.qty : ''],
     ['Weight', r.weight],

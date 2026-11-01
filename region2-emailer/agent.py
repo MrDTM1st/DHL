@@ -1465,6 +1465,40 @@ def main():
                 else:
                     report("done", f"Checked {checked} job(s) against your sent mail: "
                            f"none of them has a manifest yet.", tail(out, 16))
+            elif action == "ctms_orders":
+                # What the work PC found in CTMS about the map's orders (his ask 01/11): booked ones off the map,
+                # dates following CTMS, a Veh Type filled after a call shown ready. ctms_sync.py decides and writes
+                # the tracker under its lock; the ad hocs and pins it finds booked go the Booked button's way.
+                report("running", "Putting what CTMS says on the map…")
+                p = os.path.join(HERE, "_ctms_orders.json")
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(cmd.get("data") or {}, f)
+                out = run(["ctms_sync.py", "apply", p])
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    report("error", "What CTMS said could not be put on the map.", tail(out, 12))
+                else:
+                    off = list(res["booked"])
+                    for job in res["jobs"]:
+                        if _book_off(job)[0]:
+                            off.append(str(job).split("|")[1] if "|" in str(job) else str(job))
+                    push_tracker()
+                    push_panel()
+                    ready = sum(1 for v in res["veh"].values() if v)
+                    bits = ([f"{len(off)} booked in CTMS - taken off the map ({', '.join(off[:6])})"] if off else []) \
+                        + ([f"{len(res['moved'])} date(s) moved to CTMS's"] if res["moved"] else []) \
+                        + ([f"{ready} with a Veh Type - ready to book"] if ready else []) \
+                        + ([f"{len(res['unknown'])} not in CTMS yet ({', '.join(res['unknown'][:4])})"]
+                           if res["unknown"] else [])
+                    report("done", "CTMS looked up: " + ("; ".join(bits) if bits else "nothing has changed") + ".",
+                           tail(out, 6))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled

@@ -27,6 +27,7 @@ import urllib.request
 import zipfile
 import zlib
 import struct
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.join(HERE, "..")
@@ -75,7 +76,7 @@ def fresh():
     """A cloud that has just restarted."""
     S._ctms.update(seen=0.0, state={}, queue=[], results=[], shot=None, watch_until=0.0,
                    stop=False, captures={}, running=None, control_until=0.0, control_touched=False, payloads={},
-                   asked={}, polling=0, armed_for=None, importing={}, imported={})
+                   asked={}, polling=0, armed_for=None, importing={}, imported={}, looked_up=None)
 
 
 def poll(state=None):
@@ -2796,6 +2797,169 @@ def test_the_upload_closes_order_filters_first_when_it_is_in_the_way_and_stops_i
     finally:
         W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---- the map's orders looked up in CTMS (01/11) ----------------------------------------------------------------
+import ctms_orders as CO                # noqa: E402
+
+
+def _summary_read(rows):
+    """An Access Bridge read of Order Summary with these lines, as CTMS gives it (29-30/10): each column down the
+    screen, the left block a few pixels lower than the right - here bottom row first, to show order is by place."""
+    els = [{"r": "internal frame", "nm": "Planning", "lv": 1}, {"r": "internal frame", "nm": "Order Summary", "lv": 1}]
+    for item, key in CO.COLUMNS.items():
+        y0 = 326 if item in ("SCHED_NAME", "EXTERNAL_REF", "STATUS", "DELIVERY_TYPE_ID") else 320
+        for i in reversed(range(15)):
+            els.append({"r": "text", "nm": "Enter value for : " + item, "lv": 2,
+                        "v": rows[i][key] if i < len(rows) else "", "at": [0, y0 + 23 * i, 80, 23]})
+    els += [{"r": "push button", "nm": "Close", "lv": 2}, {"r": "internal frame", "nm": "Order Search", "lv": 1}]
+    return {"elements": els}
+
+
+def _line(ref, status, deliver, sched="261110"):
+    return {"schedule": sched, "ref": ref, "status": status, "type": "STANDARD", "ready_at": deliver,
+            "deliver_by": deliver}
+
+
+def test_order_summary_gives_each_line_whole_and_only_the_orders_own_count():
+    rows = [_line("9100020-2-1", "UNSCHEDULED", "10/11/26 16:01"), _line("9100020-1-1", "SCHEDULED", "05/11/26 16:01"),
+            _line("9100021-1-1", "UNSCHEDULED", "05/11/26 16:01")]
+    got = CO.lines(_summary_read(rows))
+    assert [(r["ref"], r["status"], CO.day(r["deliver_by"])) for r in got] == [
+        ("9100020-2-1", "UNSCHEDULED", "10/11/2026"), ("9100020-1-1", "SCHEDULED", "05/11/2026"),
+        ("9100021-1-1", "UNSCHEDULED", "05/11/2026")]
+    assert CO.lines({"elements": [{"r": "internal frame", "nm": "Planning", "lv": 1}]}) is None   # not up
+    assert CO.search_ref("9100020-1-1") == "9100020%" and CO.search_ref("AH01/11/2026/AB-CD") == "AH01/11/2026/AB-CD%"
+    assert CO.belongs("9100020-2-1", "9100020") and not CO.belongs("9100021-1-1", "9100020")
+    mine = [r for r in got if CO.belongs(r["ref"], "9100020")]
+    assert CO.line_for(mine, "10/11/2026")["ref"] == "9100020-2-1"     # its own day's open line
+    assert CO.line_for(mine, "05/11/2026") is None                     # that day's line is booked: nothing to open
+    assert CO.line_for(mine, "07/11/2026")["ref"] == "9100020-2-1"     # moved: the one open day left
+    two_days = mine + [_line("9100020-3-1", "UNSCHEDULED", "12/11/26 16:01")]
+    assert CO.line_for(two_days, "07/11/2026") is None                 # moved, but to which? no telling
+    # the Veh Type box: words in it, or none
+    w, h = 1910, 915
+    blank = bytearray(b"\xff\xff\xff\xff" * (w * h))
+    assert CO.veh_filled(bytes(blank), w, h) is False
+    for x in range(1080, 1130):
+        for y in (308, 309):
+            i = (y * w + x) * 4
+            blank[i:i + 3] = b"\x10\x10\x10"
+    assert CO.veh_filled(bytes(blank), w, h) is True and CO.veh_filled(bytes(blank), w, h, (0, 40)) is False
+
+
+def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_nothing():
+    keep = (W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    filled = bytearray(b"\xff\xff\xff\xff" * (1910 * 915))
+    for x in range(1080, 1130):
+        i = (309 * 1910 + x) * 4
+        filled[i:i + 3] = b"\x10\x10\x10"
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        ran, reads, seen = [], [], {}
+
+        def step(action, args):
+            what = args.get("name") or (tuple(args["px"]) if "px" in args else args.get("key") or args.get("text"))
+            ran.append((action, what, bool(args.get("double"))))
+            return "ok"
+        b.window_step = step
+        b._batch_look = lambda times, t0: {"kind": "window", "times": times}
+        b._seen = lambda t, name, box: seen.get(name, False)
+        b._frame = lambda: (bytes(filled), 1910, 915)
+
+        def read(win):
+            r = reads.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        J.read_fields = read
+        orders = [{"key": "9100020|10/11/2026", "ref": "9100020", "date": "10/11/2026", "veh": True},
+                  {"key": "AH01/11/2026/AB-CD|03/11/2026", "ref": "AH01/11/2026/AB-CD", "date": "03/11/2026",
+                   "veh": False}]
+        both = [_line("9100020-2-1", "UNSCHEDULED", "10/11/26 16:01"), _line("9100020-1-1", "SCHEDULED", "05/11/26 16:01")]
+
+        def go(n, **cmd):
+            ran.clear()
+            b.handle(dict({"id": n, "action": "ctms_check", "orders": orders}, **cmd))
+            return desk.sent[-1][1]
+        reads[:] = [_summary_read(both), _summary_read(both[:1]),
+                    _summary_read([_line("AH01/11/2026/AB-CD", "SCHEDULED", "03/11/26 12:00", "261103")])]
+        r = go(1)
+        assert r["ok"] and "Looked up 2 of 2" in r["detail"] and "Order Summary closed again" in r["detail"], r
+        assert ("find", "os-search", False) in ran and ran.index(("find", "os-search", False)) < \
+            ran.index(("find", "os-card", False))                       # the card was not up: the menu first
+        typed = [w for a, w, _ in ran if a == "type"]
+        assert typed == ["9100020%", "9100020-2-1", "AH01/11/2026/AB-CD%"], typed   # searches only
+        assert [x for x in ran if x[2]] == [("click", (267, 238), True)]           # one line opened: the open one
+        i = ran.index(("find", "od-vehtype", False))
+        assert ran[i + 1] == ("click", (424, 733), False)                # its Close - and never a Save (337,733)
+        assert not any(w == (337, 733) for _, w, _ in ran) and ran[-1] == ("find", "os-close", False)
+        path, sent = [(p, s) for p, s in desk.sent if p == "/api/ctms/orders"][-1]
+        got = sent["orders"]
+        assert sent["checked"] == 2 and sent["of"] == 2 and not sent["stopped"]
+        assert [x["ref"] for x in got["9100020|10/11/2026"]["lines"]] == ["9100020-2-1", "9100020-1-1"]
+        assert got["9100020|10/11/2026"]["veh"] == {"9100020-2-1": True}
+        assert "veh" not in got["AH01/11/2026/AB-CD|03/11/2026"]
+        # the card already up: straight to it; a read that fails stops the run - what was found still goes home
+        seen["os-card"] = True
+        reads[:] = [_summary_read(both[1:]), RuntimeError("CTMS's Java did not answer")]
+        r = go(2)
+        assert r["ok"] is False and "Stopped reading AH01/11/2026/AB-CD's lines" in r["detail"], r["detail"]
+        assert ("find", "os-search", False) not in ran
+        sent = [s for p, s in desk.sent if p == "/api/ctms/orders"][-1]
+        assert list(sent["orders"]) == ["9100020|10/11/2026"] and sent["stopped"]
+        # a set-time look-up waits for a quiet work PC
+        W.idle_seconds = lambda: 30.0
+        r = go(3, idle=3)
+        assert r["ok"] is False and "waits for 3 quiet minutes" in r["detail"] and ran == []
+    finally:
+        W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG = keep
+
+
+def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
+    fresh()
+    day = lambda n: (datetime.now() + timedelta(days=n)).strftime("%d/%m/%Y")     # noqa: E731
+    keep = (S._tracker, S._panel)
+    S._tracker = {"records": [
+        {"id": "9100030|x", "orders": ["9100030"], "delivery_date": day(5), "kind": "delivery"},     # chased, soon
+        {"id": "9100031|x", "orders": ["9100031", "9100032"], "delivery_date": day(4), "kind": "delivery",
+         "reply_at": "2026-11-01 09:00", "missing": []},                                            # ready
+        {"id": "9100033|x", "orders": ["9100033"], "delivery_date": day(30), "kind": "delivery"},    # far off
+        {"id": "c|x", "orders": ["9100034"], "delivery_date": "", "kind": "collection"}]}
+    S._panel = {"adhocs": [{"id": "adhoc|AH01/11/2026/AB-CD|1", "orders": ["AH01/11/2026/AB-CD"],
+                            "delivery_date": day(2)}], "pins": []}
+    try:
+        for key in (AGENT, BRIDGE, ""):
+            assert call("/api/ctms/check", {}, key=key)[0] == 401
+        code, r = call("/api/ctms/check", {})
+        assert code == 200 and r["orders"] == 5 and S._ctms_armed() and S._ctms["armed_for"] == r["id"]
+        q = S._ctms["queue"][-1]
+        assert q["action"] == "ctms_check" and [(o["ref"], o["veh"]) for o in q["orders"]] == [
+            ("9100030", True), ("9100031", False), ("9100032", False), ("9100033", False), ("AH01/11/2026/AB-CD", False)]
+        assert q["orders"][0]["key"] == "9100030|" + day(5)
+        assert call("/api/ctms/check", {})[0] == 409                     # one look-up at a time
+        found = {"9100030|" + day(5): {"lines": []}}
+        assert call("/api/ctms/orders", {"orders": found, "checked": 1, "of": 5}, key=DASH)[0] == 401
+        assert call("/api/ctms/orders", {"orders": found, "checked": 1, "of": 5, "at": "x"}, key=BRIDGE)[0] == 200
+        job = S._queue[-1]
+        assert job["action"] == "ctms_orders" and job["data"]["orders"] == found
+        assert S._ctms["looked_up"]["checked"] == 1
+        call("/api/ctms/result", {"id": r["id"], "action": "ctms_check", "ok": True, "detail": "Looked up"}, key=BRIDGE)
+        assert not S._ctms_armed() and S._ctms["armed_for"] is None
+        # what a command may carry: a safe ref, a real date or none
+        args = S._ctms_args("ctms_check", {"orders": [{"ref": "bad ref!"}, {"ref": "9100020", "date": "1/1/26",
+                                                                              "veh": 1}], "idle": 3})
+        assert args["orders"] == [{"key": "", "ref": "9100020", "date": "", "veh": True}] and args["idle"] == 3
+        S._tracker, S._panel = {"records": []}, {}
+        assert call("/api/ctms/check", {})[0] == 404                     # nothing on the map
+    finally:
+        S._tracker, S._panel = keep
+        S._queue.clear()
 
 
 def test_closing_presses_only_the_export_tabs_own_close_button():

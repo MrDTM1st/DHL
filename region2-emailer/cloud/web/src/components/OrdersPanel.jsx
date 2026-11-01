@@ -2,7 +2,7 @@ import { Fragment, useState, useEffect, useRef } from 'react';
 import { I } from '../icons.jsx';
 import { ordLabel, isUrgent, isReady, within3, dateShort, recommendFor, parcelPassFor, siteContactOf, byDeliveryDate, wlDays } from '../lib/orders.js';
 import { geoCache } from '../lib/geo.js';
-import { command } from '../api.js';
+import { command, ctmsCheck, ctmsStatus } from '../api.js';
 import CallButton from './CallButton.jsx';
 
 /* Search an order and put it on the map.
@@ -195,6 +195,70 @@ function BookedCheck({ status }) {
   );
 }
 
+/* "Check CTMS now" - every order on the map looked up in CTMS itself (his ask 01/11: details and bookings that
+   came by phone never reach the mailbox). The work PC searches each one in Order Summary - booked ones come off,
+   dates follow CTMS, a filled Veh Type shows ready - and the home PC puts that on the map. Two answers, so two
+   lines: the work PC's look-up, then what changed on the map. */
+function CtmsCheck({ status }) {
+  const [pending, setPending] = useState('');      // '' | 'work' (the work PC looking) | 'home' (the map changing)
+  const [said, setSaid] = useState('');
+  const pressedAt = useRef('');
+  const at = (status && status.at) || '';
+  const detail = (status && status.detail) || '';
+
+  // the home PC's answer: a status stamped after the work PC answered that says CTMS was looked up
+  useEffect(() => {
+    if (pending !== 'home') return undefined;
+    if (at && at !== pressedAt.current && /^CTMS looked up|could not be put on the map/.test(detail)) {
+      setPending('');
+      setSaid((s) => s + ' ' + detail);
+    }
+    return undefined;
+  }, [at, detail, pending]);
+
+  const press = async () => {
+    setSaid('');
+    let id;
+    try {
+      ({ id } = await ctmsCheck());
+    } catch (e) {
+      setSaid(e.message);
+      return;
+    }
+    setPending('work');
+    const until = Date.now() + 8 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((ok) => setTimeout(ok, 3000));
+      let st;
+      try { st = await ctmsStatus(false); } catch { continue; }
+      const r = (st.results || []).find((x) => x.id === id);
+      if (r) {
+        setSaid(r.detail || '');
+        pressedAt.current = at;
+        setPending((r.ok || /looked up/i.test(r.detail || '')) ? 'home' : '');
+        return;
+      }
+    }
+    setPending('');
+    setSaid('No answer from the work PC yet - see the CTMS page.');
+  };
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button className="btn mini" onClick={press} disabled={!!pending}
+        title="Look every order on the map up in CTMS: booked ones come off, dates follow CTMS, a filled Veh Type shows ready">
+        {pending ? 'Checking CTMS…' : 'Check CTMS now'}
+      </button>
+      {(pending || said) && (
+        <div className="s" style={{ marginTop: 6 }}>
+          {pending === 'work' ? 'The work PC is looking each order up in CTMS - a minute or two…' : said}
+          {pending === 'home' && ' Updating the map…'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // A line's dot is its map dot: purple ready to book, red still chasing the details, ringed when due inside 3 days.
 function dotStyle(o) {
   const ready = isReady(o);
@@ -229,6 +293,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
           <div className="s">{records.length} tracked · {ready} ready to book · {urgent} urgent. Tap an order for the
             full brief.</div>
           <BookedCheck status={status} />
+          <CtmsCheck status={status} />
         </div>
         <OrderSearch status={status} />
         <div className="parsed">

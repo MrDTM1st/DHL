@@ -117,6 +117,16 @@ export async function ctmsImport(name) {
   return d;
 }
 
+// The map's "Check CTMS now": every order on the map looked up in CTMS - booked ones come off, dates follow CTMS,
+// a Veh Type filled after a call shows ready. Searches and reads only; the server switches Look mum, no hands on
+// for this look-up alone when it is off.
+export async function ctmsCheck() {
+  const r = await req('/api/ctms/check', { method: 'POST' });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 export async function ctmsStop() {
   await req('/api/ctms/stop', { method: 'POST' });
 }

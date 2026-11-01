@@ -92,6 +92,7 @@ import ctms_export
 import ctms_fast
 import ctms_import
 import ctms_jab
+import ctms_orders
 import ctms_tabs
 import ctms_update
 import ctms_window
@@ -121,7 +122,8 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "steps", "paste",
          "prompt_press", "prompt_click",
          "export_fetch", "export_close",
-         "import_csv")     # Claude acting: this PC AND the dashboard must allow it
+         "import_csv",     # Claude acting: this PC AND the dashboard must allow it
+         "ctms_check")     # ... and the map's orders looked up in CTMS (searches only, nothing saved)
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -130,6 +132,8 @@ BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle", "find")
 STEPS_MAX = 120         # a whole order update - times, comments, services, vehicle - is ~90 steps
 SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
+CHECK_ORDERS = 40       # orders one CTMS look-up takes (the map holds a few dozen at most)
+CHECK_SECONDS = 360     # ... and the longest it runs: what is looked up by then still goes to the map
 ADMIN = ("update", "fields_setup", "shared_folder")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
@@ -805,6 +809,119 @@ class Bridge:
             "SOME LINES FAILED OR WERE INVALID - CTMS's own answer is in the picture.")
             + " OK pressed and the Import card closed.", dict(self._batch_look(times, t0), imported=True))
 
+    # -- the map's orders looked up in CTMS: booked or not, their dates, the Veh Type (01/11, ctms_orders) --
+    def ctms_check(self, cmd, done):
+        """Each order the dashboard sends ({ref, date, veh}) searched in Order Summary and its lines read through the
+        Access Bridge - and, for one with veh (still being chased), its open line's card opened just to see whether
+        the Veh Type is filled. Searches and reads only: nothing typed into an order, nothing saved. Order Summary
+        is closed after, so Planning shows as before. What was found goes to the dashboard (/api/ctms/orders), which
+        hands it to the home PC to put on the map."""
+        orders = [o for o in cmd.get("orders") or [] if isinstance(o, dict) and o.get("ref")][:CHECK_ORDERS]
+        if not orders:
+            return done(False, "No orders to look up.", {"kind": "ctms_check"})
+        if not self.scan_window(force=True) or self.target != "ctms":
+            return done(False, self.not_found() if self.target == "ctms" else
+                        "The bridge is working the tracker - use ctms first.", {"kind": "ctms_check"})
+        idle = float(cmd.get("idle") or 0)
+        quiet = ctms_window.idle_seconds()
+        if idle and quiet is not None and quiet < idle * 60:
+            return done(False, f"Not looked up: the work PC was used {int(quiet)}s ago - it waits for "
+                               f"{idle:g} quiet minutes, so CTMS is never taken from under you.",
+                        {"kind": "ctms_check", "postponed": True})
+        t = ctms_orders.templates()
+        self.batch = {"off": (0, 0), "snaps": []}
+        t0, times = time.time(), []
+
+        def run(steps):
+            for step in steps:
+                ts = time.time()
+                try:
+                    self.window_step(step["action"], step)
+                finally:
+                    times.append(round(time.time() - ts, 2))
+
+        def why(e):
+            return str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
+        try:
+            run([{"action": "anchor"}, {"action": "click", "px": [1000, 37], "after": 0.4}])  # Java's focus
+            if not self._seen(t, "os-card", ctms_orders.CARD_BOX):
+                run(ctms_orders.to_orders(t))
+            run(ctms_orders.card(t))
+        except Exception as e:
+            return done(False, f"Could not get to CTMS's Order Search: {why(e)} Nothing was looked up - the "
+                               "picture shows where it stopped.", dict(self._batch_look(times, t0), kind="ctms_check"))
+        found, stopped, lost = {}, "", False
+        for o in orders:
+            if time.time() - t0 > CHECK_SECONDS:
+                stopped = f"out of time after {len(found)} of {len(orders)}"
+                break
+            try:
+                run(ctms_orders.search(ctms_orders.search_ref(o["ref"])))
+            except Exception:
+                pass                    # nothing found leaves the list empty - CTMS's answer changed nothing
+            try:
+                rows = ctms_orders.lines(ctms_jab.read_fields(self.win))
+            except Exception as e:
+                stopped = f"reading {o['ref']}'s lines: {why(e)}"
+                break
+            if rows is None:
+                stopped, lost = "Order Summary was no longer on the screen", True
+                break
+            got = {"lines": [r for r in rows if ctms_orders.belongs(r["ref"], o["ref"])]}
+            line = ctms_orders.line_for(got["lines"], str(o.get("date") or "")) if o.get("veh") else None
+            if line:
+                try:
+                    run(ctms_orders.search(line["ref"]))            # the line alone: the list's first row
+                    one = [r for r in ctms_orders.lines(ctms_jab.read_fields(self.win)) or []
+                           if r["ref"] == line["ref"]]
+                    if one and one[0]["status"] == ctms_orders.OPEN:     # unscheduled: opening it asks nothing
+                        run(ctms_orders.open_line(t))
+                        bgra, w, h = self._frame()
+                        got["veh"] = {line["ref"]: ctms_orders.veh_filled(bgra, w, h, self.batch.get("off", (0, 0)))}
+                        run(ctms_orders.close_line(t))
+                except Exception as e:
+                    found[o.get("key") or f"{o['ref']}|{o.get('date') or ''}"] = got
+                    stopped, lost = f"looking at {line['ref']}'s Veh Type: {why(e)}", True
+                    break
+            found[o.get("key") or f"{o['ref']}|{o.get('date') or ''}"] = got
+        closed = False
+        if not lost:
+            try:
+                if self._seen(t, "os-card", ctms_orders.CARD_BOX):
+                    run([{"action": "click", "px": [509, 226], "after": 0.5}])     # the Search card's Close
+                run(ctms_orders.close_summary(t))
+                closed = True
+            except Exception:
+                pass
+        payload = {"orders": found, "checked": len(found), "of": len(orders), "stopped": stopped,
+                   "at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+        try:
+            self.desk.post("/api/ctms/orders", payload, timeout=60)
+            onward = " Sent to the home PC for the map."
+        except Exception as e:
+            onward = f" NOT sent to the dashboard ({friendly(e)}) - look them up again."
+        booked = sum(1 for g in found.values() if g["lines"] and all(r["status"] != ctms_orders.OPEN
+                                                                     for r in g["lines"]))
+        missing = sum(1 for g in found.values() if not g["lines"])
+        vehs = [v for g in found.values() for v in (g.get("veh") or {}).values()]
+        said = (f"Looked up {len(found)} of {len(orders)} order(s) in CTMS: {booked} with no line left to book, "
+                f"{missing} not found" + (f", Veh Type looked at on {len(vehs)} ({sum(vehs)} filled)" if vehs else "")
+                + "." + onward
+                + (" Order Summary closed again." if closed else
+                   " Order Summary was left as it is - the picture shows where." if not lost else
+                   " CTMS was left as it is - the picture shows where."))
+        if stopped:
+            said = f"Stopped {stopped}. " + said
+        return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_check", checked=len(found)))
+
+    def _seen(self, t, name, box):
+        """Whether one of the check's templates shows in that part of CTMS's window now - one look, nothing clicked."""
+        tp = t[name]
+        bgra, w, h = self._frame()
+        tpl = ctms_fast.rgb_to_bgra(base64.b64decode(tp["rgb"]), tp["w"], tp["h"])
+        return bool(ctms_fast.find(bgra, w, h, ctms_fast.shift_box(box, self.batch.get("off", (0, 0))), tpl,
+                                   tp["w"], tp["h"]))
+
     def order_filters_away(self, t):
         """His Order Filters panel floats over every CTMS card, and on 31/10 it sat right over the Import card's
         Import button. His word: "If you see it there, close it" - so before the card opens it is closed by its own
@@ -1260,6 +1377,8 @@ class Bridge:
                 return done(True, self.export_tabs_away(ctms_export.is_export))
             if action == "import_csv":
                 return self.import_csv(cmd, done)
+            if action == "ctms_check":
+                return self.ctms_check(cmd, done)
             if action in ("prompt_press", "prompt_click"):
                 ps = ctms_window.prompts()
                 if not ps:

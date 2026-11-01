@@ -259,6 +259,20 @@ def front():
     return {"process": exe, "class": _cls(h), "title": _text(h)[:120] if exe in BROWSER_EXES else ""}
 
 
+def idle_seconds():
+    """How long since anyone touched this PC's keyboard or mouse - None where that cannot be asked. A look-up waits on
+    it, so CTMS is never taken from under him."""
+    if not IS_WIN:
+        return None
+
+    class LastInput(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+    li = LastInput(ctypes.sizeof(LastInput), 0)
+    if not user32.GetLastInputInfo(ctypes.byref(li)):
+        return None
+    return ((ctypes.windll.kernel32.GetTickCount() - li.dwTime) & 0xFFFFFFFF) / 1000.0
+
+
 def is_page(cls, title):
     """Is this an Edge window whose selected tab is the one allowed web page?"""
     return cls == EDGE_CLASS and any(w in (title or "").lower() for w in PAGE_WORDS)

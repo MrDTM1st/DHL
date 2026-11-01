@@ -52,6 +52,7 @@ export function isUrgent(r) {
 export function isReady(r) {
   if (r.kind === 'adhoc' || r.kind === 'dts') return true;
   if (r.kind === 'pinned' || r.kind === 'collection') return false;
+  if (r.ctms_veh) return true;      // a Veh Type filled in CTMS - the details are in, by phone or otherwise (30/10)
   return !!r.reply_at && Array.isArray(r.missing) && r.missing.length === 0;
 }
 

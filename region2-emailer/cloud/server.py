@@ -82,7 +82,8 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "reload", "dialog", "tab", "drag",   # Claude acting - only while the switch is on
               "prompt_press", "prompt_click",      # ... Save on that box (never Open)
               "export_fetch", "export_close",      # ... or the export's file taken from its tab's address
-              "import_csv")                        # an upload CSV into CTMS (the map's Upload: /api/ctms/import)
+              "import_csv",                        # an upload CSV into CTMS (the map's Upload: /api/ctms/import)
+              "ctms_check")                        # the map's orders looked up in CTMS (/api/ctms/check)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
@@ -126,6 +127,7 @@ _ctms = {
     "armed_for": None,
     "importing": {},       # command id -> the CSV's name
     "imported": {},        # CSV name -> when CTMS took it (HH:MM)
+    "looked_up": None,     # the last look-up of the map's orders in CTMS: {at, checked, of, stopped}
 }
 # Wakes a held check-in when there is work, and a held wait when its answer lands.
 _ctms_cv = threading.Condition(_lock)
@@ -224,7 +226,7 @@ def _ctms_upload_answered_locked(cid, imported):
     if _ctms["armed_for"] is not None and _ctms["armed_for"] == cid:
         _ctms["armed_for"] = None
         _ctms["control_until"] = 0.0
-        _ctms_note_locked("Look mum, no hands mode switched off again - it was on for that upload only.")
+        _ctms_note_locked("Look mum, no hands mode switched off again - it was on for that one job only.")
 
 
 def _ctms_args(action, data):
@@ -300,7 +302,55 @@ def _ctms_args(action, data):
         # each step checked like a command of its own; nothing but the window's own steps goes through
         out["steps"] = [dict(_ctms_args(s["action"], s), action=s["action"]) for s in data["steps"][:120]
                         if isinstance(s, dict) and s.get("action") in CTMS_STEP_ACTIONS]
+    if action == "ctms_check" and isinstance(data.get("orders"), list):
+        # the map's orders to look up: a customer ref, the day it is due, whether to look at its Veh Type
+        out["orders"] = [{"key": str(o.get("key") or "")[:80], "ref": str(o["ref"]),
+                          "date": str(o.get("date") or "") if _DDMMYYYY.fullmatch(str(o.get("date") or "")) else "",
+                          "veh": bool(o.get("veh"))}
+                         for o in data["orders"][:40]
+                         if isinstance(o, dict) and _CHECK_REF.fullmatch(str(o.get("ref") or ""))]
+        num("idle", 0, 60)
     return out
+
+
+_CHECK_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.-]{2,39}")       # an NR order, an ad hoc's AH ref
+_DDMMYYYY = re.compile(r"\d{2}/\d{2}/\d{4}")
+_CHECK_VEH_DAYS = 14        # an order still being chased has its Veh Type looked at when it is due within this
+
+
+def _check_list_locked():
+    """The map's orders as the CTMS look-up takes them - one {key, ref, date, veh} for each order of each tracked
+    delivery, ad hoc and hand-pinned order (key: ref|date, how the home PC matches the answers back). veh: still
+    being chased and due within a fortnight - only then is its card opened, for a Veh Type filled after a call."""
+    out, keys = [], set()
+
+    def add(ref, date, veh):
+        ref, date = str(ref or "").strip(), str(date or "").strip()
+        key = f"{ref}|{date}"
+        if _CHECK_REF.fullmatch(ref) and key not in keys:
+            keys.add(key)
+            out.append({"key": key, "ref": ref, "date": date if _DDMMYYYY.fullmatch(date) else "", "veh": veh})
+    for r in _tracker.get("records") or []:
+        if r.get("kind") == "collection":
+            continue
+        ready = bool(r.get("reply_at")) and isinstance(r.get("missing"), list) and not r["missing"]
+        days = _days_to(r.get("delivery_date"))
+        soon = days is None or 0 <= days <= _CHECK_VEH_DAYS
+        for o in r.get("orders") or []:
+            add(o, r.get("delivery_date"), not ready and soon)
+    for r in list(_panel.get("adhocs") or []) + list(_panel.get("pins") or []):
+        for o in r.get("orders") or []:
+            add(o, r.get("delivery_date"), False)
+    return out[:40]
+
+
+def _days_to(ddmmyyyy):
+    """Days from today to a dd/mm/yyyy - None when it is not one."""
+    try:
+        when = datetime.strptime(str(ddmmyyyy or "").strip(), "%d/%m/%Y").date()
+    except ValueError:
+        return None
+    return (when - datetime.now().date()).days
 
 
 # "Set up this PC": the work PC's whole setup as one file to double-click, with
@@ -1514,6 +1564,7 @@ class Handler(BaseHTTPRequestHandler):
                     "seen_ago": int(now - _ctms["seen"]) if _ctms["seen"] else None,
                     "state": dict(_ctms["state"]),
                     "control": _ctms_control_locked(),
+                    "looked_up": _ctms["looked_up"],          # the map's orders, last looked up in CTMS
                     "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                 "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
                     "running": (dict({k: v for k, v in _ctms["running"].items() if k != "since"},
@@ -1706,6 +1757,38 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "id": cid, "online": _ctms_online()})
             return self._json(*out)
+        if path == "/api/ctms/check":
+            # the map's "Check CTMS now": every order on the map looked up in CTMS - booked or not, its dates, a Veh
+            # Type filled after a call (his ask 01/11). Look mum, no hands is switched on for this look-up only when
+            # it is off - it searches and reads, never saves - and off again once it is answered.
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                _ctms_sweep_locked()
+                orders = _check_list_locked()
+                busy = [c for c in _ctms["queue"] if c["action"] == "ctms_check"] or (
+                    _ctms["running"] and _ctms["running"].get("action") == "ctms_check")
+                if not orders:
+                    out = (404, {"error": "There is nothing on the map to look up."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it look orders up."})
+                elif busy:
+                    out = (409, {"error": "CTMS is being looked up already."})
+                else:
+                    _ctms["next_id"] += 1
+                    cid = _ctms["next_id"]
+                    if not _ctms_armed():
+                        _ctms["control_until"] = time.time() + 10 * 60
+                        _ctms["armed_for"] = cid
+                        _ctms_note_locked("Look mum, no hands mode switched on to look the map's orders up in CTMS "
+                                          "- that only.")
+                    _ctms["queue"].append({"id": cid, "action": "ctms_check", "orders": orders, "by": "dashboard",
+                                           "queued_at": time.time()})
+                    _ctms["asked"][cid] = "dashboard"
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "id": cid, "orders": len(orders), "online": _ctms_online()})
+            return self._json(*out)
         if path == "/api/ctms/stop":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
@@ -1740,6 +1823,22 @@ class Handler(BaseHTTPRequestHandler):
                 _queue.append({"action": "rail_plan", "mode": "preview", "export": {"name": name, "data": b64},
                                "queued_at": time.time()})
                 det = f"Rail plan from the CTMS export {name} queued"
+                if not _agent_online():
+                    det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
+                _status.update(state="queued", detail=det, at=datetime.now().strftime("%H:%M:%S"), output="",
+                               email=None)
+            return self._json(200, {"ok": True})
+        if path == "/api/ctms/orders":
+            # what the look-up found in CTMS: the home PC takes booked orders off the map, moves dates, marks a filled
+            # Veh Type ready - the work PC never touches the tracker itself
+            found = data.get("orders")
+            if not isinstance(found, dict) or length > 2_000_000:
+                return self._json(400, {"error": "not a look-up"})
+            with _lock:
+                _queue.append({"action": "ctms_orders", "data": data, "queued_at": time.time()})
+                _ctms["looked_up"] = {"at": datetime.now().strftime("%H:%M"), "checked": int(data.get("checked") or 0),
+                                      "of": int(data.get("of") or 0), "stopped": str(data.get("stopped") or "")[:200]}
+                det = f"What CTMS says about {len(found)} order(s) queued for the map"
                 if not _agent_online():
                     det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
                 _status.update(state="queued", detail=det, at=datetime.now().strftime("%H:%M:%S"), output="",
