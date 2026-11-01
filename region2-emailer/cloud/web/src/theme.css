@@ -97,6 +97,18 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .lbl{ font-size:10.5px; text-transform:uppercase; letter-spacing:.11em; color:var(--faint); font-weight:700; }
 
 /* ---------- dashboard ---------- */
+/* My week: his duties besides Region 2, off the Transport Planners sheet */
+.myweek{ padding:14px 16px; margin-bottom:16px; }
+.myweek-head{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+.myweek-head h3{ margin:0; font-size:14px; font-weight:800; }
+.myweek-days{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; }
+.myweek-day{ border:1px solid var(--line); border-radius:10px; padding:9px 10px; min-width:0; }
+.myweek-day.today{ border-color:var(--red); box-shadow:inset 3px 0 0 var(--red); }
+.myweek-date{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:5px; }
+.myweek-day.today .myweek-date{ color:var(--red); }
+.myweek-duty{ font-size:12.5px; font-weight:600; line-height:1.35; overflow-wrap:anywhere; }
+.myweek-duty + .myweek-duty{ margin-top:4px; }
+.myweek-duty.none{ color:var(--faint); font-weight:500; }
 .metrics{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:22px; }
 .metric{ background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--sh-sm); position:relative; overflow:hidden; }
 .metric .n{ font-size:30px; font-weight:800; letter-spacing:-.03em; line-height:1; }

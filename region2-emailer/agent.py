@@ -516,9 +516,19 @@ def push_panel():
             "mat_teams": _mat_teams(),
             "ctms_todo": _ctms_todo(),
             "ctms_plan": _ctms_plan(),
+            "planner_week": _planner_week(),
         })
     except Exception:
         pass
+
+
+def _planner_week():
+    """His week off the team's Transport Planners sheet (planner_week) - the dashboard's My week card."""
+    try:
+        import planner_week
+        return planner_week.load()
+    except Exception:
+        return {}
 
 
 def _ctms_todo():
@@ -681,6 +691,8 @@ def _bg_jobs():
         # daily safety net: re-enrol emailed-but-untracked orders. OPT-IN via
         # auto_recover.enabled - it writes to the tracker. Slow.
         ("recover", ["phase2.py", "recover"], 86400, 1800, recover_on),
+        # his week off the newest Transport Planners sheet in the mailbox (read-only) - the My week card
+        ("planner_week", ["planner_week.py", "refresh"], 3600, 300, lambda: True),
     ]
 
 
@@ -695,7 +707,7 @@ class BackgroundJobs:
     # start" are spread a minute apart instead of all firing at once; the rest
     # wait a full interval, as before.
     SOON = ("adhoc_sweep", "phase2_check", "haulier_asks", "waitlist_release",
-            "waitscan", "recover")
+            "waitscan", "recover", "planner_week")
     LOG_MAX = 256 * 1024
 
     def __init__(self):

@@ -148,6 +148,46 @@ function MediaSetsCard({ onUpload, busy }) {
   );
 }
 
+// ---- My week: what he is on besides Region 2, off the team's Transport Planners sheet (planner_week.py) ----
+// His ask (01/11): "tell me the things that I will be doing throughout the week ... DHL road ... stone blowers or
+// media sets, or whether I'm doing a rail plan ... I know I forget pretty often". Region 2 and Serviceable Materials
+// are every day, so they are never listed. The days from today on, this week's sheet then next week's.
+const sheetDay = (s) => {
+  const [d, m, y] = String(s || '').split('/').map(Number);
+  return y ? new Date(y, m - 1, d) : null;
+};
+
+function MyWeek({ week }) {
+  const weeks = (week && week.weeks) || [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = weeks.flatMap((w) => (w.days || []).map((d) => ({ ...d, at: sheetDay(d.date) })))
+    .filter((d) => d.at && d.at >= today).slice(0, 7);
+  const from = weeks.map((w) => `${w.file || 'wc ' + w.wc}${w.sender ? ` (${w.sender}, ${w.received})` : ''}`).join(' · ');
+  return (
+    <div className="card myweek">
+      <div className="myweek-head">
+        <h3>My week</h3>
+        <span className="s">{weeks.length ? 'From ' + from : 'No Transport Planners sheet for this week or next found in the mailbox yet.'}</span>
+      </div>
+      {days.length > 0 && (
+        <div className="myweek-days">
+          {days.map((d) => (
+            <div key={d.date} className={'myweek-day' + (d.at.getTime() === today.getTime() ? ' today' : '')}>
+              <div className="myweek-date">{d.day.slice(0, 3)} {d.date.slice(0, 5)}{d.at.getTime() === today.getTime() ? ' · today' : ''}</div>
+              {d.duties.length ? d.duties.map((x, i) => (
+                <div key={i} className="myweek-duty" title={x.section || ''}>
+                  {x.what}{x.note ? ` ${x.note}` : ''}{x.with && x.with.length ? ` (with ${x.with.join(', ')})` : ''}
+                </div>
+              )) : <div className="myweek-duty none">Nothing extra</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Rail plan card ----
 // The Monday of the week the card's select means, as dd/mm - what the export will ask CTMS for.
 function railMonday(week) {
@@ -416,6 +456,8 @@ export default function Dashboard({
         </div>
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
+
+      <MyWeek week={panel && panel.planner_week} />
 
       <div className="metrics">
         <div className="metric ink"><span className="bar" /><div className="n">{tracked}</div><div className="k">Orders tracked</div></div>
