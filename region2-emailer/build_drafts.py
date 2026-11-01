@@ -1382,7 +1382,7 @@ def main():
                 skipped_past.append(e)
             elif target is not None:
                 # week mode: send everything DELIVERING in the chosen week (pull it
-                # forward past the 14-day hold); park anything outside that week.
+                # forward past the wait-list hold); park anything outside that week.
                 dd = waitlist.parse_date(e["date"])
                 if dd is not None and target[0] <= dd <= target[1]:
                     kept.append(e)

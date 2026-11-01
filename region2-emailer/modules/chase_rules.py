@@ -44,8 +44,10 @@ from datetime import datetime, timedelta, date
 
 SEND, WAIT, BLOCK, HOLD, STOP = "SEND", "WAIT", "BLOCK", "HOLD", "STOP"
 
-MAX_CHASES = 2            # after the first ask: two follow-ups, then it is Delali's call
+MAX_CHASES = None         # no limit (his rule 01/11): "keep on following up on this person every 2 business days
+                          # until they reply back" - a reply, the delivery date, a booking or a haulier asked stops it
 CHASE_AFTER_BDAYS = 2     # business days since the LAST email to them (ask or chase)
+ESCALATE_BDAYS = 4        # no reply this many working days after the first ask: escalate (his rule 01/11)
 IN_TOUCH_BDAYS = 2        # "they emailed about something else" holds this long, then lapses
 OOO_HOLD_BDAYS = 5        # an out-of-office holds this long, then chasing resumes
 OOO_LINK_HOURS = 24       # an auto-reply counts only if it answers one of OUR emails
@@ -168,6 +170,21 @@ def business_days_between(start, end, holidays=()):
         if is_working_day(d, holidays):
             n += 1
     return n
+
+
+def escalate_due(rec, now, holidays=()):
+    """Whether an order's site contact is due escalating - the materials team asked for another contact: asked
+    (sent, not just drafted), no reply, ESCALATE_BDAYS working days since that first ask, the delivery still ahead,
+    and not escalated already."""
+    if rec.get("kind", "delivery") != "delivery" or rec.get("status", "sent") != "sent":
+        return False
+    if rec.get("reply_at") or rec.get("escalated_at"):
+        return False
+    asked = parse_dt(rec.get("emailed_at"))
+    deliv = parse_day(rec.get("delivery_date"))
+    if not asked or (deliv and deliv <= now.date()):
+        return False
+    return business_days_between(asked, now, holidays) >= ESCALATE_BDAYS
 
 
 def in_working_hours(now, holidays=()):
@@ -459,7 +476,7 @@ def assess(rec, mails, ctx, text_of, now):
 
     ours = fr["ours"]
     chased = max(int(rec.get("chases") or 0), max(0, len(ours) - 1))
-    if chased >= MAX_CHASES:
+    if MAX_CHASES is not None and chased >= MAX_CHASES:
         return _d(STOP, f"already chased {chased} time(s) - over to you")
     last = max([fr["asked"]] + [m["at"] for m in ours]
                + [x for x in (parse_dt(rec.get("last_emailed_at")),

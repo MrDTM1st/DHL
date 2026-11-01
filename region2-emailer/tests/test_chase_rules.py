@@ -206,8 +206,9 @@ def test_bounced_ask_stops():
     assert run(r, mails, "2026-08-10 10:00", texts)["action"] == cr.SEND
 
 
-def test_timing_two_business_days_since_the_last_email_and_a_cap():
-    r = rec(["5032847"], "david.lloyd3@networkrail.co.uk", "2026-07-09 10:00")    # a Thursday
+def test_timing_every_two_business_days_until_they_reply():
+    r = rec(["5032847"], "david.lloyd3@networkrail.co.uk", "2026-07-09 10:00",    # a Thursday
+            delivery="24/07/2026")
     mails = [out("2026-07-09 10:00", "david.lloyd3@networkrail.co.uk", "5032847 Site", "D")]
     assert run(r, mails, "2026-07-10 10:00")["action"] == cr.WAIT      # Fri: 1 business day
     assert run(r, mails, "2026-07-12 10:00")["action"] == cr.WAIT      # Sun: still 1
@@ -217,7 +218,28 @@ def test_timing_two_business_days_since_the_last_email_and_a_cap():
     assert run(r, mails, "2026-07-14 10:00")["action"] == cr.WAIT
     assert run(r, mails, "2026-07-15 10:00")["action"] == cr.SEND      # chase #2
     mails.append(out("2026-07-15 10:00", "david.lloyd3@networkrail.co.uk", "5032847 Site", "D3"))
-    assert run(r, mails, "2026-07-20 10:00")["action"] == cr.STOP      # two chases: over to Delali
+    # no limit (his rule 01/11): every 2 business days until they reply...
+    assert run(r, mails, "2026-07-16 10:00")["action"] == cr.WAIT
+    assert run(r, mails, "2026-07-17 10:00")["action"] == cr.SEND      # chase #3
+    for day, eid in (("2026-07-17 10:00", "D4"), ("2026-07-21 10:00", "D5")):
+        mails.append(out(day, "david.lloyd3@networkrail.co.uk", "5032847 Site", eid))
+    assert run(r, mails, "2026-07-23 10:00")["action"] == cr.SEND      # chase #5
+    # ...and never once the delivery day comes
+    assert run(r, mails, "2026-07-24 10:00")["action"] == cr.STOP
+
+
+def test_an_order_unanswered_four_working_days_after_the_ask_is_due_escalating():
+    hol = {T("2026-08-31 00:00").date()}                                # a bank holiday Monday
+    r = rec(["5032848"], "someone@networkrail.co.uk", "2026-08-26 10:00", delivery="15/09/2026")   # a Wednesday
+    assert not cr.escalate_due(r, T("2026-08-28 15:00"), hol)          # Thu, Fri: 2
+    assert not cr.escalate_due(r, T("2026-08-31 15:00"), hol)          # the holiday: still 2
+    assert not cr.escalate_due(r, T("2026-09-01 15:00"), hol)          # Tue: 3
+    assert cr.escalate_due(r, T("2026-09-02 09:00"), hol)              # Wed: 4 working days
+    assert not cr.escalate_due(dict(r, reply_at="2026-09-01 11:00"), T("2026-09-02 09:00"), hol)
+    assert not cr.escalate_due(dict(r, escalated_at="2026-09-02 08:30"), T("2026-09-02 09:00"), hol)
+    assert not cr.escalate_due(dict(r, status="drafted"), T("2026-09-02 09:00"), hol)      # never asked
+    assert not cr.escalate_due(dict(r, kind="collection"), T("2026-09-02 09:00"), hol)
+    assert not cr.escalate_due(dict(r, delivery_date="02/09/2026"), T("2026-09-02 09:00"), hol)   # its day
 
 
 def test_remembered_reply_blocks_a_duplicate_record_and_rearm_reopens():

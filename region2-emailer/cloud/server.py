@@ -935,7 +935,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 
   <div class="card">
     <div class="tkhd">
-      <div class="lbl">Wait list — <span id="wlcount">…</span> <span class="hint" style="font-weight:400">· held until ~14 days before delivery, then auto-sent</span></div>
+      <div class="lbl">Wait list — <span id="wlcount">…</span> <span class="hint" style="font-weight:400">· held until ~3 weeks before delivery, then auto-sent</span></div>
       <div style="display:flex; gap:.4rem;">
         <button class="btn mini" onclick="releaseWaitlist()">Release due now</button>
       </div>
@@ -1526,7 +1526,7 @@ function bookedCall(encId){
   setTimeout(loadTracker, 2500);
 }
 function releaseWaitlist(){
-  if(!confirm('Send now any wait-listed order already within its 14-day window? (Already-emailed and past-date ones are skipped automatically.)')) return;
+  if(!confirm('Send now any wait-listed order already within its 3-week window? (Already-emailed and past-date ones are skipped automatically.)')) return;
   post({action:'waitlist_release'});
 }
 function wlDays(dd){
@@ -1544,7 +1544,7 @@ async function loadWaitlist(){
     const over = show.filter(isOver).length;
     document.getElementById('wlcount').textContent =
       (show.length===1?'1 held':show.length+' held') + (over? ' · '+over+' NEED ATTENTION':'');
-    if(!show.length){ host.innerHTML='<span class="hint">Nothing waiting — far-ahead orders appear here and auto-send ~14 days before delivery.</span>'; return; }
+    if(!show.length){ host.innerHTML='<span class="hint">Nothing waiting — far-ahead orders appear here and auto-send ~3 weeks before delivery.</span>'; return; }
     show.sort((a,b)=>((wlDays(a.date)??1e9)-(wlDays(b.date)??1e9)));
     host.innerHTML = show.map(e=>{
       const n=wlDays(e.date);

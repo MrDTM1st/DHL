@@ -342,6 +342,8 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
                     {o.kind === 'adhoc' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>AD HOC</span>}
                     {o.kind === 'dts' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>DTS</span>}
                     {o.kind === 'pinned' && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--ink2)' }}>BY HAND</span>}
+                    {o.escalate_due && <span className="ubadge" style={{ marginLeft: 6, background: 'var(--yellow-d)', color: 'var(--ink)' }}
+                      title="No reply 4 working days after the ask - ask the materials team for another contact">ESCALATE</span>}
                   </div>
                   <div className="s">
                     {pp && pp.ok ? <>Rec: <b style={{ color: 'var(--goink, #18804a)' }}>Parcel Pass</b> · small load</>

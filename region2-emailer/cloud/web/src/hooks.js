@@ -37,7 +37,7 @@ export function useTracker(onAuthFail, ms = 6000) {
   return { records: (data && data.records) || [], refreshTracker: refresh };
 }
 
-// /api/waitlist — far-ahead orders held until ~14 days out.
+// /api/waitlist — far-ahead orders held until ~3 weeks out.
 export function useWaitlist(onAuthFail, ms = 6000) {
   const { data, refresh } = usePoll(getWaitlist, ms, onAuthFail, [onAuthFail]);
   return { entries: (data && data.entries) || [], refreshWaitlist: refresh };

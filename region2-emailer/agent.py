@@ -84,6 +84,16 @@ def push_tracker():
             site_contacts.enrich(data)
         except Exception:
             pass
+        try:   # who is due escalating: no reply 4 working days after the ask (his rule 01/11) - worked out fresh
+            from datetime import datetime
+            from modules import chase_rules
+            from services import BANK_HOLIDAYS
+            hol = {datetime.strptime(h, "%Y-%m-%d").date() for h in BANK_HOLIDAYS}
+            now = datetime.now()
+            for r in data.get("records") or []:
+                r["escalate_due"] = chase_rules.escalate_due(r, now, hol)
+        except Exception:
+            pass
         _req("/api/tracker", data)
     except Exception:
         pass

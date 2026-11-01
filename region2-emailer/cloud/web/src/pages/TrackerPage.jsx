@@ -103,7 +103,7 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
               const turningOn = !autoChase;
               if (turningOn && !window.confirm(
                 'Turn AUTOMATIC follow-ups on?\n\nChasers will then send on their own every 3 hours '
-                + 'to any order 2+ business days overdue a reply (max 3 per order).')) return;
+                + 'to anyone who has not replied - in working hours, every 2 business days until they do.')) return;
               onCommand({ action: 'set_auto_chase', on: turningOn });
             }}>
             <span className="knob" />
@@ -140,6 +140,8 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
                 {r.loose_ballast && <span className="lbadge">LOOSE BALLAST</span>}
                 {within3(r.delivery_date) && <span className="ubadge">≤3 DAYS</span>}
                 {(r.chases || 0) > 0 && <span className="chases">{r.chases} chase{r.chases > 1 ? 's' : ''}</span>}
+                {r.escalate_due && <span className="ubadge" style={{ background: 'var(--yellow-d)', color: 'var(--ink)' }}
+                  title="No reply 4 working days after the ask - ask the materials team for another contact">ESCALATE</span>}
               </div>
               <div className="sub">
                 {[r.worksite || r.site, r.postcode].filter(Boolean).join(', ')}

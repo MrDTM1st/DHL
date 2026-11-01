@@ -404,6 +404,7 @@ def send_haulier(ns):
             if e.get("what") == "alt_contact":
                 import ctms_todo
                 ctms_todo.escalated(e.get("orders", []))
+                tracker.escalated(e.get("orders", []))     # no longer shown as due escalating
             else:
                 import haulier_asks
                 haulier_asks.record(e.get("orders", []), e.get("haulier") or to, to)

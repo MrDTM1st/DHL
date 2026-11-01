@@ -65,7 +65,28 @@ def _release_lock():
     return True
 
 
+def _timer_run():
+    """Run by the agent's 3-hourly timer, not a press of Send on the dashboard: the timer runs every background job
+    with R2_PHASE2_WAIT=0."""
+    import os
+    return os.environ.get("R2_PHASE2_WAIT") == "0"
+
+
+def _working_hours(now=None):
+    """Mon-Fri 08:00-16:30, bank holidays out - the hours the chasers keep, too."""
+    from datetime import datetime
+    from modules import chase_rules as cr
+    from services import BANK_HOLIDAYS
+    hol = {datetime.strptime(h, "%Y-%m-%d").date() for h in BANK_HOLIDAYS}
+    return cr.in_working_hours(now or datetime.now(), hol)
+
+
 def release(send=False):
+    if send and _timer_run() and not _working_hours():
+        # the lead time went from 2 weeks to 3 on a Sunday night (01/11): the timer must not mail a whole new
+        # week's sites at 3am - due entries go on its first run in working hours; Send on the dashboard still sends
+        print("release: outside working hours - due entries wait for the first run on a working day after 08:00.")
+        return {"sent": [], "skipped": [], "missed": [], "failed": []}
     if send and not _release_lock():
         print("release: another wait-list release is already running - skipping.")
         return {"sent": [], "skipped": [], "missed": [], "failed": []}

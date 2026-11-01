@@ -103,6 +103,29 @@ export default function App() {
     bootstrapped.current = true;
   }, [records, pushToast]);
 
+  // ---- and when an order falls due escalating: no reply 4 working days after the ask (his rule 01/11) ----
+  const knownEscalate = useRef(new Set());
+  useEffect(() => {
+    if (!records) return;
+    const fresh = records.filter((r) => r.escalate_due && !knownEscalate.current.has(r.id));
+    fresh.forEach((r) => knownEscalate.current.add(r.id));
+    if (!fresh.length) return;
+    const created = Date.now();
+    setNotes((ns) => {
+      const have = new Set(ns.map((n) => n.id));
+      return [...fresh.map((r) => ({
+        id: 'e-' + r.id,
+        kind: 'urgent',
+        title: (r.worksite || r.site || ordLabel(r)) + ': escalate',
+        msg: 'No reply from ' + (r.name || r.to || 'the site') + ' in 4 working days - ask the materials team for '
+          + 'another contact (' + ordLabel(r) + ').',
+        createdAt: created,
+        read: false,
+        orderId: r.id,
+      })).filter((n) => !have.has(n.id)), ...ns];
+    });
+  }, [records]);
+
   // ---- a freshly processed ad hoc takes you straight to the map ----
   // The first panel we see is the baseline (old ad hocs shouldn't hijack the
   // screen on page load); anything appearing AFTER that is a form you just

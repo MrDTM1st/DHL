@@ -105,6 +105,21 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
     save(d)
 
 
+def escalated(orders, when=None):
+    """The materials team was asked for another contact for these orders: their records stop showing the escalation
+    as due (his rule 01/11: due after 4 working days without a reply). Returns how many were marked."""
+    want = {str(o).strip() for o in orders or []}
+    d = load()
+    n = 0
+    for r in d["records"]:
+        if want & {str(o).strip() for o in r.get("orders") or []} and not r.get("escalated_at"):
+            r["escalated_at"] = when or _now()
+            n += 1
+    if n:
+        save(d)
+    return n
+
+
 def book(record_id):
     """Booked over the phone: the order is handled even though no email reply
     will ever arrive, so drop it from the tracker. Matched by record id.

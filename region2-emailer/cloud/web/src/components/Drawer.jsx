@@ -470,6 +470,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               )}
             </div>
           )}
+          {r.escalate_due && (team || teamChoices.length > 0) && (
+            <div className="s" style={{ margin: '2px 0 6px', color: 'var(--red)', fontWeight: 700 }}>
+              No reply in 4 working days - time to ask the materials team for another contact.
+            </div>
+          )}
           {team && (
             <div style={{ margin: '2px 0 10px' }}>
               <button className="btn mini"

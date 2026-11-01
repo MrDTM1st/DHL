@@ -2,7 +2,8 @@
 Wait-list store for the Region 2 emailer.
 
 Region 2 orders whose delivery date is further out than the lead time (config
-waitlist.lead_days, default 14) are held here instead of being emailed straight
+waitlist.lead_days, default 21 - his rule 01/11: "start emailing people for
+orders 3 weeks ahead or less") are held here instead of being emailed straight
 away, then auto-SENT once delivery comes within the window. The store is a plain
 JSON file on the always-on home PC, so it survives restarts - an order placed on
 the wait list cannot be forgotten.
@@ -27,9 +28,9 @@ PATH = os.path.join(HERE, "waitlist.json")
 
 try:
     _CFG = json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))
-    LEAD_DAYS = int(_CFG.get("waitlist", {}).get("lead_days", 14))
+    LEAD_DAYS = int(_CFG.get("waitlist", {}).get("lead_days", 21))
 except Exception:
-    LEAD_DAYS = 14
+    LEAD_DAYS = 21
 
 
 def _now():
