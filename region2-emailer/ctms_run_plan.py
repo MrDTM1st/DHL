@@ -7,15 +7,20 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
              deliver   the day and window the site gave - a single time is time..time+2h
              collect   a morning delivery is collected the day before, in the supplier's yard hours; never on a
                        weekend - a Monday delivery collects on Friday, with STORAGE x2
-             comment   LOC Detail, deliver side: date time - contact phone - HIAB required - Rear steer required -
-                       W3W, no commas
-             services  HIAB when the site needs ours; rear steer on an artic only; PTS never on ballast
-             veh type  as stated, else by the CTMS weight - a HIAB load of 10,000 kg or less goes on a rigid
+             comment   LOC Detail, deliver side: date time - contact phone - HIAB required (or Moffett required) -
+                       Rear steer required - W3W, no commas
+             services  HIAB or MOFFETT when the site needs ours - always in Services, never a vehicle type ("whenever
+                       we're adding a HIAB or a Moffett, we do it in the services tab", his rule 01/11); rear steer
+                       on an artic only; PTS never on ballast
+             veh type  as stated, else by the CTMS weight - a HIAB load of 10,000 kg or less goes on a rigid. Only
+                       ever NR_Rigid (Up to 40ft) or NR_40ft Artic Flatbed - never RIGID MOFFETT and the like (his
+                       rule 01/11). A Moffett job's vehicle is picked, the most a Moffett carries not being set
   booking, other   his to do - never run
 
 Anything it can't be sure of HOLDS the item. Each doubt names the field, the site's own words from the email (only
-ever their words - anything of ours goes in the reason), and the choices for a drop-down (his 01/11: "tell me exactly what they said in the email and then give me like a drop down
-menu of what to select"); a choice made there is kept on the item (ctms_todo.answer) and settles that doubt.
+ever their words - anything of ours goes in the reason), and the choices for a drop-down (his 01/11: "tell me
+exactly what they said in the email and then give me like a drop down menu of what to select"); a choice made there
+is kept on the item (ctms_todo.answer) and settles that doubt.
 
     python ctms_run_plan.py        the plan, as JSON
 """
@@ -159,10 +164,6 @@ def plan_update(it, rec, found):
     if off not in OFFLOADING:
         off = doubt("offloading", "Offloading", ov.get("raw") or ov.get("value"), OFFLOADING,
                     "Both named - which one?" if ov.get("value") == "BOTH" else "Not certain what they need")
-    if off == "MOFFETT":
-        checks.append({"field": "moffett", "label": "Moffett", "quote": str(ov.get("raw") or ""), "options": [],
-                       "text": False, "why": "A Moffett job - its service and vehicle aren't in the run yet: do "
-                                             "this one by hand"})
     mats = (str(rec.get("materials") or "") + " " + " ".join(rec.get("product_codes") or [])).lower()
     ballast = bool(re.search(r"ballast|aggregate|stone\s*-?\s*blower", mats))
     rv = _field(d, "rear_steer")
@@ -200,12 +201,18 @@ def plan_update(it, rec, found):
             veh = doubt("veh", "Vehicle", "", VEHICLES,
                         (f"{float(kg):,.0f} kg in CTMS - " if kg else "") + "no HIAB: the most a rigid takes "
                         "without one isn't set")
-        # offloading not settled yet (or a Moffett): the vehicle waits for it
+        elif off == "MOFFETT":
+            veh = doubt("veh", "Vehicle", "", VEHICLES,
+                        (f"{float(kg):,.0f} kg in CTMS - " if kg else "") + "a Moffett job: the most a Moffett "
+                        "carries isn't set - the Moffett itself goes in Services")
+        # offloading not settled yet: the vehicle waits for it
     if veh:
         s["veh"] = veh
-    # -- services: HIAB when ours is needed, rear steer on an artic only, PTS never on ballast
-    if off in ("HIAB", "SITE/NONE") and rear in YES_NO and pts in YES_NO and veh:
-        s["services"] = {"HIAB": off == "HIAB", "REAR STEER": rear == "yes" and veh == "artic", "PTS": pts == "yes"}
+    # -- services: HIAB or MOFFETT when ours is needed (Services, never a vehicle type), rear steer on an artic only,
+    #    PTS never on ballast
+    if off in OFFLOADING and rear in YES_NO and pts in YES_NO and veh:
+        s["services"] = {"HIAB": off == "HIAB", "MOFFETT": off == "MOFFETT",
+                         "REAR STEER": rear == "yes" and veh == "artic", "PTS": pts == "yes"}
         if rear == "yes" and veh == "rigid":
             explain.append("Rear steer left off: the site said yes, but a rigid never needs it (your rule)")
     # -- the collection: a morning delivery the day before in yard hours, never on a weekend
@@ -255,6 +262,8 @@ def plan_update(it, rec, found):
         bits = [f"{datetime.strptime(date, '%d/%m/%Y'):%d/%m/%y} {when_said}", f"{name} {phone}".strip()]
         if off == "HIAB":
             bits.append("HIAB required")
+        if off == "MOFFETT":
+            bits.append("Moffett required")
         if (s.get("services") or {}).get("REAR STEER"):
             bits.append("Rear steer required")
         if w3w:

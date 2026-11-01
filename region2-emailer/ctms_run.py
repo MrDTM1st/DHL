@@ -4,9 +4,11 @@ read back before it counts as done (his ask 01/11; the Run button on the dashboa
 
   note     the -1-1 line opened and its Special Instructions read: ending with the note already - nothing to type -
            else the note at its end, read back, Save, Close; opened again, it must end with the note
-  update   for each open line: opened and its Services read, closed; then the one order-update batch - times, the
-           deliver side's comment, services off and on, the Veh Type - Save (the schedule question OK'd) and Close;
-           then Order Summary read: Ready At and Deliver By must be what was typed
+  update   for each open line: opened, its Veh Type box and Services read, closed; then the one order-update batch -
+           times, the deliver side's comment, services off and on (HIAB and MOFFETT live there), the Veh Type only
+           when the box is empty (40ft rigid or 40ft artic flatbed, never a Moffett vehicle - his rule 01/11) - Save
+           (the schedule question OK'd) and Close; then Order Summary read: Ready At and Deliver By must be what was
+           typed. A Veh Type already set to another vehicle stops it before anything is typed
   done     CTMS has no line left to update - ticked off, nothing typed
 
 The first thing that isn't as expected stops the run, and CTMS is left as it is for him to look at - nothing is
@@ -24,6 +26,11 @@ import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVICE_ROWS = 14                  # the Services grid's rows, as the Access Bridge reads them
+# The open order's Veh Type box (its Detail tab), and what it shows - pictures of CTMS's own vehicle names, cut 01/11.
+# Only these two are ever picked: "the vehicle tab, we don't use that rigid Moffett thing ... We just use the 40-foot
+# rigid" (his rule 01/11) - a HIAB or a Moffett goes in Services.
+VEH_BOX = "1052,298,1204,324"
+VEH_SHOWS = {"rigid": ("box-veh-rigid", "NR_Rigid (Up to 40ft)"), "artic": ("box-veh-artic", "NR_40ft Artic Flatbed")}
 
 
 class Failed(Exception):
@@ -137,6 +144,14 @@ def _close(R):
         raise Failed("the order would not close")
 
 
+def veh_now(R):
+    """What the open order's Veh Type box shows: "rigid", "artic", "" when empty - or None, another vehicle."""
+    for k, (tpl, _) in VEH_SHOWS.items():
+        if R._on_screen(tpl, VEH_BOX):
+            return k
+    return "" if R._on_screen("box-veh-empty", VEH_BOX) else None
+
+
 def run_note(R, p):
     ref, note = p["lines"][0], p["set"]["note"]
     _open(R, ref)
@@ -165,6 +180,19 @@ def run_update(R, p):
     want = s.get("services") or {}
     for ref in p["lines"]:
         _open(R, ref)
+        # the vehicle first, before anything is typed: the list is only opened on an empty box - on a filled one it
+        # opens at its own value and the scroll lands elsewhere (6055920, 01/11) - and a vehicle already there that
+        # isn't the plan's is his, never changed by the run
+        veh = s.get("veh")
+        if veh:
+            now = veh_now(R)
+            if now == veh:
+                veh = None
+            elif now != "":
+                _close(R)
+                raise Failed(f"{ref}: its Veh Type is already "
+                             + (VEH_SHOWS[now][1] if now else "a vehicle other than the 40ft rigid or artic")
+                             + f", not {VEH_SHOWS[veh][1]} - left as it is, nothing typed")
         rc, _ = _quiet(R.send_batch, "services-tab",
                        R.parse_steps(["anchor", "anchor window", "click 750,186 react box=20,200,1250,700 timeout=10"]))
         if rc:
@@ -176,7 +204,7 @@ def run_update(R, p):
         if s.get("storage") and "STORAGE" not in have:
             adds.append(f"STORAGE:{s['storage']}")
         a = _ns(order=ref, collect=s.get("collect"), deliver=s.get("deliver"), comments=s.get("comments"),
-                add_service=adds or None, remove_service_row=removes or None, veh=s.get("veh"))
+                add_service=adds or None, remove_service_row=removes or None, veh=veh)
         card = R._on_screen("os-card", R.CARD_BOX)
         rc, said = _quiet(R.send_batch, "order-update", R.parse_steps(R.order_update_items(a, card_open=card)), [ref])
         if rc:
@@ -195,7 +223,7 @@ def run_update(R, p):
                          f"{got['deliver_by']} - not {c0} / {d1}")
         bits = [x for x in (f"collect {s['collect']}" if s.get("collect") else "",
                             f"deliver {s['deliver']}" if s.get("deliver") else "",
-                            s.get("veh") or "",
+                            VEH_SHOWS[veh][1] if veh else (f"{VEH_SHOWS[s['veh']][1]} already" if s.get("veh") else ""),
                             ("+" + "+".join(c.split(":")[0] for c in adds)) if adds else "",
                             f"-{len(removes)} service(s)" if removes else "") if x]
         done.append(f"{ref}: {', '.join(bits)}")

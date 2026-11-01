@@ -31,16 +31,18 @@ def _summary(ref, ready, deliver):
 
 
 class FakeCTMS:
-    """Just enough of ctms_remote: each call recorded, each read answered from `reads`."""
+    """Just enough of ctms_remote: each call recorded, each read answered from `reads`; `veh` is what the order's
+    Veh Type box shows - "rigid", "artic", "" (empty) or "other"."""
     CARD_BOX = "430,50,830,270"
 
-    def __init__(self, reads):
-        self.reads, self.calls = list(reads), []
+    def __init__(self, reads, veh=""):
+        self.reads, self.calls, self.veh = list(reads), [], veh
         self.RUN_STEPS = {"order-close": lambda a: [("click", {})],
                           "order-note": lambda a: [("type", {"text": a.note})]}
 
     def _on_screen(self, name, box, timeout=0.0):
-        return False
+        return {"box-veh-rigid": self.veh == "rigid", "box-veh-artic": self.veh == "artic",
+                "box-veh-empty": self.veh == ""}.get(name, False)
 
     def order_update_items(self, a, card_open=False):
         return [("update", {k: v for k, v in vars(a).items() if v})]
@@ -98,7 +100,7 @@ def test_an_update_takes_off_and_puts_on_only_what_the_order_lacks_and_reads_the
     said = X.run_update(R, p)
     upd = [b for n, b in R.calls if n == "order-update" and b[0][1].get("deliver")][0][0][1]
     assert upd["remove_service_row"] == [1, 2] and "add_service" not in upd        # HIAB there already
-    assert upd["veh"] == "rigid" and upd["comments"] == "05/11/26 08:00 - Sam"
+    assert upd["veh"] == "rigid" and upd["comments"] == "05/11/26 08:00 - Sam"          # an empty box: picked
     assert "9100093-1-1" in said
     # the times CTMS shows after the save are not what was typed: stop
     R = FakeCTMS([_card(services=[]), _summary("9100093-1-1", "04/11/26 09:00", "05/11/26 12:00")])
@@ -128,6 +130,38 @@ def test_a_run_stops_at_the_first_failure_and_ticks_off_only_what_was_done():
         assert [r["id"] for r in out["results"]] == ["a", "b"] and "2 not started" in out["said"], out
     finally:
         ctms_run_plan.load, ctms_todo.done, X._client = keep
+
+
+def test_a_vehicle_already_there_is_never_picked_again_and_another_one_stops_it_before_any_typing():
+    p = {"lines": ["9100096-1-1"], "set": {
+        "deliver": "05/11/26 08:00-12:00", "comments": "05/11/26 08:00 - Sam", "veh": "rigid",
+        "services": {"HIAB": True, "MOFFETT": False, "REAR STEER": False, "PTS": False}}}
+    # already the 40ft rigid: everything else typed, the vehicle list never opened
+    R = FakeCTMS([_card(services=["HIAB"]), _summary("9100096-1-1", "", "05/11/26 12:00")], veh="rigid")
+    said = X.run_update(R, p)
+    upd = [b for n, b in R.calls if n == "order-update" and b[0][1].get("deliver")][0][0][1]
+    assert "veh" not in upd and "NR_Rigid (Up to 40ft) already" in said, said
+    # set to the artic, or to a vehicle it doesn't know: left as it is, nothing typed, nothing saved
+    for shows, words in (("artic", "NR_40ft Artic Flatbed"), ("other", "a vehicle other than")):
+        R = FakeCTMS([], veh=shows)
+        try:
+            X.run_update(R, p)
+            assert False, "should have stopped"
+        except X.Failed as e:
+            assert words in str(e) and "nothing typed" in str(e), str(e)
+        assert not any(n == "order-update" and b[0][1].get("deliver") for n, b in R.calls if b)
+        assert ("save-close", None) not in R.calls
+
+
+def test_a_moffett_goes_in_services_like_a_hiab():
+    p = {"lines": ["9100097-1-1"], "set": {
+        "deliver": "05/11/26 08:00-12:00", "veh": "artic",
+        "services": {"HIAB": False, "MOFFETT": True, "REAR STEER": False, "PTS": False}}}
+    R = FakeCTMS([_card(services=["HIAB"]), _summary("9100097-1-1", "", "05/11/26 12:00")])
+    X.run_update(R, p)
+    upd = [b for n, b in R.calls if n == "order-update" and b[0][1].get("deliver")][0][0][1]
+    assert upd["add_service"] == ["MOFFETT"] and upd["remove_service_row"] == [1]   # HIAB off, MOFFETT on
+    assert upd["veh"] == "artic"
 
 
 if __name__ == "__main__":

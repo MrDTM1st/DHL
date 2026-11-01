@@ -50,7 +50,7 @@ def test_a_clear_reply_is_ready_with_his_rules_applied():
     assert p["set"]["deliver"] == "05/11/26 08:00-12:00"
     assert p["set"]["collect"] == "04/11/26 08:00-15:45"                # the day before, in the yard's hours
     assert p["set"]["veh"] == "rigid"                                   # 5,100 kg on a HIAB
-    assert p["set"]["services"] == {"HIAB": True, "REAR STEER": False, "PTS": False}
+    assert p["set"]["services"] == {"HIAB": True, "MOFFETT": False, "REAR STEER": False, "PTS": False}
     assert p["set"]["comments"] == "05/11/26 08:00-12:00 - Sam Example 07700900123 - HIAB required - W3W ///one.two.three"
     assert any(e.startswith("Rear steer left off") for e in p["explain"])
 
@@ -124,6 +124,21 @@ def test_without_a_weight_the_vehicle_is_asked_not_assumed():
     p = P.plan([_item("9100082")], [rec], _found("9100082", "05/11/2026"))[0]
     c = next(c for c in p["checks"] if c["field"] == "veh")
     assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and "Weight not read" in c["why"]
+
+
+def test_a_moffett_job_puts_the_moffett_in_services_and_asks_for_the_vehicle():
+    rec = _rec("9100083", "05/11/2026", offloading={"value": "MOFFETT", "confidence": "high", "raw": "yes moffett"},
+               rear_steer={"value": "no", "confidence": "high"})
+    item = _item("9100083")
+    p = P.plan([item], [rec], _found("9100083", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "veh")
+    assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and "Moffett" in c["why"]
+    assert c["quote"] == ""                               # nothing of ours passed off as their words
+    p = P.plan([dict(item, answers={"veh": "artic"})], [rec], _found("9100083", "05/11/2026"))[0]
+    assert p["status"] == "ready", p["checks"]
+    assert p["set"]["services"] == {"HIAB": False, "MOFFETT": True, "REAR STEER": False, "PTS": False}
+    assert p["set"]["veh"] == "artic" and "Moffett required" in p["set"]["comments"]
+    assert "HIAB required" not in p["set"]["comments"]
 
 
 if __name__ == "__main__":
