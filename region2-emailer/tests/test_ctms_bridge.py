@@ -3100,6 +3100,11 @@ def test_teams_opens_only_that_persons_chat_and_checks_it_by_its_title():
     assert not TM.only_copies("", "Hi Sam") and not TM.only_copies("Hi", "Hi Sam")
     assert not TM.holds_only("an older draft Hi Sam,\nOrder: 9100001", "Hi Sam,\nOrder: 9100001")
     assert not TM.holds_only("Hi Sam,", "Hi Sam,\nOrder: 9100001") and not TM.holds_only("", "")
+    # the invisible marks an editor keeps in its text (zero-width space, word joiner) are not words
+    assert TM.holds_only("⁠⁠Hi Sam,\r\nOrder: 9100001​", "Hi Sam,\nOrder: 9100001")
+    assert TM.only_copies("Hi Sam,\nSecond line.⁠Hi Sam,\nSecond line.﻿", "Hi Sam,\nSecond line.")
+    assert TM.empty("​", "Type a message") and not TM.only_copies("​", "Hi Sam")
+    assert TM._show("x" * 60).endswith(", 60 characters") and "'\\u2060'" in TM._show("⁠")
 
 
 def test_the_bridge_sends_in_teams_only_with_the_switch_and_says_why_it_stopped():

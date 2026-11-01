@@ -24,6 +24,7 @@ Standard library only, like everything else in work_pc\\.
 import os
 import re
 import time
+import unicodedata
 from urllib.parse import quote
 
 import ctms_window
@@ -70,8 +71,19 @@ def is_chat_with(title, words):
     return all(w in chat for w in words)
 
 
+def _plain(s):
+    """The box's text without the invisible marks an editor keeps in it (zero-width spaces, word joiners)."""
+    return "".join(ch for ch in str(s or "") if unicodedata.category(ch) != "Cf")
+
+
 def _squash(s):
-    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+    return re.sub(r"\s+", " ", _plain(s)).strip().lower()
+
+
+def _show(v):
+    """What the box reads, for a message: its start and end as Python writes them (invisible marks show), and length."""
+    v = str(v or "")
+    return f"{v[:50]!r}{' ... ' + repr(v[-25:]) if len(v) > 50 else ''}, {len(v)} characters"
 
 
 def same_text(box, text):
@@ -88,7 +100,7 @@ def holds_only(box, text):
 def only_copies(box, text):
     """Is the box holding nothing but this same message, once or more - left there by an earlier try of this send?
     Spacing between the copies does not matter; any other word in it does."""
-    v, t = re.sub(r"\s+", "", str(box or "")).lower(), re.sub(r"\s+", "", str(text or "")).lower()
+    v, t = re.sub(r"\s+", "", _plain(box)).lower(), re.sub(r"\s+", "", _plain(text)).lower()
     return bool(t) and bool(v) and len(v) % len(t) == 0 and v == t * (len(v) // len(t))
 
 
@@ -217,21 +229,28 @@ def _box(s, hwnd, who):
 def _fill_and_send(s, hwnd, who, text, dry):
     box, label = _box(s, hwnd, who)
     before = _value(s, box)
-    if not empty(before, label) and only_copies(before, text):  # this same message, left by an earlier try: ours
-        _set_value(s, box, "")
-        time.sleep(0.7)
-        before = _value(s, box)
     if not empty(before, label):
-        raise Stop(f"The message box with {who} already holds a draft ({before[:60]!r}) - left as it is, nothing "
-                   "sent.")
+        if not only_copies(before, text):
+            raise Stop(f"The message box with {who} already holds a draft ({_show(before)}) - left as it is, nothing "
+                       "sent.")
+        took = _set_value(s, box, "")                            # this same message, left by an earlier try: ours
+        time.sleep(0.7)
+        after = _value(s, box)
+        if not empty(after, label):
+            raise Stop(f"Copies of this message left in the box with {who} by an earlier try would not clear through "
+                       f"UI Automation (Teams {'took' if took else 'refused'} the change and still reads "
+                       f"{_show(after)}) - left as it is, nothing sent.")
     # from here the box was empty - anything that goes wrong empties it again, so nothing of ours is left in it
     if not _set_value(s, box, text):
-        raise Stop(f"Teams' message box with {who} would not take the text through UI Automation - nothing sent.")
+        raise Stop(f"Teams' message box with {who} refused the text through UI Automation - nothing sent.")
     time.sleep(0.7)
     got = _value(s, box)
     if not holds_only(got, text):
         _set_value(s, box, "")
-        raise Stop(f"The message box with {who} read back {got[:80]!r}, not the message - emptied, nothing sent.")
+        if empty(got, label):
+            raise Stop(f"Teams' message box with {who} took the text through UI Automation but did not keep it - it "
+                       "reads empty again, nothing sent.")
+        raise Stop(f"The message box with {who} read back {_show(got)}, not the message - emptied, nothing sent.")
     if dry:
         _set_value(s, box, "")
         time.sleep(0.7)
