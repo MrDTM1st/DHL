@@ -96,6 +96,12 @@ def is_box(name):
     return str(name or "").strip().lower().startswith(BOX_WORDS)
 
 
+def empty(value, name=""):
+    """Is the message box empty? An empty one reads back its own prompt ("Type a message") as its value."""
+    v = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+    return not v or v == re.sub(r"\s+", " ", str(name or "")).strip().lower() or v in BOX_WORDS
+
+
 def is_send(name):
     """Teams' own Send button - "Send" or "Send (Ctrl+Enter)" - never "Send feedback" and the like."""
     n = str(name or "").strip().lower()
@@ -208,8 +214,9 @@ def send(email, name, text, dry=False):
                 raise Stop(f"Teams' message box could not be found in the chat with {who} (the cursor is on "
                            f"{label or 'nothing'!r}; boxes and buttons seen: {'; '.join(names[:15]) or 'none'}) - "
                            "nothing typed.")
+            label = s.name(box)
             before = _value(s, box)
-            if before.strip():
+            if not empty(before, label):
                 raise Stop(f"The message box with {who} already holds text ({before[:60]!r}) - left as it is, "
                            "nothing typed.")
             _set_focus(box)
@@ -230,9 +237,9 @@ def send(email, name, text, dry=False):
             if dry:
                 _keys(hwnd, ("ctrl", "a"), ("delete",))
                 left = _value(s, box)
-                return {"ok": not left.strip(), "said": f"Dry run: the chat with {who} opened and its message box took "
-                        "the text and read it back - emptied again, nothing sent." + (
-                            "" if not left.strip() else " BUT the box still holds text - empty it in Teams."),
+                return {"ok": empty(left, label), "said": f"Dry run: the chat with {who} opened and its message box "
+                        "took the text and read it back - emptied again, nothing sent." + (
+                            "" if empty(left, label) else " BUT the box still holds text - empty it in Teams."),
                         "payload": _picture(hwnd)}
             button, _ = find(s, hwnd, is_send, kinds=(50000,))
             if not (button and s.invoke(button)):
@@ -244,7 +251,7 @@ def send(email, name, text, dry=False):
     finally:
         if hr >= 0:
             ctms_tabs.ole32.CoUninitialize()
-    if left.strip():
+    if not empty(left, label):
         return {"ok": False, "said": f"Send was pressed in the chat with {who} but the box still holds text - "
                 "look at Teams before sending again.", "payload": _picture(hwnd)}
     return {"ok": True, "said": f"Sent to {who} on Teams.", "payload": _picture(hwnd)}

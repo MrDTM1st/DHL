@@ -3089,6 +3089,8 @@ def test_teams_opens_only_that_persons_chat_and_checks_it_by_its_title():
     assert TM.is_box("Type a message") and TM.is_box("Type a new message") and not TM.is_box("Search")
     assert TM.is_send("Send") and TM.is_send("Send (Ctrl+Enter)")
     assert not TM.is_send("Send feedback") and not TM.is_send("Sender details") and not TM.is_send("")
+    assert TM.empty("", "Type a message") and TM.empty("Type a message\n", "Type a message")    # its own prompt
+    assert TM.empty("Type a new message", "") and not TM.empty("Hi Sam", "Type a message")
 
 
 def test_the_bridge_sends_in_teams_only_with_the_switch_and_says_why_it_stopped():
