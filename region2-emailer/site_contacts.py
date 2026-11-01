@@ -72,6 +72,62 @@ def remember(emails, path=None):
         return False
 
 
+def same_person(a, b):
+    """Whether two names are one person - the same surname and first initial, "Gallimore, Adam" read as Adam
+    Gallimore. A lone first name is never enough."""
+    def parts(n):
+        n = str(n or "").strip()
+        if "," in n:
+            last, _, first = n.partition(",")
+            n = f"{first} {last}"
+        w = re.findall(r"[a-z]+", n.lower())
+        return (w[0], w[-1]) if len(w) >= 2 else None
+    pa, pb = parts(a), parts(b)
+    return bool(pa and pb and pa[1] == pb[1] and pa[0][0] == pb[0][0])
+
+
+def fill_contact(contact, sheet_name, sheet_phone, same=False):
+    """His rule (01/11): "if they have updated the order but have not given you a site contact, use them as a site
+    contact. You'll find it in the Excel sheet anyway, with their name and phone number." So: nobody named - the
+    order's contact from its sheet, name and number; the sender named (the 30/10 rule) but no number - the sheet's
+    number, only when the sender IS the sheet's contact (`same`: their address is the one we emailed, or the names
+    match). (name, phone, how) - how is "" when nothing came from the sheet."""
+    c = contact if isinstance(contact, dict) else {}
+    name, phone = str(c.get("name") or "").strip(), str(c.get("phone") or "").strip()
+    sheet_name, sheet_phone = str(sheet_name or "").strip(), str(sheet_phone or "").strip()
+    if not sheet_phone:
+        return name, phone, ""
+    if not name and sheet_name:
+        return sheet_name, sheet_phone, "sheet"
+    if name and not phone and (same or same_person(name, sheet_name)):
+        return name, sheet_phone, "sheet phone"
+    return name, phone, ""
+
+
+def fill_reply(rec, item=None, path=None):
+    """The rule above on a freshly parsed reply (phase2): the record's contact filled from the order's remembered
+    sheet contact. True when it changed anything."""
+    det = rec.get("details") if isinstance(rec, dict) else None
+    if not isinstance(det, dict):
+        return False
+    book = _load(path or BOOK)
+    sheet = next((book[k] for k in (str(o).split("-")[0].strip() for o in rec.get("orders") or []) if k in book), None)
+    if not sheet:
+        return False
+    sender = ""
+    try:
+        sender = str(getattr(item, "SenderEmailAddress", "") or "").strip().lower()
+    except Exception:
+        pass
+    same = bool(sender) and sender == str(rec.get("to") or "").strip().lower()
+    c = det.get("contact") if isinstance(det.get("contact"), dict) else {}
+    name, phone, how = fill_contact(c, sheet.get("name"), sheet.get("phone"), same)
+    if not how:
+        return False
+    det["contact"] = dict(c, name=name, phone=re.sub(r"\D", "", phone), confidence="high", source=how)
+    return True
+
+
 def enrich(tracker_data, path=None):
     """Add site_phone / site_contact to the delivery records that have none, from the remembered extract
     contacts. Collection records are left alone - their orders' numbers belong to the delivery site, not the

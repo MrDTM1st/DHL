@@ -114,7 +114,7 @@ def test_an_update_takes_off_and_puts_on_only_what_the_order_lacks_and_reads_the
 def test_a_run_stops_at_the_first_failure_and_ticks_off_only_what_was_done():
     import ctms_run_plan
     import ctms_todo
-    ticked, keep = [], (ctms_run_plan.load, ctms_todo.done, X._client)
+    ticked, filed, keep = [], [], (ctms_run_plan.load, ctms_todo.done, X._client, X.FILE)
     plan = [{"id": "a", "kind": "update", "status": "done", "lines": [], "set": {}},
             {"id": "b", "kind": "note", "status": "ready", "lines": ["9100094-1-1"],
              "set": {"note": " - Emailed DO 28/10"}},
@@ -125,11 +125,14 @@ def test_a_run_stops_at_the_first_failure_and_ticks_off_only_what_was_done():
         ctms_run_plan.load = lambda: plan
         ctms_todo.done = lambda i: ticked.append(i)
         X._client = lambda: FakeCTMS([_card("x"), _card("x")])           # b: typed, never reads back
+        X.FILE = lambda p: filed.append(p["id"]) or "; 2 email(s) filed to Region 2 > Completed"
         out = X.run(["a", "b", "c", "d"])
         assert ticked == ["a"] and out["ok"] is False
         assert [r["id"] for r in out["results"]] == ["a", "b"] and "2 not started" in out["said"], out
+        # the update CTMS shows done files its email chain; a note, or an item that failed, files nothing
+        assert filed == ["a"] and "2 email(s) filed" in out["results"][0]["said"]
     finally:
-        ctms_run_plan.load, ctms_todo.done, X._client = keep
+        ctms_run_plan.load, ctms_todo.done, X._client, X.FILE = keep
 
 
 def test_a_vehicle_already_there_is_never_picked_again_and_another_one_stops_it_before_any_typing():

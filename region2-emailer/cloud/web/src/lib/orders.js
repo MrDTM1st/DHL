@@ -451,11 +451,17 @@ export function milesBetween(a, b) {
 // the job (Delali, 02/10): rails over 18.3m, rear steer, night or weekend work.
 // `leftOff` says who was left off and why, so the drawer can say so.
 //
-// `nearMiss` names firms that meet all but ONE of the job's needs (so only on
-// jobs with two or more - one short of a one-need job is no fit at all) and
-// are nearer than anyone who fits, with what they lack. The sheet can simply lack
-// a capability: DE O'Reilly had rear steer all along, but a rear steer job on
+// `nearMiss` names firms that meet all but ONE of the job's needs and are nearer
+// than anyone who fits, with what they lack. The sheet can simply lack a
+// capability: DE O'Reilly had rear steer all along, but a rear steer job on
 // their doorstep listed seven firms further away and never said why (01/11).
+// On a one-need job only a firm with the same kit in another size counts (`has`)
+// - Agrihaul, at 7115211's pick-up, has a rigid HIAB but no artic HIAB on the
+// sheet (01/11); a tipper-only firm is never a near miss for a HIAB job.
+const SIZE_WORDS = new Set(['artic', 'rigid', 'short', 'remote', 'small', 'wagon', 'drag', 'vans']);
+const kitWords = (names) => new Set(names.flatMap((c) => String(c).toLowerCase().split(/[^a-z]+/))
+  .filter((w) => w.length > 2 && !SIZE_WORDS.has(w)));
+
 export function recommendFor(r, hauliers, geo) {
   const job = jobOf(r);
   const need = job.need;
@@ -524,7 +530,11 @@ export function recommendFor(r, hauliers, geo) {
     const caps = new Set((h.caps || []).map((c) => String(c).trim().toLowerCase()));
     const missing = need.filter((n) => !n.any.some((c) => caps.has(c.toLowerCase())));
     if (missing.length) {
-      if (missing.length === 1 && need.length > 1) oneShort.push({ h, missing: missing[0].label });
+      if (missing.length === 1) {
+        const want = kitWords(missing[0].any);
+        const has = (h.caps || []).filter((c) => [...kitWords([c])].some((w) => want.has(w)));
+        if (need.length > 1 || has.length) oneShort.push({ h, missing: missing[0].label, has: has.join(', ') });
+      }
       return false;
     }
     const why = fleetCant(h);
@@ -565,8 +575,8 @@ export function recommendFor(r, hauliers, geo) {
   // distances there's no "near" to speak of, so nothing until they geocode
   const fitMiles = out.filter((h) => h.miles !== null).map((h) => h.miles);
   const bestFit = fitMiles.length ? Math.min(...fitMiles) : (out.length ? -1 : Infinity);
-  const nearMiss = oneShort.map(({ h, missing }) => Object.assign({
-    name: h.name, missing, rank: h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2),
+  const nearMiss = oneShort.map(({ h, missing, has }) => Object.assign({
+    name: h.name, missing, has, rank: h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2),
   }, distOf(h)))
     .filter((x) => x.miles !== null && x.miles < bestFit)
     .sort((a, b) => a.miles - b.miles || a.name.localeCompare(b.name))

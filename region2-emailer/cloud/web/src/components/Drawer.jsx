@@ -574,7 +574,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           {nearMiss.length > 0 && (
             <div className="statusdetail" style={{ margin: '-4px 0 10px', fontSize: 12.5, color: 'var(--muted)' }}>
               Nearby but left off: {nearMiss.map((x) => `${x.name} (${['our fleet', 'Tier 1', 'Tier 2'][x.rank]}, `
-                + `${x.miles} mi from ${x.nearEnd}) — no ${x.missing} on the contact sheet`).join('; ')}
+                + `${x.miles} mi from ${x.nearEnd}) — no ${x.missing} on the contact sheet`
+                + (x.has ? ` (has ${x.has})` : '')).join('; ')}
             </div>
           )}
           {recs.length ? recs.map((h, i) => {

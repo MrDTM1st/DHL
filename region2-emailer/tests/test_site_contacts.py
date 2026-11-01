@@ -69,5 +69,42 @@ class RememberAndEnrich(unittest.TestCase):
         self.assertTrue(sc.remember([{"orders": ["9000004"], "site_phone": "07700 900111"}], self.book))
 
 
+class FillContact(unittest.TestCase):
+    """His rule (01/11): no site contact in the reply - the person who sent it, name and number off the sheet."""
+
+    def test_same_person(self):
+        self.assertTrue(sc.same_person("Gallimore, Sam", "Sam Gallimore"))
+        self.assertTrue(sc.same_person("S Gallimore", "Sam Gallimore"))
+        self.assertFalse(sc.same_person("Sam", "Sam Gallimore"))            # a lone first name is never enough
+        self.assertFalse(sc.same_person("Jo Gallimore", "Sam Gallimore"))
+
+    def test_fill(self):
+        self.assertEqual(sc.fill_contact({"name": "", "phone": ""}, "Sam Example", "07700 900123"),
+                         ("Sam Example", "07700 900123", "sheet"))
+        self.assertEqual(sc.fill_contact({"name": "Sam Example", "phone": ""}, "Sam Example", "07700 900123"),
+                         ("Sam Example", "07700 900123", "sheet phone"))
+        self.assertEqual(sc.fill_contact({"name": "Jo Test", "phone": ""}, "Sam Example", "07700 900123"),
+                         ("Jo Test", "", ""))                                   # someone else - not their number
+        self.assertEqual(sc.fill_contact({"name": "Jo Test", "phone": ""}, "Sam Example", "07700 900123", same=True),
+                         ("Jo Test", "07700 900123", "sheet phone"))           # the address we emailed replied
+        self.assertEqual(sc.fill_contact({"name": "Jo Test", "phone": "07700900999"}, "Sam Example", "07700 900123"),
+                         ("Jo Test", "07700900999", ""))                        # the reply's own number stands
+        self.assertEqual(sc.fill_contact({}, "Sam Example", ""), ("", "", ""))   # no number on the sheet: nothing
+
+    def test_fill_reply_from_the_book(self):
+        book = os.path.join(tempfile.mkdtemp(), "_site_phones.json")
+        with open(book, "w", encoding="utf-8") as f:
+            json.dump({"9000005": {"name": "Sam Example", "phone": "07700 900123"}}, f)
+
+        class Reply:
+            SenderEmailAddress = "Sam.Example@example.com"
+        rec = {"orders": ["9000005-1-1"], "to": "sam.example@example.com",
+               "details": {"contact": {"name": "Sam E", "phone": "", "source": "sender"}}}
+        self.assertTrue(sc.fill_reply(rec, Reply(), book))
+        self.assertEqual(rec["details"]["contact"]["phone"], "07700900123")
+        self.assertEqual(rec["details"]["contact"]["source"], "sheet phone")
+        self.assertFalse(sc.fill_reply({"orders": ["9000006"], "details": {"contact": {}}}, Reply(), book))
+
+
 if __name__ == "__main__":
     unittest.main()

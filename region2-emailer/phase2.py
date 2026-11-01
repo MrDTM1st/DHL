@@ -652,6 +652,11 @@ def check(ns=None):
                 pt = product_type_of(r)
                 r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt,
                                               sender=str(getattr(item, "SenderName", "") or ""))
+                try:   # no site contact in the reply: the person who sent it, name and number off the order's
+                    import site_contacts    # Excel sheet (his rule 01/11)
+                    site_contacts.fill_reply(r, item)
+                except Exception:
+                    pass
                 r["missing"] = dd.missing(r["details"], pt)
                 metrics.log("reply_parsed", orders=r.get("orders", []),
                             missing=len(r["missing"]))

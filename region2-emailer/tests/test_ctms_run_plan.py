@@ -145,6 +145,26 @@ def test_a_moffett_job_goes_in_services_on_a_40ft_artic():
     assert p["status"] == "ready" and p["set"]["veh"] == "rigid" and p["set"]["services"]["MOFFETT"] is True
 
 
+def test_no_site_contact_in_the_reply_means_the_sender_on_the_sheets_name_and_number():
+    nobody = {"name": "", "phone": "", "confidence": "amber", "raw": ""}
+    rec = dict(_rec("9100084", "05/11/2026", contact=nobody), site_contact="Sam Sheet", site_phone="07700 900555")
+    p = P.plan([_item("9100084")], [rec], _found("9100084", "05/11/2026"))[0]
+    assert p["status"] == "ready", p["checks"]
+    assert "Sam Sheet 07700900555" in p["set"]["comments"]
+    assert any("order's contact" in e for e in p["explain"])
+    # the sender named (no one else was) but no number: the sheet's number when it is the same person...
+    sender = {"name": "Gallimore, Sam", "phone": "", "confidence": "amber", "source": "sender", "raw": ""}
+    rec = dict(_rec("9100085", "05/11/2026", contact=sender), site_contact="Sam Gallimore", site_phone="07700 900556")
+    p = P.plan([_item("9100085")], [rec], _found("9100085", "05/11/2026"))[0]
+    assert p["status"] == "ready" and "07700900556" in p["set"]["comments"], p
+    # ...never someone else's number: a colleague who answered is asked for, not given the requester's number
+    colleague = dict(sender, name="Jo Colleague")
+    rec = dict(_rec("9100086", "05/11/2026", contact=colleague), site_contact="Sam Gallimore", site_phone="07700 900556")
+    p = P.plan([_item("9100086")], [rec], _found("9100086", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "contact")
+    assert p["status"] == "held" and "No number for Jo Colleague" in c["why"] and c["text"]
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

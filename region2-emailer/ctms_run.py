@@ -11,6 +11,8 @@ read back before it counts as done (his ask 01/11; the Run button on the dashboa
            typed. A Veh Type already set to another vehicle stops it before anything is typed
   done     CTMS has no line left to update - ticked off, nothing typed
 
+An update done (or found done) files its email chain away - his rule (30/10) - through file_chain.
+
 The first thing that isn't as expected stops the run, and CTMS is left as it is for him to look at - nothing is
 saved past that point and the rest wait. Each item done is ticked off the CTMS to-do.
 
@@ -230,6 +232,27 @@ def run_update(R, p):
     return "; ".join(done)
 
 
+def file_emails(p):
+    """His rule (30/10): once an order is updated, its email chain is filed away - the site thread's mails still in
+    the Inbox's top level into Region 2 > Completed (file_chain). Never fails the item - CTMS is done whatever the
+    mailbox says - but says what happened."""
+    try:
+        import build_drafts as bd
+        import ctms_todo
+        import file_chain
+        orders = set(p.get("orders") or [])
+        recs = [r for r in ctms_todo._tracker_records()
+                if r.get("kind", "delivery") == "delivery" and orders & set(r.get("orders") or [])]
+        ns = bd.get_ns()
+        n = sum(len(file_chain.file_chain(ns, r)) for r in recs or [{"orders": sorted(orders)}])
+        return f"; {n} email(s) filed to Region 2 > Completed" if n else "; no emails left in the Inbox to file"
+    except Exception as e:
+        return f"; emails NOT filed ({type(e).__name__}: {e})"
+
+
+FILE = file_emails                 # the tests put a stand-in here
+
+
 def run(ids):
     import ctms_run_plan
     import ctms_todo
@@ -239,7 +262,8 @@ def run(ids):
     for p in sorted(plan, key=lambda p: want.index(p["id"])):
         if p["status"] == "done":
             ctms_todo.done(p["id"])
-            results.append({"id": p["id"], "ok": True, "said": "CTMS has no line left to update - ticked off"})
+            results.append({"id": p["id"], "ok": True,
+                            "said": "CTMS has no line left to update - ticked off" + FILE(p)})
             continue
         if p["status"] != "ready":
             results.append({"id": p["id"], "ok": False, "said": f"not run - {p['status']}"})
@@ -254,6 +278,8 @@ def run(ids):
             results.append({"id": p["id"], "ok": False, "said": f"{type(e).__name__}: {e}"})
             break
         ctms_todo.done(p["id"])
+        if p["kind"] == "update":
+            said += FILE(p)
         results.append({"id": p["id"], "ok": True, "said": said})
     ok = sum(1 for r in results if r["ok"])
     left = len(want) - len(results)

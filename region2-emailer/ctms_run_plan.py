@@ -254,13 +254,24 @@ def plan_update(it, rec, found):
                            "why": "The supplier's yard hours aren't on the record - do the collection by hand"})
     # -- the deliver-side comment
     cv = _field(d, "contact")
-    name = " ".join(w.capitalize() for w in str(cv.get("name") or "").split())
-    phone = re.sub(r"\D", "", str(cv.get("phone") or ""))
+    import site_contacts
+    sheet_name = str(rec.get("site_contact") or "").strip()
+    name, phone, how = site_contacts.fill_contact(cv, sheet_name, rec.get("site_phone"))
+    name = " ".join(w.capitalize() for w in name.split())
+    phone = re.sub(r"\D", "", phone)
+    if how == "sheet":
+        explain.append(f"No site contact in the reply - {name}, the order's contact, on the sheet's number (your rule)")
+    elif how == "sheet phone":
+        explain.append(f"{name}'s number from the order's sheet - the reply had none")
     if answers.get("contact"):
         name, phone = answers["contact"].strip(), ""          # typed as name and number together
     if not name:
-        name = doubt("contact", "Contact", cv.get("raw"), (), "Nobody named - type the name and number", text=True)
+        name = doubt("contact", "Contact", cv.get("raw"), (), "Nobody named and no contact on the order's sheet - "
+                     "type the name and number", text=True)
         phone = ""
+    elif not phone and not answers.get("contact"):
+        name = doubt("contact", "Contact", cv.get("raw"), (), f"No number for {name} in the reply or on the order's "
+                     "sheet - type the name and number", text=True)
     w3w = str(_field(d, "what3words").get("value") or "").strip()
     if date and start and name:
         when_said = f"{start}-{end}" if said_window else start
@@ -309,7 +320,9 @@ def load():
             found = (json.load(f) or {}).get("orders") or {}
     except (OSError, ValueError):
         found = {}
-    return plan(ctms_todo.listing(), ctms_todo._tracker_records(), found)
+    import site_contacts
+    recs = site_contacts.enrich({"records": ctms_todo._tracker_records()})["records"]   # each order's sheet contact
+    return plan(ctms_todo.listing(), recs, found)
 
 
 if __name__ == "__main__":

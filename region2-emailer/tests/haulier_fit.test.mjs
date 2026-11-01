@@ -144,9 +144,25 @@ test('a firm one capability short but nearer than everyone who fits is named, wi
   assert.deepEqual(none.nearMiss.map((x) => x.name), ['Near Short Co', 'Far Short Co']);
   // no distances yet: nothing is "near"
   assert.deepEqual(recommendFor(r, pool, {}).nearMiss, []);
-  // a one-need job: lacking its only need is no fit at all, not a near miss
+  // a one-need job: lacking its only need is no fit at all - unless the firm has that kit in another size
   const oneNeed = job('60x sleepers', { offloading: { value: 'HIAB' } }, { postcode: 'DD1 1DD' });
   assert.deepEqual(recommendFor(oneNeed, pool.slice(2), geo).nearMiss, []);
+});
+
+test('on a one-need job a nearby firm with the same kit in another size is named - a rigid HIAB for an artic HIAB job', () => {
+  // 80 one-tonne bags: artic HIABs (over 20 bags), the pick-up at the firm's own yard
+  const pool = [
+    H('Far Artic Co', 'tier1', ['Artic Hiab'], { pc: 'AA1 1AA' }),
+    H('Yard Rigid Co', 'tier2', ['Bags', 'Rigid Hiab', 'Artic Flat', 'Rigid Tipper'], { pc: 'YY1 1YY' }),
+    H('Yard Tipper Co', 'tier2', ['Rigid Tipper', 'Artic Tipper'], { pc: 'YY1 1YY' }),   // no HIAB at all
+  ];
+  const geo = { 'AA1 1AA': { la: 54.0, lo: -2.0 }, 'YY1 1YY': { la: 54.09, lo: -1.4 }, 'LL1 1LL': { la: 53.23, lo: -0.54 } };
+  const r = job('80x ballast', {}, { postcode: 'LL1 1LL', collections: [{ pc: 'YY1 1YY' }] });
+  const res = recommendFor(r, pool, geo);
+  assert.deepEqual(labels(r), ['artic hiab']);
+  assert.deepEqual(res.list.map((h) => h.name), ['Far Artic Co']);
+  assert.deepEqual(res.nearMiss.map((x) => [x.name, x.missing, x.has, x.nearEnd]),
+    [['Yard Rigid Co', 'artic hiab', 'Rigid Hiab', 'collection']]);
 });
 
 test('a HIAB load of 10t or under goes on a rigid by its CTMS weight - rear steer drops, our fleet can take it', () => {
