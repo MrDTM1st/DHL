@@ -2473,6 +2473,14 @@ def test_the_export_goes_into_downloads_only_ever_adding_and_a_sign_in_page_is_n
             assert False
         except RuntimeError as e:
             assert "press Export" in str(e)
+        # the one-click rail export's own file only: one made since its Export press, never an older tab left open
+        X._openers = lambda: iter([("straight from CTMS's server", opener(csv))])
+        assert X.take([OLD, EXP], since="2026-10-31_221000")["name"].endswith("221330.csv")
+        try:
+            X.take([OLD], since="2026-10-31_221000")
+            assert False, "an older export was taken"
+        except RuntimeError as e:
+            assert "made since Export was pressed" in str(e), e
     finally:
         X.DOWNLOADS, X._openers, X.fetch = keep
         shutil.rmtree(tmp, ignore_errors=True)
@@ -2504,7 +2512,7 @@ def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_bri
     TB.select = lambda target, timeout=10.0: (selected.append(target) or showing.append(
         "Oracle Fusion Middleware Forms Services and 2 more pages - Work - Microsoft Edge") or (True, "Brought up"))
     asked = []
-    X.take = lambda names, want="": (asked.append((names, want)) or
+    X.take = lambda names, want="", since="": (asked.append((names, want, since)) or
                                      {"name": "short_rail_rep_2026-10-31_221330.csv", "url": EXP, "saved_as":
                                       "short_rail_rep_2026-10-31_221330.csv", "written": True, "bytes": 2048,
                                       "rows": 12, "header": "Schedule,Trip Number", "how": "straight from CTMS's server",
@@ -2515,11 +2523,12 @@ def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_bri
         b.handle({"id": 1, "action": "export_fetch"})               # acting off: not even tried
         assert desk.sent[-1][1]["ok"] is False and asked == [] and closed == []
         b.armed = True
-        b.handle({"id": 2, "action": "export_fetch"})
+        b.handle({"id": 2, "action": "export_fetch", "since": "2026-10-31_221000"})
         r = desk.sent[-1][1]
         assert r["ok"] and "Took short_rail_rep_2026-10-31_221330.csv straight from CTMS's server" in r["detail"], r
         assert "12 row(s)" in r["detail"] and r["payload"]["kind"] == "export"
         assert asked[0][0][0].startswith(EXP) and OLD in asked[0][0] and "Inbox - Outlook" not in asked[0][0]
+        assert asked[0][2] == "2026-10-31_221000"                   # the rail export's own file, by its time
         assert closed == [[EXP]] and selected == ["ctms"]           # only the tab it took; then CTMS's tab
         assert pressed == [("Internet Explorer Download - Security Warning", "Cancel")]   # not the other box
         assert "Closed 1 export tab; CTMS's tab is the one showing again" in r["detail"], r["detail"]
@@ -3026,6 +3035,38 @@ def test_the_ctms_to_do_run_switches_acting_on_for_itself_and_puts_it_back():
     finally:
         S._ctms["control_until"] = 0.0
         S._ctms["todo_run"] = None
+        S._queue.clear()
+
+
+def test_the_rail_plans_ctms_export_switches_acting_on_for_itself_and_never_overlaps_a_to_do_run():
+    fresh()
+    try:
+        assert call("/api/ctms/rail", {"week": "next"}, key=AGENT)[0] == 401
+        assert call("/api/ctms/rail", {"week": "last"})[0] == 400
+        code, r = call("/api/ctms/rail", {"week": "next"})
+        assert code == 200 and S._ctms_armed()
+        job = S._queue[-1]
+        assert job == dict(job, action="ctms_rail", week="next", run=r["run"])
+        assert call("/api/ctms/rail", {"week": "current"})[0] == 409                   # one at a time
+        assert call("/api/ctms/todo/run", {"ids": ["a1"]})[0] == 409                   # ... nor beside a to-do run
+        assert call("/api/ctms/status")[1]["rail_run"]["state"] == "running"
+        assert call("/api/ctms/rail/ran", {"run": r["run"], "ok": True, "said": "Exported"}, key=DASH)[0] == 401
+        assert call("/api/ctms/rail/ran", {"run": r["run"], "ok": True, "said": "Exported",
+                                           "file": "short_rail_rep_2026-11-01_200000.csv"}, key=AGENT)[0] == 200
+        assert not S._ctms_armed()
+        run = call("/api/ctms/status")[1]["rail_run"]
+        assert run["state"] == "done" and run["ok"] and run["said"] == "Exported" and "until" not in run
+        # a to-do run going: no export beside it
+        code, t = call("/api/ctms/todo/run", {"ids": ["a1"]})
+        assert code == 200 and call("/api/ctms/rail", {"week": "next"})[0] == 409
+        call("/api/ctms/todo/ran", {"run": t["run"], "ok": True, "said": "1 of 1 done"}, key=AGENT)
+        # the export's file: only one made since the press, and since= rides on export_fetch alone
+        assert S._ctms_args("export_fetch", {"since": "2026-11-01_195000"})["since"] == "2026-11-01_195000"
+        assert "since" not in S._ctms_args("export_fetch", {"since": "yesterday"})
+        assert "since" not in S._ctms_args("click", {"since": "2026-11-01_195000"})
+    finally:
+        S._ctms["control_until"] = 0.0
+        S._ctms["todo_run"] = S._ctms["rail_run"] = None
         S._queue.clear()
 
 

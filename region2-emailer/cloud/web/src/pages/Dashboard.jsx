@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { I } from '../icons.jsx';
 import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.js';
-import { fileToB64, getFiles, downloadFile } from '../api.js';
+import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
 
 // ---- Holiday cover / handover card ----
@@ -149,10 +149,56 @@ function MediaSetsCard({ onUpload, busy }) {
 }
 
 // ---- Rail plan card ----
+// The Monday of the week the card's select means, as dd/mm - what the export will ask CTMS for.
+function railMonday(week) {
+  const d = new Date();
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + (week === 'next' ? 7 : 0));
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' });
+}
+
 function RailPlanCard({ onUpload, onCommand }) {
   const fileRef = useRef(null);
   const [file, setFile] = useState(null);
   const [week, setWeek] = useState('next');
+  // Export from CTMS: the run the dashboard started, followed until the home PC says how it ended
+  const [railRun, setRailRun] = useState(null);
+  const following = useRef(0);
+  const follow = async (id) => {
+    following.current = id;
+    const until = Date.now() + 16 * 60 * 1000;
+    while (following.current === id && Date.now() < until) {
+      let st;
+      try { st = await ctmsStatus(false); } catch { st = null; }
+      const r = st && st.rail_run;
+      if (r && r.id === id) {
+        setRailRun(r);
+        if (r.state !== 'running') return;
+      }
+      await new Promise((ok) => setTimeout(ok, 4000));
+    }
+  };
+  useEffect(() => {
+    // a run started before this page opened is followed too
+    ctmsStatus(false).then((st) => {
+      const r = st && st.rail_run;
+      if (r) { setRailRun(r); if (r.state === 'running') follow(r.id); }
+    }).catch(() => {});
+    return () => { following.current = 0; };
+  }, []);
+  const exportCtms = async () => {
+    if (!window.confirm(`Export the Short Rail Report for the week of ${railMonday(week)} from CTMS on the work PC, `
+      + 'and preview its plan into Files? It drives CTMS for about 3 minutes - leave the work PC alone meanwhile. '
+      + 'Nothing is sent.')) return;
+    let run;
+    try {
+      ({ run } = await ctmsRail(week));
+    } catch (e) {
+      setRailRun({ state: 'refused', said: e.message });
+      return;
+    }
+    setRailRun({ id: run, state: 'running', said: '' });
+    follow(run);
+  };
   const run = async (mode) => {
     if (!file) {
       // no file picked: Build & send sends the plan last previewed - the one a CTMS export the work PC took
@@ -170,7 +216,7 @@ function RailPlanCard({ onUpload, onCommand }) {
   return (
     <div className="cmd">
       <div className="top"><div className="ci">{I.rail}</div><h3>Rail plan</h3></div>
-      <div className="desc">Build the weekly plan from a CTMS CSV. A CTMS export the work PC takes is previewed by itself — Build &amp; send with no file sends that.</div>
+      <div className="desc">Build the weekly plan from a CTMS CSV, or Export from CTMS for the week picked: the work PC exports it and the plan is previewed by itself. Build &amp; send with no file sends that.</div>
       <input ref={fileRef} type="file" accept=".csv" style={{ marginBottom: 7 }} onChange={(e) => setFile(e.target.files[0])} />
       <select value={week} onChange={(e) => setWeek(e.target.value)} style={{ marginBottom: 7 }}>
         <option value="next">Next week — new plan</option>
@@ -180,6 +226,18 @@ function RailPlanCard({ onUpload, onCommand }) {
         <button className="btn block" onClick={() => run('preview')}>Preview</button>
         <button className="btn red block" onClick={() => run('send')}>Build &amp; send</button>
       </div>
+      <button className="btn block" style={{ marginTop: 7 }} onClick={exportCtms}
+        disabled={!!railRun && railRun.state === 'running'}
+        title="CTMS on the work PC exports the week's Short Rail Report; its plan is previewed into Files. Nothing is sent.">
+        {railRun && railRun.state === 'running' ? 'Exporting from CTMS…' : `Export from CTMS (wc ${railMonday(week)})`}
+      </button>
+      {railRun && (
+        <div className="s" style={{ marginTop: 6 }}>
+          {railRun.state === 'running'
+            ? 'The work PC is exporting from CTMS - about 3 minutes. Its plan then lands in Files as a preview.'
+            : railRun.said}
+        </div>
+      )}
     </div>
   );
 }

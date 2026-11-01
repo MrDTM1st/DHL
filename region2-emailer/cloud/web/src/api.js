@@ -140,6 +140,20 @@ export async function ctmsTodoRun(ids) {
   return d;
 }
 
+// The Rail plan card's Export from CTMS (his "where is the execute rail plan button on the dashboard", 01/11): the
+// week's Short Rail Report exported by the home PC driving CTMS, and the plan previewed from it into Files - nothing
+// is sent. Look mum, no hands is switched on for the run, back as it was after.
+export async function ctmsRail(week) {
+  const r = await req('/api/ctms/rail', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ week }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 // His pick for one of a held item's doubts, from its drop-down - the home PC keeps it on the item.
 export async function ctmsTodoAnswer(id, field, value) {
   const r = await req('/api/ctms/todo/answer', {

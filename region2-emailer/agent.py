@@ -1557,6 +1557,33 @@ def main():
                 push_panel()
                 push_tracker()
                 report("done" if res["ok"] else "error", "CTMS to-do run: " + res["said"] + ".", tail(out, 12))
+            elif action == "ctms_rail":
+                # the Rail plan card's Export from CTMS: the week's Short Rail Report exported by driving CTMS on the
+                # work PC (ctms_rail_export.py). The bridge sends the file on, and the rail_plan preview that queues
+                # runs next - nothing is sent. The dashboard switched Look mum, no hands on for this run
+                week = "current" if cmd.get("week") == "current" else "next"
+                report("running", f"Exporting the rail plan ({week} week) from CTMS on the work PC…")
+                try:
+                    out = run(["ctms_rail_export.py", "run", week], timeout=900)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    res = {"ok": False, "said": "The export did not finish - CTMS is left as it stopped; see the "
+                                                "output."}
+                try:
+                    _req("/api/ctms/rail/ran", {"run": cmd.get("run"), "ok": res["ok"], "said": res["said"],
+                                                "file": res.get("file") or ""})
+                except Exception:
+                    pass
+                report("done" if res["ok"] else "error", "Rail plan CTMS export: " + res["said"], tail(out, 8))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled

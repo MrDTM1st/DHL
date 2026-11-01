@@ -129,6 +129,7 @@ _ctms = {
     "imported": {},        # CSV name -> when CTMS took it (HH:MM)
     "looked_up": None,     # the last look-up of the map's orders in CTMS: {at, checked, of, stopped}
     "todo_run": None,      # the CTMS page's Run: {id, ids, state, at, said, results, ...}
+    "rail_run": None,      # the Rail plan card's Export from CTMS: {id, week, state, at, said, ...}
 }
 # Wakes a held check-in when there is work, and a held wait when its answer lands.
 _ctms_cv = threading.Condition(_lock)
@@ -148,6 +149,13 @@ def _ctms_armed():
 def _ctms_control_locked():
     left = _ctms["control_until"] - time.time()
     return {"armed": left > 0, "left": max(0, int(left))}
+
+
+def _ctms_going_locked(kind):
+    """Whether a run the dashboard started ("todo_run", "rail_run") is still going - one past its armed time is
+    over, whatever the home PC last said."""
+    run = _ctms[kind]
+    return bool(run and run.get("state") == "running" and time.time() < run["until"])
 
 
 # A deploy restarts this server and empties its memory - "Claude can act" with it, though Delali switched it on
@@ -286,6 +294,9 @@ def _ctms_args(action, data):
     snap = str(data.get("snap") or "")
     if re.fullmatch(r"s\d{1,9}", snap):
         out["snap"] = snap
+    since = str(data.get("since") or "")          # export_fetch: only a file CTMS made at or after this
+    if action == "export_fetch" and re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", since):
+        out["since"] = since
     if data.get("dir") in ("up", "down", "left", "right", "to"):
         out["dir"] = data["dir"]
     if data.get("target") in ("ctms", "page"):      # which window the bridge works
@@ -320,6 +331,7 @@ _CHECK_VEH_DAYS = 14        # an order due within this has its open lines' cards
 _TODO_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")          # a CTMS to-do item's id
 _TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact"}
 _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
+_RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
 
 
 def _check_list_locked():
@@ -1675,6 +1687,8 @@ class Handler(BaseHTTPRequestHandler):
                     "looked_up": _ctms["looked_up"],          # the map's orders, last looked up in CTMS
                     "todo_run": ({k: v for k, v in _ctms["todo_run"].items() if k not in ("before", "until")}
                                  if _ctms["todo_run"] else None),
+                    "rail_run": ({k: v for k, v in _ctms["rail_run"].items() if k not in ("before", "until")}
+                                 if _ctms["rail_run"] else None),
                     "next_check": _check_next(_uk_now()),     # ... and when they will be by themselves
                     "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                 "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
@@ -1925,6 +1939,8 @@ class Handler(BaseHTTPRequestHandler):
                     out = (400, {"error": "Nothing picked to run."})
                 elif run and run.get("state") == "running" and time.time() < run["until"]:
                     out = (409, {"error": "A CTMS to-do run is going already."})
+                elif _ctms_going_locked("rail_run"):
+                    out = (409, {"error": "The rail plan's CTMS export is going - run the to-do when it's done."})
                 elif _ctms["state"].get("control") is False:
                     out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
                                           "--allow-control on it to let it type into CTMS."})
@@ -1957,6 +1973,50 @@ class Handler(BaseHTTPRequestHandler):
                     if _ctms["control_until"] == run["until"]:
                         _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
                         _ctms_note_locked("CTMS to-do run ended - Look mum, no hands mode back as it was.")
+            return self._json(200, {"ok": True})
+        if path == "/api/ctms/rail":
+            # the Rail plan card's Export from CTMS (his "where is the execute rail plan button on the dashboard",
+            # 01/11): the week's Short Rail Report exported by the home PC driving CTMS (ctms_rail_export.py), the
+            # plan previewed from it - nothing sent. Look mum, no hands on for the run, back as it was when it ends
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            week = str(data.get("week") or "").strip().lower()
+            with _lock:
+                if week not in ("next", "current"):
+                    out = (400, {"error": "Which week - next or current?"})
+                elif _ctms_going_locked("rail_run"):
+                    out = (409, {"error": "The rail plan is being exported from CTMS already."})
+                elif _ctms_going_locked("todo_run"):
+                    out = (409, {"error": "A CTMS to-do run is going - export when it's done."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it export."})
+                else:
+                    _ctms["next_id"] += 1
+                    rid = _ctms["next_id"]
+                    before = _ctms["control_until"]
+                    until = max(before, time.time() + _RAIL_RUN_MINUTES * 60)
+                    _ctms["control_until"], _ctms["armed_for"] = until, None
+                    _ctms["rail_run"] = {"id": rid, "week": week, "before": before, "until": until, "state": "running",
+                                         "at": datetime.now().strftime("%H:%M"), "said": ""}
+                    _ctms_note_locked(f"Look mum, no hands mode switched on for the rail plan's CTMS export ({week} "
+                                      "week) - back as it was when it ends.")
+                    _queue.append({"action": "ctms_rail", "week": week, "run": rid, "queued_at": time.time()})
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
+            return self._json(*out)
+        if path == "/api/ctms/rail/ran":
+            # the home PC says the export ended: what it did - and the switch back as it was before it
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["rail_run"]
+                if run and run["id"] == data.get("run"):
+                    run.update(state="done", ok=bool(data.get("ok")), said=str(data.get("said") or "")[:600],
+                               file=str(data.get("file") or "")[:80], ended=datetime.now().strftime("%H:%M"))
+                    if _ctms["control_until"] == run["until"]:
+                        _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
+                        _ctms_note_locked("Rail plan's CTMS export ended - Look mum, no hands mode back as it was.")
             return self._json(200, {"ok": True})
         if path == "/api/ctms/stop":
             if not self._is_dash():

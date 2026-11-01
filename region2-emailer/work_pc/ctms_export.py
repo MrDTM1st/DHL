@@ -94,14 +94,21 @@ def fetch(url):
     raise RuntimeError("Could not take the file from CTMS's server - " + "; ".join(why) + ".")
 
 
-def take(names, want=""):
+STAMP = re.compile(r"(\d{4}-\d{2}-\d{2}_\d{6})\.csv$")     # the time CTMS made the file, in its name
+
+
+def take(names, want="", since=""):
     """The newest export open in a tab (or the one called `want`) into Downloads ->
-    {"name", "saved_as", "written", "bytes", "rows", "header", "how"}."""
+    {"name", "saved_as", "written", "bytes", "rows", "header", "how"}. `since` ("YYYY-MM-DD_HHMMSS"): only a file
+    CTMS made then or later - the one-click rail export's own, never an older tab left open."""
     found = urls(names)
     if want:
         found = [u for u in found if u.rsplit("/", 1)[-1].lower() == str(want).strip().lower()]
+    if since:
+        found = [u for u in found if (STAMP.search(u) or [None, ""])[1] >= since]
     if not found:
         raise RuntimeError("No CTMS export is open in an Edge tab" + (f" called {want}" if want else "")
+                           + (" made since Export was pressed" if since else "")
                            + " - press Export in CTMS first.")
     url = found[0]
     name = url.rsplit("/", 1)[-1]

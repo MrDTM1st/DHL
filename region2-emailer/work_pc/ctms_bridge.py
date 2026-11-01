@@ -1362,7 +1362,7 @@ class Bridge:
                 # the file CTMS's export opened in a tab, taken from its address into Downloads (ctms_export) -
                 # then that tab closed and CTMS's brought back, so the bridge sees CTMS again
                 names = ([self.win["title"]] if self.win else []) + ctms_tabs.names(ctms_export.is_export)
-                got = ctms_export.take(names, cmd.get("option") or "")
+                got = ctms_export.take(names, cmd.get("option") or "", cmd.get("since") or "")
                 data = got.pop("data")
                 back = self.export_tabs_away(lambda n: got["url"] in (n or ""))
                 onward = ""
