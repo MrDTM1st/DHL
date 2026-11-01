@@ -399,7 +399,7 @@ def _pair_return(rows):
     return [(r, None) for r in rows]
 
 
-def _adhoc_record(d, csv_name, ret=None, form_file="", kind="adhoc"):
+def _adhoc_record(d, csv_name, ret=None, form_file="", kind="adhoc", mail=None):
     s = lambda k: str(d.get(k) or "").strip()
 
     cdate, cwin, ddate, dwin = _leg_dates(d)
@@ -449,6 +449,11 @@ def _adhoc_record(d, csv_name, ret=None, form_file="", kind="adhoc"):
         "csv": os.path.basename(csv_name),
         "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+    if mail:
+        # the email the form came in (monitor_tick put it on the map by itself) - who sent it, and where to find it
+        # again to forward it on the same chain once it is booked
+        rec["mail"] = {k: str(mail.get(k) or "")[:300] for k in
+                       ("from", "subject", "received", "file", "entryid", "store", "conversation")}
     if ret is not None:
         r2 = lambda k: str(ret.get(k) or "").strip()
         rcd, rcwin, rdd, rdwin = _leg_dates(ret)
@@ -461,7 +466,7 @@ def _adhoc_record(d, csv_name, ret=None, form_file="", kind="adhoc"):
     return rec
 
 
-def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc"):
+def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc", mail=None):
     """Newest first, capped - the map only ever needs the recent handful.
     Keeps a copy of the filled form so the cover-request email can forward it."""
     form_file = ""
@@ -492,7 +497,7 @@ def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc"):
             except Exception:
                 pass
             old = []
-    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file, kind=kind)
+    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file, kind=kind, mail=mail)
             for d, ret in _pair_return(rows)]
     # A job you have already booked off must not come back just because the form
     # was reprocessed. _booked_drops.json guarded the TRACKER only; nothing on
@@ -526,8 +531,29 @@ def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc"):
     return len(recs)
 
 
+def outcome(out):
+    """What a run of this script said about a form -> (on the map?, its order or why not) - for monitor_tick, which
+    puts forms off the mail straight on the map."""
+    if "MAP : job saved" in out:
+        m = re.search(r"^Order (\S+)", out, re.M)
+        return True, m.group(1) if m else ""
+    why = next((ln.strip(" !") for ln in out.splitlines()
+                if ln.startswith(("!!", "Nothing written", "MAP : NOT", "SKIP:", "No data", "NOT FOUND"))), "")
+    return False, why or "the form did not finish processing"
+
+
 def main():
-    arg = sys.argv[1].strip() if len(sys.argv) > 1 else "latest"
+    args = sys.argv[1:]
+    mail = None
+    if "--mail" in args:            # monitor_tick: the email the form came in, as a small JSON file
+        i = args.index("--mail")
+        try:
+            with open(args[i + 1], encoding="utf-8") as f:
+                mail = json.load(f)
+        except (IndexError, OSError, ValueError):
+            mail = None
+        del args[i:i + 2]
+    arg = args[0].strip() if args else "latest"
     if os.path.exists(arg):
         path, src = arg, "local file"
     else:
@@ -607,7 +633,7 @@ def main():
         # saved" regardless, so an upload that reached the map and one that was
         # silently refused produced identical output. AH19/8/26NESY was chased
         # for a quarter of an hour on the strength of that line.
-        n_mapped = save_adhocs(rows, name, form_path=path)
+        n_mapped = save_adhocs(rows, name, form_path=path, mail=mail)
         if n_mapped:
             print("MAP : job saved for the dashboard map (form kept for forwarding).")
         else:

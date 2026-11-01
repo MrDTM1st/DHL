@@ -676,6 +676,7 @@ BG_FAIL_RETRY = 600     # a SENDING job died or was killed: report it, retry thi
 BG_GATE_WAIT = 30       # seconds a job queues for the slot before giving way
 GATE_SKIPPED = 75       # outlook_gate / phase2 "did not run" exit code
 PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # monitor_tick: new mail, check replies
+PUSH_DUE = os.path.join(HERE, "_push_due")       # monitor_tick: an ad hoc went on the map - push its CSV and pin now
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
 SEND_JOBS = ("waitlist_release", "chase")
 
@@ -895,6 +896,10 @@ def main():
     last_push = time.time()
     last_panel = time.time()
     last_ctms = 0.0
+    try:
+        pushed_due = os.path.getmtime(PUSH_DUE)
+    except OSError:
+        pushed_due = 0.0
     bg = None
     if IS_LOCAL:                    # the cloud agent runs no timer jobs
         try:
@@ -1760,6 +1765,15 @@ def main():
         if time.time() - last_files > 1800:   # heal the Files list after a redeploy
             push_new_files({})
             last_files = time.time()
+        try:                                   # an ad hoc the monitor put on the map: its CSV and pin go up now
+            due = os.path.getmtime(PUSH_DUE)
+        except OSError:
+            due = 0.0
+        if due > pushed_due:
+            pushed_due = due
+            push_new_files({})
+            push_panel()
+            last_panel = time.time()
         if not IS_LOCAL and time.time() - last_ctms > 60:   # CTMS captures come home
             pull_ctms_captures()
             last_ctms = time.time()

@@ -138,7 +138,12 @@ export default function App() {
     if (knownAdhocs.current === null) { knownAdhocs.current = new Set(ids); return; }
     const fresh = ids.find((id) => !knownAdhocs.current.has(id));
     ids.forEach((id) => knownAdhocs.current.add(id));
-    if (fresh) {
+    const rec = fresh && adhocs.find((a) => a.id === fresh);
+    if (rec && rec.mail) {
+      // one the desk took off an email by itself (his ask 01/11) - said, never a jump away from what you're doing
+      pushToast('New ad hoc on the map', `${(rec.orders || []).join(' / ')} from ${rec.mail.from || 'an email'}`
+        + ' - its brief has the Upload button.', 'go');
+    } else if (fresh) {
       pushToast('Ad hoc processed', 'CSV is in Files — here\'s the job on the map.', 'go');
       setSelectedId(fresh);
       setPickedHaulier(null);

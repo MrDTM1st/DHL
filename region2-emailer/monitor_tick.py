@@ -8,7 +8,9 @@ Synergy Upload folder and reacts the moment something relevant lands:
   * new mail in or out                -> flag _phase2_due so the local agent runs
     the reply/booking check now (at most every 5 min after the last one
     ended), not on its 20-minute cycle,
-  * a new ad-hoc Haulage Request / DTS form -> flag it on the dashboard,
+  * a new ad-hoc Haulage Request form -> put it straight on the map with its upload CSV, the email it came in kept
+    on the job (his ask 01/11: "instead of just notifying me, just put it on the map and then give me an upload
+    button"); a DTS form, a PDF or a form that won't process is flagged on the dashboard as before,
   * a bounce on a delivery-details email -> bounce_escalate asks the materials
     team for an alternative contact straight away (the one thing this sends -
     Delali, 05/10/2026: "if something bounces, just immediately escalate it").
@@ -17,7 +19,7 @@ Seeds silently on the first run so it never floods on startup. Apart from the
 bounce escalation it only builds/notifies. State + watermark live in
 _monitor_seen.json.
 """
-import os, sys, json, time, subprocess
+import os, re, sys, json, time, subprocess
 from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,6 +33,39 @@ PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # agent.py runs the reply check
 BUILD_TRIES = 3           # an extract whose auto-build keeps failing is given up after this
 TICK_MAX_AGE = 25 * 60    # a tick alive this long is stuck on a COM call
 FORM_HINTS = ("haulage request", "transport request", "request form", "dts")
+AUTO_FORMS = os.path.join(HERE, "_adhoc_forms", "from_mail")   # gitignored: forms saved off the mail
+PUSH_DUE = os.path.join(HERE, "_push_due")   # touched when the map has something new: the agents push it now
+
+
+def _auto_adhoc(ns, eid, fn):
+    """A new Haulage Request form, processed exactly as the dashboard's Ad hoc box does, the email it came in kept on
+    the job (to forward on the same chain once it is booked). -> (on the map?, its order or why not, who sent it)"""
+    try:
+        it = ns.GetItemFromID(eid)
+        att = next(a for a in (it.Attachments.Item(i) for i in range(1, it.Attachments.Count + 1))
+                   if str(a.FileName) == fn)
+        os.makedirs(AUTO_FORMS, exist_ok=True)
+        path = os.path.join(AUTO_FORMS, datetime.now().strftime("%Y%m%d%H%M%S_")
+                            + re.sub(r"[^A-Za-z0-9._ -]+", "-", fn))
+        att.SaveAsFile(path)
+        sender = str(getattr(it, "SenderName", "") or "")
+        mail = {"entryid": eid, "store": str(it.Parent.StoreID), "from": sender, "file": fn,
+                "conversation": str(getattr(it, "ConversationID", "") or ""),
+                "subject": str(getattr(it, "Subject", "") or ""),
+                "received": it.ReceivedTime.strftime("%Y-%m-%d %H:%M")}
+        with open(path + ".mail.json", "w", encoding="utf-8") as f:
+            json.dump(mail, f)
+    except Exception as e:
+        return False, f"the form could not be saved off the email ({type(e).__name__})", ""
+    rc, out = run(["process_form.py", path, "--mail", path + ".mail.json"])
+    import process_form
+    ok, what = process_form.outcome(out)
+    if ok:
+        try:
+            open(PUSH_DUE, "w").close()
+        except OSError:
+            pass
+    return ok, what, sender
 
 
 def _load():
@@ -244,7 +279,7 @@ def main():
                       and any(h in low or h in subj.lower() for h in FORM_HINTS)
                       and eid not in adhoc_ids):
                     adhoc_ids.add(eid)
-                    new_adhocs.append(fn)
+                    new_adhocs.append((eid, fn, subj))
     # slow full-tree sweep for BS files filed outside the watched folders
     if time.time() - state.get("last_tree", 0) > TREE_EVERY:
         try:
@@ -291,8 +326,25 @@ def main():
     if new_extracts:
         _build(state, new_extracts)
     if new_adhocs:
-        report("done", "New ad-hoc form arrived: " + ", ".join(new_adhocs[:3])
-               + " - process it from the DTS / Ad-hoc box.")
+        mapped, flagged = [], []
+        for eid, fn, subj in new_adhocs[:5]:
+            low = fn.lower()
+            if low.endswith((".xlsx", ".xlsm")) and "dts" not in low and "dts" not in subj.lower():
+                try:                            # nothing here may take the tick (extracts, replies) down with it
+                    ok, what, sender = _auto_adhoc(ns, eid, fn)
+                except Exception as e:
+                    ok, what, sender = False, f"{type(e).__name__}: {e}", ""
+                (mapped if ok else flagged).append(
+                    f"{what} from {sender or 'the email'}" if ok else f"{fn} ({what})")
+            else:
+                flagged.append(fn)
+        if mapped:
+            report("done", "New ad hoc on the map: " + "; ".join(mapped)
+                   + " - its brief has the Upload button." + (f" Not processed: {'; '.join(flagged)}"
+                                                              " - use the DTS / Ad-hoc box." if flagged else ""))
+        elif flagged:
+            report("done", "New ad-hoc form arrived: " + "; ".join(flagged)
+                   + " - process it from the DTS / Ad-hoc box.")
 
 
 REVIEW_STATES = ("preview_ready", "batch_ready", "sites_needed", "found")
