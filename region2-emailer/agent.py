@@ -463,6 +463,18 @@ def _pins():
         return []
 
 
+def _noc_teams():
+    """Who DHL NOC is messaged on Teams, first the usual one (config.json "noc_teams", kept off GitHub): [{name, email,
+    note}] - the brief's Teams button for our own fleet instead of an email (his ask 01/11)."""
+    try:
+        with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
+            people = json.load(f).get("noc_teams") or []
+        return [{"name": str(p.get("name") or "")[:40], "email": str(p.get("email") or "")[:120],
+                 "note": str(p.get("note") or "")[:80]} for p in people if isinstance(p, dict) and p.get("email")][:6]
+    except Exception:
+        return []
+
+
 def _mat_teams():
     """Materials-team escalation contacts (rails / ballast / sleepers)."""
     try:
@@ -518,6 +530,7 @@ def push_panel():
             "ctms_todo": _ctms_todo(),
             "ctms_plan": _ctms_plan(),
             "planner_week": _planner_week(),
+            "noc_teams": _noc_teams(),
         })
     except Exception:
         pass

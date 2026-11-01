@@ -336,7 +336,7 @@ export default function App() {
             onAdhocBooked={onAdhocBooked}
             onCommand={onCommand} matTeams={panel.mat_teams || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
-            asks={panel.asks || {}} />
+            asks={panel.asks || {}} nocTeams={panel.noc_teams || []} />
         )}
       </div>
       <Toasts toasts={toasts} dismiss={dismissToast} />

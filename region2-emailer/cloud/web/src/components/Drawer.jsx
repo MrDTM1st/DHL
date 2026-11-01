@@ -101,6 +101,22 @@ function coverRequest(r) {
   ].filter((x) => x !== null && x !== '').join('\n');
 }
 
+// The same ask for DHL NOC, who are messaged on Teams, not emailed (his ask 01/11: "instead of an email button, can
+// we get like a Teams message button"): their first name, no email opening or signature - a chat carries the sender -
+// and no dashes standing in for punctuation ("no em dashes to Rich", 02/10).
+function teamsText(r, name) {
+  const body = coverRequest(r)
+    .replace(/^Hi,\n\nWould you be able to cover the job below;/, `Hi ${name || 'there'}, would you be able to cover the job below?`)
+    .replace(/(\d{1,2}:\d{2}) - (\d{1,2}:\d{2})/g, '$1 to $2')
+    .replace(/\s*→\s*/g, ' to ')
+    .replace(/\s+[—–]\s+/g, ', ')
+    .replace(/ - /g, ', ');
+  return body + '\n\nLet me know if you can take it and I will get it raised.';
+}
+
+const teamsLink = (email, message) => 'https://teams.microsoft.com/l/chat/0/0?users=' + encodeURIComponent(email)
+  + '&message=' + encodeURIComponent(message);
+
 /* Edits to a cover request are remembered PER ORDER.
    Chasing haulage means sending the same job to several hauliers in a row. Any
    wording you fix for the first one - a gate code, a corrected time, a note
@@ -152,7 +168,7 @@ function clearEdit(id) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUpdate, openPhone,
-  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks }) {
+  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks, nocTeams = [] }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -226,7 +242,18 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
     } });
     setComposing(null);
   };
-  useEffect(() => { setComposing(null); }, [r.id]);   // a new brief means a fresh compose
+  // DHL NOC's Teams message: who it goes to (the usual one first), the text, and whether it was copied
+  const [teams, setTeams] = useState(null);           // {to, message, copied} while open
+  const openTeams = () => {
+    const p = nocTeams[0] || {};
+    setComposing(null);
+    setTeams(teams ? null : { to: p.email, message: teamsText(r, p.name), copied: false });
+  };
+  const teamsTo = (email) => {
+    const p = nocTeams.find((x) => x.email === email) || {};
+    setTeams((t) => ({ ...t, to: email, copied: false, message: t.message.replace(/^Hi [^,]*,/, `Hi ${p.name || 'there'},`) }));
+  };
+  useEffect(() => { setComposing(null); setTeams(null); }, [r.id]);   // a new brief means a fresh compose
   const [leg, setLeg] = useState(null);     // collection -> delivery
   const [repo, setRepo] = useState(null);   // picked haulier's base -> collection
   const colls = collectionsOf(r);           // EVERY pick-up, not just the first
@@ -628,7 +655,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
               </div>
               <div className="hbtns" onClick={(e) => e.stopPropagation()}>
                 <HaulierCalls h={h} onCall={onCall} />
-                {h.email && (
+                {h.fleet && nocTeams.length > 0 ? (
+                  <button className="callbtn mail" onClick={openTeams}>Teams</button>
+                ) : h.email && (
                   <button className="callbtn mail"
                     onClick={() => (composing === h.name ? setComposing(null) : startCompose(h))}>
                     Email
@@ -637,6 +666,27 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
               </div>
             </div>
             {composeBox(h)}
+            {h.fleet && teams && (
+              <div className="hcompose" onClick={(e) => e.stopPropagation()}>
+                <label>To
+                  <select value={teams.to} onChange={(e) => teamsTo(e.target.value)}>
+                    {nocTeams.map((p) => <option key={p.email} value={p.email}>{p.name}{p.note ? ` (${p.note})` : ''}</option>)}
+                  </select>
+                </label>
+                <label>Message
+                  <textarea rows={12} value={teams.message}
+                    onChange={(e) => setTeams({ ...teams, message: e.target.value, copied: false })} />
+                </label>
+                <div className="hcompose-foot">
+                  <span className="hint-sig">No email is sent. Open in Teams starts the chat with this typed in - you press Send.</span>
+                  <button className="btn mini" onClick={() => setTeams(null)}>Close</button>
+                  <button className="btn mini" onClick={async () => {
+                    try { await navigator.clipboard.writeText(teams.message); setTeams({ ...teams, copied: true }); } catch { /* no clipboard */ }
+                  }}>{teams.copied ? 'Copied' : 'Copy'}</button>
+                  <a className="btn mini red" href={teamsLink(teams.to, teams.message)} target="_blank" rel="noreferrer">Open in Teams</a>
+                </div>
+              </div>
+            )}
             </div>
             );
           }) : (
