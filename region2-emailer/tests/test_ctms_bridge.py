@@ -3091,6 +3091,12 @@ def test_teams_opens_only_that_persons_chat_and_checks_it_by_its_title():
     assert not TM.is_send("Send feedback") and not TM.is_send("Sender details") and not TM.is_send("")
     assert TM.empty("", "Type a message") and TM.empty("Type a message\n", "Type a message")    # its own prompt
     assert TM.empty("Type a new message", "") and not TM.empty("Hi Sam", "Type a message")
+    # the quiet send: the text rides in Teams' own link, and the box must hold it and nothing else
+    assert TM.chat_link("sam.example@example.com", "Hi Sam,\nOrder: 9100001 & co") == \
+        "msteams:/l/chat/0/0?users=sam.example@example.com&message=Hi%20Sam%2C%0AOrder%3A%209100001%20%26%20co"
+    assert TM.holds_only("Hi Sam,\r\nOrder: 9100001", "Hi Sam,\nOrder: 9100001")
+    assert not TM.holds_only("an older draft Hi Sam,\nOrder: 9100001", "Hi Sam,\nOrder: 9100001")
+    assert not TM.holds_only("Hi Sam,", "Hi Sam,\nOrder: 9100001") and not TM.holds_only("", "")
 
 
 def test_the_bridge_sends_in_teams_only_with_the_switch_and_says_why_it_stopped():
