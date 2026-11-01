@@ -119,14 +119,52 @@ def book(record_id):
     return n
 
 
-def drop_completed(d):
-    """Remove orders that have cleared every pipeline stage. An order is complete
-    once its send-off brief is ready (the terminal stage) - at that point it has
-    been drafted, emailed, replied to and sent off, so it no longer needs
-    tracking. Mutates `d` in place; returns how many were removed."""
+# A replied order (send-off brief ready) is ready to BOOK, not finished - his map, 31/10: purple until it is booked.
+# It stays until a booking takes it off (the booked sweeps), and only leaves on its own once its delivery date is
+# this many days gone, when it can be nothing but stale.
+STALE_DAYS = 7
+
+
+def _days_past(date):
+    """How many days a dd/mm/yyyy delivery date is behind today - None when it is not a date."""
+    try:
+        return (datetime.now() - datetime.strptime(str(date or "").strip(), "%d/%m/%Y")).days
+    except ValueError:
+        return None
+
+
+def drop_completed(d, keep_ids=()):
+    """Remove replied orders whose delivery date is STALE_DAYS gone. keep_ids are never removed - the ones finished
+    during this very check must survive to be saved. Mutates `d` in place; returns how many were removed."""
     before = len(d["records"])
-    d["records"] = [r for r in d["records"] if not r.get("sendoff_ready")]
+    d["records"] = [r for r in d["records"]
+                    if not (r.get("sendoff_ready") and r.get("id") not in keep_ids
+                            and (_days_past(r.get("delivery_date")) or 0) > STALE_DAYS)]
     return before - len(d["records"])
+
+
+def move_date(d, r, date, why=""):
+    """The order's delivery moved to `date` (dd/mm/yyyy): the record takes the new date AND the id that goes with
+    it, so the map shows one dot on the new day instead of a second beside the old. A record already on the new id
+    (an earlier chase or send for the same orders and day) is folded into this one. The old date is kept in
+    date_was. Returns True when the date changed."""
+    date = str(date or "").strip()
+    try:
+        datetime.strptime(date, "%d/%m/%Y")
+    except ValueError:
+        return False
+    if date == str(r.get("delivery_date") or "").strip():
+        return False
+    new_id = _key(r.get("orders") or [], date)
+    for other in [o for o in d["records"] if o is not r and o.get("id") == new_id]:
+        r["chases"] = max(r.get("chases", 0), other.get("chases", 0))
+        d["records"].remove(other)
+    r["date_was"] = r.get("delivery_date")
+    r["date_moved_at"] = _now()
+    if why:
+        r["date_moved_by"] = why
+    r["delivery_date"], r["id"] = date, new_id
+    return True
 
 
 # ---------- refresh from Outlook ----------
@@ -187,7 +225,7 @@ def refresh():
                     r["reply_at"] = _now()
                     break
         r["sendoff_ready"] = any(any(o in s for o in orders) for s in sendout_subjects)
-    drop_completed(d)   # an order that reached send-off is done - stop tracking it
+    drop_completed(d)   # a send-off order stays until it is booked - only a stale one goes
     save(d)
     return d
 

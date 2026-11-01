@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, ZoomControl, AttributionControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { isUrgent, within3, pcNorm, recommendFor, collectionsOf } from '../lib/orders.js';
+import { isUrgent, isReady, within3, pcNorm, recommendFor, collectionsOf } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween, DEPOTS } from '../lib/geo.js';
 import OrdersPanel from '../components/OrdersPanel.jsx';
 
@@ -24,8 +24,9 @@ const bIcon = L.divIcon({ className: 'pin-icon', html: '<span class="pin-ab b">B
 function aNIcon(n) {
   return L.divIcon({ className: 'pin-icon', html: `<span class="pin-ab a">A${n}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] });
 }
-function orderIcon(urgent, selected) {
-  return divIcon('pin-order' + (urgent ? ' urgent' : '') + (selected ? ' selected' : ''), selected ? 22 : 16);
+function orderIcon(r, selected) {
+  return divIcon('pin-order' + (isReady(r) ? ' ready' : '') + (isUrgent(r) ? ' urgent' : '')
+    + (selected ? ' selected' : ''), selected ? 22 : 16);
 }
 
 // Frames the map on the pins ONCE, when they first appear - and then never
@@ -121,8 +122,9 @@ function FlyToRoute({ id, line, from, to }) {
 // phone it folds into the Layers panel, so the map is not hidden behind cards.
 const NETWORK_KEY = (
   <>
-    <div className="legrow"><span className="ld" style={{ background: 'var(--red)' }} />Tracked delivery</div>
-    <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Urgent · ≤3 days</div>
+    <div className="legrow"><span className="ld" style={{ background: 'var(--red)' }} />Order · chasing details</div>
+    <div className="legrow"><span className="ld" style={{ background: 'var(--purple)' }} />Ready to book</div>
+    <div className="legrow"><span className="ld" style={{ background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }} />Flashing · due ≤3 days</div>
     <div className="legrow"><span className="ld sq" style={{ background: 'var(--depot)' }} />Collection depot</div>
     <div className="legrow"><span className="ld" style={{ background: 'var(--yellow)', border: '1.5px solid #8a6d00' }} />Haulier base</div>
   </>
@@ -351,7 +353,7 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
 
         {/* focus mode hides the other orders; the focused one is the B pin */}
         {layers.orders && !focused && orderPts.map(({ r, pos }) => (
-          <Marker key={r.id} position={pos} icon={orderIcon(isUrgent(r), selectedId === r.id)}
+          <Marker key={r.id} position={pos} icon={orderIcon(r, selectedId === r.id)}
             eventHandlers={{ click: () => onSelect(r) }} title={(r.worksite || r.site || '') + ' — ' + (r.orders || []).join(' / ')} />
         ))}
       </MapContainer>

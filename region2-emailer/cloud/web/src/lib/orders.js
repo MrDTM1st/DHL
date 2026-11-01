@@ -45,6 +45,16 @@ export function isUrgent(r) {
   return within3(r.delivery_date || r.date) || !!r.loose_ballast;
 }
 
+// Ready to book (his colours, 31/10): the site has replied and nothing it must tell us is missing, so the job only
+// wants booking - purple on the map. The rest are still being chased - red, a reply that left something out
+// included. An ad hoc or DTS job comes with its details on the form. Booked jobs are not here at all: the home PC
+// takes them off.
+export function isReady(r) {
+  if (r.kind === 'adhoc' || r.kind === 'dts') return true;
+  if (r.kind === 'pinned' || r.kind === 'collection') return false;
+  return !!r.reply_at && Array.isArray(r.missing) && r.missing.length === 0;
+}
+
 export function urgScore(r) {
   return (within3(r.delivery_date || r.date) ? 2 : 0) + (r.loose_ballast ? 1 : 0);
 }
@@ -71,10 +81,10 @@ export function statusLabel(r) {
   // stage fields below mean anything for one of these
   if (r.kind === 'pinned') return r.booked ? 'By hand — booked in'
     : (r.tracked ? 'By hand — tracked' : 'By hand — map only');
-  if (r.sendoff_ready) return 'Sent off';
+  if (isReady(r)) return 'Ready to book';
+  if (r.reply_at) return (r.missing || []).length ? 'Replied — still needs ' + r.missing.join(', ') : 'Replied';
   if (r.ooo_at) return 'Out of office';
   if ((r.chases || 0) > 0) return 'Chased ×' + r.chases;
-  if (r.reply_at) return 'Replied';
   if (r.emailed_at) return 'Awaiting reply';
   return 'Drafted';
 }

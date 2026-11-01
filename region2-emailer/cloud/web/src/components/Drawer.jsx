@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  ordLabel, statusLabel, dueText, isUrgent, within3, needsFor, recommendFor,
+  ordLabel, statusLabel, dueText, dateShort, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
   fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, siteContactOf,
 } from '../lib/orders.js';
@@ -357,7 +357,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const rows = [
     ['Status', statusLabel(r)],
-    ['Delivery', dueText(r)],
+    ['Delivery', dueText(r) + (r.date_was ? ' · moved from ' + dateShort(r.date_was)
+      + (r.date_moved_by ? ' by ' + r.date_moved_by : '') : '')],
     ['Material', r.materials],
     ['Quantity', r.qty && !(r.materials || '').includes(r.qty) ? r.qty : ''],
     ['Weight', r.weight],

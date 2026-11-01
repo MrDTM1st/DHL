@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef } from 'react';
 import { I } from '../icons.jsx';
-import { ordLabel, isUrgent, within3, dateShort, recommendFor, parcelPassFor, siteContactOf, byDeliveryDate, wlDays } from '../lib/orders.js';
+import { ordLabel, isUrgent, isReady, within3, dateShort, recommendFor, parcelPassFor, siteContactOf, byDeliveryDate, wlDays } from '../lib/orders.js';
 import { geoCache } from '../lib/geo.js';
 import { command } from '../api.js';
 import CallButton from './CallButton.jsx';
@@ -195,6 +195,14 @@ function BookedCheck({ status }) {
   );
 }
 
+// A line's dot is its map dot: purple ready to book, red still chasing the details, ringed when due inside 3 days.
+function dotStyle(o) {
+  const ready = isReady(o);
+  const style = { background: ready ? 'var(--purple)' : 'var(--red)' };
+  if (isUrgent(o)) style.boxShadow = '0 0 0 3px ' + (ready ? 'var(--purple-t)' : 'var(--red-t)');
+  return style;
+}
+
 // On a phone the panel is a sheet along the bottom of the map, closed to one
 // line so the map stays visible; `open` lives on the map page so the list is
 // still open when you come back from a brief. On a computer it is always open
@@ -206,6 +214,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
   // of their own so they never read as this week's work
   const firstPast = list.findIndex((o) => (wlDays(o.delivery_date || o.date) ?? 0) < 0);
   const urgent = records.filter(isUrgent).length;
+  const ready = records.filter(isReady).length;
   return (
     <div className={'uploadpanel orderspanel' + (open ? ' open' : '')}>
       <button className="sheet-toggle" onClick={onToggle} aria-expanded={!!open}>
@@ -217,7 +226,8 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
       <div className="op-body">
         <div className="up-head">
           <div className="t">{I.track}Orders &amp; hauliers</div>
-          <div className="s">{records.length} tracked · {urgent} urgent. Tap an order for the full brief.</div>
+          <div className="s">{records.length} tracked · {ready} ready to book · {urgent} urgent. Tap an order for the
+            full brief.</div>
           <BookedCheck status={status} />
         </div>
         <OrderSearch status={status} />
@@ -241,9 +251,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
                 </div>
               )}
               <div className={'orow' + (selectedId === o.id ? ' sel' : '')} onClick={() => onSelect(o)}>
-                <span className="pdot2" style={isUrgent(o)
-                  ? { background: 'var(--red)', boxShadow: '0 0 0 3px var(--red-t)' }
-                  : { background: 'var(--faint)' }} />
+                <span className="pdot2" style={dotStyle(o)} />
                 <div className="pm">
                   <div className="o mono">
                     {ordLabel(o)} <span style={{ color: 'var(--faint)', fontWeight: 600 }}>· {o.worksite || o.site || ''}</span>

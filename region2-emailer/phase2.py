@@ -625,11 +625,11 @@ def check(ns=None):
     # Which orders were ALREADY finished before this run. Anything that becomes
     # finished DURING this run must survive to be saved - see the drop below.
     was_done = {r["id"] for r in d["records"] if r.get("sendoff_ready")}
-    replies = ooo = briefs = 0
+    replies = ooo = briefs = moved = 0
     finder = _reply_finder(ns, [r for r in d["records"] if r.get("status") == "sent"
                                 and not r.get("reply_at") and not r.get("ooo_at")])
-    for r in d["records"]:
-        if r.get("status") != "sent":
+    for r in list(d["records"]):            # a copy: a reply's date can fold another record into this one
+        if r.get("status") != "sent" or not any(x is r for x in d["records"]):
             continue
         if r.get("reply_at"):
             continue
@@ -655,6 +655,10 @@ def check(ns=None):
                 r["missing"] = dd.missing(r["details"], pt)
                 metrics.log("reply_parsed", orders=r.get("orders", []),
                             missing=len(r["missing"]))
+                # the date the site asks for is the date the order gets in CTMS (his rule for updating an order
+                # from a reply) - and the dashboard shows the same (his ask, 31/10). A date that is not firm waits
+                # for his confirm on the Tracker page (learn_detail), which moves it then.
+                moved += tracker.move_date(d, r, dd.firm_date(r["details"]), "the site's reply")
             except Exception as e:
                 r["details_note"] = str(e)[:140]
             try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list
@@ -724,26 +728,18 @@ def check(ns=None):
         # churn of 24/07).
         tracker.remember_drops(dropped_orders)
         metrics.log("booked_removed", n=booked_removed, orders=dropped_orders[:20])
-    # Completed orders leave the tracker - but NOT in the same run that
-    # completed them. The reply is parsed onto the record (r["details"]), the
-    # brief is drafted, sendoff_ready is set, and drop_completed then deleted
-    # that record before the only save() below. So every parsed reply died in
-    # memory: 45 order groups had been parsed and NOT ONE tracker record carried
-    # a "details" key. That is why the haulier cover request was never prefilled
-    # with the site contact's answers, and why the same order could be re-enrolled
-    # and briefed twice.
-    #
-    # A record finished during THIS run now survives one cycle - long enough to
-    # be saved, pushed to the dashboard and used - and leaves on the next check.
-    before_n = len(d["records"])
-    d["records"] = [r for r in d["records"]
-                    if not (r.get("sendoff_ready") and r["id"] in was_done)]
-    removed = before_n - len(d["records"])
+    # A replied order is ready to BOOK, not done: it stays - purple on the map - until a booking takes it off
+    # (the sweeps above), and leaves on its own only once its delivery date is a week gone (tracker.STALE_DAYS).
+    # It used to leave on the next check, so the map never showed what was ready. Never in the run that finished
+    # it, either: the reply is parsed onto the record and must survive to the save() below - when it did not,
+    # 45 parsed replies died in memory and no record ever carried its "details".
+    finished_now = {r["id"] for r in d["records"] if r.get("sendoff_ready") and r["id"] not in was_done}
+    removed = tracker.drop_completed(d, keep_ids=finished_now)
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
           f"{briefs} send-off draft(s) created, {booked_removed} booked-by-you removed, "
-          f"{removed} completed order(s) removed, {repaired} product wording(s) repaired, "
-          f"{collfilled} collection(s) filled in.")
+          f"{removed} stale ready order(s) removed, {moved} delivery date(s) moved by a reply, "
+          f"{repaired} product wording(s) repaired, {collfilled} collection(s) filled in.")
     return replies, ooo, briefs
 
 
@@ -1134,8 +1130,10 @@ def learn_detail(rec_id, field, value):
             cell["value"] = value
         cell["confidence"] = dd.HIGH
         r["missing"] = dd.missing(det, product_type_of(r))
+        moved = field == "date" and tracker.move_date(d, r, value, "your confirm")
         tracker.save(d)
-        return f"learned {field}={value!r} for {rec_id} (from {raw[:40]!r})"
+        return (f"learned {field}={value!r} for {rec_id} (from {raw[:40]!r})"
+                + (f" - the order moves to {value}" if moved else ""))
     return f"record {rec_id} not found"
 
 

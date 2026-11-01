@@ -597,6 +597,16 @@ def missing(details, product_type=None):
     return out
 
 
+def firm_date(details):
+    """The one delivery date a reply settles on (dd/mm/yyyy), or None - an amber date, a "flexible" one or a choice
+    of days is not firm, and waits for Delali's confirm."""
+    cell = (details or {}).get("date") or {}
+    if (cell.get("value") and cell.get("confidence") == HIGH and not cell.get("flexible")
+            and len(cell.get("options") or []) <= 1):
+        return cell["value"]
+    return None
+
+
 def amber(details):
     """Fields parsed but not certain - these are the one-click confirms whose
     answers get fed back through learn()."""

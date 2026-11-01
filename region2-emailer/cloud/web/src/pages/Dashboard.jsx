@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { I } from '../icons.jsx';
-import { isUrgent, ordLabel, within3, dateShort } from '../lib/orders.js';
+import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.js';
 import { fileToB64, getFiles, downloadFile } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
 
@@ -327,8 +327,8 @@ export default function Dashboard({
   const tracked = records.length;
   const urgent = records.filter(isUrgent).length;
   const awaiting = records.filter((r) => r.emailed_at && !r.reply_at).length;
-  const ready = records.filter((r) => r.sendoff_ready).length;
-  const waiters = [...records].filter((r) => !r.sendoff_ready)
+  const ready = records.filter(isReady).length;
+  const waiters = [...records].filter((r) => !isReady(r))
     .sort((a, b) => (within3(b.delivery_date) - within3(a.delivery_date)))
     .slice(0, 4);
 
@@ -363,7 +363,7 @@ export default function Dashboard({
         <div className="metric ink"><span className="bar" /><div className="n">{tracked}</div><div className="k">Orders tracked</div></div>
         <div className="metric red"><span className="bar" /><div className="n">{urgent}</div><div className="k">Urgent · ≤3 days</div></div>
         <div className="metric yellow"><span className="bar" /><div className="n">{awaiting}</div><div className="k">Awaiting reply</div></div>
-        <div className="metric faint"><span className="bar" /><div className="n">{ready}</div><div className="k">Ready to send off</div></div>
+        <div className="metric faint"><span className="bar" /><div className="n">{ready}</div><div className="k">Ready to book</div></div>
       </div>
 
       {/* Transient review steps the agent drives (batch / edit / sites / decisions) */}

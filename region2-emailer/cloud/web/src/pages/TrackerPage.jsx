@@ -3,7 +3,7 @@ import { I } from '../icons.jsx';
 import { RegionBadge } from '../components/RegionBadge.jsx';
 import CallButton from '../components/CallButton.jsx';
 import {
-  isUrgent, within3, ordLabel, statusLabel, isAmberStatus, dueText, dateShort,
+  isUrgent, isReady, within3, ordLabel, statusLabel, isAmberStatus, dueText, dateShort,
   stageOf, DFIELDS, detVal, siteContactOf,
 } from '../lib/orders.js';
 
@@ -66,12 +66,12 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
     all: records.length,
     urgent: records.filter(isUrgent).length,
     awaiting: records.filter((r) => r.emailed_at && !r.reply_at).length,
-    ready: records.filter((r) => r.sendoff_ready).length,
+    ready: records.filter(isReady).length,
   };
   const list = records.filter((r) => {
     if (filter === 'urgent' && !isUrgent(r)) return false;
     if (filter === 'awaiting' && !(r.emailed_at && !r.reply_at)) return false;
-    if (filter === 'ready' && !r.sendoff_ready) return false;
+    if (filter === 'ready' && !isReady(r)) return false;
     if (q) {
       const s = (ordLabel(r) + ' ' + (r.site || '') + ' ' + (r.worksite || '') + ' ' + (r.to || '') + ' ' + (r.materials || '')).toLowerCase();
       if (!s.includes(q.toLowerCase())) return false;
@@ -79,7 +79,7 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
     return true;
   }).sort((a, b) => (isUrgent(b) - isUrgent(a)));
 
-  const chips = [['all', 'All'], ['urgent', 'Urgent'], ['awaiting', 'Awaiting reply'], ['ready', 'Send-off ready']];
+  const chips = [['all', 'All'], ['urgent', 'Urgent'], ['awaiting', 'Awaiting reply'], ['ready', 'Ready to book']];
 
   return (
     <div className="scroll"><div className="container page-anim">
