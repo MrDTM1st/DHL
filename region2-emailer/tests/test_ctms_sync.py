@@ -59,6 +59,19 @@ def test_the_plan_takes_off_moves_and_marks_ready_and_leaves_the_rest():
     assert p["looked"] == ["9100050|05/11/2026", "9100051|05/11/2026", "9100052|06/11/2026", "9100053|06/11/2026"]
 
 
+def test_a_reply_update_ctms_shows_done_comes_off_the_to_do_list():
+    items = [{"id": "t1", "kind": "update", "orders": ["9100080"]},          # Veh Type now filled: done
+             {"id": "t2", "kind": "update", "orders": ["9100081"]},          # cancelled in CTMS: nothing to update
+             {"id": "t3", "kind": "update", "orders": ["9100082"]},          # still open, Veh Type empty: stays
+             {"id": "t4", "kind": "update", "orders": ["9100083"]},          # not looked up: stays
+             {"id": "t5", "kind": "note", "orders": ["9100080"]},            # a note is not this rule's
+             {"id": "t6", "kind": "update", "orders": ["9100080"], "done_at": "2026-11-01 01:40"}]
+    found = {"9100080|": {"lines": [_ln("9100080-1-1", "UNSCHEDULED", "05/11/26")], "veh": {"9100080-1-1": True}},
+             "9100081|10/11/2026": {"lines": [_ln("9100081-1-1", "CANCELLED", "10/11/26")]},
+             "9100082|": {"lines": [_ln("9100082-1-1", "UNSCHEDULED", "06/11/26")], "veh": {"9100082-1-1": False}}}
+    assert C.todo_done(found, items) == ["t1", "t2"]
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

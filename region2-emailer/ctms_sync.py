@@ -88,6 +88,24 @@ def plan(found, records, jobs=()):
     return out
 
 
+def todo_done(found, items):
+    """The CTMS to-do's "update the order from the reply" items CTMS shows are done (his ask 01/11: "you didn't update
+    the to-do list"): the order's open line has its Veh Type filled - his rule 30/10, the details are in - or no line
+    is left UNSCHEDULED at all (booked, or cancelled). Their ids."""
+    out = []
+    for it in items:
+        if it.get("kind") != "update" or it.get("done_at"):
+            continue
+        got = [v for k, v in found.items() for o in it.get("orders") or [] if k.split("|")[0] == str(o)]
+        lines = [ln for g in got for ln in g.get("lines") or []]
+        if not lines:
+            continue
+        if not any(ln.get("status") == OPEN for ln in lines) or any(
+                v for g in got for v in (g.get("veh") or {}).values()):
+            out.append(it["id"])
+    return out
+
+
 def apply(found, at=""):
     """Put the plan on the tracker, under its lock. Returns the plan with what was done."""
     import outlook_gate as gate
@@ -119,6 +137,9 @@ def apply(found, at=""):
     if gone:
         tracker.remember_drops(sorted({str(o) for r in gone for o in r.get("orders") or []}))
     p["booked_orders"] = [" / ".join(r.get("orders") or []) for r in gone]
+    import ctms_todo
+    p["todo_done"] = [it["what"] for it in (ctms_todo.done(i) for i in todo_done(found, ctms_todo.load()["items"]))
+                      if it]
     return p
 
 
@@ -130,7 +151,7 @@ def main(argv):
         data = json.load(f)
     p = apply(data.get("orders") or {}, str(data.get("at") or ""))
     print(json.dumps({"booked": p["booked_orders"], "moved": p["moved"], "veh": p["veh"], "jobs": p["jobs"],
-                      "unknown": sorted(set(p["unknown"]))}))
+                      "unknown": sorted(set(p["unknown"])), "todo_done": p["todo_done"]}))
     return 0
 
 

@@ -1506,7 +1506,9 @@ def main():
                         + ([f"{len(res['moved'])} date(s) moved to CTMS's"] if res["moved"] else []) \
                         + ([f"{ready} with a Veh Type - ready to book"] if ready else []) \
                         + ([f"{len(res['unknown'])} not in CTMS yet ({', '.join(res['unknown'][:4])})"]
-                           if res["unknown"] else [])
+                           if res["unknown"] else []) \
+                        + ([f"{len(res['todo_done'])} CTMS to-do item(s) ticked off - CTMS shows them done"]
+                           if res.get("todo_done") else [])
                     report("done", "CTMS looked up: " + ("; ".join(bits) if bits else "nothing has changed") + ".",
                            tail(out, 6))
             elif action == "haulier_email":

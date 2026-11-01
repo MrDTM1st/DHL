@@ -2932,15 +2932,19 @@ def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
         {"id": "9100033|x", "orders": ["9100033"], "delivery_date": day(30), "kind": "delivery"},    # far off
         {"id": "c|x", "orders": ["9100034"], "delivery_date": "", "kind": "collection"}]}
     S._panel = {"adhocs": [{"id": "adhoc|AH01/11/2026/AB-CD|1", "orders": ["AH01/11/2026/AB-CD"],
-                            "delivery_date": day(2)}], "pins": []}
+                            "delivery_date": day(2)}], "pins": [],
+                # the CTMS to-do's reply updates: looked up too (a filled Veh Type ticks them off), once each
+                "ctms_todo": [{"kind": "update", "orders": ["9100035"]}, {"kind": "update", "orders": ["9100030"]},
+                              {"kind": "note", "orders": ["9100036"]}]}
     try:
         for key in (AGENT, BRIDGE, ""):
             assert call("/api/ctms/check", {}, key=key)[0] == 401
         code, r = call("/api/ctms/check", {})
-        assert code == 200 and r["orders"] == 5 and S._ctms_armed() and S._ctms["armed_for"] == r["id"]
+        assert code == 200 and r["orders"] == 6 and S._ctms_armed() and S._ctms["armed_for"] == r["id"]
         q = S._ctms["queue"][-1]
         assert q["action"] == "ctms_check" and [(o["ref"], o["veh"]) for o in q["orders"]] == [
-            ("9100030", True), ("9100031", False), ("9100032", False), ("9100033", False), ("AH01/11/2026/AB-CD", False)]
+            ("9100030", True), ("9100031", False), ("9100032", False), ("9100033", False), ("AH01/11/2026/AB-CD", False),
+            ("9100035", True)]
         assert q["orders"][0]["key"] == "9100030|" + day(5)
         assert call("/api/ctms/check", {})[0] == 409                     # one look-up at a time
         found = {"9100030|" + day(5): {"lines": []}}
