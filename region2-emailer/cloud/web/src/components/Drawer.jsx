@@ -106,7 +106,7 @@ function coverRequest(r) {
 // and no dashes standing in for punctuation ("no em dashes to Rich", 02/10).
 function teamsText(r, name) {
   const body = coverRequest(r)
-    .replace(/^Hi,\n\nWould you be able to cover the job below;/, `Hi ${name || 'there'}, would you be able to cover the job below?`)
+    .replace(/^Hi,\n+Would you be able to cover the job below;/, `Hi ${name || 'there'}, would you be able to cover the job below?`)
     .replace(/(\d{1,2}:\d{2}) - (\d{1,2}:\d{2})/g, '$1 to $2')
     .replace(/\s*→\s*/g, ' to ')
     .replace(/\s+[—–]\s+/g, ', ')
