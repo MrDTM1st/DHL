@@ -161,14 +161,16 @@ function MyWeek({ week }) {
   const weeks = (week && week.weeks) || [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const days = weeks.flatMap((w) => (w.days || []).map((d) => ({ ...d, at: sheetDay(d.date) })))
+  const days = weeks.flatMap((w) => (w.days || []).map((d) => ({ ...d, at: sheetDay(d.date), wk: w })))
     .filter((d) => d.at && d.at >= today).slice(0, 7);
-  const from = weeks.map((w) => `${w.file || 'wc ' + w.wc}${w.sender ? ` (${w.sender}, ${w.received})` : ''}`).join(' · ');
+  const from = [...new Set(days.map((d) => d.wk))]          // only the sheets the days shown come from
+    .map((w) => `${(w.file || 'wc ' + w.wc).replace(/\.xlsx$/i, '')}`
+      + (w.sender ? ` - ${w.sender.replace(/\s*\(.*\)\s*$/, '')}, ${w.received}` : '')).join(' · ');
   return (
     <div className="card myweek">
       <div className="myweek-head">
         <h3>My week</h3>
-        <span className="s">{weeks.length ? 'From ' + from : 'No Transport Planners sheet for this week or next found in the mailbox yet.'}</span>
+        <span className="myweek-from">{days.length ? 'From ' + from : 'No Transport Planners sheet for this week or next found in the mailbox yet.'}</span>
       </div>
       {days.length > 0 && (
         <div className="myweek-days">
