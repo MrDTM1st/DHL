@@ -202,9 +202,21 @@ function BookedCheck({ status }) {
 function CtmsCheck({ status }) {
   const [pending, setPending] = useState('');      // '' | 'work' (the work PC looking) | 'home' (the map changing)
   const [said, setSaid] = useState('');
+  const [when, setWhen] = useState({});            // the last look-up and the next set time, from the CTMS status
   const pressedAt = useRef('');
   const at = (status && status.at) || '';
   const detail = (status && status.detail) || '';
+
+  // it also looks itself up at 9, 12, 3 and 5 on weekdays: say when it last did and when it next will
+  useEffect(() => {
+    let live = true;
+    const look = () => ctmsStatus(false).then((st) => {
+      if (live) setWhen({ last: st.looked_up && st.looked_up.at, next: st.next_check });
+    }).catch(() => {});
+    look();
+    const t = setInterval(look, 60000);
+    return () => { live = false; clearInterval(t); };
+  }, [pending]);
 
   // the home PC's answer: a status stamped after the work PC answered that says CTMS was looked up
   useEffect(() => {
@@ -253,6 +265,13 @@ function CtmsCheck({ status }) {
         <div className="s" style={{ marginTop: 6 }}>
           {pending === 'work' ? 'The work PC is looking each order up in CTMS - a minute or two…' : said}
           {pending === 'home' && ' Updating the map…'}
+        </div>
+      )}
+      {(when.next || when.last) && (
+        <div className="s" style={{ marginTop: 4, color: 'var(--faint)' }}
+          title="At 9, 12, 3 and 5 on weekdays, once the work PC has been left alone for 3 minutes">
+          {when.last ? 'Last looked up ' + when.last : 'Not looked up yet'}
+          {when.next ? ' · by itself next at ' + when.next : ''}
         </div>
       )}
     </div>

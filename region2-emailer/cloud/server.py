@@ -12,7 +12,7 @@ Same dashboard as the local control plane, hardened for the internet:
     DASH_KEY=... AGENT_KEY=... PORT=8080 python server.py
 """
 import base64, binascii, hashlib, hmac, json, os, re, sys, time, threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "0.0.0.0"
@@ -351,6 +351,102 @@ def _days_to(ddmmyyyy):
     except ValueError:
         return None
     return (when - datetime.now().date()).days
+
+
+# Set-time look-ups (his "Do times and buttons", 01/11): at these UK times on weekdays the map's orders are looked up in
+# CTMS just as "Check CTMS now" does, Look mum, no hands switched on for that look-up alone. The work PC starts one
+# only once it has been left alone CHECK_IDLE minutes - "postponed" otherwise - and it is tried again every
+# CHECK_RETRY seconds until the next time comes round (the last of the day, for CHECK_LAST_FOR).
+CHECK_TIMES = ((9, 0), (12, 0), (15, 0), (17, 0))
+CHECK_IDLE = 3
+CHECK_RETRY = 300
+CHECK_LAST_FOR = 2 * 3600
+_check_slot = {"done": [], "next_try": 0.0, "pending": None}     # pending: (the time's "YYYY-MM-DD HH:MM", command id)
+
+
+def _uk_time(utc):
+    """UK clock time for a UTC one: GMT, or BST from 01:00 GMT on March's last Sunday to October's - Railway runs
+    on UTC, and nothing here needs a timezone database for that."""
+    def last_sunday(month):
+        d = datetime(utc.year, month, 31, 1)
+        return d - timedelta(days=(d.weekday() + 1) % 7)
+    return utc + timedelta(hours=1) if last_sunday(3) <= utc < last_sunday(10) else utc
+
+
+def _uk_now():
+    return _uk_time(datetime.now(timezone.utc).replace(tzinfo=None))
+
+
+def _check_slot_now(uk):
+    """The set time due at UK time `uk`, as "YYYY-MM-DD HH:MM" - None at a weekend, before the first time or after
+    the last's window."""
+    if uk.weekday() >= 5:
+        return None
+    times = [uk.replace(hour=h, minute=m, second=0, microsecond=0) for h, m in CHECK_TIMES]
+    started = [t for t in times if t <= uk]
+    if not started or (started[-1] == times[-1] and (uk - started[-1]).total_seconds() > CHECK_LAST_FOR):
+        return None
+    return started[-1].strftime("%Y-%m-%d %H:%M")
+
+
+def _check_next(uk):
+    """When the next set-time look-up is, in words: "12:00", or "Mon 09:00" past today's last."""
+    for h, m in CHECK_TIMES:
+        t = uk.replace(hour=h, minute=m, second=0, microsecond=0)
+        if t > uk and uk.weekday() < 5:
+            return t.strftime("%H:%M")
+    d = uk + timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d.replace(hour=CHECK_TIMES[0][0], minute=CHECK_TIMES[0][1]).strftime("%a %H:%M")
+
+
+def _ctms_due_check_locked(uk=None, now=None):
+    """Queue the set-time look-up when one is due - the bridge online, nothing of the kind waiting or running, the
+    work PC not set to look only, the try before given its CHECK_RETRY. Returns the command queued, or None."""
+    now = time.time() if now is None else now
+    slot = _check_slot_now(uk or _uk_now())
+    pend = _check_slot["pending"]
+    if pend and not (any(c["id"] == pend[1] for c in _ctms["queue"])
+                     or (_ctms["running"] and _ctms["running"]["id"] == pend[1])):
+        # gone with no answer (expired unpicked, or the bridge restarted mid-run): tried again in a while
+        _check_slot["pending"], _check_slot["next_try"] = None, now + CHECK_RETRY
+        return None
+    if (not slot or slot in _check_slot["done"] or pend or now < _check_slot["next_try"] or not _ctms_online()
+            or _ctms["state"].get("control") is False):
+        return None
+    if any(c["action"] == "ctms_check" for c in _ctms["queue"]) or (
+            _ctms["running"] and _ctms["running"].get("action") == "ctms_check"):
+        return None
+    orders = _check_list_locked()
+    if not orders:
+        _check_slot["done"] = (_check_slot["done"] + [slot])[-20:]
+        return None
+    _ctms["next_id"] += 1
+    cid = _ctms["next_id"]
+    if not _ctms_armed():
+        _ctms["control_until"] = time.time() + 10 * 60
+        _ctms["armed_for"] = cid
+        _ctms_note_locked(f"Look mum, no hands mode switched on for the {slot[-5:]} CTMS look-up - that only.")
+    cmd = {"id": cid, "action": "ctms_check", "orders": orders, "idle": CHECK_IDLE, "by": f"set time {slot[-5:]}",
+           "queued_at": now}
+    _ctms["queue"].append(cmd)
+    _ctms["asked"][cid] = cmd["by"]
+    _check_slot["pending"] = (slot, cid)
+    _ctms_cv.notify_all()
+    return cmd
+
+
+def _check_answered_locked(cid, postponed):
+    """A set-time look-up answered: done for that time - or, the work PC in use, tried again in CHECK_RETRY."""
+    pend = _check_slot["pending"]
+    if not pend or pend[1] != cid:
+        return
+    _check_slot["pending"] = None
+    if postponed:
+        _check_slot["next_try"] = time.time() + CHECK_RETRY
+    else:
+        _check_slot["done"] = (_check_slot["done"] + [pend[0]])[-20:]
 
 
 # "Set up this PC": the work PC's whole setup as one file to double-click, with
@@ -1565,6 +1661,7 @@ class Handler(BaseHTTPRequestHandler):
                     "state": dict(_ctms["state"]),
                     "control": _ctms_control_locked(),
                     "looked_up": _ctms["looked_up"],          # the map's orders, last looked up in CTMS
+                    "next_check": _check_next(_uk_now()),     # ... and when they will be by themselves
                     "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                 "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
                     "running": (dict({k: v for k, v in _ctms["running"].items() if k != "since"},
@@ -1869,6 +1966,7 @@ class Handler(BaseHTTPRequestHandler):
                                           f"{max(1, round((until - time.time()) / 60))} min left, as it was.")
                 _ctms_take_state_locked(data.get("state"))
                 _ctms_sweep_locked()
+                _ctms_due_check_locked()            # a set-time look-up of the map's orders, when one is due
                 # Held open until there is work, or something the bridge has
                 # to know changes (pictures wanted, the switch flipped).
                 deadline = time.time() + wait
@@ -1943,6 +2041,7 @@ class Handler(BaseHTTPRequestHandler):
                                      "pic": bool(payload and payload.get("img"))})
                 if cid in _ctms["importing"] or (cid is not None and _ctms["armed_for"] == cid):
                     _ctms_upload_answered_locked(cid, imported=bool(payload and payload.get("imported")))
+                _check_answered_locked(cid, postponed=bool(payload and payload.get("postponed")))
                 if payload is not None and isinstance(cid, int):
                     held = _ctms["payloads"]
                     held.pop(cid, None)

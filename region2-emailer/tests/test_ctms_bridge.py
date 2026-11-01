@@ -2962,6 +2962,61 @@ def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
         S._queue.clear()
 
 
+def test_set_time_look_ups_come_at_9_12_3_and_5_on_weekdays_wait_for_a_quiet_work_pc_and_retry():
+    fresh()
+    keep = (S._tracker, S._panel, dict(S._check_slot))
+    S._tracker = {"records": [{"id": "9100070|x", "orders": ["9100070"], "kind": "delivery",
+                               "delivery_date": (datetime.now() + timedelta(days=3)).strftime("%d/%m/%Y")}]}
+    S._panel = {}
+    S._check_slot.update(done=[], next_try=0.0, pending=None)
+    mon = datetime(2026, 11, 2, 9, 4)                                   # a Monday, just past nine
+    try:
+        assert S._uk_time(datetime(2026, 7, 1, 8, 0)) == datetime(2026, 7, 1, 9, 0)      # BST
+        assert S._uk_time(datetime(2026, 11, 2, 8, 0)) == datetime(2026, 11, 2, 8, 0)    # GMT
+        assert S._check_next(mon) == "12:00" and S._check_next(datetime(2026, 11, 6, 18, 0)) == "Mon 09:00"
+        with S._lock:
+            S._ctms["seen"] = time.time()                               # the bridge online
+            cmd = S._ctms_due_check_locked(uk=mon)
+            assert cmd and cmd["idle"] == 3 and cmd["by"] == "set time 09:00" and S._ctms["armed_for"] == cmd["id"]
+            assert cmd["orders"][0]["ref"] == "9100070"
+            assert S._ctms_due_check_locked(uk=mon) is None             # one at a time
+        # the work PC in use: switched off again, tried again in five minutes - not before
+        call("/api/ctms/result", {"id": cmd["id"], "action": "ctms_check", "ok": False, "detail": "Not looked up",
+                                  "payload": {"postponed": True}}, key=BRIDGE)
+        assert not S._ctms_armed()
+        with S._lock:
+            S._ctms["queue"].clear()
+            S._ctms["seen"] = time.time()
+            assert S._ctms_due_check_locked(uk=mon, now=time.time() + 60) is None
+            cmd2 = S._ctms_due_check_locked(uk=mon, now=time.time() + S.CHECK_RETRY + 1)
+            assert cmd2 and cmd2["id"] != cmd["id"]
+        call("/api/ctms/result", {"id": cmd2["id"], "action": "ctms_check", "ok": True, "detail": "Looked up"},
+             key=BRIDGE)
+        later = time.time() + 2 * S.CHECK_RETRY
+        with S._lock:
+            S._ctms["queue"].clear()
+            S._ctms["seen"] = time.time()
+            assert S._ctms_due_check_locked(uk=mon.replace(hour=11, minute=30), now=later) is None   # nine is done
+            cmd3 = S._ctms_due_check_locked(uk=mon.replace(hour=12, minute=1), now=later)
+            assert cmd3 and cmd3["by"] == "set time 12:00"
+            # gone unanswered (the bridge restarted mid-run): tried again after the wait
+            S._ctms["queue"].clear()
+            assert S._ctms_due_check_locked(uk=mon.replace(hour=12, minute=2), now=later) is None
+            assert S._check_slot["pending"] is None
+            assert S._ctms_due_check_locked(uk=mon.replace(hour=12, minute=8), now=later + S.CHECK_RETRY + 1)
+            S._ctms["queue"].clear()
+            S._check_slot["pending"] = None
+            assert S._ctms_due_check_locked(uk=datetime(2026, 11, 7, 12, 1), now=later * 2) is None   # Saturday
+            S._ctms["seen"] = 0.0                                                                     # offline
+            assert S._ctms_due_check_locked(uk=mon.replace(hour=15, minute=1), now=later * 2) is None
+        assert "next_check" in call("/api/ctms/status")[1]
+    finally:
+        S._tracker, S._panel = keep[0], keep[1]
+        S._check_slot.clear()
+        S._check_slot.update(keep[2])
+        fresh()
+
+
 def test_closing_presses_only_the_export_tabs_own_close_button():
     class Tabs:
         """Edge's tab strip, as UI Automation hands it: each tab with its close button."""
