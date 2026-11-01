@@ -240,7 +240,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const d = r.details || {};
   const v = (k) => detVal(k, d[k]);
-  const { need, list, leftOff, nearMiss } = recommendFor(r, hauliers, geo);
+  const { need, list, leftOff, nearMiss, notes, checks } = recommendFor(r, hauliers, geo);
   // Who has ALREADY been emailed about this job, keyed by haulier name. Worked
   // out from Sent Items on the home PC, so it counts the ones sent by hand -
   // which is most of them. An order can carry several numbers; any of them
@@ -523,6 +523,17 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
             {need.length ? need.map((n, i) => <span className="needchip" key={i} title={n.any.join(' / ')}>{n.label}</span>)
               : <span className="needchip" style={{ background: 'var(--seg)', color: 'var(--muted)', borderColor: 'var(--line2)' }}>general haulage</span>}
           </div>
+          {notes.length > 0 && (
+            <div className="statusdetail" style={{ margin: '8px 0 0', fontSize: 12.5, color: 'var(--muted)' }}>
+              {notes.map((n) => <div key={n}>{n}</div>)}
+            </div>
+          )}
+          {checks.length > 0 && (
+            <div className="ppcard warn" style={{ marginTop: 10 }}>
+              <b>NOT CERTAIN — CHECK BEFORE BOOKING</b>
+              {checks.map((c) => <div key={c}>{c}</div>)}
+            </div>
+          )}
 
           {pp && (pp.ok ? (
             <div className="ppcard go">

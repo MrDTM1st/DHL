@@ -812,8 +812,9 @@ class Bridge:
     # -- the map's orders looked up in CTMS: booked or not, their dates, the Veh Type (01/11, ctms_orders) --
     def ctms_check(self, cmd, done):
         """Each order the dashboard sends ({ref, date, veh}) searched in Order Summary and its lines read through the
-        Access Bridge - and, for one with veh (still being chased), its open line's card opened just to see whether
-        the Veh Type is filled. Searches and reads only: nothing typed into an order, nothing saved. Order Summary
+        Access Bridge - and, for one with veh (due within a fortnight), its open lines' cards opened (up to four) to
+        see whether the Veh Type is filled and read the weight, which decides rigid or artic on the map. Searches and
+        reads only: nothing typed into an order, nothing saved. Order Summary
         is closed after, so Planning shows as before. What was found goes to the dashboard (/api/ctms/orders), which
         hands it to the home PC to put on the map."""
         orders = [o for o in cmd.get("orders") or [] if isinstance(o, dict) and o.get("ref")][:CHECK_ORDERS]
@@ -868,8 +869,7 @@ class Bridge:
                 stopped, lost = "Order Summary was no longer on the screen", True
                 break
             got = {"lines": [r for r in rows if ctms_orders.belongs(r["ref"], o["ref"])]}
-            line = ctms_orders.line_for(got["lines"], str(o.get("date") or "")) if o.get("veh") else None
-            if line:
+            for line in ctms_orders.open_lines(got["lines"], str(o.get("date") or "")) if o.get("veh") else []:
                 try:
                     run(ctms_orders.search(line["ref"]))            # the line alone: the list's first row
                     one = [r for r in ctms_orders.lines(ctms_jab.read_fields(self.win)) or []
@@ -877,13 +877,18 @@ class Bridge:
                     if one and one[0]["status"] == ctms_orders.OPEN:     # unscheduled: opening it asks nothing
                         run(ctms_orders.open_line(t))
                         bgra, w, h = self._frame()
-                        got["veh"] = {line["ref"]: ctms_orders.veh_filled(bgra, w, h, self.batch.get("off", (0, 0)))}
+                        got.setdefault("veh", {})[line["ref"]] = ctms_orders.veh_filled(
+                            bgra, w, h, self.batch.get("off", (0, 0)))
+                        kg = ctms_orders.card_weight(ctms_jab.read_fields(self.win))
+                        if kg is not None:
+                            got.setdefault("weight", {})[line["ref"]] = kg
                         run(ctms_orders.close_line(t))
                 except Exception as e:
-                    found[o.get("key") or f"{o['ref']}|{o.get('date') or ''}"] = got
-                    stopped, lost = f"looking at {line['ref']}'s Veh Type: {why(e)}", True
+                    stopped, lost = f"looking at {line['ref']}'s card: {why(e)}", True
                     break
             found[o.get("key") or f"{o['ref']}|{o.get('date') or ''}"] = got
+            if lost:
+                break
         closed = False
         if not lost:
             try:
@@ -904,8 +909,10 @@ class Bridge:
                                                                      for r in g["lines"]))
         missing = sum(1 for g in found.values() if not g["lines"])
         vehs = [v for g in found.values() for v in (g.get("veh") or {}).values()]
+        kgs = [v for g in found.values() for v in (g.get("weight") or {}).values()]
         said = (f"Looked up {len(found)} of {len(orders)} order(s) in CTMS: {booked} with no line left to book, "
                 f"{missing} not found" + (f", Veh Type looked at on {len(vehs)} ({sum(vehs)} filled)" if vehs else "")
+                + (f", weight read on {len(kgs)}" if kgs else "")
                 + "." + onward
                 + (" Order Summary closed again." if closed else
                    " Order Summary was left as it is - the picture shows where." if not lost else

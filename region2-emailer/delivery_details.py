@@ -261,9 +261,10 @@ def parse_offloading(text, product_type=None):
     if hiab:
         return "HIAB", HIGH
     if re.match(r"^\s*(yes|y\b|yeah|yep|please|required|req\b)", s):
-        # bare yes -> HIAB by policy; sleepers lean Moffett in the history
-        if product_type == "sleepers":
-            return "MOFFETT", AMBER
+        # bare yes -> HIAB, whatever the load: "if someone says, do we need to bring our own offloading? And then
+        # they say yes, you always default to a HIAB. Not a Moffett. Unless they explicitly say so" - Delali,
+        # 01/11/2026. Sleepers used to lean Moffett here from the history - a guess that sent a sleeper job to
+        # Moffett firms only.
         return "HIAB", HIGH
     return None, AMBER
 

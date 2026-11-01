@@ -5,7 +5,7 @@
 //
 //     node tests/haulier_fit.test.mjs
 import assert from 'node:assert/strict';
-import { recommendFor, needsFor, byDeliveryDate } from '../cloud/web/src/lib/orders.js';
+import { recommendFor, needsFor, byDeliveryDate, jobOf } from '../cloud/web/src/lib/orders.js';
 
 const H = (name, tier, caps, extra = {}) => ({ name, tier, caps, pc: '', no_go: [], ...extra });
 const HAULIERS = [
@@ -147,6 +147,37 @@ test('a firm one capability short but nearer than everyone who fits is named, wi
   // a one-need job: lacking its only need is no fit at all, not a near miss
   const oneNeed = job('60x sleepers', { offloading: { value: 'HIAB' } }, { postcode: 'DD1 1DD' });
   assert.deepEqual(recommendFor(oneNeed, pool.slice(2), geo).nearMiss, []);
+});
+
+test('a HIAB load of 10t or under goes on a rigid by its CTMS weight - rear steer drops, our fleet can take it', () => {
+  const said = { offloading: { value: 'HIAB' }, rear_steer: { value: 'yes' }, artic_access: { value: 'yes' } };
+  const r = job('60x sleepers', said, { ctms_weight: 5100, reply_at: '2026-11-01 10:24' });
+  assert.deepEqual(labels(r), ['rigid hiab']);
+  const res = recommendFor(r, HAULIERS, {});
+  assert.ok(res.list.some((h) => h.name === 'Our Fleet'));
+  assert.ok(res.notes.some((n) => n.includes('5,100 kg') && n.includes('rigid HIAB')));
+  assert.ok(res.notes.some((n) => n.startsWith('Rear steer left off')));
+  assert.deepEqual(res.checks, []);
+  // over 10t it is an artic HIAB and the site's rear steer stands; over 20,280 kg, more than one
+  assert.deepEqual(labels(job('120x sleepers', said, { ctms_weight: 15000 })), ['artic hiab', 'rear steer']);
+  assert.ok(jobOf(job('300x sleepers', said, { ctms_weight: 45000 })).notes[0].includes('more than one artic HIAB'));
+  // a vehicle the site named wins over the weight
+  assert.deepEqual(labels(job('60x sleepers', { ...said, vehicle: { value: 'NR_ARTIC_FL' } }, { ctms_weight: 5100 })),
+    ['artic hiab', 'rear steer']);
+});
+
+test('whatever it could not be sure of goes under "not certain", never passed off as fact', () => {
+  const checks = (details, extra = {}) => recommendFor(job('60x sleepers', details, { reply_at: 'x', ...extra }),
+    HAULIERS, {}).checks;
+  assert.ok(checks({ offloading: { value: 'HIAB' }, rear_steer: { value: 'yes' } })
+    .some((c) => c.startsWith('Weight not read from CTMS yet') && c.includes('rear steer only counts on an artic')));
+  assert.ok(checks({ offloading: { value: 'MOFFETT', confidence: 'amber', raw: 'yes' } })
+    .some((c) => c.includes('not certain')));
+  assert.ok(checks({ offloading: { value: 'BOTH', confidence: 'amber' } }).some((c) => c.includes('which one')));
+  assert.ok(checks({ offloading: { value: 'SITE/NONE' } }).some((c) => c.startsWith('No HIAB')));
+  assert.deepEqual(checks({ offloading: { value: 'HIAB' } }, { ctms_weight: 5100 }), []);
+  // still being chased: nothing is flagged yet - the brief says chasing
+  assert.deepEqual(recommendFor(job('60x sleepers', {}), HAULIERS, {}).checks, []);
 });
 
 test('orders run soonest first, then no date, then past ones most recent first', () => {

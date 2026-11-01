@@ -59,6 +59,18 @@ def test_the_plan_takes_off_moves_and_marks_ready_and_leaves_the_rest():
     assert p["looked"] == ["9100050|05/11/2026", "9100051|05/11/2026", "9100052|06/11/2026", "9100053|06/11/2026"]
 
 
+def test_the_weight_off_the_cards_is_the_deliverys_lines_added_up():
+    recs = [{"id": "9100060|05/11/2026", "orders": ["9100060"], "delivery_date": "05/11/2026"},
+            {"id": "9100061|06/11/2026", "orders": ["9100061"], "delivery_date": "06/11/2026"}]
+    found = {"9100060|05/11/2026": {"lines": [_ln("9100060-1-1", "UNSCHEDULED", "05/11/26"),
+                                              _ln("9100060-2-1", "UNSCHEDULED", "05/11/26")],
+                                    "weight": {"9100060-1-1": 1900.0, "9100060-2-1": 3200.5}},
+             "9100061|06/11/2026": {"lines": [_ln("9100061-1-1", "UNSCHEDULED", "06/11/26")]}}     # card not read
+    p = C.plan(found, recs)
+    assert p["weight"] == {"9100060|05/11/2026": {"kg": 5100.5,
+                                                   "lines": {"9100060-1-1": 1900.0, "9100060-2-1": 3200.5}}}
+
+
 def test_a_reply_update_ctms_shows_done_comes_off_the_to_do_list():
     items = [{"id": "t1", "kind": "update", "orders": ["9100080"]},          # Veh Type now filled: done
              {"id": "t2", "kind": "update", "orders": ["9100081"]},          # cancelled in CTMS: nothing to update

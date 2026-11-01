@@ -1508,7 +1508,9 @@ def main():
                         + ([f"{len(res['unknown'])} not in CTMS yet ({', '.join(res['unknown'][:4])})"]
                            if res["unknown"] else []) \
                         + ([f"{len(res['todo_done'])} CTMS to-do item(s) ticked off - CTMS shows them done"]
-                           if res.get("todo_done") else [])
+                           if res.get("todo_done") else []) \
+                        + ([f"weight read on {len(res['weight'])} - rigid or artic follows it on the map"]
+                           if res.get("weight") else [])
                     report("done", "CTMS looked up: " + ("; ".join(bits) if bits else "nothing has changed") + ".",
                            tail(out, 6))
             elif action == "haulier_email":

@@ -2846,6 +2846,31 @@ def test_order_summary_gives_each_line_whole_and_only_the_orders_own_count():
             i = (y * w + x) * 4
             blank[i:i + 3] = b"\x10\x10\x10"
     assert CO.veh_filled(bytes(blank), w, h) is True and CO.veh_filled(bytes(blank), w, h, (0, 40)) is False
+    # every open line of the day has its card opened - a delivery split over lines weighs them all
+    split = [_line("9100022-1-1", "UNSCHEDULED", "10/11/26 16:01"), _line("9100022-2-1", "UNSCHEDULED", "10/11/26 16:01"),
+             _line("9100022-3-1", "SCHEDULED", "10/11/26 16:01")]
+    assert [r["ref"] for r in CO.open_lines(split, "10/11/2026")] == ["9100022-1-1", "9100022-2-1"]
+    assert CO.open_lines(split, "10/11/2026", 1) == [CO.line_for(split, "10/11/2026")]
+
+
+def _card_read(weights, carried=(), well=()):
+    """An Access Bridge read with an order's card up: its lines' planned Weight cells, then the carried ones after
+    Delivered - and Planning's order well behind it, with a Weight column of its own."""
+    els = [{"r": "internal frame", "nm": "Order details for 11300001", "lv": 1}]
+    els += [{"r": "text", "nm": "Weight", "v": v, "lv": 4} for v in weights]
+    els += [{"r": "text", "nm": "Delivered", "v": "", "lv": 4}]
+    els += [{"r": "text", "nm": "Weight", "v": v, "lv": 4} for v in carried]
+    els += [{"r": "internal frame", "nm": "Planning", "lv": 1}]
+    els += [{"r": "text", "nm": "Weight", "v": v, "lv": 3} for v in well]
+    return {"elements": els}
+
+
+def test_an_orders_weight_is_its_cards_planned_lines_only():
+    assert CO.card_weight(_card_read(["   5,100.00", "", ""], carried=["   5,100.00"], well=["420000"])) == 5100.0
+    assert CO.card_weight(_card_read(["   1,232.00", "      750.50", ""])) == 1982.5
+    assert CO.card_weight(_card_read(["", ""])) is None                          # no weight on the card
+    assert CO.card_weight({"elements": [{"r": "internal frame", "nm": "Planning", "lv": 1},
+                                        {"r": "text", "nm": "Weight", "v": "2000", "lv": 3}]}) is None   # no card up
 
 
 def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_nothing():
@@ -2887,7 +2912,7 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
             ran.clear()
             b.handle(dict({"id": n, "action": "ctms_check", "orders": orders}, **cmd))
             return desk.sent[-1][1]
-        reads[:] = [_summary_read(both), _summary_read(both[:1]),
+        reads[:] = [_summary_read(both), _summary_read(both[:1]), _card_read(["   1,232.00", ""]),
                     _summary_read([_line("AH01/11/2026/AB-CD", "SCHEDULED", "03/11/26 12:00", "261103")])]
         r = go(1)
         assert r["ok"] and "Looked up 2 of 2" in r["detail"] and "Order Summary closed again" in r["detail"], r
@@ -2904,6 +2929,7 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
         assert sent["checked"] == 2 and sent["of"] == 2 and not sent["stopped"]
         assert [x["ref"] for x in got["9100020|10/11/2026"]["lines"]] == ["9100020-2-1", "9100020-1-1"]
         assert got["9100020|10/11/2026"]["veh"] == {"9100020-2-1": True}
+        assert got["9100020|10/11/2026"]["weight"] == {"9100020-2-1": 1232.0} and "weight read on 1" in r["detail"]
         assert "veh" not in got["AH01/11/2026/AB-CD|03/11/2026"]
         # the card already up: straight to it; a read that fails stops the run - what was found still goes home
         seen["os-card"] = True
@@ -2942,8 +2968,9 @@ def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
         code, r = call("/api/ctms/check", {})
         assert code == 200 and r["orders"] == 6 and S._ctms_armed() and S._ctms["armed_for"] == r["id"]
         q = S._ctms["queue"][-1]
+        # due within a fortnight, chased or ready alike: cards opened for the Veh Type and the weight
         assert q["action"] == "ctms_check" and [(o["ref"], o["veh"]) for o in q["orders"]] == [
-            ("9100030", True), ("9100031", False), ("9100032", False), ("9100033", False), ("AH01/11/2026/AB-CD", False),
+            ("9100030", True), ("9100031", True), ("9100032", True), ("9100033", False), ("AH01/11/2026/AB-CD", False),
             ("9100035", True)]
         assert q["orders"][0]["key"] == "9100030|" + day(5)
         assert call("/api/ctms/check", {})[0] == 409                     # one look-up at a time

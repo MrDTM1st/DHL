@@ -251,14 +251,27 @@ function longestMetres(mats) {
 //   * wheelsets: the firms flagged for wheelsets.
 //   * PTS never for ballast (his rule, 30/10); rear steer never on a rigid
 //     (his rule, 30/10) - it is an artic thing.
-// Returns the needs ({label, any[]}) plus what the job is, for the ranking.
+//   * a HIAB load's WEIGHT, off its order card in CTMS (the CTMS look-up reads
+//     it), decides rigid or artic where nobody named a vehicle - his figures
+//     (31/10): a rigid HIAB takes up to 10,000 kg, an artic HIAB 20,280 kg. A
+//     5.1t load the site asked rear steer for goes on a rigid, which never needs
+//     it - and then our fleet's rigids can take it (01/11). No HIAB, or a
+//     Moffett: those limits aren't set, so nothing is decided by weight there.
+// Returns the needs ({label, any[]}) plus what the job is, for the ranking, and
+// what the brief must say: `notes` (facts it went on) and `checks` - anything
+// it could not be sure of. "If you ever need to make a guess, you have to tell
+// me" (Delali, 01/11): a guess is never passed off as fact.
+const RIGID_HIAB_KG = 10000;
+const ARTIC_HIAB_KG = 20280;
+const kgText = (kg) => `${Math.round(kg).toLocaleString('en-GB')} kg`;
+
 export function jobOf(r) {
   const d = r.details || {};
   const mats = ((r.materials || '') + ' ' + (r.product_codes || []).join(' ')).toLowerCase();
   const vi = vehicleInfo((d.vehicle || {}).value || '');
   const off = (d.offloading || {}).value || '';
   const noArtics = (d.artic_access || {}).value === 'no';
-  const rigid = vi.rigid || noArtics;
+  const kg = Number(r.ctms_weight) > 0 ? Number(r.ctms_weight) : null;
   // Mirrors is_loose_ballast() in build_drafts.py: ballast AND loose. The stock
   // code is the last resort and the only one that works on records written
   // before the summary kept the word: the tracker keeps product_codes even when
@@ -283,6 +296,11 @@ export function jobOf(r) {
   const rails = railItems.length > 0;
   const metres = rails ? longestMetres(railItems.join(' ')) : null;
   const wheelsets = /wheelset/.test(mats);
+  // lifted off by our HIAB: said so, or not said on bags and sleepers
+  const lifted = !loose && !stoneblower && !rails && (off === 'HIAB' || (!off && (bagged || sleepers)));
+  const byWeight = !vi.need && !noArtics && lifted && kg !== null
+    ? (kg <= RIGID_HIAB_KG ? 'rigid' : 'artic') : null;
+  const rigid = vi.rigid || noArtics || byWeight === 'rigid';
   const out = [];
   if (loose || stoneblower) out.push(vi.need === RIGID_TIPPER ? RIGID_TIPPER : TIPPER);
   if (rails) {
@@ -293,8 +311,8 @@ export function jobOf(r) {
   if (wheelsets) out.push(WHEELSETS);
   // offloading - what lifts it off at the site
   if (!loose && !stoneblower) {
-    // more than an artic hiab's 20 bags, or an artic named outright
-    const big = (bags > 20 && !noArtics) || vi.artic;
+    // more than an artic hiab's 20 bags, an artic named outright, or over a rigid HIAB's weight
+    const big = (bags > 20 && !noArtics) || vi.artic || byWeight === 'artic';
     const hiab = big ? ARTIC_HIAB : (rigid ? RIGID_HIAB : (rails && !noArtics ? ARTIC_HIAB : HIAB));
     if (off === 'MOFFETT') out.push(MOFFETT);
     else if (off === 'BOTH') out.push(HIAB_OR_MOFFETT);
@@ -303,7 +321,8 @@ export function jobOf(r) {
       if (bagged || sleepers) out.push(big ? ARTIC_FLAT : (rigid ? RIGID_FLAT : ANY_FLAT));
     } else if (bagged || sleepers) out.push(hiab);   // not said: they need our lifting gear
   }
-  if (((d.rear_steer || {}).value) === 'yes' && !rigid) out.push(REAR_STEER);
+  const rearSaid = ((d.rear_steer || {}).value) === 'yes';
+  if (rearSaid && !rigid) out.push(REAR_STEER);
   if (((d.pts || {}).value) === 'yes' && !ballast) out.push(PTS);
   // a stated vehicle is a requirement too - unless a need already there is
   // stricter (an artic hiab is an artic flat with a crane)
@@ -313,7 +332,30 @@ export function jobOf(r) {
   const said = (mats + ' ' + String(r.weight || '') + ' ' + String(r.product || '')).toLowerCase();
   if (!vi.need && /luton|tail\s*-?\s*lift/.test(said)) out.push(SMALL);
   if (!out.length) out.push(GENERAL);
-  return { need: out, rails, metres, rearSteer: out.includes(REAR_STEER) };
+  const notes = [], checks = [];
+  if (byWeight === 'rigid') notes.push(`${kgText(kg)} in CTMS - a rigid HIAB (up to ${kgText(RIGID_HIAB_KG)})`);
+  if (byWeight === 'artic') {
+    notes.push(`${kgText(kg)} in CTMS - ` + (kg > ARTIC_HIAB_KG
+      ? `more than one artic HIAB (${kgText(ARTIC_HIAB_KG)} each) - the booking splits it`
+      : `an artic HIAB (over ${kgText(RIGID_HIAB_KG)})`));
+  }
+  if (rearSaid && rigid) notes.push('Rear steer left off: the site said yes, but this goes on a rigid - a rigid never needs it');
+  // only once the site has answered - before that the whole brief is still being chased
+  if (r.reply_at) {
+    const oc = d.offloading || {};
+    if (off === 'BOTH') checks.push('Offloading: the site named a HIAB and a Moffett - which one?');
+    else if (off && oc.confidence === 'amber') checks.push(`Offloading read as ${off} from "${oc.raw || ''}" - not certain`);
+    if (!off && (bagged || sleepers) && !loose && !stoneblower) checks.push('Offloading not answered - taken as our HIAB');
+    if (lifted && !vi.need && !noArtics && kg === null) {
+      checks.push(`Weight not read from CTMS yet - rigid or artic is open (a rigid HIAB takes up to ${kgText(RIGID_HIAB_KG)})`
+        + (rearSaid ? '; rear steer only counts on an artic' : ''));
+    }
+    if (off === 'MOFFETT') checks.push("The most a Moffett carries isn't set - check the weight fits");
+    if (off === 'SITE/NONE' && (bagged || sleepers) && !vi.need && !noArtics) {
+      checks.push("No HIAB: rigid or artic is open - the most a rigid takes without a HIAB isn't set");
+    }
+  }
+  return { need: out, rails, metres, rearSteer: out.includes(REAR_STEER), kg, byWeight, notes, checks };
 }
 
 // What a job needs from a haulier - [{label, any[]}], each met by ANY of its
@@ -529,7 +571,7 @@ export function recommendFor(r, hauliers, geo) {
     .filter((x) => x.miles !== null && x.miles < bestFit)
     .sort((a, b) => a.miles - b.miles || a.name.localeCompare(b.name))
     .slice(0, 3);
-  return { need, list: out, nw, leftOff, nearMiss };
+  return { need, list: out, nw, leftOff, nearMiss, notes: job.notes, checks: job.checks };
 }
 
 // The map's order list: soonest delivery first (so the urgent ones lead), then

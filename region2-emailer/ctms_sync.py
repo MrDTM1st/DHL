@@ -11,6 +11,8 @@ it found to the home PC as a "ctms_orders" job. His rules decide what it means:
     that day (tracker.move_date) - the dashboard follows CTMS
   * ready: a Veh Type filled on its open line - "if there's a vehicle type in there, it already means that we've
     got all the details for it and we just need to book it in" (30/10) - for details that came by phone
+  * the weight: its open lines' weights off their cards, added up - the map decides rigid or artic from it (his
+    "if you read how much it weighs on the CTMS", 01/11)
 
 An order CTMS does not know (not imported yet, a typo), or one whose open lines are on several other days, is left
 as it is. Runs as its own process under the tracker's lock, so a reply check saving at the same moment can never
@@ -54,10 +56,11 @@ def judge(lines, date):
 
 
 def plan(found, records, jobs=()):
-    """What to change, from the bridge's answer `found` ({"ref|date": {"lines": [...], "veh": {ref: bool}}}):
-    {"booked": [record ids], "moved": [(record id, new date)], "veh": {record id: bool}, "jobs": [job ids booked],
-    "unknown": [orders CTMS does not know]}. `jobs`: the map's ad hocs and pins, booked or left alone."""
-    out = {"booked": [], "moved": [], "veh": {}, "jobs": [], "unknown": [], "looked": []}
+    """What to change, from the bridge's answer `found` ({"ref|date": {"lines": [...], "veh": {ref: bool},
+    "weight": {ref: kg}}}): {"booked": [record ids], "moved": [(record id, new date)], "veh": {record id: bool},
+    "weight": {record id: {"kg", "lines"}}, "jobs": [job ids booked], "unknown": [orders CTMS does not know]}.
+    `jobs`: the map's ad hocs and pins, booked or left alone."""
+    out = {"booked": [], "moved": [], "veh": {}, "weight": {}, "jobs": [], "unknown": [], "looked": []}
     for r in records:
         if r.get("kind") == "collection" or not r.get("orders"):
             continue
@@ -79,6 +82,9 @@ def plan(found, records, jobs=()):
         vehs = [v for g in got for v in (g.get("veh") or {}).values()]
         if vehs:
             out["veh"][r["id"]] = any(vehs)
+        kgs = {ref: kg for g in got for ref, kg in (g.get("weight") or {}).items()}
+        if kgs:
+            out["weight"][r["id"]] = {"kg": round(sum(kgs.values()), 2), "lines": kgs}
     for j in jobs:
         date = str(j.get("delivery_date") or "").strip()
         got = [found[k] for k in (f"{o}|{date}" for o in j.get("orders") or []) if k in found]
@@ -130,6 +136,9 @@ def apply(found, at=""):
     for rid, filled in p["veh"].items():
         if rid in by_id:
             by_id[rid]["ctms_veh"] = filled
+    for rid, w in p["weight"].items():
+        if rid in by_id:
+            by_id[rid]["ctms_weight"], by_id[rid]["ctms_weight_lines"] = w["kg"], w["lines"]
     for rid, new in p["moved"]:                 # last: a move changes the record's id
         if rid in by_id and any(r is by_id[rid] for r in d["records"]):
             tracker.move_date(d, by_id[rid], new, "CTMS")
@@ -150,7 +159,8 @@ def main(argv):
     with open(argv[2], encoding="utf-8") as f:
         data = json.load(f)
     p = apply(data.get("orders") or {}, str(data.get("at") or ""))
-    print(json.dumps({"booked": p["booked_orders"], "moved": p["moved"], "veh": p["veh"], "jobs": p["jobs"],
+    print(json.dumps({"booked": p["booked_orders"], "moved": p["moved"], "veh": p["veh"],
+                      "weight": {k: v["kg"] for k, v in p["weight"].items()}, "jobs": p["jobs"],
                       "unknown": sorted(set(p["unknown"])), "todo_done": p["todo_done"]}))
     return 0
 

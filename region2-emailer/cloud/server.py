@@ -315,13 +315,14 @@ def _ctms_args(action, data):
 
 _CHECK_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.-]{2,39}")       # an NR order, an ad hoc's AH ref
 _DDMMYYYY = re.compile(r"\d{2}/\d{2}/\d{4}")
-_CHECK_VEH_DAYS = 14        # an order still being chased has its Veh Type looked at when it is due within this
+_CHECK_VEH_DAYS = 14        # an order due within this has its open lines' cards opened: Veh Type and weight
 
 
 def _check_list_locked():
     """The map's orders as the CTMS look-up takes them - one {key, ref, date, veh} for each order of each tracked
-    delivery, ad hoc and hand-pinned order (key: ref|date, how the home PC matches the answers back). veh: still
-    being chased and due within a fortnight - only then is its card opened, for a Veh Type filled after a call."""
+    delivery, ad hoc and hand-pinned order (key: ref|date, how the home PC matches the answers back). veh: due within
+    a fortnight - only then are its open lines' cards opened, for a Veh Type filled after a call and the weight that
+    decides rigid or artic (his "read how much it weighs on the CTMS", 01/11) - chased or ready alike."""
     out, keys = [], set()
 
     def add(ref, date, veh):
@@ -333,11 +334,10 @@ def _check_list_locked():
     for r in _tracker.get("records") or []:
         if r.get("kind") == "collection":
             continue
-        ready = bool(r.get("reply_at")) and isinstance(r.get("missing"), list) and not r["missing"]
         days = _days_to(r.get("delivery_date"))
         soon = days is None or 0 <= days <= _CHECK_VEH_DAYS
         for o in r.get("orders") or []:
-            add(o, r.get("delivery_date"), not ready and soon)
+            add(o, r.get("delivery_date"), soon)
     for r in list(_panel.get("adhocs") or []) + list(_panel.get("pins") or []):
         for o in r.get("orders") or []:
             add(o, r.get("delivery_date"), False)

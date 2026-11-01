@@ -139,17 +139,49 @@ def day(v):
     return f"{m.group(1)}/{m.group(2)}/20{m.group(3)}" if m else ""
 
 
-def line_for(rows, date):
-    """The open line to look at for a delivery due `date` (dd/mm/yyyy): that day's own - none when that day's lines
-    are all scheduled, booked already - else, CTMS having no line that day (the delivery moved) and every open line
-    on one other day, that day's first. None when nothing is open, or there is no telling which."""
+def open_lines(rows, date, most=4):
+    """The open lines whose cards are opened for a delivery due `date` (dd/mm/yyyy) - for the Veh Type and the
+    weight: that day's own - none when that day's lines are all scheduled, booked already - else, CTMS having no
+    line that day (the delivery moved) and every open line on one other day, that day's. [] when nothing is open, or
+    there is no telling which. At most `most`, by ref."""
     mine = [r for r in rows if day(r.get("deliver_by")) == date]
     open_ = sorted((r for r in (mine or rows) if r.get("status") == OPEN), key=lambda r: r["ref"])
     if mine:
-        return open_[0] if open_ else None
+        return open_[:most]
     if open_ and len({day(r.get("deliver_by")) for r in open_}) == 1:
-        return open_[0]
-    return None
+        return open_[:most]
+    return []
+
+
+def line_for(rows, date):
+    """The first of open_lines - the one line to look at for a delivery due `date` - or None."""
+    got = open_lines(rows, date, 1)
+    return got[0] if got else None
+
+
+def card_weight(fields):
+    """The open order's weight in kg from an Access Bridge read: its product lines' planned Weight cells added up.
+    The card's own window only ("Order details for ..."): Planning's order well has a Weight column of its own, and
+    the card's second Weight column, after Delivered, is what was carried. None when the card shows no weight."""
+    els = (fields or {}).get("elements") or []
+    i0 = next((i for i, e in enumerate(els) if e.get("r") == "internal frame"
+               and str(e.get("nm") or "").startswith("Order details for")), None)
+    if i0 is None:
+        return None
+    lv0, total, seen = els[i0].get("lv", 0), 0.0, False
+    for e in els[i0 + 1:]:
+        if e.get("lv", 0) <= lv0:
+            break
+        if e.get("r") != "text":
+            continue
+        if e.get("nm") == "Delivered":
+            break                       # the carried columns start here
+        if e.get("nm") == "Weight":
+            try:
+                total, seen = total + float(str(e.get("v") or "").replace(",", "").strip()), True
+            except ValueError:
+                pass                    # an empty row
+    return round(total, 2) if seen else None
 
 
 def veh_filled(bgra, w, h, off=(0, 0)):
