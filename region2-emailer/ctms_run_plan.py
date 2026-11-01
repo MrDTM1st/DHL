@@ -11,8 +11,10 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
                        Rear steer required - W3W, no commas
              services  HIAB or MOFFETT when the site needs ours - always in Services, never a vehicle type ("whenever
                        we're adding a HIAB or a Moffett, we do it in the services tab", his rule 01/11); rear steer
-                       on an artic only; PTS never on ballast
-             veh type  as stated, else by the CTMS weight - a HIAB load of 10,000 kg or less goes on a rigid. Only
+                       on an artic only; PTS only ever on rails ("PTS is only for Rails", his rule 01/11)
+             veh type  as stated, else by the weight - bagged ballast's bags in tonnes ("if it's 60 bags of ballast,
+                       it will always be 60 tons", his 01/11), else CTMS's - a HIAB load of 10,000 kg or less goes on a
+                       rigid. Only
                        ever NR_Rigid (Up to 40ft) or NR_40ft Artic Flatbed - never RIGID MOFFETT and the like (his
                        rule 01/11). A Moffett job goes on a 40ft artic ("Moffetts are usually on 40ft artics", his
                        01/11) - picked only when the site takes no artics
@@ -35,6 +37,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LOOKED_UP = os.path.join(HERE, "_ctms_orders.json")
 OPEN = "UNSCHEDULED"
 RIGID_HIAB_KG = 10000
+BAG_KG = 1000                      # a bag of ballast is a tonne, always (his 01/11)
 OFFLOADING = ["HIAB", "MOFFETT", "SITE/NONE"]
 YES_NO = ["yes", "no"]
 VEHICLES = ["rigid", "artic"]
@@ -97,6 +100,27 @@ def _vehicle_said(v):
     if re.search(r"rig|7\.5|18\s*t|26\s*t|transit|van", s):
         return "rigid"
     return ""
+
+
+def ballast_bags(rec):
+    """The 1 t bags of ballast an order is, when that is all it is - none loose, nothing else on it - so their count
+    is its weight in tonnes; 0 otherwise (an aggregate bag's weight isn't known)."""
+    mats = str(rec.get("materials") or "")
+    if re.search(r"loose|stone\s*-?\s*blower", mats, re.I) or any(
+            str(c).strip().endswith("100500/001") for c in rec.get("product_codes") or []):    # the loose stock code
+        return 0
+    n = 0
+    for part in (p for p in re.split(r"[,;]", mats) if p.strip()):
+        m = re.match(r"\s*(\d+)\s*x\s*.*\bballast\b", part, re.I)
+        if not m:
+            return 0
+        n += int(m.group(1))
+    return n
+
+
+def is_rails(rec):
+    """Rails on the order (S&C with them) - the only loads PTS is ever for."""
+    return bool(re.search(r"\brails?\b|s&c|switch|crossing", str(rec.get("materials") or ""), re.I))
 
 
 def plan_note(it):
@@ -165,23 +189,23 @@ def plan_update(it, rec, found):
     if off not in OFFLOADING:
         off = doubt("offloading", "Offloading", ov.get("raw") or ov.get("value"), OFFLOADING,
                     "Both named - which one?" if ov.get("value") == "BOTH" else "Not certain what they need")
-    mats = (str(rec.get("materials") or "") + " " + " ".join(rec.get("product_codes") or [])).lower()
-    ballast = bool(re.search(r"ballast|aggregate|stone\s*-?\s*blower", mats))
     rv = _field(d, "rear_steer")
     rear = answers.get("rear_steer") or (rv.get("value") if rv.get("confidence") in ("high", None) else None)
     if rear not in YES_NO:
         rear = doubt("rear_steer", "Rear steer", rv.get("raw") or rv.get("value"), YES_NO, "Not certain")
     pv = _field(d, "pts")
     pts = answers.get("pts") or (pv.get("value") if pv.get("confidence") in ("high", None) else None)
-    if ballast:
+    if not is_rails(rec):
         pts = "no"
         if pv.get("value") == "yes":
-            explain.append("PTS left off: a ballast order never gets it (your rule)")
+            explain.append("PTS left off: PTS is only for rails (your rule)")
     elif pts not in YES_NO:
         pts = doubt("pts", "PTS", pv.get("raw") or pv.get("value"), YES_NO, "Not certain")
-    # -- the vehicle: as stated, else by the CTMS weight
+    # -- the vehicle: as stated, else by the weight - bagged ballast's bags in tonnes, else CTMS's
     veh = answers.get("veh") or _vehicle_said(_field(d, "vehicle").get("value"))
-    kg = rec.get("ctms_weight")
+    bags = ballast_bags(rec)
+    kg = bags * BAG_KG or rec.get("ctms_weight")
+    weighs = f"{bags} bags of ballast at 1 t each - {bags * BAG_KG:,} kg" if bags else f"{float(kg or 0):,.0f} kg in CTMS"
     no_artics = _field(d, "artic_access").get("value") == "no"
     if not veh:
         if off == "MOFFETT":
@@ -194,12 +218,11 @@ def plan_update(it, rec, found):
                 explain.append("A Moffett job - on a 40ft artic (Moffetts usually are, your rule)")
         elif off == "HIAB" and kg:
             veh = "rigid" if float(kg) <= RIGID_HIAB_KG else "artic"
-            explain.append(f"{float(kg):,.0f} kg in CTMS - " + ("a rigid HIAB (up to 10,000 kg)" if veh == "rigid"
-                                                                 else "an artic HIAB (over 10,000 kg)"))
+            explain.append(f"{weighs} - " + ("a rigid HIAB (up to 10,000 kg)" if veh == "rigid"
+                                             else "an artic HIAB (over 10,000 kg)"))
             if veh == "artic" and no_artics:
                 veh = doubt("veh", "Vehicle", _field(d, "artic_access").get("raw"), VEHICLES,
-                            f"{float(kg):,.0f} kg in CTMS - over a rigid HIAB's 10,000 kg - but the site takes "
-                            "no artics")
+                            f"{weighs} - over a rigid HIAB's 10,000 kg - but the site takes no artics")
         elif no_artics and (not kg or float(kg) <= RIGID_HIAB_KG):
             veh = "rigid"
             explain.append("No artic access - a rigid")
@@ -208,13 +231,12 @@ def plan_update(it, rec, found):
                         "or pick")
         elif off == "SITE/NONE":
             veh = doubt("veh", "Vehicle", "", VEHICLES,
-                        (f"{float(kg):,.0f} kg in CTMS - " if kg else "") + "no HIAB: the most a rigid takes "
-                        "without one isn't set")
+                        (f"{weighs} - " if kg else "") + "no HIAB: the most a rigid takes without one isn't set")
         # offloading not settled yet: the vehicle waits for it
     if veh:
         s["veh"] = veh
     # -- services: HIAB or MOFFETT when ours is needed (Services, never a vehicle type), rear steer on an artic only,
-    #    PTS never on ballast
+    #    PTS only on rails
     if off in OFFLOADING and rear in YES_NO and pts in YES_NO and veh:
         s["services"] = {"HIAB": off == "HIAB", "MOFFETT": off == "MOFFETT",
                          "REAR STEER": rear == "yes" and veh == "artic", "PTS": pts == "yes"}

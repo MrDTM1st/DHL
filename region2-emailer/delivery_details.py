@@ -586,9 +586,9 @@ LABELS = {"date": "delivery date", "time": "delivery time", "offloading": "offlo
 
 def missing(details, product_type=None):
     """What's still needed - so the chaser asks for exactly these, instead of
-    'can I get a reply?'. PTS is only chased on RAIL orders (Delali's rule),
-    but it is never assumed on any order."""
-    need = list(REQUIRED) + (["pts"] if product_type == "rails" else [])
+    'can I get a reply?'. PTS is only chased on RAIL orders (S&C with them) -
+    "PTS is only for Rails" (Delali's rule) - but it is never assumed on any order."""
+    need = list(REQUIRED) + (["pts"] if product_type in ("rails", "S&C") else [])
     out = []
     for k in need:
         v = details.get(k) or {}

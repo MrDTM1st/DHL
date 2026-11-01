@@ -77,6 +77,12 @@ def test_the_senders_name_reads_like_a_name():
     assert D.sender_name("") is None
 
 
+def test_pts_is_only_chased_on_rails():
+    assert "PTS" in D.missing({}, "rails") and "PTS" in D.missing({}, "S&C")
+    for kind in ("ballast", "loose ballast", "sleepers", None):
+        assert "PTS" not in D.missing({}, kind), kind
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

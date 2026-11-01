@@ -113,10 +113,32 @@ def test_what_cannot_be_typed_safely_is_left_for_him():
     assert p["status"] == "yours"
 
 
-def test_ballast_never_gets_pts():
-    rec = dict(_rec("9100081", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials="10x 1t bags of ballast")
-    p = P.plan([_item("9100081")], [rec], _found("9100081", "05/11/2026"))[0]
-    assert p["set"]["services"]["PTS"] is False and any("ballast" in e for e in p["explain"])
+def test_pts_is_only_ever_for_rails():
+    for mats in ("10x 1t bags of ballast", "60x sleepers"):
+        rec = dict(_rec("9100081", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials=mats)
+        p = P.plan([_item("9100081")], [rec], _found("9100081", "05/11/2026"))[0]
+        assert p["set"]["services"]["PTS"] is False and "PTS left off: PTS is only for rails (your rule)" in p["explain"]
+        rec = dict(_rec("9100081", "05/11/2026", pts={"value": None}), materials=mats)   # not asked: nothing to doubt
+        assert not any(c["field"] == "pts" for c in P.plan([_item("9100081")], [rec],
+                                                            _found("9100081", "05/11/2026"))[0]["checks"])
+    rec = dict(_rec("9100084", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials="2x rails")
+    assert P.plan([_item("9100084")], [rec], _found("9100084", "05/11/2026"))[0]["set"]["services"]["PTS"] is True
+    rec = dict(_rec("9100084", "05/11/2026", pts={"value": None, "raw": ""}), materials="2x rails")
+    assert any(c["field"] == "pts" for c in P.plan([_item("9100084")], [rec], _found("9100084", "05/11/2026"))[0]["checks"])
+
+
+def test_bagged_ballast_weighs_a_tonne_a_bag_whatever_ctms_says():
+    rec = dict(_rec("9100085", "05/11/2026"), materials="60x ballast", product_codes=["0057/100500/002"],
+               ctms_weight=None)
+    p = P.plan([_item("9100085")], [rec], _found("9100085", "05/11/2026"))[0]
+    assert p["set"]["veh"] == "artic" and p["set"]["services"]["REAR STEER"] is True, p
+    assert "60 bags of ballast at 1 t each - 60,000 kg - an artic HIAB (over 10,000 kg)" in p["explain"]
+    rec = dict(rec, materials="8x ballast", ctms_weight=30000)
+    assert P.plan([_item("9100085")], [rec], _found("9100085", "05/11/2026"))[0]["set"]["veh"] == "rigid"
+    assert P.ballast_bags({"materials": "9x ballast, 7x aggregate"}) == 0         # an aggregate bag isn't known
+    assert P.ballast_bags({"materials": "100x loose ballast"}) == 0
+    assert P.ballast_bags({"materials": "80x ballast", "product_codes": ["0057/100500/001"]}) == 0   # loose stock
+    assert P.ballast_bags({"materials": "10x 1t bags of ballast"}) == 10
 
 
 def test_without_a_weight_the_vehicle_is_asked_not_assumed():

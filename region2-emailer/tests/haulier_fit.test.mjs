@@ -42,12 +42,28 @@ test('bagged ballast never goes to a tipper-only or log-grab firm', () => {
   assert.ok(!got.includes('Tipper Only Ltd') && !got.includes('Log Grab Co') && !got.includes('Curtain Co'), got.join());
 });
 
-test('over 20 bags is artic hiabs - 20 or fewer, either size', () => {
+test('a bag of ballast is a tonne: 10 or fewer a rigid hiab, more an artic hiab', () => {
   assert.deepEqual(labels(job('72x ballast')), ['artic hiab']);
   assert.ok(!names(job('72x ballast')).includes('Rigid Hiab Co'));
-  assert.deepEqual(labels(job('12x ballast')), ['rigid or artic hiab']);
-  assert.ok(names(job('12x ballast')).includes('Rigid Hiab Co'));
+  assert.deepEqual(labels(job('12x ballast')), ['artic hiab']);                  // 12 t: over a rigid's 10 t
+  assert.ok(!names(job('12x ballast')).includes('Rigid Hiab Co'));
+  assert.deepEqual(labels(job('8x ballast')), ['rigid hiab']);
+  assert.deepEqual(labels(job('10x 1t bags of ballast')), ['rigid hiab']);
+  // the bags are the weight, whatever CTMS says; with aggregate on it they aren't, so over 20 bags is artics
+  assert.deepEqual(labels(job('8x ballast', {}, { ctms_weight: 30000 })), ['rigid hiab']);
   assert.deepEqual(labels(job('15x ballast, 7x aggregate')), ['artic hiab']);   // 22 bags
+  assert.deepEqual(labels(job('9x ballast, 7x aggregate')), ['rigid or artic hiab']);
+});
+
+test('60 bags of ballast is 60 tonnes - nothing left uncertain about rigid or artic', () => {
+  const said = { offloading: { value: 'HIAB' }, artic_access: { value: 'yes' }, rear_steer: { value: 'yes' },
+    pts: { value: 'yes' } };
+  const r = job('60x ballast', said, { product_codes: ['0057/100500/002'], reply_at: '2026-11-01 16:20' });
+  const res = recommendFor(r, HAULIERS, {});
+  assert.deepEqual(labels(r), ['artic hiab', 'rear steer']);                     // no PTS: it isn't rails
+  assert.deepEqual(res.checks, []);
+  assert.ok(res.notes.some((x) => x.startsWith('60 bags of ballast at 1 t each - 60,000 kg - more than one artic HIAB')),
+    res.notes.join(' | '));
 });
 
 test('loose ballast and stoneblower stone are tipped', () => {
@@ -83,10 +99,12 @@ test('our fleet is left off night and weekend work, and says why', () => {
   assert.deepEqual(res.leftOff, [{ name: 'Our Fleet', why: 'night work' }]);
 });
 
-test('a rigid never gets rear steer; ballast never gets PTS', () => {
+test('a rigid never gets rear steer; PTS is only ever for rails', () => {
   assert.ok(!labels(job('12x sleepers', { rear_steer: { value: 'yes' }, artic_access: { value: 'no' } })).includes('rear steer'));
   assert.ok(labels(job('12x sleepers', { rear_steer: { value: 'yes' } })).includes('rear steer'));
   assert.ok(!labels(job('12x ballast', { pts: { value: 'yes' } })).includes('PTS'));
+  assert.ok(!labels(job('12x sleepers', { pts: { value: 'yes' } })).includes('PTS'));
+  assert.ok(labels(job('2x rails', { pts: { value: 'yes' } })).includes('PTS'));
 });
 
 test('vehicle codes name the sheet\'s own vehicles', () => {

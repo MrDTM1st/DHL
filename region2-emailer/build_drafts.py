@@ -74,6 +74,16 @@ QUESTIONS = """    Date and time of delivery?
     Is rear steer required?
     Does the driver need PTS (Only required if within 3m of line)?
     What3Words Location?"""
+PTS_QUESTION = "    Does the driver need PTS (Only required if within 3m of line)?\n"
+RAIL_TYPES = ("rails", "S&C")      # product_type()s PTS is ever asked for
+
+
+def questions(items):
+    """The details asked for, items = [(qty, description)]: the PTS question only when a rail is on the order -
+    "PTS is only for Rails ... we only send out the PTS question when we're asking for Rails" (his rule 01/11)."""
+    if any(product_type(desc) in RAIL_TYPES for _, desc in items):
+        return QUESTIONS
+    return QUESTIONS.replace(PTS_QUESTION, "")
 
 SIGNATURE = """Kind regards
 
@@ -157,9 +167,10 @@ def _bodies(name, items, dd, pos=None):
         line_h = (f"I've got the following available on {dd}:<br><br>"
                   + "".join(f"&nbsp;&nbsp;&nbsp;&nbsp;{q}x {_html.escape(pr)}<br>" for q, pr in items)
                   + f"<br>{ask}")
-    message = f"{greet}\n\n{top_t}{line_t}\n\n{QUESTIONS}"
+    qs = questions(items)
+    message = f"{greet}\n\n{top_t}{line_t}\n\n{qs}"
     text = f"{message}\n\n\n{SIGNATURE}"
-    q_html = _html.escape(QUESTIONS).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
+    q_html = _html.escape(qs).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
     html = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
             f"{greet_h}<br><br>{top_h}{line_h}<br><br>{q_html}<br><br>{SIGNATURE_HTML}</div>")
     return text, html, message

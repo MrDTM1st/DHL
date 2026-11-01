@@ -226,6 +226,22 @@ function bagsIn(mats) {
   return n;
 }
 
+// Bagged ballast weighs its bag count in tonnes: "if it's 60 bags of ballast,
+// it will always be 60 tons" (Delali, 01/11). The bags of ballast on an order
+// that is nothing else - 0 when anything else is on it (an aggregate bag's
+// weight isn't known), so its weight then comes from CTMS.
+const BAG_KG = 1000;
+function ballastBags(materials) {
+  const parts = String(materials || '').split(/[,;]/).filter((p) => p.trim());
+  let n = 0;
+  for (const p of parts) {
+    const m = p.match(/^\s*(\d+)\s*x\s*.*\bballast\b/i);
+    if (!m) return 0;
+    n += +m[1];
+  }
+  return n;
+}
+
 // The longest length named in the materials, in metres ("18.288m", "36 m",
 // "60ft"), or null.
 function longestMetres(mats) {
@@ -249,10 +265,12 @@ function longestMetres(mats) {
 //   * rails and S&C: the Rail / S&C fleet. Over 60ft (18.3m) only a trombone
 //     takes them.
 //   * wheelsets: the firms flagged for wheelsets.
-//   * PTS never for ballast (his rule, 30/10); rear steer never on a rigid
-//     (his rule, 30/10) - it is an artic thing.
-//   * a HIAB load's WEIGHT, off its order card in CTMS (the CTMS look-up reads
-//     it), decides rigid or artic where nobody named a vehicle - his figures
+//   * PTS only ever for rails (S&C with them) - "PTS is only for Rails" (his
+//     rule, 01/11); rear steer never on a rigid (his rule, 30/10) - it is an
+//     artic thing.
+//   * a HIAB load's WEIGHT - bagged ballast's bag count in tonnes, else off its
+//     order card in CTMS (the CTMS look-up reads it) - decides rigid or artic
+//     where nobody named a vehicle - his figures
 //     (31/10): a rigid HIAB takes up to 10,000 kg, an artic HIAB 20,280 kg. A
 //     5.1t load the site asked rear steer for goes on a rigid, which never needs
 //     it - and then our fleet's rigids can take it (01/11). No HIAB, or a
@@ -271,7 +289,6 @@ export function jobOf(r) {
   const vi = vehicleInfo((d.vehicle || {}).value || '');
   const off = (d.offloading || {}).value || '';
   const noArtics = (d.artic_access || {}).value === 'no';
-  const kg = Number(r.ctms_weight) > 0 ? Number(r.ctms_weight) : null;
   // Mirrors is_loose_ballast() in build_drafts.py: ballast AND loose. The stock
   // code is the last resort and the only one that works on records written
   // before the summary kept the word: the tracker keeps product_codes even when
@@ -282,9 +299,12 @@ export function jobOf(r) {
   const looseCode = (r.product_codes || []).some((c) => String(c).trim().endsWith('100500/001'));
   const stoneblower = /stone\s*-?\s*blower/.test(mats);
   const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats)) || looseCode;
-  const ballast = /ballast|aggregate/.test(mats) || stoneblower;
   const bagged = !loose && !stoneblower && /ballast|aggregate|\bbags?\b/.test(mats);
   const bags = bagged ? bagsIn(mats) : 0;
+  // the load's weight: bagged ballast's bags in tonnes ("always"), else what CTMS says
+  const bagKg = bagged ? ballastBags(r.materials) * BAG_KG : 0;
+  const kg = bagKg || (Number(r.ctms_weight) > 0 ? Number(r.ctms_weight) : null);
+  const whence = () => (bagKg ? `${bagKg / BAG_KG} bags of ballast at 1 t each - ${kgText(kg)}` : `${kgText(kg)} in CTMS`);
   // each line on its own: a sleeper's stock line can name the rail it is for
   // ("... BASEPLATE FOR INCLINED CEN56 RAIL", "GUARD RAIL SLEEPER", "SWITCH
   // BEARER") and is still a sleeper
@@ -323,7 +343,7 @@ export function jobOf(r) {
   }
   const rearSaid = ((d.rear_steer || {}).value) === 'yes';
   if (rearSaid && !rigid) out.push(REAR_STEER);
-  if (((d.pts || {}).value) === 'yes' && !ballast) out.push(PTS);
+  if (((d.pts || {}).value) === 'yes' && rails) out.push(PTS);
   // a stated vehicle is a requirement too - unless a need already there is
   // stricter (an artic hiab is an artic flat with a crane)
   if (vi.need && !out.some((n) => n.any.every((c) => vi.need.any.includes(c)))) out.push(vi.need);
@@ -333,9 +353,9 @@ export function jobOf(r) {
   if (!vi.need && /luton|tail\s*-?\s*lift/.test(said)) out.push(SMALL);
   if (!out.length) out.push(GENERAL);
   const notes = [], checks = [];
-  if (byWeight === 'rigid') notes.push(`${kgText(kg)} in CTMS - a rigid HIAB (up to ${kgText(RIGID_HIAB_KG)})`);
+  if (byWeight === 'rigid') notes.push(`${whence()} - a rigid HIAB (up to ${kgText(RIGID_HIAB_KG)})`);
   if (byWeight === 'artic') {
-    notes.push(`${kgText(kg)} in CTMS - ` + (kg > ARTIC_HIAB_KG
+    notes.push(`${whence()} - ` + (kg > ARTIC_HIAB_KG
       ? `more than one artic HIAB (${kgText(ARTIC_HIAB_KG)} each) - the booking splits it`
       : `an artic HIAB (over ${kgText(RIGID_HIAB_KG)})`));
   }
