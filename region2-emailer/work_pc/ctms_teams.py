@@ -82,12 +82,52 @@ def windows():
     return out
 
 
-def _focused_box(s):
-    """The element with the keyboard focus -> (element, control type, name, value)."""
+BOX_WORDS = ("type a message", "type a new message", "type your message")
+FIND_NODES = 6000                    # UI Automation elements looked at, at most, for the box and the Send button
+
+
+def _focused(s):
+    """(control type, name) of what has the keyboard focus - for saying what was there instead."""
     el = s._get(s.uia, 8)                                       # IUIAutomation::GetFocusedElement
-    if not el:
-        return None, 0, "", ""
-    return el, s.control_type(el), s.name(el), _value(s, el)
+    return (s.control_type(el), s.name(el)) if el else (0, "")
+
+
+def is_box(name):
+    return str(name or "").strip().lower().startswith(BOX_WORDS)
+
+
+def is_send(name):
+    """Teams' own Send button - "Send" or "Send (Ctrl+Enter)" - never "Send feedback" and the like."""
+    n = str(name or "").strip().lower()
+    return n == "send" or n.startswith("send (")
+
+
+def find(s, hwnd, match, kinds=(), cap=FIND_NODES):
+    """The first element in Teams' window whose name `match` passes (and of one of `kinds`, if given), walking the
+    window breadth first -> (element or None, [names of the edit boxes and buttons seen])."""
+    seen, level, names = 0, [s.element(hwnd)], []
+    while level and seen < cap:
+        deeper = []
+        for el in level:
+            for child in s.children(el):
+                seen += 1
+                kind = s.control_type(child)
+                if kind in BOX_TYPES + (50000,):              # edit boxes, documents and buttons: named back
+                    nm = s.name(child)
+                    if nm and len(names) < 40:
+                        names.append(nm[:60])
+                    if (not kinds or kind in kinds) and match(nm):
+                        return child, names
+                deeper.append(child)
+                if seen >= cap:
+                    break
+        level = deeper
+    return None, names
+
+
+def _set_focus(el):
+    from ctms_tabs import _fn
+    _fn(el, 3)(el)                                              # IUIAutomationElement::SetFocus
 
 
 def _value(s, el):
@@ -152,18 +192,28 @@ def send(email, name, text, dry=False):
         raise Stop(f"Teams did not open the chat with {who} in time (it shows: {seen}) - nothing typed.")
     if not ctms_act.to_front(hwnd):
         raise Stop("Teams could not be brought to the front - nothing typed.")
-    time.sleep(1.5)                                              # the chat's message box takes the cursor
+    time.sleep(1.5)                                              # the chat draws its message box
     hr = ctms_tabs.ole32.CoInitializeEx(None, 0)
     try:
         s = ctms_tabs._Session()
         try:
-            el, kind, label, before = _focused_box(s)
-            if kind not in BOX_TYPES or "message" not in label.lower():
-                raise Stop(f"The cursor is not in Teams' message box (it is on {label or 'nothing'!r}) - nothing "
-                           "typed.")
+            box, names = None, []
+            for _ in range(3):                                   # Teams draws its page for UI Automation on asking
+                box, names = find(s, hwnd, is_box)
+                if box:
+                    break
+                time.sleep(1.0)
+            if not box:
+                kind, label = _focused(s)
+                raise Stop(f"Teams' message box could not be found in the chat with {who} (the cursor is on "
+                           f"{label or 'nothing'!r}; boxes and buttons seen: {'; '.join(names[:15]) or 'none'}) - "
+                           "nothing typed.")
+            before = _value(s, box)
             if before.strip():
                 raise Stop(f"The message box with {who} already holds text ({before[:60]!r}) - left as it is, "
                            "nothing typed.")
+            _set_focus(box)
+            time.sleep(0.4)
             keep = ctms_act._clip_text()
             ctms_act._clip_set(text.replace("\r\n", "\n").replace("\n", "\r\n"))
             try:
@@ -171,25 +221,30 @@ def send(email, name, text, dry=False):
                 time.sleep(1.0)
             finally:
                 ctms_act._clip_set(keep)
-            typed = _focused_box(s)[3]
+            typed = _value(s, box)
             if not same_text(typed, text):
                 _keys(hwnd, ("ctrl", "a"), ("delete",))
-                raise Stop(f"The message box did not read back the text ({typed[:60]!r}) - emptied, nothing sent.")
+                kind, label = _focused(s)
+                raise Stop(f"The message box did not read back the text (it reads {typed[:60]!r}; the cursor is on "
+                           f"{label or 'nothing'!r}) - emptied, nothing sent.")
             if dry:
                 _keys(hwnd, ("ctrl", "a"), ("delete",))
-                left = _focused_box(s)[3]
-                return {"ok": not left.strip(), "said": f"Dry run: the chat with {who} opened and took the text - "
-                        "emptied again, nothing sent." + ("" if not left.strip() else " BUT the box still holds "
-                                                          "text - empty it in Teams."), "payload": _picture(hwnd)}
-            _keys(hwnd, ("return",))
+                left = _value(s, box)
+                return {"ok": not left.strip(), "said": f"Dry run: the chat with {who} opened and its message box took "
+                        "the text and read it back - emptied again, nothing sent." + (
+                            "" if not left.strip() else " BUT the box still holds text - empty it in Teams."),
+                        "payload": _picture(hwnd)}
+            button, _ = find(s, hwnd, is_send, kinds=(50000,))
+            if not (button and s.invoke(button)):
+                _keys(hwnd, ("return",))                         # no Send button to press: Teams sends on Enter
             time.sleep(1.5)
-            left = _focused_box(s)[3]
+            left = _value(s, box)
         finally:
             s.close()
     finally:
         if hr >= 0:
             ctms_tabs.ole32.CoUninitialize()
     if left.strip():
-        return {"ok": False, "said": f"Enter was pressed in the chat with {who} but the box still holds text - "
+        return {"ok": False, "said": f"Send was pressed in the chat with {who} but the box still holds text - "
                 "look at Teams before sending again.", "payload": _picture(hwnd)}
     return {"ok": True, "said": f"Sent to {who} on Teams.", "payload": _picture(hwnd)}
