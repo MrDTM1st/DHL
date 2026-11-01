@@ -111,6 +111,9 @@ class _Att:
     def __init__(self, name):
         self.FileName = name
 
+    def SaveAsFile(self, path):
+        _book(path)
+
 
 class _Atts:
     def __init__(self, names):
@@ -162,6 +165,30 @@ def test_newest_picks_the_highest_version_per_week_across_folders():
     assert sorted(got) == [date(2026, 10, 26), date(2026, 11, 2)]
     assert got[date(2026, 11, 2)]["version"] == 2 and got[date(2026, 11, 2)]["from"] == "Kim Example"
     assert got[date(2026, 10, 26)]["name"] == "Transport Planners wc 26.10.26 v3.xlsx"
+
+
+def test_a_refresh_keeps_this_week_and_next_dated_whatever_the_copy_is_called():
+    inbox = _Folder("Inbox", [_Mail(1, ["Transport Planners wc 02.11.26 v2.xlsx"]),
+                              _Mail(8, ["Transport Planners wc 26.10.26 v1.xlsx"]),
+                              _Mail(3, ["Transport Planners wc 19.10.26 v4.xlsx"])])       # a week already over
+    tmp = tempfile.mkdtemp(prefix="planner-test-")
+    keep = sys.modules.get("build_drafts"), W.HERE, W.PATH
+    _stub_build_drafts(inbox)
+    W.HERE, W.PATH = tmp, os.path.join(tmp, "_planner_week.json")
+    try:
+        out = W.refresh(None, today=date(2026, 10, 29))
+        assert [(w["wc"], w["version"], w["file"]) for w in out["weeks"]] == [
+            ("26/10/2026", 1, "Transport Planners wc 26.10.26 v1.xlsx"),
+            ("02/11/2026", 2, "Transport Planners wc 02.11.26 v2.xlsx")]
+        assert out["weeks"][1]["days"][0]["date"] == "02/11/2026"
+        assert [w["wc"] for w in W.load(date(2026, 10, 29))["weeks"]] == ["26/10/2026", "02/11/2026"]
+    finally:
+        if keep[0] is None:
+            sys.modules.pop("build_drafts", None)
+        else:
+            sys.modules["build_drafts"] = keep[0]
+        W.HERE, W.PATH = keep[1], keep[2]
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

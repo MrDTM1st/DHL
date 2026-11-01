@@ -93,9 +93,9 @@ def duties(rows, me=ME, skip=SKIP):
     return out
 
 
-def read(path, me=ME, skip=SKIP):
+def read(path, me=ME, skip=SKIP, week=None):
     """One sheet -> {"wc": dd/mm/yyyy, "version", "days": [{"day", "date", "duties"}]} Monday to Friday (a weekend
-    day only when he has something on it)."""
+    day only when he has something on it). week: (its Monday, version) when the file's own name no longer says."""
     import openpyxl
     import warnings
     warnings.filterwarnings("ignore")
@@ -105,7 +105,7 @@ def read(path, me=ME, skip=SKIP):
         rows = [list(r) for r in ws.iter_rows(values_only=True)]
     finally:
         wb.close()
-    wk = week_of(os.path.basename(path))
+    wk = week or week_of(os.path.basename(path))
     monday = wk[0] if wk else None
     got = duties(rows, me, skip)
     days = []
@@ -171,7 +171,7 @@ def refresh(ns, today=None):
             continue
         path = os.path.join(HERE, f"_planner_wc_{monday:%Y-%m-%d}.xlsx")
         f["att"].SaveAsFile(path)
-        wk = read(path)
+        wk = read(path, week=(monday, f["version"]))
         wk.update(file=f["name"], sender=f["from"], received=f["received"].strftime("%d/%m %H:%M"))
         weeks.append(wk)
     out = {"at": datetime.now().strftime("%Y-%m-%d %H:%M"), "weeks": weeks}
