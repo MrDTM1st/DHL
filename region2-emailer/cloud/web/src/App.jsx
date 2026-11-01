@@ -256,7 +256,8 @@ export default function App() {
   const openNote = (n) => {
     setNotes((ns) => ns.map((x) => x.id === n.id ? { ...x, read: true } : x));
     setBellOpen(false);
-    if (n.orderId) { setPage('tracker'); setTimeout(() => setSelectedId(n.orderId), 120); }
+    // its brief opens on the map - the only page a brief stays open on
+    if (n.orderId) { setPage('map'); setPickedHaulier(null); setSelectedId(n.orderId); }
   };
   const markAll = () => setNotes((ns) => ns.map((n) => ({ ...n, read: true })));
   const clearAll = () => setNotes([]);
@@ -271,6 +272,10 @@ export default function App() {
   // the Tracker's "Updated over the phone": its brief opens with the call's questions already showing
   const [phoneFor, setPhoneFor] = useState(null);
   const phoneFromList = (o) => { selectOrder(o); setPhoneFor(o.id); };
+  // the brief belongs to the map: leaving the map closes it (his ask 01/11 - it stayed open over the Tracker and CTMS)
+  useEffect(() => {
+    if (page !== 'map') { setSelectedId(null); setPickedHaulier(null); setPhoneFor(null); }
+  }, [page]);
   const selectedRecord = mapRecords.find((r) => r.id === selectedId);
   // a selected record can vanish on refresh (booked orders drop off, old ad
   // hocs rotate out) - clear the selection or the map stays focused on nothing
