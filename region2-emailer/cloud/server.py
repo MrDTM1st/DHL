@@ -83,7 +83,8 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "prompt_press", "prompt_click",      # ... Save on that box (never Open)
               "export_fetch", "export_close",      # ... or the export's file taken from its tab's address
               "import_csv",                        # an upload CSV into CTMS (the map's Upload: /api/ctms/import)
-              "ctms_check")                        # the map's orders looked up in CTMS (/api/ctms/check)
+              "ctms_check",                        # the map's orders looked up in CTMS (/api/ctms/check)
+              "teams_send")                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
@@ -297,6 +298,11 @@ def _ctms_args(action, data):
     since = str(data.get("since") or "")          # export_fetch: only a file CTMS made at or after this
     if action == "export_fetch" and re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", since):
         out["since"] = since
+    if action == "teams_send":                    # who in DHL NOC, and the dashboard's text (a chat runs longer)
+        out["email"] = str(data.get("email") or "")[:120]
+        out["name"] = str(data.get("name") or "")[:60]
+        out["text"] = str(data.get("text") or "")[:4000]
+        out["dry"] = bool(data.get("dry"))
     if data.get("dir") in ("up", "down", "left", "right", "to"):
         out["dir"] = data["dir"]
     if data.get("target") in ("ctms", "page"):      # which window the bridge works
@@ -1913,6 +1919,43 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms["asked"][cid] = "dashboard"
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "id": cid, "orders": len(orders), "online": _ctms_online()})
+            return self._json(*out)
+        if path == "/api/ctms/teams":
+            # the brief's Send in Teams for DHL NOC (his ask 01/11: "I want you to send it on Teams on the work PC"):
+            # only to someone on the home PC's NOC list, the text he has just read. Look mum, no hands is switched on
+            # for this one message when it is off, and off again once it is answered
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            email, text = str(data.get("email") or "").strip().lower(), str(data.get("text") or "").strip()
+            with _lock:
+                _ctms_sweep_locked()
+                who = next((p for p in (_panel.get("noc_teams") or [])
+                            if str(p.get("email") or "").strip().lower() == email), None) if email else None
+                busy = [c for c in _ctms["queue"] if c["action"] == "teams_send"] or (
+                    _ctms["running"] and _ctms["running"].get("action") == "teams_send")
+                if not who:
+                    out = (400, {"error": "Not someone on the DHL NOC list - nothing sent."})
+                elif not text or len(text) > 4000:
+                    out = (400, {"error": "No message to send, or far too long for a chat."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it send."})
+                elif busy:
+                    out = (409, {"error": "A Teams message is being sent already."})
+                else:
+                    _ctms["next_id"] += 1
+                    cid = _ctms["next_id"]
+                    if not _ctms_armed():
+                        _ctms["control_until"] = time.time() + 3 * 60
+                        _ctms["armed_for"] = cid
+                        _ctms_note_locked(f"Look mum, no hands mode switched on to send one Teams message to "
+                                          f"{who.get('name') or email} - that only.")
+                    _ctms["queue"].append({"id": cid, "action": "teams_send", "email": who["email"],
+                                           "name": str(who.get("name") or "")[:60], "text": text,
+                                           "dry": bool(data.get("dry")), "by": "dashboard", "queued_at": time.time()})
+                    _ctms["asked"][cid] = "dashboard"
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "id": cid, "online": _ctms_online()})
             return self._json(*out)
         if path == "/api/ctms/todo/answer":
             # his pick from a held to-do item's drop-down (his 01/11: "tell me exactly what they said in the email

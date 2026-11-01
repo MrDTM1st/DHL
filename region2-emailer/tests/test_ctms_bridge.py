@@ -3070,6 +3070,79 @@ def test_the_rail_plans_ctms_export_switches_acting_on_for_itself_and_never_over
         S._queue.clear()
 
 
+# ---- a message to DHL NOC in the work PC's Teams (01/11) ---------------------------------------------
+import ctms_teams as TM                 # noqa: E402
+
+
+def test_teams_opens_only_that_persons_chat_and_checks_it_by_its_title():
+    assert TM.chat_link("sam.example@example.com") == "msteams:/l/chat/0/0?users=sam.example@example.com"
+    words = TM.name_words("sam.example@example.com", "Sam")
+    assert words == ["sam", "example"]
+    assert TM.is_chat_with("Chat | Sam Example | Microsoft Teams", words)
+    assert TM.is_chat_with("Chat | Example, Sam (Example Co) | Microsoft Teams", words)
+    for wrong in ("Chat | Sam Other | Microsoft Teams", "Chat | Jo Example | Microsoft Teams", "Sam Example",
+                  "Activity | Microsoft Teams", "Chat | Sam Example | Outlook"):
+        assert not TM.is_chat_with(wrong, words), wrong
+    assert TM.same_text("Hi Sam, would you be able to cover the job below?\n\nOrder: 9100001",
+                        "Hi Sam, would you be able\r\nto cover the job below?\nOrder: 9100001")
+    assert not TM.same_text("", "Hi Sam") and not TM.same_text("Hi Jo", "Hi Sam")
+
+
+def test_the_bridge_sends_in_teams_only_with_the_switch_and_says_why_it_stopped():
+    keep = (TM.send, B.LOG)
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    calls = []
+
+    def fake(email, name, text, dry=False):
+        calls.append((email, name, text, dry))
+        if "stop" in text:
+            raise TM.Stop("The cursor is not in Teams' message box - nothing typed.")
+        return {"ok": True, "said": "Sent to Sam Example on Teams.", "payload": {"kind": "teams", "img": ""}}
+    TM.send = fake
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        cmd = {"id": 1, "action": "teams_send", "email": "sam.example@example.com", "name": "Sam", "text": "Hi Sam"}
+        b.handle(cmd)                                                      # switched off: not even tried
+        assert desk.sent[-1][1]["ok"] is False and calls == []
+        b.armed = True
+        b.handle(dict(cmd, id=2))
+        r = desk.sent[-1][1]
+        assert r["ok"] and r["detail"] == "Sent to Sam Example on Teams." and calls[-1][3] is False
+        b.handle(dict(cmd, id=3, text="please stop", dry=True))
+        r = desk.sent[-1][1]
+        assert not r["ok"] and r["detail"].startswith("Not sent: The cursor is not in Teams") and calls[-1][3] is True
+    finally:
+        TM.send, B.LOG = keep
+
+
+def test_send_in_teams_goes_only_to_the_noc_list_and_switches_acting_on_for_that_one_message():
+    fresh()
+    keep = S._panel
+    S._panel = {"noc_teams": [{"name": "Sam", "email": "sam.example@example.com"}]}
+    try:
+        body = {"email": "sam.example@example.com", "text": "Hi Sam, would you be able to cover the job below?"}
+        assert call("/api/ctms/teams", body, key=AGENT)[0] == 401
+        assert call("/api/ctms/teams", dict(body, email="someone@example.com"))[0] == 400     # not on the list
+        assert call("/api/ctms/teams", dict(body, text=""))[0] == 400
+        code, r = call("/api/ctms/teams", dict(body, email="SAM.Example@example.com"))
+        assert code == 200 and S._ctms_armed() and S._ctms["armed_for"] == r["id"]
+        q = S._ctms["queue"][-1]
+        assert q == dict(q, action="teams_send", email="sam.example@example.com", name="Sam", text=body["text"],
+                         dry=False)
+        assert call("/api/ctms/teams", body)[0] == 409                                        # one at a time
+        assert call("/api/ctms/result", {"id": r["id"], "action": "teams_send", "ok": True,
+                                         "detail": "Sent to Sam Example on Teams."}, key=BRIDGE)[0] == 200
+        assert not S._ctms_armed()                                                            # off again
+        assert S._ctms_args("teams_send", {"email": "a@b.co", "name": "A", "text": "x" * 5000, "dry": 1})             == dict(S._ctms_args("teams_send", {"email": "a@b.co", "name": "A", "text": "x" * 5000, "dry": 1}),
+                    email="a@b.co", name="A", text="x" * 4000, dry=True)
+    finally:
+        S._panel = keep
+        S._ctms["control_until"] = 0.0
+        S._ctms["armed_for"] = None
+        S._ctms["queue"] = []
+
+
 def test_set_time_look_ups_come_at_9_12_3_and_5_on_weekdays_wait_for_a_quiet_work_pc_and_retry():
     fresh()
     keep = (S._tracker, S._panel, dict(S._check_slot))

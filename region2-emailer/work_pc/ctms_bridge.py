@@ -94,6 +94,7 @@ import ctms_import
 import ctms_jab
 import ctms_orders
 import ctms_tabs
+import ctms_teams
 import ctms_update
 import ctms_window
 import pip_here
@@ -123,7 +124,8 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "prompt_press", "prompt_click",
          "export_fetch", "export_close",
          "import_csv",     # Claude acting: this PC AND the dashboard must allow it
-         "ctms_check")     # ... and the map's orders looked up in CTMS (searches only, nothing saved)
+         "ctms_check",     # ... and the map's orders looked up in CTMS (searches only, nothing saved)
+         "teams_send")     # ... and a dashboard message sent to DHL NOC in this PC's Teams (ctms_teams)
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -1382,6 +1384,14 @@ class Bridge:
             if action == "export_close":
                 # export tabs left open - each one blanks CTMS's window for the bridge
                 return done(True, self.export_tabs_away(ctms_export.is_export))
+            if action == "teams_send":
+                # a dashboard message to DHL NOC, sent in this PC's Teams (his ask 01/11) - ctms_teams checks the chat,
+                # the box and the text before Enter, and stops with nothing sent on anything else
+                try:
+                    got = ctms_teams.send(cmd.get("email"), cmd.get("name"), cmd.get("text"), dry=bool(cmd.get("dry")))
+                except ctms_teams.Stop as e:
+                    return done(False, f"Not sent: {e}")
+                return done(got["ok"], got["said"], got.get("payload") or None)
             if action == "import_csv":
                 return self.import_csv(cmd, done)
             if action == "ctms_check":

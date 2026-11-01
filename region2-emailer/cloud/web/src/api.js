@@ -154,6 +154,19 @@ export async function ctmsRail(week) {
   return d;
 }
 
+// The brief's Send in Teams for DHL NOC (his ask 01/11): the message sent in the work PC's Teams, to someone on the
+// home PC's NOC list only. Look mum, no hands is switched on for this one message when it is off.
+export async function ctmsTeams(email, text, dry = false) {
+  const r = await req('/api/ctms/teams', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, text, dry }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 // His pick for one of a held item's doubts, from its drop-down - the home PC keeps it on the item.
 export async function ctmsTodoAnswer(id, field, value) {
   const r = await req('/api/ctms/todo/answer', {

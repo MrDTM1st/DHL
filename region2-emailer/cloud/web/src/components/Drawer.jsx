@@ -9,6 +9,7 @@ import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
 import { RegionBadge } from './RegionBadge.jsx';
 import CallButton from './CallButton.jsx';
 import PhoneUpdate from './PhoneUpdate.jsx';
+import { ctmsTeams, ctmsStatus } from '../api.js';
 
 // A haulier's Call buttons - the contact sheet sometimes holds two numbers in
 // the one cell ("01632 960102 / 07700 900102"), and both are worth a button.
@@ -113,9 +114,6 @@ function teamsText(r, name) {
     .replace(/ - /g, ', ');
   return body + '\n\nLet me know if you can take it and I will get it raised.';
 }
-
-const teamsLink = (email, message) => 'https://teams.microsoft.com/l/chat/0/0?users=' + encodeURIComponent(email)
-  + '&message=' + encodeURIComponent(message);
 
 /* Edits to a cover request are remembered PER ORDER.
    Chasing haulage means sending the same job to several hauliers in a row. Any
@@ -251,7 +249,31 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
   };
   const teamsTo = (email) => {
     const p = nocTeams.find((x) => x.email === email) || {};
-    setTeams((t) => ({ ...t, to: email, copied: false, message: t.message.replace(/^Hi [^,]*,/, `Hi ${p.name || 'there'},`) }));
+    setTeams((t) => ({ ...t, to: email, copied: false, said: '', message: t.message.replace(/^Hi [^,]*,/, `Hi ${p.name || 'there'},`) }));
+  };
+  // Send in Teams: the work PC's Teams sends it (ctms_teams on the bridge) - followed until the work PC answers
+  const sendTeams = async () => {
+    const t = teams;
+    setTeams({ ...t, sending: true, said: 'Sending on the work PC…' });
+    let id;
+    try {
+      ({ id } = await ctmsTeams(t.to, t.message));
+    } catch (e) {
+      setTeams((x) => x && { ...x, sending: false, said: e.message });
+      return;
+    }
+    const until = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((ok) => setTimeout(ok, 2500));
+      let st;
+      try { st = await ctmsStatus(false); } catch { continue; }
+      const res = (st.results || []).find((x) => x.id === id);
+      if (res) {
+        setTeams((x) => x && { ...x, sending: false, sent: !!res.ok, said: res.detail || (res.ok ? 'Sent.' : 'Not sent.') });
+        return;
+      }
+    }
+    setTeams((x) => x && { ...x, sending: false, said: 'No answer from the work PC yet - look at Teams before sending again.' });
   };
   useEffect(() => { setComposing(null); setTeams(null); }, [r.id]);   // a new brief means a fresh compose
   const [leg, setLeg] = useState(null);     // collection -> delivery
@@ -679,15 +701,16 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
                 </label>
                 <label>Message
                   <textarea rows={12} value={teams.message}
-                    onChange={(e) => setTeams({ ...teams, message: e.target.value, copied: false })} />
+                    onChange={(e) => setTeams({ ...teams, message: e.target.value, copied: false, sent: false, said: '' })} />
                 </label>
                 <div className="hcompose-foot">
-                  <span className="hint-sig">No email is sent. Open in Teams starts the chat with this typed in - you press Send.</span>
+                  <span className="hint-sig">{teams.said || 'Sent from your Teams on the work PC - no email.'}</span>
                   <button className="btn mini" onClick={() => setTeams(null)}>Close</button>
                   <button className="btn mini" onClick={async () => {
                     try { await navigator.clipboard.writeText(teams.message); setTeams({ ...teams, copied: true }); } catch { /* no clipboard */ }
                   }}>{teams.copied ? 'Copied' : 'Copy'}</button>
-                  <a className="btn mini red" href={teamsLink(teams.to, teams.message)} target="_blank" rel="noreferrer">Open in Teams</a>
+                  <button className="btn mini red" disabled={teams.sending || teams.sent || !teams.message.trim()}
+                    onClick={sendTeams}>{teams.sending ? 'Sending…' : teams.sent ? 'Sent' : 'Send in Teams'}</button>
                 </div>
               </div>
             )}
