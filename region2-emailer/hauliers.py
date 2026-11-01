@@ -65,6 +65,10 @@ def _district(pc):
 # only_areas takes postcode areas ("CB") or, where an area is too big to take
 # whole, districts ("PE15").
 #
+# Capabilities the sheet leaves out go in caps_add, which keeps the sheet's own
+# list and adds to it (a re-import that adds more still comes through); caps
+# replaces the list outright.
+#
 # Scotland - the part of Region 1 north of the border.
 SCOTLAND_AREAS = ["AB", "DD", "DG", "EH", "FK", "G", "HS", "IV", "KA", "KW",
                   "KY", "ML", "PA", "PH", "TD", "ZE"]
@@ -93,6 +97,11 @@ _OVERRIDES = {
     # allocates them to Region 1 only, as it does Tennant - asked whether they
     # should be limited the same way: "Yes, Scotland only" - Delali, 31/10/2026.
     "william hamilton": {"only_areas": SCOTLAND_AREAS, "only_scope": "delivery"},
+    # "DEO has rear steer, if it isn't on the form then I apologise" - Delali,
+    # 01/11/2026. The contact sheet leaves it off, so a rear steer job on their
+    # own doorstep in Walsall skipped them - Tier 1 and the nearest firm - for
+    # firms much further away.
+    "o'reilly": {"caps_add": ["Rear Steer"]},
     # "DHL NOC doesn't like doing night jobs and weekend jobs" - Delali,
     # 2026-07-24. Not a hard no: they stay on the list, but a night/weekend
     # job flags them and drops them below the external hauliers so the first
@@ -145,7 +154,12 @@ def _apply_overrides(d):
         nm = str(h.get("name", "")).lower()
         for key, ov in _OVERRIDES.items():
             if key in nm:
+                ov = dict(ov)
+                extra = ov.pop("caps_add", [])
                 h.update(ov)
+                if extra:
+                    caps = list(h.get("caps") or [])
+                    h["caps"] = caps + [c for c in extra if c not in caps]
     d["services"] = [dict(PARCEL_PASS)]
     return d
 
