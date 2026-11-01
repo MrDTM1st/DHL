@@ -337,6 +337,55 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
     body = s.tab_title || hostOf(s.tab_url);
   }
 
+  // the to-do card, built once: under the live picture on a desktop - beside it the right-hand column was all of
+  // the page (his ask 01/11: "it looks all right-hand side heavy") - and in its old place on a phone, one column
+  const todoCard = (
+    <div className="card statuscard">
+      <div className="statushd">
+        <span className="lbl">To do on CTMS</span>
+        <span className={'ctms-todo-n' + (todo.length ? ' some' : '')}>{todo.length}</span>
+      </div>
+      {(plan.length ? plan : todo).slice(0, 30).map((t) => {
+        const p = plan.length ? t : null;
+        return (
+          <div className="ctms-act ctms-todo" key={t.id}>
+            <span className={'ctms-todo-kind ' + t.kind}>{TODO_KIND[t.kind] || t.kind}</span>
+            <span className="d"><b className="mono">{(t.orders || []).join(' / ')}</b> {t.what}
+              {p && p.status === 'ready' && <div className="ctms-plan">{planText(p)}</div>}
+              {p && (p.explain || []).map((e) => <div className="ctms-plan why" key={e}>{e}</div>)}
+              {p && p.status === 'held' && (p.checks || []).map((c) => (
+                <HeldCheck key={c.field} item={p} c={c} busy={answering} onAnswer={answer} />))}
+            </span>
+            {p ? <span className={'ctms-plan-st ' + p.status}>{PLAN_STATUS[p.status] || p.status}</span>
+              : <span className="t mono">{ddmm(t.added)}</span>}
+          </div>
+        );
+      })}
+      {todo.length > 30 && <div className="ctms-muted">… and {todo.length - 30} more.</div>}
+      {runnable.length > 0 && (
+        <div className="ctms-run">
+          <button className="btn primary" disabled={running || runBusy} onClick={runTodo}>
+            {running ? 'Running in CTMS…' : `Run ${runnable.length} in CTMS`}
+          </button>
+          <span className="ctms-muted">{MODE} switches on for the run and back as it was after. Each order
+            is read back before it counts as done; the first thing not as expected stops the run.</span>
+        </div>
+      )}
+      {lastRun && lastRun.state === 'done' && (
+        <div className="ctms-runlog">
+          <b>Last run {lastRun.ended || lastRun.at}:</b> {lastRun.said}
+          {(lastRun.results || []).map((r) => (
+            <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : '✗'} {r.said}</div>))}
+        </div>
+      )}
+      <div className="ctms-muted" style={{ marginTop: todo.length ? 8 : 0 }}>
+        {!todo.length ? 'Nothing owed - CTMS is up to date with every email, chase and reply.'
+          : plan.some((p) => p.status === 'held') ? 'Held items need your pick above before the button runs them.'
+            : ''}
+      </div>
+    </div>
+  );
+
   return (
     <div className="scroll"><div className="container page-anim">
       <div className="pagehead">
@@ -382,6 +431,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
               {attached && s.error ? <span className="ctms-err">{shotMeta ? ' · ' : ''}{deskWords(s.error)}</span> : null}
             </div>
           </div>
+          <div className="ctms-todo-desk">{todoCard}</div>
         </div>
 
         <div className="ctms-col">
@@ -458,50 +508,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
             )}
           </div>
 
-          <div className="card statuscard">
-            <div className="statushd">
-              <span className="lbl">To do on CTMS</span>
-              <span className={'ctms-todo-n' + (todo.length ? ' some' : '')}>{todo.length}</span>
-            </div>
-            {(plan.length ? plan : todo).slice(0, 30).map((t) => {
-              const p = plan.length ? t : null;
-              return (
-                <div className="ctms-act ctms-todo" key={t.id}>
-                  <span className={'ctms-todo-kind ' + t.kind}>{TODO_KIND[t.kind] || t.kind}</span>
-                  <span className="d"><b className="mono">{(t.orders || []).join(' / ')}</b> {t.what}
-                    {p && p.status === 'ready' && <div className="ctms-plan">{planText(p)}</div>}
-                    {p && (p.explain || []).map((e) => <div className="ctms-plan why" key={e}>{e}</div>)}
-                    {p && p.status === 'held' && (p.checks || []).map((c) => (
-                      <HeldCheck key={c.field} item={p} c={c} busy={answering} onAnswer={answer} />))}
-                  </span>
-                  {p ? <span className={'ctms-plan-st ' + p.status}>{PLAN_STATUS[p.status] || p.status}</span>
-                    : <span className="t mono">{ddmm(t.added)}</span>}
-                </div>
-              );
-            })}
-            {todo.length > 30 && <div className="ctms-muted">… and {todo.length - 30} more.</div>}
-            {runnable.length > 0 && (
-              <div className="ctms-run">
-                <button className="btn primary" disabled={running || runBusy} onClick={runTodo}>
-                  {running ? 'Running in CTMS…' : `Run ${runnable.length} in CTMS`}
-                </button>
-                <span className="ctms-muted">{MODE} switches on for the run and back as it was after. Each order
-                  is read back before it counts as done; the first thing not as expected stops the run.</span>
-              </div>
-            )}
-            {lastRun && lastRun.state === 'done' && (
-              <div className="ctms-runlog">
-                <b>Last run {lastRun.ended || lastRun.at}:</b> {lastRun.said}
-                {(lastRun.results || []).map((r) => (
-                  <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : '✗'} {r.said}</div>))}
-              </div>
-            )}
-            <div className="ctms-muted" style={{ marginTop: todo.length ? 8 : 0 }}>
-              {!todo.length ? 'Nothing owed - CTMS is up to date with every email, chase and reply.'
-                : plan.some((p) => p.status === 'held') ? 'Held items need your pick above before the button runs them.'
-                  : ''}
-            </div>
-          </div>
+          <div className="ctms-todo-phone">{todoCard}</div>
 
           <div className="card statuscard">
             <div className="statushd"><span className="lbl">Activity</span></div>

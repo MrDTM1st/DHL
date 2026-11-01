@@ -37,6 +37,25 @@ def test_caps_replaces_and_other_keys_set():
     assert got["Untouched Co"] == {"name": "Untouched Co", "caps": ["Bags"]}
 
 
+def test_a_tier_1_we_rarely_use_comes_after_the_other_tier_1s():
+    import booking_plan
+    d = {"hauliers": [{"name": "Rare Co", "tier": "tier1", "caps": ["Moffett"], "rarely": True},
+                      {"name": "Zed Co", "tier": "tier1", "caps": ["Moffett"]},
+                      {"name": "Alpha Co", "tier": "tier2", "caps": ["Moffett"]}]}
+    assert [h["name"] for h in booking_plan.moffett_hauliers(d)] == ["Zed Co", "Rare Co", "Alpha Co"]
+
+
+def test_the_real_list_marks_aht_logistics_rarely_used():
+    import importlib
+    real = importlib.reload(hauliers)._OVERRIDES
+    try:
+        assert real["aht logistics"] == {"rarely": True}
+    finally:
+        hauliers._OVERRIDES = {"adder co": {"caps_add": ["Rear Steer", "Moffett"]},
+                               "swapper co": {"caps": ["Log Grab"]},
+                               "patch co": {"only_areas": ["SE"], "only_scope": "delivery"}}
+
+
 def test_the_override_list_is_not_changed_by_applying_it():
     _load({"name": "Adder Co", "caps": []})
     assert hauliers._OVERRIDES["adder co"] == {"caps_add": ["Rear Steer", "Moffett"]}

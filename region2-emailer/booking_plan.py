@@ -55,7 +55,7 @@ def moffett_hauliers(directory=None):
     our own fleet, then tier 1, then tier 2."""
     d = hauliers.load() if directory is None else directory
     able = [h for h in d.get("hauliers", []) if "Moffett" in h.get("caps", []) and not h.get("do_not_use")]
-    return sorted(able, key=lambda h: (hauliers.rank_of(h), h["name"].lower()))
+    return sorted(able, key=lambda h: (hauliers.rank_of(h), bool(h.get("rarely")), h["name"].lower()))
 
 
 def _code(carrier):

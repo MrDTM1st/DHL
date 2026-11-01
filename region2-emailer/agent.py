@@ -274,6 +274,7 @@ def _slim_hauliers():
                         "only": h.get("only_areas", []),     # the patch they work and nowhere else
                         "only_scope": h.get("only_scope", "both"),
                         "avoid_nw": bool(h.get("avoid_night_weekend")),  # DHL NOC: no nights/weekends
+                        "rarely": bool(h.get("rarely")),     # tier 1 but rarely used: last of the tier 1s
                         "caps": h.get("caps", [])})   # capability match happens in the browser
         # booking services (Parcel Pass): published for their contact details
         # only - no postcode, never ranked, flagged so the browser knows
@@ -1596,6 +1597,34 @@ def main():
                 except Exception:
                     pass
                 report("done" if res["ok"] else "error", "Rail plan CTMS export: " + res["said"], tail(out, 8))
+            elif action == "phone_update" and order:
+                # the brief's "Updated over the phone" (his ask 01/11): what the site said on a call, picked from
+                # drop-downs - onto the order like a reply, and the order owes CTMS an update from it. phone_update.py
+                # takes the tracker's lock, so it runs on its own and lets go when it ends
+                import tempfile
+                report("running", "Saving what the site said on the phone…")
+                fd, answers = tempfile.mkstemp(prefix="phone_update_", suffix=".json")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(cmd.get("data") if isinstance(cmd.get("data"), dict) else {}, f)
+                try:
+                    out = run(["phone_update.py", "apply", order, answers], timeout=120)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                finally:
+                    os.remove(answers)
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    res = {"ok": False, "said": "Not saved - the phone update did not finish; see the output."}
+                push_tracker()
+                push_panel()
+                report("done" if res["ok"] else "error", res["said"], tail(out, 6))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled

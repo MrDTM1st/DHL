@@ -183,6 +183,17 @@ test('on a one-need job a nearby firm with the same kit in another size is named
     [['Yard Rigid Co', 'artic hiab', 'Rigid Hiab', 'collection']]);
 });
 
+test('a tier 1 we rarely use is listed after the other tier 1s however near - and still before tier 2', () => {
+  const pool = [
+    H('Rare One Co', 'tier1', ['Artic Hiab'], { pc: 'DD1 1DD', rarely: true }),         // on the doorstep
+    H('Usual One Co', 'tier1', ['Artic Hiab'], { pc: 'AA1 1AA' }),                      // far off
+    H('Second Tier Co', 'tier2', ['Artic Hiab'], { pc: 'DD1 1DD' }),
+  ];
+  const geo = { 'AA1 1AA': { la: 54.0, lo: -2.0 }, 'DD1 1DD': { la: 52.6, lo: -1.0 } };
+  const res = recommendFor(job('60x sleepers', { offloading: { value: 'HIAB' } }, { postcode: 'DD1 1DD' }), pool, geo);
+  assert.deepEqual(res.list.map((h) => h.name), ['Usual One Co', 'Rare One Co', 'Second Tier Co']);
+});
+
 test('a HIAB load of 10t or under goes on a rigid by its CTMS weight - rear steer drops, our fleet can take it', () => {
   const said = { offloading: { value: 'HIAB' }, rear_steer: { value: 'yes' }, artic_access: { value: 'yes' } };
   const r = job('60x sleepers', said, { ctms_weight: 5100, reply_at: '2026-11-01 10:24' });

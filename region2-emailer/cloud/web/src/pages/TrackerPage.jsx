@@ -58,7 +58,7 @@ function DetailChips({ r, onLearn }) {
   );
 }
 
-export default function TrackerPage({ records, onSelect, onCommand, onLearn, onBookedCall, onCall, autoChase }) {
+export default function TrackerPage({ records, onSelect, onCommand, onLearn, onPhone, onCall, autoChase }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
 
@@ -157,7 +157,7 @@ export default function TrackerPage({ records, onSelect, onCommand, onLearn, onB
             <DetailChips r={r} onLearn={onLearn} />
             <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
               <button className="btn mini" onClick={(e) => { e.stopPropagation(); onSelect(r); }}>View brief</button>
-              <button className="btn mini" onClick={(e) => { e.stopPropagation(); onBookedCall(r); }}>Booked via call</button>
+              <button className="btn mini" onClick={(e) => { e.stopPropagation(); onPhone(r); }}>Updated over the phone</button>
               {site && (
                 <CallButton number={site.number} who={site.name || r.worksite || r.site} onCall={onCall}
                   label={'Call ' + ((site.name || '').split(' ')[0] || 'site')} />

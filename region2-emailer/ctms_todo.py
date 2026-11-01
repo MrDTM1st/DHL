@@ -125,6 +125,31 @@ def replied(rec, path=None, when=None):
     return it
 
 
+def phoned(rec, path=None, when=None):
+    """He rang the site - his "updated over the phone" (01/11): the order is to be updated from what they said, as
+    from a reply. It takes the place of any update still open for the order (an earlier email's): the record holds
+    everything now, the call's answers over the email's, and the run works from the record."""
+    if rec.get("kind", "delivery") != "delivery" or not rec.get("orders"):
+        return None
+    when = when or _now()
+    orders = set(_bases(rec["orders"]))
+    d = load(path)
+    for it in d["items"]:
+        if it["kind"] == "update" and not it.get("done_at") and orders & set(it["orders"]):
+            it["done_at"], it["superseded"] = when, "phone"
+    _save(d, path)
+    try:
+        day = datetime.strptime(when[:10], "%Y-%m-%d").strftime("%d/%m")
+    except ValueError:
+        day = when[:5]
+    it = add("update", rec["orders"], f"Updated over the phone {day} - update the order from it",
+             details={"details": rec.get("details"), "missing": rec.get("missing"),
+                      "site": rec.get("site"), "to": rec.get("to")},
+             source="phone", path=path, when=when)
+    services_due(rec["orders"], _reply_legs(rec.get("details")), path=path, when=when)
+    return it
+
+
 # ---- Night / Saturday / Sunday ---------------------------------------------
 # The upload never puts these on (nr_csv.transform: nothing is charged for a service nobody chose), and the period-end
 # clean ups kept finding them missing - nine orders across Aug-Oct 2026. His ask 31/10: "that should be on the CTMS

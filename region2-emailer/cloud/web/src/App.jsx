@@ -204,11 +204,11 @@ export default function App() {
     setTimeout(refreshTracker, 1800);
   }, [onCommand, refreshTracker]);
 
-  const onBookedCall = useCallback((r) => {
-    if (!window.confirm('Mark ' + ordLabel(r) + ' as booked over the phone and remove it from the tracker?')) return;
-    onCommand({ action: 'booked_call', order: r.id });
-    setSelectedId(null);
-    setTimeout(refreshTracker, 2500);
+  // the brief's "Updated over the phone" (his ask 01/11): the site's answers from a call - the home PC puts them on
+  // the order like a reply and adds its update to the CTMS to-do list (phone_update.py)
+  const onPhoneUpdate = useCallback((r, answers) => {
+    onCommand({ action: 'phone_update', order: r.id, data: answers });
+    setTimeout(refreshTracker, 4000);
   }, [onCommand, refreshTracker]);
 
   // what a Call button did: dialled (a phone), or copied the number (a computer)
@@ -267,7 +267,10 @@ export default function App() {
   // without the other is half an answer. Works from the tracker too.
   // The picked haulier lives here because both the brief and the map need it:
   // it re-times the job from that haulier's base and draws their approach leg.
-  const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); setPage('map'); };
+  const selectOrder = (o) => { setSelectedId(o.id); setPickedHaulier(null); setPage('map'); setPhoneFor(null); };
+  // the Tracker's "Updated over the phone": its brief opens with the call's questions already showing
+  const [phoneFor, setPhoneFor] = useState(null);
+  const phoneFromList = (o) => { selectOrder(o); setPhoneFor(o.id); };
   const selectedRecord = mapRecords.find((r) => r.id === selectedId);
   // a selected record can vanish on refresh (booked orders drop off, old ad
   // hocs rotate out) - clear the selection or the map stays focused on nothing
@@ -314,7 +317,7 @@ export default function App() {
         )}
         {page === 'tracker' && (
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn}
-            onBookedCall={onBookedCall} onCall={onCall} autoChase={!!(panel && panel.auto_chase)} />
+            onPhone={phoneFromList} onCall={onCall} autoChase={!!(panel && panel.auto_chase)} />
         )}
         {page === 'notifications' && (
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
@@ -323,8 +326,9 @@ export default function App() {
           plan={panel.ctms_plan || []} />}
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
-            onClose={() => { setSelectedId(null); setPickedHaulier(null); }}
-            onCall={onCall} onBookedCall={onBookedCall} onAdhocBooked={onAdhocBooked}
+            onClose={() => { setSelectedId(null); setPickedHaulier(null); setPhoneFor(null); }}
+            onCall={onCall} onPhoneUpdate={onPhoneUpdate} openPhone={phoneFor === selectedId}
+            onAdhocBooked={onAdhocBooked}
             onCommand={onCommand} matTeams={panel.mat_teams || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
             asks={panel.asks || {}} />

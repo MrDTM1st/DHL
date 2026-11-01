@@ -587,7 +587,11 @@ export function recommendFor(r, hauliers, geo) {
     for (let b = h.rank - 1; b >= 0 && above === null; b -= 1) above = best[b];
     if (above !== null && h.miles < above) h.closerThanAbove = true;
   });
+  // a firm we rarely use stays in its band but last in it, however near - AHT
+  // Logistics: "although they're a tier one, put them below all the other tier
+  // ones" (Delali, 01/11)
   out.sort((a, b) => a.rank - b.rank
+    || !!a.rarely - !!b.rarely
     || (a.miles === null) - (b.miles === null)
     || (a.miles || 9e9) - (b.miles || 9e9)
     || a.name.localeCompare(b.name));

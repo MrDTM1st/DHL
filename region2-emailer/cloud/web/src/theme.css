@@ -680,7 +680,13 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
       background:var(--ink); color:var(--yellow); border-radius:4px; padding:1px 5px; margin-right:6px;
       position:relative; top:-1px; }
 
-@media (max-width:960px){ .ctmsgrid{ grid-template-columns:minmax(0,1fr); } }
+/* the CTMS to-do: under the live picture beside the right-hand column; in that column's run on one column */
+.ctms-todo-phone{ display:none; }
+@media (max-width:960px){
+  .ctmsgrid{ grid-template-columns:minmax(0,1fr); }
+  .ctms-todo-desk{ display:none; }
+  .ctms-todo-phone{ display:block; }
+}
 @media (max-width:680px){
   .ctms-headbtns{ width:100%; justify-content:space-between; }
   .ctms-host{ display:none; }
@@ -713,6 +719,15 @@ a.callbtn:hover{ color:var(--red); }
 .callbtn.big:hover{ color:#fff; border-color:var(--go); filter:brightness(1.06); }
 .drawer-acts{ display:flex; gap:8px; margin-top:12px; }
 .drawer-acts .drawer-act{ flex:1; min-width:0; margin:0; }
+/* Updated over the phone: the call's answers, drop-downs first */
+.phoneform{ border:1px solid var(--red); border-radius:var(--radius); padding:12px 14px; margin-bottom:14px;
+  background:var(--card); display:grid; gap:7px; }
+.pf-head{ font-weight:800; font-size:13.5px; margin-bottom:2px; }
+.pf-row{ display:grid; grid-template-columns:minmax(0,9rem) minmax(0,1fr); align-items:center; gap:10px; font-size:12.5px; }
+.pf-row > span{ color:var(--muted); font-weight:600; }
+.pf-row select, .pf-row input{ width:100%; min-width:0; }
+.pf-foot{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px; }
+.pf-miss{ flex:1 1 12rem; font-size:12px; color:var(--muted); }
 .sitecalls{ display:flex; flex-direction:column; gap:6px; }
 .sc-line{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .sc-from{ font-size:11px; font-weight:500; color:var(--muted); }

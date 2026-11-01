@@ -121,6 +121,11 @@ _OVERRIDES = {
     # do_not_use takes them out of recommend() and off the dashboard, and
     # stand_down skips them, so they are not even told a job went elsewhere.
     "a. rhodes": {"do_not_use": True},
+    # "We rarely use AHT logistics. So although they're a tier one, put them
+    # below all the other tier ones, because, you know, we just don't really
+    # use them" - Delali, 01/11/2026. Still tier 1 - above every tier 2 - but
+    # last of the tier 1s, however near.
+    "aht logistics": {"rarely": True},
 }
 
 
@@ -414,7 +419,7 @@ def recommend(from_pc, needs=(), to_pc="", limit=None, include_couriers=False):
     # falsy, so a haulier whose depot IS the collection postcode scored 9e9 and
     # sorted LAST in its band. KMS sat 0.0 miles from a Barnsley collection and
     # came back 13th of 13. Distance is only missing when it is None.
-    ok.sort(key=lambda h: (h["rank"], h["miles"] is None,
+    ok.sort(key=lambda h: (h["rank"], bool(h.get("rarely")), h["miles"] is None,
                            9e9 if h["miles"] is None else h["miles"],
                            not h["used_before"]))
     return (ok[:limit] if limit else ok), est

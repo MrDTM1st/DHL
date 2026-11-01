@@ -8,6 +8,7 @@ import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
 import { RegionBadge } from './RegionBadge.jsx';
 import CallButton from './CallButton.jsx';
+import PhoneUpdate from './PhoneUpdate.jsx';
 
 // A haulier's Call buttons - the contact sheet sometimes holds two numbers in
 // the one cell ("01632 960102 / 07700 900102"), and both are worth a button.
@@ -150,7 +151,7 @@ function clearEdit(id) {
   } catch (e) { /* nothing to do */ }
 }
 
-export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedCall,
+export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUpdate, openPhone,
   onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
@@ -160,7 +161,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
   const [remembered, setRemembered] = useState(false);
   // On a phone the brief is a sheet under the map; this pulls it up to full height.
   const [full, setFull] = useState(false);
-  useEffect(() => { setFull(false); }, [r.id]);
+  // "Updated over the phone": the call's answers, asked right here (PhoneUpdate)
+  const [phoning, setPhoning] = useState(false);
+  useEffect(() => { setFull(!!openPhone); setPhoning(!!openPhone); }, [r.id, openPhone]);
 
   const defaultSubject = () => `${(r.orders || []).join(' / ')} Delivery`;
 
@@ -439,9 +442,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               <CallButton big number={site.calls[0].number} who={siteWho(site.calls[0])} onCall={onCall}
                 label={'Call ' + (siteWho(site.calls[0]).split(' ')[0] || 'site')} />
             )}
-            {onBookedCall && !oneOff && (
-              <button className="btn drawer-act" onClick={() => onBookedCall(r)}>
-                Mark booked over the phone
+            {/* "Mark booked over the phone" went (01/11): bookings are made in CTMS now, so a call is for the
+                site's details - "change it to updated over the phone" */}
+            {onPhoneUpdate && !oneOff && (
+              <button className={'btn drawer-act' + (phoning ? ' red' : '')} onClick={() => setPhoning((v) => !v)}>
+                Updated over the phone
               </button>
             )}
             {onAdhocBooked && oneOff && (
@@ -452,6 +457,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           </div>
         </div>
         <div className="drawer-b">
+          {phoning && (
+            <PhoneUpdate record={r} onCancel={() => setPhoning(false)}
+              onSave={(answers) => { onPhoneUpdate(r, answers); setPhoning(false); }} />
+          )}
           <dl className="kv">
             {rows.map((x, i) => (
               <div key={i} style={{ display: 'contents' }}>
@@ -593,6 +602,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
               <div className="hn">
                 <b>{h.name}</b>
                 <span className={'htag ' + RANK_TAG[h.rank]}>{RANK_LABEL[h.rank]}</span>
+                {h.rarely && <span className="htag" title="Tier 1, but rarely used - listed after the other tier 1s">RARELY USED</span>}
                 {askedBy[h.name] && (
                   <span className="htag asked" title={'Emailed ' + askedBy[h.name].when
                     + ' (' + (askedBy[h.name].how || '') + ')'}>
