@@ -4,14 +4,16 @@ message button ... I want you to send it on Teams on the work PC", then "build t
 no clipboard, so nothing he is doing on the work PC can get in the way. The dashboard's Send in Teams hands over who and
 what, and each step is checked before the next:
 
-  open    Teams' own link for a chat with that address, the text riding in it (msteams:/l/chat/0/0?users=..&message=..)
-          - Teams opens the chat with the text in its message box; nothing else is opened
+  open    Teams' own link for a chat with that address (msteams:/l/chat/0/0?users=..) - nothing else is opened. Not
+          the link's message part: Teams typed that into the box twice in the 01/11 test
   check   a Teams window titled with that chat ("Chat | Rich Brumby | Microsoft Teams"), and its message box (found
-          through UI Automation by its name) reading back the text and nothing else - an older draft there, another
-          chat, or none in time stops it with nothing sent. Where the link leaves the box empty, the text is put in
-          through UI Automation instead, and must read back the same
+          through UI Automation by its name) empty - his own draft there, another chat, or none in time stops it with
+          nothing sent
+  type    the text put in through UI Automation's Value pattern, and read back: this message and nothing else
   send    Teams' own Send button pressed through UI Automation - never a key - and the box empty after; the window that
           was in front is put back, and a picture of the chat comes back
+
+Once the text is in, anything that goes wrong empties the box again - it was empty, so nothing of ours is left in it.
 
 Opening the chat brings Teams forward for those few seconds - the link does that. Only ever Teams' own window, only the
 chat the dashboard named, only the dashboard's text. A dry run does it all but Send, and empties the box again. Nothing
@@ -30,8 +32,6 @@ IS_WIN = os.name == "nt"
 EXES = ("ms-teams.exe", "teams.exe")
 TITLE_END = "| microsoft teams"
 OPEN_SECONDS = 25
-FILL_SECONDS = 8                    # Teams puts the link's text in the box a moment after the chat shows
-LINK_MAX = 2000                     # a longer link than this is not handed to Windows: the text goes in afterwards
 BOX_TYPES = (50004, 50030)          # UI Automation's Edit and Document: what Teams' message box reads as
 BUTTON = 50000
 BOX_WORDS = ("type a message", "type a new message", "type your message")
@@ -44,10 +44,9 @@ class Stop(Exception):
     pass
 
 
-def chat_link(email, text=""):
-    """Teams' own link for a chat with that address - with the message for its box when there is one."""
-    link = "msteams:/l/chat/0/0?users=" + quote(str(email or "").strip(), safe="@.")
-    return link + ("&message=" + quote(str(text), safe="") if text else "")
+def chat_link(email):
+    """Teams' own link for a chat with that address."""
+    return "msteams:/l/chat/0/0?users=" + quote(str(email or "").strip(), safe="@.")
 
 
 def name_words(email, name=""):
@@ -84,6 +83,13 @@ def same_text(box, text):
 def holds_only(box, text):
     """Does the box hold the text and nothing else - no older draft before or after it?"""
     return bool(_squash(text)) and _squash(box) == _squash(text)
+
+
+def only_copies(box, text):
+    """Is the box holding nothing but this same message, once or more - left there by an earlier try of this send?
+    Spacing between the copies does not matter; any other word in it does."""
+    v, t = re.sub(r"\s+", "", str(box or "")).lower(), re.sub(r"\s+", "", str(text or "")).lower()
+    return bool(t) and bool(v) and len(v) % len(t) == 0 and v == t * (len(v) // len(t))
 
 
 def is_box(name):
@@ -210,39 +216,42 @@ def _box(s, hwnd, who):
 
 def _fill_and_send(s, hwnd, who, text, dry):
     box, label = _box(s, hwnd, who)
-    got, end = "", time.time() + FILL_SECONDS
-    while time.time() < end:
-        got = _value(s, box)
-        if not empty(got, label):
-            break
-        time.sleep(0.5)
-    if empty(got, label):                                        # the link left the box empty: the text another way
-        if not _set_value(s, box, text):
-            raise Stop(f"Teams left the message box with {who} empty and would not take the text through UI "
-                       "Automation - nothing sent.")
+    before = _value(s, box)
+    if not empty(before, label) and only_copies(before, text):  # this same message, left by an earlier try: ours
+        _set_value(s, box, "")
         time.sleep(0.7)
-        got = _value(s, box)
+        before = _value(s, box)
+    if not empty(before, label):
+        raise Stop(f"The message box with {who} already holds a draft ({before[:60]!r}) - left as it is, nothing "
+                   "sent.")
+    # from here the box was empty - anything that goes wrong empties it again, so nothing of ours is left in it
+    if not _set_value(s, box, text):
+        raise Stop(f"Teams' message box with {who} would not take the text through UI Automation - nothing sent.")
+    time.sleep(0.7)
+    got = _value(s, box)
     if not holds_only(got, text):
-        raise Stop(f"The message box with {who} reads {got[:80]!r} - not just this message (an older draft, or Teams "
-                   "changed it). Nothing sent: look at the chat in Teams.")
+        _set_value(s, box, "")
+        raise Stop(f"The message box with {who} read back {got[:80]!r}, not the message - emptied, nothing sent.")
     if dry:
         _set_value(s, box, "")
         time.sleep(0.7)
         left = _value(s, box)
         return {"ok": empty(left, label),
-                "said": f"Dry run: the chat with {who} opened with the text in its message box, read back exactly - "
-                        "emptied again, nothing sent." + ("" if empty(left, label) else
-                                                         " BUT the text is still in the box - empty it in Teams.")}
+                "said": f"Dry run: the chat with {who} opened and its message box took the text and read it back "
+                        "exactly - emptied again, nothing sent." + ("" if empty(left, label) else
+                                                                   " BUT the text is still in the box - empty it in Teams.")}
     button, _ = find(s, hwnd, is_send, kinds=(BUTTON,))
-    if not button:
-        raise Stop(f"Teams' Send button could not be found in the chat with {who} - the text is in the box, NOT sent.")
-    if not s.invoke(button):
-        raise Stop(f"Teams' Send button would not press in the chat with {who} - the text is in the box, NOT sent.")
+    if not (button and s.invoke(button)):
+        _set_value(s, box, "")
+        raise Stop(f"Teams' Send button could not be {'pressed' if button else 'found'} in the chat with {who} - "
+                   "emptied, nothing sent.")
     time.sleep(1.5)
-    left = _value(s, _box(s, hwnd, who)[0])                      # the box afresh: Teams redraws it once sent
+    box2, _ = _box(s, hwnd, who)                                 # the box afresh: Teams redraws it once sent
+    left = _value(s, box2)
     if not empty(left, label):
-        return {"ok": False, "said": f"Send was pressed in the chat with {who} but the box still holds text - look "
-                                     "at Teams before sending again."}
+        _set_value(s, box2, "")
+        return {"ok": False, "said": f"Send was pressed in the chat with {who} but the text stayed in the box - "
+                                     "emptied it; look at the chat in Teams to see whether it went."}
     return {"ok": True, "said": f"Sent to {who} on Teams."}
 
 
@@ -258,10 +267,11 @@ def send(email, name, text, dry=False):
         raise Stop("No text to send, or far too long for a chat.")
     who = " ".join(w.capitalize() for w in words)
     before = ctms_window.user32.GetForegroundWindow()            # put back once it is done
-    link = chat_link(email, text)
     hwnd = None
     try:
-        os.startfile(link if len(link) <= LINK_MAX else chat_link(email))
+        # the plain chat link: a message riding in the link was typed into the box twice (01/11 test), so the text
+        # goes in through UI Automation once the box is seen to be empty
+        os.startfile(chat_link(email))
         end = time.time() + OPEN_SECONDS
         while time.time() < end and not hwnd:
             hwnd = next((h for h, t in windows() if is_chat_with(t, words)), None)

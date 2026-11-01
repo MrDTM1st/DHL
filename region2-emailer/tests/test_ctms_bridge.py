@@ -3091,10 +3091,13 @@ def test_teams_opens_only_that_persons_chat_and_checks_it_by_its_title():
     assert not TM.is_send("Send feedback") and not TM.is_send("Sender details") and not TM.is_send("")
     assert TM.empty("", "Type a message") and TM.empty("Type a message\n", "Type a message")    # its own prompt
     assert TM.empty("Type a new message", "") and not TM.empty("Hi Sam", "Type a message")
-    # the quiet send: the text rides in Teams' own link, and the box must hold it and nothing else
-    assert TM.chat_link("sam.example@example.com", "Hi Sam,\nOrder: 9100001 & co") == \
-        "msteams:/l/chat/0/0?users=sam.example@example.com&message=Hi%20Sam%2C%0AOrder%3A%209100001%20%26%20co"
+    # the quiet send: the box must hold this message and nothing else; copies of this same message left by an
+    # earlier try are ours to clear, anything else is his draft and is left alone
     assert TM.holds_only("Hi Sam,\r\nOrder: 9100001", "Hi Sam,\nOrder: 9100001")
+    assert TM.only_copies("Hi Sam,\nSecond line.Hi Sam,\nSecond line.", "Hi Sam,\nSecond line.")
+    assert TM.only_copies("Hi Sam, Second line.", "Hi Sam,\nSecond line.")
+    assert not TM.only_copies("Hi Sam,\nSecond line. And my own note", "Hi Sam,\nSecond line.")
+    assert not TM.only_copies("", "Hi Sam") and not TM.only_copies("Hi", "Hi Sam")
     assert not TM.holds_only("an older draft Hi Sam,\nOrder: 9100001", "Hi Sam,\nOrder: 9100001")
     assert not TM.holds_only("Hi Sam,", "Hi Sam,\nOrder: 9100001") and not TM.holds_only("", "")
 
