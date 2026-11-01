@@ -124,6 +124,31 @@ test('a haulier who works one patch is listed only for drops inside it', () => {
   assert.ok(at('').includes('Patch Co') && at('').includes('Scot Co'));
 });
 
+test('a firm one capability short but nearer than everyone who fits is named, with what it lacks', () => {
+  const pool = [
+    H('Far Fit Co', 'tier1', ['Artic Hiab', 'Rear Steer'], { pc: 'AA1 1AA' }),
+    H('Near Short Co', 'tier1', ['Artic Hiab'], { pc: 'BB1 1BB' }),        // no rear steer
+    H('Near Two Short Co', 'tier2', ['Vans'], { pc: 'BB1 1BC' }),          // no hiab, no rear steer
+    H('Far Short Co', 'tier2', ['Artic Hiab'], { pc: 'CC1 1CC' }),         // short, and further than the fit
+  ];
+  const geo = { 'AA1 1AA': { la: 54.0, lo: -2.0 }, 'BB1 1BB': { la: 52.61, lo: -1.0 },
+    'BB1 1BC': { la: 52.61, lo: -1.0 }, 'CC1 1CC': { la: 55.5, lo: -2.0 }, 'DD1 1DD': { la: 52.6, lo: -1.0 } };
+  const r = job('60x sleepers', { offloading: { value: 'HIAB' }, rear_steer: { value: 'yes' } }, { postcode: 'DD1 1DD' });
+  const res = recommendFor(r, pool, geo);
+  assert.deepEqual(res.list.map((h) => h.name), ['Far Fit Co']);
+  assert.deepEqual(res.nearMiss.map((x) => [x.name, x.missing, x.rank, x.nearEnd]),
+    [['Near Short Co', 'rear steer', 1, 'delivery']]);
+  // nobody fits: the nearest firms one short are still named
+  const none = recommendFor(r, pool.slice(1), geo);
+  assert.deepEqual(none.list, []);
+  assert.deepEqual(none.nearMiss.map((x) => x.name), ['Near Short Co', 'Far Short Co']);
+  // no distances yet: nothing is "near"
+  assert.deepEqual(recommendFor(r, pool, {}).nearMiss, []);
+  // a one-need job: lacking its only need is no fit at all, not a near miss
+  const oneNeed = job('60x sleepers', { offloading: { value: 'HIAB' } }, { postcode: 'DD1 1DD' });
+  assert.deepEqual(recommendFor(oneNeed, pool.slice(2), geo).nearMiss, []);
+});
+
 test('orders run soonest first, then no date, then past ones most recent first', () => {
   const rs = [10, -3, 2, null, -30, 0].map((d, i) => ({ id: String(i), orders: ['900000' + i],
     delivery_date: d === null ? '' : ddmmyyyy(d) }));

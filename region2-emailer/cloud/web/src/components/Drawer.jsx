@@ -240,7 +240,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
 
   const d = r.details || {};
   const v = (k) => detVal(k, d[k]);
-  const { need, list, leftOff } = recommendFor(r, hauliers, geo);
+  const { need, list, leftOff, nearMiss } = recommendFor(r, hauliers, geo);
   // Who has ALREADY been emailed about this job, keyed by haulier name. Worked
   // out from Sent Items on the home PC, so it counts the ones sent by hand -
   // which is most of them. An order can carry several numbers; any of them
@@ -558,6 +558,12 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onBookedC
           {leftOff.length > 0 && (
             <div className="statusdetail" style={{ margin: '-4px 0 10px', fontSize: 12.5, color: 'var(--muted)' }}>
               Left off: {leftOff.map((x) => `${x.name} (${x.why})`).join(', ')}
+            </div>
+          )}
+          {nearMiss.length > 0 && (
+            <div className="statusdetail" style={{ margin: '-4px 0 10px', fontSize: 12.5, color: 'var(--muted)' }}>
+              Nearby but left off: {nearMiss.map((x) => `${x.name} (${['our fleet', 'Tier 1', 'Tier 2'][x.rank]}, `
+                + `${x.miles} mi from ${x.nearEnd}) — no ${x.missing} on the contact sheet`).join('; ')}
             </div>
           )}
           {recs.length ? recs.map((h, i) => {

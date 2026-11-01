@@ -408,6 +408,12 @@ export function milesBetween(a, b) {
 // DHL NOC (our fleet) is left off - not just ranked lower - where it cannot take
 // the job (Delali, 02/10): rails over 18.3m, rear steer, night or weekend work.
 // `leftOff` says who was left off and why, so the drawer can say so.
+//
+// `nearMiss` names firms that meet all but ONE of the job's needs (so only on
+// jobs with two or more - one short of a one-need job is no fit at all) and
+// are nearer than anyone who fits, with what they lack. The sheet can simply lack
+// a capability: DE O'Reilly had rear steer all along, but a rear steer job on
+// their doorstep listed seven firms further away and never said why (01/11).
 export function recommendFor(r, hauliers, geo) {
   const job = jobOf(r);
   const need = job.need;
@@ -454,16 +460,7 @@ export function recommendFor(r, hauliers, geo) {
     }
     return false;
   };
-  const out = (hauliers || []).filter((h) => {
-    if (h.parcel) return false;   // Parcel Pass is a booking service, never ranked
-    if (outsideCoverage(h)) return false;
-    // every need met by one of its capabilities, named exactly as the sheet does
-    const caps = new Set((h.caps || []).map((c) => String(c).trim().toLowerCase()));
-    if (!need.every((n) => n.any.some((c) => caps.has(c.toLowerCase())))) return false;
-    const why = fleetCant(h);
-    if (why) leftOff.push({ name: h.name, why });
-    return !why;
-  }).map((h) => {
+  const distOf = (h) => {
     const g = geo[pcNorm(h.pc || '')];
     // nearest of the collection points - the run starts wherever suits them
     const mcs = g ? cgs.map((c) => milesBetween(c, g)).filter((x) => x !== null) : [];
@@ -471,12 +468,27 @@ export function recommendFor(r, hauliers, geo) {
     const md = g && dg ? milesBetween(dg, g) : null;
     const both = [['collection', mc], ['delivery', md]].filter((x) => x[1] !== null);
     both.sort((a, b) => a[1] - b[1]);
-    return Object.assign({}, h, {
+    return {
       miles: both.length ? both[0][1] : null,
       nearEnd: both.length ? both[0][0] : null,
       milesCollection: mc, milesDelivery: md,
-    });
-  });
+    };
+  };
+  const oneShort = [];
+  const out = (hauliers || []).filter((h) => {
+    if (h.parcel) return false;   // Parcel Pass is a booking service, never ranked
+    if (outsideCoverage(h)) return false;
+    // every need met by one of its capabilities, named exactly as the sheet does
+    const caps = new Set((h.caps || []).map((c) => String(c).trim().toLowerCase()));
+    const missing = need.filter((n) => !n.any.some((c) => caps.has(c.toLowerCase())));
+    if (missing.length) {
+      if (missing.length === 1 && need.length > 1) oneShort.push({ h, missing: missing[0].label });
+      return false;
+    }
+    const why = fleetCant(h);
+    if (why) leftOff.push({ name: h.name, why });
+    return !why;
+  }).map((h) => Object.assign({}, h, distOf(h)));
   out.forEach((h) => { h.rank = h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2); });
   // Band order is the order of APPROACH, but a haulier that is much closer than
   // everyone ahead of it is worth surfacing rather than burying - a tier 2 at
@@ -507,7 +519,17 @@ export function recommendFor(r, hauliers, geo) {
     || (a.miles === null) - (b.miles === null)
     || (a.miles || 9e9) - (b.miles || 9e9)
     || a.name.localeCompare(b.name));
-  return { need, list: out, nw, leftOff };
+  // nearer than everyone who fits (or anyone at all when nobody fits); without
+  // distances there's no "near" to speak of, so nothing until they geocode
+  const fitMiles = out.filter((h) => h.miles !== null).map((h) => h.miles);
+  const bestFit = fitMiles.length ? Math.min(...fitMiles) : (out.length ? -1 : Infinity);
+  const nearMiss = oneShort.map(({ h, missing }) => Object.assign({
+    name: h.name, missing, rank: h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2),
+  }, distOf(h)))
+    .filter((x) => x.miles !== null && x.miles < bestFit)
+    .sort((a, b) => a.miles - b.miles || a.name.localeCompare(b.name))
+    .slice(0, 3);
+  return { need, list: out, nw, leftOff, nearMiss };
 }
 
 // The map's order list: soonest delivery first (so the urgent ones lead), then
