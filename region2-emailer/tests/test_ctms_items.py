@@ -44,11 +44,6 @@ class FakeOrder:
     # -- what the Access Bridge hands over
     def read(self):
         els = []
-        if self.asked:
-            els += [{"r": "internal frame", "nm": f"Orders {self.asked}", "lv": 0},
-                    {"r": "option pane", "nm": self.asked, "lv": 1},
-                    {"r": "push button", "nm": "OK ALT O", "lv": 1, "at": [938, 569, 91, 31]},
-                    {"r": "push button", "nm": "Cancel ALT C", "lv": 1, "at": [1029, 569, 91, 31]}]
         if self.open_card:
             els += [{"r": "internal frame", "nm": "Order details for 11000001", "lv": 0},
                     {"r": "text", "nm": "Customer Ref", "v": self.opens_as or self.ref, "lv": 3, "at": [594, 200, 150, 24]},
@@ -65,6 +60,12 @@ class FakeOrder:
                 rows = self.have + [""] * (I.SERVICE_ROWS - len(self.have))
                 els += [{"r": "push button", "nm": "Charge Revenue", "lv": 3}]
                 els += [{"r": "text", "nm": "", "v": v, "lv": 3, "at": [100, 400, 50, 20]} for v in rows]
+        if self.asked:                  # as CTMS hands it over (02/11): a window inside the one that asked
+            els += [{"r": "internal frame", "nm": f"Orders {self.asked}", "lv": 1},
+                    {"r": "option pane", "nm": self.asked, "lv": 2, "at": [771, 473, 357, 135]},
+                    {"r": "push button", "nm": "OK ALT O", "lv": 3, "at": [938, 569, 91, 31]},
+                    {"r": "push button", "nm": "Cancel ALT C", "lv": 3, "at": [1029, 569, 91, 31]},
+                    {"r": "label", "nm": self.asked, "lv": 3, "at": [871, 505, 249, 60]}]
         els += [{"r": "internal frame", "nm": "Order Summary", "lv": 0},
                 {"r": "text", "nm": "Enter value for : EXTERNAL_REF", "v": self.ref, "lv": 3, "at": [0, 100]},
                 {"r": "text", "nm": "Enter value for : EARLY_AVAIL", "v": self.ready, "lv": 3, "at": [0, 100]},
@@ -399,6 +400,9 @@ def test_the_parsers():
     o = FakeOrder(ready="a", deliver_by="b")
     assert I.summary_line(o.read(), o.ref) == {"ready_at": "a", "deliver_by": "b"} and I.summary_line(o.read(), "x") is None
     assert I.question(o.read()) is None
+    o.open_card, o.asked = True, "Do you want to discard your changes?"
+    words, buttons = I.question(o.read())
+    assert words == "Orders Do you want to discard your changes?" and sorted(buttons) == ["cancel", "ok"]
 
 
 if __name__ == "__main__":
