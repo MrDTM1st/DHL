@@ -272,7 +272,8 @@ def plan_update(it, rec, found):
     rv = _field(d, "rear_steer")
     rear = answers.get("rear_steer") or (rv.get("value") if rv.get("confidence") in ("high", None) else None)
     if rear not in YES_NO:
-        rear = doubt("rear_steer", "Rear steer", rv.get("raw") or rv.get("value"), YES_NO, "Not certain")
+        rear = doubt("rear_steer", "Rear steer", rv.get("raw") or rv.get("value"), YES_NO,
+                     "Not certain" if rv.get("raw") or rv.get("value") else "Their email doesn't say")
     pv = _field(d, "pts")
     pts = answers.get("pts") or (pv.get("value") if pv.get("confidence") in ("high", None) else None)
     if not is_rails(rec):
@@ -280,7 +281,8 @@ def plan_update(it, rec, found):
         if pv.get("value") == "yes":
             explain.append("PTS left off: PTS is only for rails (your rule)")
     elif pts not in YES_NO:
-        pts = doubt("pts", "PTS", pv.get("raw") or pv.get("value"), YES_NO, "Not certain")
+        pts = doubt("pts", "PTS", pv.get("raw") or pv.get("value"), YES_NO,
+                    "Not certain" if pv.get("raw") or pv.get("value") else "Their email doesn't say")
     # -- the vehicle: whatever fits - rails by their length, the rest by the weight (see the top of this file). Only
     #    what the site's own words rule out, or what nothing on the order can say, comes to him
     bags = ballast_bags(rec)

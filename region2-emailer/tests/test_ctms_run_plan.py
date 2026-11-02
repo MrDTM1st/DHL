@@ -81,6 +81,14 @@ def test_the_sites_instruction_for_the_load_ends_the_comment():
     assert p["set"]["comments"].endswith(" - W3W ///one.two.three - X84 per lorry")
 
 
+def test_a_question_the_email_never_answers_says_so():
+    rec = _rec("9100093", "05/11/2026", rear_steer={"value": None, "confidence": "amber", "raw": ""},
+               pts={"value": None, "confidence": "amber", "raw": "PTS maybe"})
+    rec["materials"], rec["product_codes"] = "10x rails", [RAIL_60FT]
+    why = {c["field"]: c["why"] for c in P.plan([_item("9100093")], [rec], _found("9100093", "05/11/2026"))[0]["checks"]}
+    assert why == {"rear_steer": "Their email doesn't say", "pts": "Not certain"}, why
+
+
 def test_a_note_is_always_ready():
     p = P.plan([{"id": "n1", "kind": "note", "orders": ["9100070"], "ref": "9100070-1-1", "note": " - Emailed DO 28/10",
                  "what": "Add 'Emailed DO 28/10'"}], [], {})

@@ -474,6 +474,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
     ['Rear steer', v('rear_steer')],
     ['PTS', v('pts')],
     ['What3Words', v('what3words')],
+    ['Notes', v('notes')],
     ['Chases', r.chases ? String(r.chases) : ''],
   ].filter((x) => x[1]);
 
