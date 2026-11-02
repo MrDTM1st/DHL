@@ -6,7 +6,7 @@ No picture is read between the steps: CTMS's own words on its menus and box titl
 (ctms_book_templates.json) and what only the screen knows - which row is the order, which manifest is new - is read
 through the Access Bridge. In order, the way he books:
 
-  1. the manifest tree's Sched on the delivery day - the well's To follows it
+  1. the order well's own To and the manifest tree's Sched both on the delivery day - one doesn't reliably follow the other
   2. the order's unscheduled lines for that day found in the well: as it stands, then with the Deliver column pressed
      (his tip: latest first, so the day's orders are on top), then with the well's own Refresh
   3. the delivery type put up when the real date makes it more urgent than the order says - "the delivery type has to
@@ -235,6 +235,7 @@ class Booking:
         self.els = []
         self.sched = ""
         self.flipped = False       # the Deliver column pressed: pressed again at the end, so it's as he left it
+        self.to_was = ""           # the well's To as he had it: put back at the end
         self.trips = []
         self.veh_kept = ""         # what CTMS now keeps as the Veh Type of the line taken to the carrier screen
         self.said = []
@@ -297,7 +298,7 @@ class Booking:
 
     def set_sched(self, want):
         """The tree on that schedule: its list runs newest first, a day a row, so Up once per day ahead, Enter, read
-        back (his walkthrough 29/10; a click on an open list's row can pick nothing). The well's To moves with it."""
+        back (his walkthrough 29/10; a click on an open list's row can pick nothing)."""
         for _ in range(3):
             have = sched_of(self.els)
             if have == want:
@@ -311,6 +312,55 @@ class Booking:
                      + [_key("enter", 0.3), {"action": "settle", "quiet": 0.6, "timeout": 15}])
             self.look()
         raise Stop(f"The manifest tree wouldn't go to schedule {want}: it shows {sched_of(self.els)}.")
+
+    def to_box(self):
+        """The well's To: its arrow, and its list's rows when open. Only an open list hands over what To says."""
+        frame = ctms_rows._frame(self.els) or []
+        at = next((i for i, e in enumerate(frame) if e.get("r") == "combo box" and e.get("nm") == "To" and placed(e)), None)
+        if at is None:
+            raise Stop("Could not find the order well's To date in Planning. Nothing was booked.")
+        rows = []
+        for e in frame[at + 1:]:
+            if e.get("lv", 0) <= frame[at].get("lv", 0):
+                break
+            if e.get("r") == "label" and placed(e) and re.fullmatch(r"\d{6}", str(e.get("nm") or "")):
+                rows.append(e)
+        x, y, w, h = frame[at]["at"]
+        return [x + w - 10, y + h // 2], rows
+
+    def move_to(self, want):
+        """The well's To on that schedule, the way the tree's goes: its list runs oldest first, a day a row, so Down once per
+        day ahead, Enter (seen live 02/11). True when it was there already, the list shut again; the well re-queries if not."""
+        arrow, rows = self.to_box()[0], []
+        for _ in range(3):                               # a click without the focus may only give it the focus
+            self.run([{"action": "click", "screen": arrow, "after": 0.5}])
+            self.look()
+            arrow, rows = self.to_box()
+            if rows:
+                break
+        have = next((str(e["nm"]) for e in rows if "selected" in (e.get("st") or [])), "")
+        if not have:
+            if rows:
+                self.run([{"action": "click", "screen": arrow, "after": 0.3}])
+            raise Stop("Could not read the order well's To date. Nothing was booked.")
+        self.to_was = self.to_was or have
+        if have == want:
+            self.run([{"action": "click", "screen": arrow, "after": 0.3}])
+            return True
+        days = (datetime.strptime(want, "%y%m%d") - datetime.strptime(have, "%y%m%d")).days
+        self.run([_key("down" if days > 0 else "up")] * abs(days)
+                 + [_key("enter", 0.3), {"action": "settle", "quiet": 0.6, "timeout": 15}])
+        return False
+
+    def set_day(self, want):
+        """The well's To and the tree's Sched on that schedule (his 02/11: the order is found by the well's own date, and "the
+        manifest tree, you have to do the same thing"). To is read back last: a change of the tree's Sched can move it."""
+        self.move_to(want)
+        self.set_sched(want)
+        for _ in range(3):
+            if self.move_to(want):
+                return
+        raise Stop(f"The order well's To wouldn't go to {want}. Nothing was booked.")
 
     def well(self):
         return ctms_rows.rows(self.els)
@@ -356,7 +406,7 @@ class Booking:
         """The well's own Refresh, off a row's menu - it isn't live: an import or a split only shows after it."""
         rows = self.well()
         if not rows:
-            raise Stop("Planning's order well is empty as it is filtered - check its filters.")
+            return                         # nothing delivering by that day as it is filtered: no row to right-click
         pt = ctms_rows.point(rows[0])
         self.run([{"action": "click", "screen": pt, "after": 0.7}, {"action": "click", "screen": pt, "right": True, "after": 0.3},
                   _find(self.t, "wm-refresh", ROW_MENU, 3, click=True, after=0.3),
@@ -422,12 +472,20 @@ class Booking:
             self.run([_click(CARRIER_EXIT, after=0.8)])
 
     def tidy(self):
-        """As he left it: the Deliver column back, no carrier window behind Planning."""
+        """As he left it: the Deliver column back, the well's To back, no carrier window behind Planning. A trip not saved
+        keeps the well as it is: a new To re-queries it."""
         self.run([ANCHOR])
         self.look()
         self.carrier_window_away()
         if self.flipped:
             self.press_deliver()
+        if self.to_was and not self.unsaved():
+            self.move_to(self.to_was)
+
+    def unsaved(self):
+        """Whether Planning's Save is lit."""
+        save = next((e for e in ctms_rows._frame(self.els) or [] if e.get("r") == "push button" and e.get("nm") == "Save"), None)
+        return save is not None and "disabled" not in (save.get("st") or [])
 
     # -- what goes on the order first
     def raise_type(self, ref):
@@ -601,22 +659,25 @@ class Booking:
     def book(self, orders, date, carrier, trailer, haulage, vehicles):
         """The whole booking. self.trips says what was made, however it ended."""
         self.start()
-        self.set_sched(sched_for_day(date))
+        self.set_day(sched_for_day(date))
         self.stage("the date")
         lines = self.lines(orders, date)
         if not lines:
             ahead = (datetime.strptime(date, "%d/%m/%Y") + timedelta(days=1)).strftime("%y%m%d")
-            self.set_sched(ahead)          # a night delivery sits on the next day's schedule, past the well's To
+            self.set_day(ahead)            # a night delivery sits on the next day's schedule, past the well's To
             lines = self.lines(orders, date)
         named = " / ".join(orders)
         if not lines:
-            other = sorted({f"{r['cust_ref']} on {ctms_orders.day(r.get('deliver'))}" for r in lines_of(self.well(), orders)})
+            if self.to_was:                # a later date than the day asked for sits past that To
+                self.move_to(self.to_was)
+                self.look()
+            other = sorted({f"{r['cust_ref']} on {ctms_orders.day(r.get('deliver'))}" for r in self.scan(orders, "")})
             raise Stop((f"CTMS has {', '.join(other)}, not {date}: run its update first or check the date." if other else
-                        f"{named} isn't in the order well for {date}. It may be booked already, not in CTMS yet, or kept out "
-                        "by the well's filters (Business Type, To Plan Reg).") + " Nothing was booked.")
+                        f"{named} isn't in the order well for {date}. It may be booked already, not in CTMS yet, on another "
+                        "day in CTMS, or kept out by the well's filters (Business Type, To Plan Reg).") + " Nothing was booked.")
         want = sched_for_delivery(lines[0].get("deliver"))
         if want and want != sched_of(self.els):
-            self.set_sched(want)
+            self.set_day(want)
         if vehicles > 1 and len(lines) > 1 and len(lines) != vehicles:
             raise Stop(f"{named} has {len(lines)} lines to share over {vehicles} vehicles: the button can't split that yet. "
                        "Nothing was booked.")

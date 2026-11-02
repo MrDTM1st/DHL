@@ -5,7 +5,7 @@ the way the Access Bridge hands them, the steps it is told to take moving it on.
 """
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "work_pc"))
@@ -28,8 +28,12 @@ def _cell(col, row, value):
 class FakeCtms:
     """What the run sees. `well` is the list as CTMS would sort it; a step list moves it on."""
 
-    def __init__(self, well, carriers=("DHL_NOC",), sched="261102", tree=(), cost="96.18"):
+    def __init__(self, well, carriers=("DHL_NOC",), sched="261102", tree=(), cost="96.18", to="261113", to_stuck=False):
         self.well = list(well)
+        self.to = to                    # the well's own To
+        self.to_stuck = to_stuck
+        self.to_list = None             # the row picked while its list is open
+        self.planning_unsaved = False
         self.carriers = list(carriers)
         self.sched = sched
         self.tree = dict(tree)          # manifest: status
@@ -55,8 +59,12 @@ class FakeCtms:
         self.panel = None
 
     # -- what the Access Bridge hands over
+    def upto(self):
+        """The well as its To lets it show."""
+        return [r for r in self.well if datetime.strptime(r["deliver"][:8], "%d/%m/%y") <= datetime.strptime(self.to, "%y%m%d")]
+
     def rows_shown(self):
-        rows = list(reversed(self.well)) if self.reversed else self.well
+        rows = list(reversed(self.upto())) if self.reversed else self.upto()
         return rows[self.page * 15:self.page * 15 + 15]
 
     def read(self):
@@ -64,8 +72,13 @@ class FakeCtms:
         els = [{"r": "internal frame", "nm": "Planning", "lv": 0, "at": [20, 130, 1648, 807]},
                {"r": "tree", "nm": "", "lv": 1, "at": [35, 228, 396, 696]},
                {"r": "text", "nm": "Sched", "v": self.sched, "lv": 1, "at": [79, 202, 80, 21]},
+               {"r": "push button", "nm": "Save", "lv": 1, "at": [1307, 88, 60, 25], "st": None if self.planning_unsaved else ["disabled"]},
                {"r": "push button", "nm": "Order Filters", "lv": 1, "at": [1557, 544, 95, 23]},
-               {"r": "push button", "nm": "Cust Ref", "lv": 1, "at": [X0, 560, 100, 25]},
+               {"r": "combo box", "nm": "To", "lv": 1, "at": list(TO_BOX)},
+               {"r": "list", "nm": "", "lv": 2, "at": [750, 369, 73, 182] if self.to_list else [-1, -1, -1, -1]}]
+        if self.to_list:
+            els += [{"r": "label", "nm": self.to_list, "lv": 3, "at": [750, 369, 73, 22], "st": ["selected"]}]
+        els += [{"r": "push button", "nm": "Cust Ref", "lv": 1, "at": [X0, 560, 100, 25]},
                {"r": "push button", "nm": "Deliver From", "lv": 1, "at": [1127, 560, 66, 25]},
                {"r": "label", "nm": self.status_line or "<OSC>", "lv": 1, "at": [416, 949, 1162, 16]}]
         for n, (man, status) in enumerate(self.tree.items()):
@@ -142,6 +155,9 @@ class FakeCtms:
         if sc:
             if s.get("right"):
                 return
+            if list(sc) == [TO_BOX[0] + TO_BOX[2] - 10, TO_BOX[1] + TO_BOX[3] // 2]:
+                self.to_list = None if self.to_list else self.to
+                return
             for i, r in enumerate(self.rows_shown()):
                 y = Y0 + 23 * i
                 if abs(sc[1] - (y + 11)) < 12 and X0 <= sc[0] <= X0 + 100:
@@ -205,15 +221,23 @@ class FakeCtms:
             self.card = None
 
     def key(self, k):
-        if k == "enter":
+        if self.to_list and k in ("up", "down"):
+            d = datetime.strptime(self.to_list, "%y%m%d") + timedelta(days=1 if k == "down" else -1)
+            self.to_list = d.strftime("%y%m%d")
+        elif self.to_list and k == "enter":
+            self.to = self.to if self.to_stuck else self.to_list
+            self.to_list = None
+            self.page = 0
+        elif k == "enter":
             self.sched = self.want_sched if getattr(self, "want_sched", None) else self.sched
         elif k == "pagedown":
-            if (self.page + 1) * 15 < len(self.well):
+            if (self.page + 1) * 15 < len(self.upto()):
                 self.page += 1
         elif k == "escape":
             self.list = None
 
 
+TO_BOX = (758, 523, 80, 23)
 TRAILERS = ("NR_BULK_SKIP", "NR_ARTIC_FL", "NR_FLAT_RIG")
 ALT_CARRIERS = ("DAWN_HAULAGE", "DELTA_DH", "DOVER FREIGHT")
 
@@ -231,7 +255,6 @@ def _job(ctms, dry=False, now=NOW):
         downs = sum(1 for s in batch if s.get("key") == "down")
         if any(s.get("px") == list(B.SCHED_ARROW) for s in batch):
             d = datetime.strptime(ctms.sched, "%y%m%d")
-            from datetime import timedelta
             ctms.want_sched = (d + timedelta(days=ups - downs)).strftime("%y%m%d")
         run(batch)
 
@@ -322,6 +345,43 @@ def test_an_order_past_the_first_page_is_found_with_the_deliver_column_pressed_a
     assert job.flipped is True and ctms.reversed is True
     job.tidy()
     assert job.flipped is False and ctms.reversed is False
+
+
+def test_the_wells_own_to_goes_on_the_delivery_day_so_the_order_is_on_top_and_goes_back_after():
+    later = [_row(f"90000{i:02d}-1-1", "12/11/26 08:00") for i in range(200)]     # far past six pages from the 13/11 end
+    ctms = FakeCtms([_row("9100001-1-1")] + later)
+    job = _book(ctms, dry=True)
+    assert ctms.to == "261106" and ctms.sched == "261106"
+    assert job.trips and job.to_was == "261113"
+    job.tidy()
+    assert ctms.to == "261113" and ctms.to_list is None and ctms.reversed is False
+
+
+def test_a_to_already_on_the_day_has_its_list_shut_and_nothing_pressed():
+    ctms = FakeCtms([_row("9100001-1-1")], sched="261106", to="261106")
+    job = _book(ctms)
+    assert ctms.to == "261106" and ctms.to_list is None and job.trips[0]["status"] == "ACCEPTED"
+    assert not any(s.get("key") in ("up", "down") for s in ctms.steps)
+
+
+def test_a_to_that_wont_move_stops_before_anything_is_booked():
+    ctms = FakeCtms([_row("9100001-1-1")], to_stuck=True)
+    try:
+        _book(ctms)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "wouldn't go to 261106" in str(e) and "Nothing was booked" in str(e)
+    assert ctms.tree == {}
+
+
+def test_a_trip_not_saved_keeps_the_well_as_it_is():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    job = _job(ctms)
+    job.look()
+    job.set_day("261106")
+    ctms.planning_unsaved = True
+    job.tidy()
+    assert ctms.to == "261106"
 
 
 def test_another_days_lines_of_the_order_are_left_for_their_own_booking():
