@@ -53,6 +53,19 @@ DAYS = 30
 # now (find_bookings), and this only stops a runaway folder.
 PER_FOLDER = 2000
 FOLDERS = ("ADHOC", "Inbox", "Sent Items")
+# A haulier naming one of our manifests is not always saying THIS job is on it. AQ's answer to a cover request on 02/11
+# was "we already have our pts driver on man 01575454" - their driver was busy on another job - and the sweep took the
+# number as AH7/11/26NECA's booking and took it off the map (his "that isn't our manifest for this order"). A mail from
+# anyone but us that turns the job down, or puts the manifest on something else, books nothing: the job stays on the
+# map, which is the safe way to be wrong.
+DECLINED = re.compile(r"\balready\b|\b(?:another|different|other)\s+(?:jobs?|manifests?|man|runs?|loads?|work)\b|"
+                      r"\bcan(?:no|')?t\b|\bcannot\b|\bunable\b|\bnot\s+(?:able|available)\b|\bno\s+availability\b|"
+                      r"\bfully\s+booked\b|\bunfortunately\b|\bdecline[ds]?\b|\bsorry\b", re.I)
+
+
+def declined(text):
+    """Does a reply turn the job down, or put its manifest on another job?"""
+    return bool(DECLINED.search(str(text or "")))
 
 
 def _load_adhocs():
@@ -164,6 +177,10 @@ def find_bookings(ns, refs, days=DAYS):
             m = bd._MAN_RE.search(top)
             if not (m or any(p in top for p in bd._BOOKED_PHRASES)):
                 continue
+            sender = str(getattr(it, "SenderEmailAddress", "") or "").lower()
+            ours = folder.Name.strip().lower() == "sent items" or bd.DHL_SMTP.lower() in sender
+            if not ours and declined(top):
+                continue                          # a haulier turning it down, or busy on another manifest
             man = m.group(0).upper().replace(" ", "-") if m else ""
             for r in hits:
                 # keep the EARLIEST confirmation, not whichever we saw last
