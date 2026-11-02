@@ -80,6 +80,21 @@ def test_a_wrong_person_reply_gives_nothing_to_type_whatever_its_footer_says():
                                          "above, will be able to help you.")
     # our questions answered count wherever they signed off
     assert K.gave_details(rec, "Hi,\r\nThanks\r\nCan artics access the site? no\r\n" + QUOTED, "rails", "Sam") is True
+    # someone asking a colleague for "an alternative contact for your order" is no answer to our questions
+    asking = "Good afternoon all,\r\n\r\n@Jo Site please can you provide an alternative contact for your order RD1234?\r\n"
+    assert K.gave_details(rec, asking + TEAM_SIGNATURE + QUOTED, "rails", "Sam") is False
+
+
+def test_our_questions_answered_in_the_mail_they_quote_are_details_but_quoted_blank_are_not():
+    rec = {"delivery_date": "16/11/2026", "materials": "2x rails"}
+    asked = ("\r\nFrom: Delali Opoku (DHL Supply Chain) <delali.opoku@dhl.com>\r\nSubject: 9100200 Exampletown\r\n\r\n"
+             "Hi Sam,\r\n\r\n    Date and time of delivery?\r\n    Who will be the contact for delivery?\r\n    Alternative "
+             "delivery contact?\r\n    Do we need to bring our own offloading? (HIAB or Moffet)\r\n    Can artics access the "
+             "site?\r\n    Is rear steer required?\r\n    Does the driver need PTS (Only required if within 3m of line)?\r\n"
+             "    What3Words Location?\r\n\r\nKind regards\r\n\r\nDelali Opoku\r\n07700 900999\r\n")
+    assert K.gave_details(rec, "Please see below\r\n" + asked, "rails", "Sam Example") is False
+    assert K.gave_details(rec, "Details below in red.\r\n" + asked.replace("access the site?", "access the site? No"),
+                          "rails", "Sam Example") is True
 
 
 def test_a_footers_date_is_no_delivery_date_and_a_day_gone_is_not_firm():

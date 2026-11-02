@@ -112,7 +112,8 @@ _TIME_PATS = [
     re.compile(r"\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(am|pm)?(?:\s*(?:hrs?|hours))?"
                r"(?!\.?\d)(?![a-z])", re.I),
     re.compile(r"\b(\d{1,2})\s*(am|pm)\b", re.I),                      # 10am, 12am
-    re.compile(r"(?<![\d/\-.])(\d{4})(?:\s*hrs)?(?![\d/\-])", re.I),   # 2200, 0400
+    # 2200, 0400 - but not part of a word: an order's "RD1234" or "2000kg" is no time
+    re.compile(r"(?<![\d/\-.a-z])(\d{4})(?:\s*hrs)?(?![\d/\-a-z])", re.I),
 ]
 
 
