@@ -268,6 +268,7 @@ def _slim_hauliers():
                         "pc": h.get("postcode", ""), "tier": h.get("tier", ""),
                         "phone": (h.get("phone") or "")[:40],
                         "email": (h.get("emails") or [""])[0],
+                        "ctms": h.get("ctms", ""),           # its carrier code in CTMS, for the Book button
                         "fleet": bool(h.get("own_fleet")),   # DHL NOC - approached first
                         "no_go": h.get("no_go_areas", []),   # areas they don't cover
                         "no_go_scope": h.get("no_go_scope", "both"),  # which end it applies to
@@ -1601,6 +1602,33 @@ def main():
                 push_panel()
                 push_tracker()
                 report("done" if res["ok"] else "error", "CTMS to-do run: " + res["said"] + ".", tail(out, 12))
+            elif action == "ctms_book":
+                # the order panel's Book: the trips made on the work PC, then what follows them from here - the DigiHaul
+                # row, the site's email, off the map (book_run.py). The dashboard switched Look mum, no hands on for it
+                job = {k: cmd.get(k) for k in ("record", "orders", "date", "carrier", "trailer", "haulage", "vehicles", "dry")}
+                report("running", f"Booking {' / '.join(job['orders'] or [])} with {job['carrier']} on the work PC…")
+                try:
+                    out = run(["book_run.py", "run", json.dumps(job)], timeout=840)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    res = {"ok": False, "said": "The booking did not finish - look at CTMS before pressing it again.",
+                           "trips": []}
+                try:
+                    _req("/api/ctms/book/ran", dict(res, run=cmd.get("run")))
+                except Exception:
+                    pass
+                push_panel()
+                push_tracker()
+                report("done" if res["ok"] else "error", "Book: " + res["said"], tail(out, 12))
             elif action == "ctms_rail":
                 # the Rail plan card's Export from CTMS: the week's Short Rail Report exported by driving CTMS on the
                 # work PC (ctms_rail_export.py). The bridge sends the file on, and the rail_plan preview that queues

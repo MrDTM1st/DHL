@@ -87,6 +87,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import cdp
 import ctms_act
+import ctms_book
 import ctms_drive
 import ctms_export
 import ctms_fast
@@ -125,6 +126,7 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "export_fetch", "export_close",
          "import_csv",     # Claude acting: this PC AND the dashboard must allow it
          "ctms_check",     # ... and the map's orders looked up in CTMS (searches only, nothing saved)
+         "ctms_book",      # ... and the order panel's Book: one order's trips made in one go (ctms_book)
          "teams_send")     # ... and a dashboard message sent to DHL NOC in this PC's Teams (ctms_teams)
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
@@ -141,7 +143,8 @@ ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
 LOGGED = ("name", "on", "ref", "at", "to", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
-          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target", "steps", "folder")
+          "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target", "steps", "folder",
+          "orders", "date", "carrier", "trailer", "haulage", "vehicles", "dry")
 RESTART = 75            # the child's exit code for "updated - start me again"
 
 SHOT_EVERY = 1.5        # seconds between pictures while the CTMS page is open
@@ -933,6 +936,56 @@ class Bridge:
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_check", checked=len(found),
                                             orders=found))
 
+    # -- the order panel's Book: one order's trips made in one go, no picture between the steps (02/11, ctms_book) --
+    def book_order(self, cmd, done):
+        """His press of Book, the haulier and the price picked on the panel. Every click is CTMS's own on this PC; what was
+        made goes back in the answer, and a stop says where, with any box left open backed out of."""
+        orders = [str(o).strip() for o in cmd.get("orders") or [] if str(o).strip()]
+        date, carrier = str(cmd.get("date") or ""), str(cmd.get("carrier") or "").strip()
+        if not orders or not date or not carrier:
+            return done(False, "Book needs the order, its date and the carrier.", {"kind": "ctms_book"})
+        if not self.scan_window(force=True) or self.target != "ctms":
+            return done(False, self.not_found() if self.target == "ctms" else
+                        "The bridge is working the tracker - use ctms first.", {"kind": "ctms_book"})
+        t = ctms_book.templates()
+        self.batch = {"off": (0, 0), "snaps": []}
+        t0, times = time.time(), []
+
+        def run(steps):
+            for step in steps:
+                ts = time.time()
+                try:
+                    self.window_step(step["action"], step)
+                finally:
+                    times.append(round(time.time() - ts, 2))
+
+        job = ctms_book.Booking(run, lambda: ctms_jab.read_fields(self.win).get("elements") or [],
+                                lambda name, box: self._seen(t, name, box), t, dry=bool(cmd.get("dry")))
+        stopped = ""
+        try:
+            job.book(orders, date, carrier, str(cmd.get("trailer") or "").strip(), cmd.get("haulage"),
+                     int(cmd.get("vehicles") or 1))
+        except Exception as e:
+            stopped = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
+            try:
+                job.back_out()
+            except Exception:
+                pass
+        try:
+            job.tidy()
+        except Exception:
+            pass
+        took = round(time.time() - t0, 1)
+        made = [x for x in job.trips if x.get("manifest")]
+        said = (f"{'Rehearsed' if cmd.get('dry') else 'Booked'} {' / '.join(orders)} in {took:g}s: "
+                + ", ".join(f"{x['manifest']} {x['status']}" for x in made) if made and not stopped else
+                f"Rehearsed {' / '.join(orders)} in {took:g}s with {carrier}: revenue {job.trips[0]['revenue']}, cost "
+                f"{job.trips[0]['cost']}. Nothing booked." if job.trips and not stopped else
+                f"Stopped after {took:g}s: {stopped}"
+                + (f" Already made: {', '.join(x['manifest'] + ' ' + x['status'] for x in made)}." if made else ""))
+        return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
+                                            stages=job.stages, notes=job.said, stopped=stopped, seconds=took))
+
     def _seen(self, t, name, box):
         """Whether one of the check's templates shows in that part of CTMS's window now - one look, nothing clicked."""
         tp = t[name]
@@ -1116,7 +1169,10 @@ class Bridge:
             time.sleep(min(max(float(args["after"]), 0.0), 10.0) if args.get("after") is not None else 0.4)
             return f"{detail} on '{name}'"
         if action in ("waitfor", "check"):
-            px = args.get("px")
+            px, sc = args.get("px"), args.get("screen")
+            if isinstance(sc, (list, tuple)) and len(sc) == 2:     # where the Access Bridge places a thing
+                left, top = (int(v) for v in ctms_window.content_area(self.win)[:2])
+                px, off = [sc[0] - left, sc[1] - top], (0, 0)
             if not (isinstance(px, (list, tuple)) and len(px) == 2):
                 raise RuntimeError(f"{action} needs a point: {action} X,Y #RRGGBB.")
             want = ctms_fast.parse_color(args.get("color"))
@@ -1412,6 +1468,8 @@ class Bridge:
                 return self.import_csv(cmd, done)
             if action == "ctms_check":
                 return self.ctms_check(cmd, done)
+            if action == "ctms_book":
+                return self.book_order(cmd, done)
             if action in ("prompt_press", "prompt_click"):
                 ps = ctms_window.prompts()
                 if not ps:

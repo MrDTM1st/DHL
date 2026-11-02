@@ -273,6 +273,9 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         if "focused" in i["states"] and ctx["focus"] is None:
             ctx["focus"] = e["n"]
         below = level + 1
+    if role == "list" and (i["w"] <= 0 or i["h"] <= 0):
+        return                                  # a drop-down that isn't open: none of its rows are on the screen, and
+                                                # one of Planning's holds thousands - most of a read's seven seconds (02/11)
     for k in range(min(i["children"], KIDS)):
         kid = api.child(vm, ac, k)
         if not kid:

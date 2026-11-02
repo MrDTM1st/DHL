@@ -84,6 +84,7 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "export_fetch", "export_close",      # ... or the export's file taken from its tab's address
               "import_csv",                        # an upload CSV into CTMS (the map's Upload: /api/ctms/import)
               "ctms_check",                        # the map's orders looked up in CTMS (/api/ctms/check)
+              "ctms_book",                         # one order's trips made in CTMS (/api/ctms/book)
               "teams_send")                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
@@ -132,6 +133,7 @@ _ctms = {
     "looked_up": None,     # the last look-up of the map's orders in CTMS: {at, checked, of, stopped}
     "todo_run": None,      # the CTMS page's Run: {id, ids, state, at, said, results, ...}
     "rail_run": None,      # the Rail plan card's Export from CTMS: {id, week, state, at, said, ...}
+    "book_run": None,      # the order panel's Book: {id, record, orders, carrier, state, at, said, trips, seconds, ...}
 }
 # Wakes a held check-in when there is work, and a held wait when its answer lands.
 _ctms_cv = threading.Condition(_lock)
@@ -322,6 +324,15 @@ def _ctms_args(action, data):
         # each step checked like a command of its own; nothing but the window's own steps goes through
         out["steps"] = [dict(_ctms_args(s["action"], s), action=s["action"]) for s in data["steps"][:120]
                         if isinstance(s, dict) and s.get("action") in CTMS_STEP_ACTIONS]
+    if action == "ctms_book":
+        # the order panel's Book: what /api/ctms/book checked, gone through the same gate as every command
+        out["orders"] = [str(o) for o in (data.get("orders") or [])[:8] if _CHECK_REF.fullmatch(str(o))]
+        out["date"] = str(data.get("date") or "") if _DDMMYYYY.fullmatch(str(data.get("date") or "")) else ""
+        out["carrier"] = str(data.get("carrier") or "") if _CARRIER.fullmatch(str(data.get("carrier") or "")) else ""
+        out["trailer"] = str(data.get("trailer") or "") if _CARRIER.fullmatch(str(data.get("trailer") or "")) else ""
+        out["dry"] = bool(data.get("dry"))
+        num("haulage", 0, 100000)
+        num("vehicles", 1, 20, int)
     if action == "ctms_check" and isinstance(data.get("orders"), list):
         # the map's orders to look up: a customer ref, the day it is due, whether to look at its Veh Type
         out["orders"] = [{"key": str(o.get("key") or "")[:80], "ref": str(o["ref"]),
@@ -335,11 +346,13 @@ def _ctms_args(action, data):
 
 _CHECK_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.-]{2,39}")       # an NR order, an ad hoc's AH ref
 _DDMMYYYY = re.compile(r"\d{2}/\d{2}/\d{4}")
+_CARRIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,29}")                # a CTMS carrier or trailer code
 _CHECK_VEH_DAYS = 14        # an order due within this has its open lines' cards opened: Veh Type and weight
 _TODO_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")          # a CTMS to-do item's id
 _TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact", "already"}
 _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 _RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
+_BOOK_RUN_MINUTES = 15       # the longest a Book runs: a few vehicles, the tracker row and the site's email
 
 
 def _check_list_locked():
@@ -1701,6 +1714,8 @@ class Handler(BaseHTTPRequestHandler):
                                  if _ctms["todo_run"] else None),
                     "rail_run": ({k: v for k, v in _ctms["rail_run"].items() if k not in ("before", "until")}
                                  if _ctms["rail_run"] else None),
+                    "book_run": ({k: v for k, v in _ctms["book_run"].items() if k not in ("before", "until")}
+                                 if _ctms["book_run"] else None),
                     "next_check": _check_next(_uk_now()),     # ... and when they will be by themselves
                     "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                 "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
@@ -2025,6 +2040,53 @@ class Handler(BaseHTTPRequestHandler):
                     if _ctms["control_until"] == run["until"]:
                         _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
                         _ctms_note_locked("CTMS to-do run ended - Look mum, no hands mode back as it was.")
+            return self._json(200, {"ok": True})
+        if path == "/api/ctms/book":
+            # the order panel's Book (his design 02/11: "book with who?", the price if tier 2, and it's booked): his press
+            # and pick are the go-ahead for this one order. Look mum, no hands on for the run, back as it was when it ends
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            job = _ctms_args("ctms_book", data)
+            with _lock:
+                if not job.get("orders") or not job.get("date") or not job.get("carrier"):
+                    out = (400, {"error": "Book needs the order, its date and the carrier."})
+                elif _ctms_going_locked("book_run"):
+                    out = (409, {"error": "A booking is going already - it'll be a minute."})
+                elif _ctms_going_locked("todo_run") or _ctms_going_locked("rail_run"):
+                    out = (409, {"error": "A CTMS run is going - book when it's done."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it book."})
+                else:
+                    _ctms["next_id"] += 1
+                    rid = _ctms["next_id"]
+                    before = _ctms["control_until"]
+                    until = max(before, time.time() + _BOOK_RUN_MINUTES * 60)
+                    _ctms["control_until"], _ctms["armed_for"] = until, None
+                    _ctms["book_run"] = {"id": rid, "record": str(data.get("record") or "")[:120], "orders": job["orders"],
+                                         "carrier": job["carrier"], "dry": job["dry"], "before": before, "until": until,
+                                         "state": "running", "at": datetime.now().strftime("%H:%M"), "said": ""}
+                    _ctms_note_locked(f"Look mum, no hands mode switched on to book {' / '.join(job['orders'])} - back as it "
+                                      "was when it ends.")
+                    _queue.append(dict(job, action="ctms_book", record=str(data.get("record") or "")[:120],
+                                       run=rid, queued_at=time.time()))
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
+            return self._json(*out)
+        if path == "/api/ctms/book/ran":
+            # the home PC says the booking ended: what it made - and the switch back as it was before it
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["book_run"]
+                if run and run["id"] == data.get("run"):
+                    run.update(state="done", ok=bool(data.get("ok")), said=str(data.get("said") or "")[:900],
+                               ended=datetime.now().strftime("%H:%M"), seconds=data.get("seconds"),
+                               trips=[{k: str(t.get(k) or "")[:40] for k in ("manifest", "status", "revenue", "cost")}
+                                      for t in (data.get("trips") or [])[:20] if isinstance(t, dict)])
+                    if _ctms["control_until"] == run["until"]:
+                        _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
+                        _ctms_note_locked("Booking ended - Look mum, no hands mode back as it was.")
             return self._json(200, {"ok": True})
         if path == "/api/ctms/rail":
             # the Rail plan card's Export from CTMS (his "where is the execute rail plan button on the dashboard",

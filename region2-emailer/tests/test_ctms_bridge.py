@@ -1816,8 +1816,9 @@ class _FakeJava:
 
     def info(self, vm, ac):
         n = self.refs[ac]
+        x, y, w, h = n.get("at", (0, 0, 10, 10))
         return {"role": n["role"], "name": n["name"], "description": n["desc"], "states": n["states"],
-                "children": len(n["kids"]), "x": 0, "y": 0, "w": 10, "h": 10, "text": "value" in n}
+                "children": len(n["kids"]), "x": x, "y": y, "w": w, "h": h, "text": "value" in n}
 
     def child(self, vm, ac, k):
         return self._ref(self.refs[ac]["kids"][k])
@@ -1881,6 +1882,18 @@ def test_one_very_long_part_of_a_screen_no_longer_stops_the_rest_being_read():
         assert sum(1 for e in out["elements"] if e["r"] == "text") == 30 and java.held == set()
     finally:
         J.KIDS = keep
+
+
+def test_a_drop_down_that_isnt_open_is_not_walked_but_an_open_ones_rows_are_read():
+    # one of Planning's holds thousands, none on the screen: most of a read's seven seconds. Open, its rows come as labels
+    # with their places - how the Book button picks a carrier or a trailer by name (02/11)
+    closed = _n("list", kids=[_n("label", f"hidden {i}") for i in range(30)])
+    closed["at"] = (-1, -1, -1, -1)
+    opened = _n("list", kids=[_n("label", "NR_ARTIC_FL")])
+    opened["at"] = (853, 309, 239, 182)
+    out = J.read([11], api=_FakeJava({11: _n("frame", kids=[closed, opened])}))
+    names = [e["nm"] for e in out["elements"] if e["r"] == "label"]
+    assert names == ["NR_ARTIC_FL"] and out["visited"] < 12
 
 
 def test_a_click_can_aim_at_a_screen_point_but_never_off_ctms():
