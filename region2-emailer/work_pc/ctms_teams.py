@@ -12,8 +12,8 @@ each step is checked before the next:
           through UI Automation by its name) empty - his own draft there, another chat, or none in time stops it with
           nothing sent
   type    the cursor put in that box through UI Automation, one paste, and read back: this message and nothing else.
-          The clipboard comes back as it was (text and its formatting, a picture, files); a copy a password manager
-          marked private is not put back; the message is kept out of the clipboard's history
+          The clipboard comes back as it was once Teams shows the text (text and its formatting, a picture, files);
+          a copy a password manager marked private is not put back
   send    Teams' own Send button, and the box empty after; the window that was in front is put back, and a picture of
           the chat comes back
 
@@ -50,7 +50,7 @@ CLIP_TEXT = ("HTML Format", "Rich Text Format")                  # kept with cop
 CLIP_OTHER = ("PNG", "HTML Format", "Preferred DropEffect", "FileNameW")    # with no text: a picture, or files
 CLIP_PRIVATE = ("ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore",
                 "CanIncludeInClipboardHistory")                  # how a password manager marks its copy
-CLIP_NO_HISTORY = ("CanIncludeInClipboardHistory", "CanUploadToCloudClipboard")
+PASTE_SECONDS = 4                   # for Teams to show the pasted text before the clipboard is put back
 
 
 class Stop(Exception):
@@ -273,12 +273,14 @@ def _clip_save():
 
 
 def _clip_put(items):
-    """The clipboard set to these [(format, bytes)] and nothing else - [] leaves it empty. False = it was busy."""
+    """The clipboard set to these [(format, bytes)] and nothing else - [] leaves it empty. False = it was busy, or
+    Windows would not take one of them."""
     import ctypes
     import ctms_act
     u, k = _clip_api()
     if not ctms_act._open_clipboard():
         return False
+    took = True
     try:
         u.EmptyClipboard()
         for f, data in items:
@@ -287,33 +289,46 @@ def _clip_put(items):
             if not p:
                 if h:
                     k.GlobalFree(h)
+                took = False
                 continue
             ctypes.memmove(p, data, len(data))
             k.GlobalUnlock(h)
             if not u.SetClipboardData(f, h):                     # the clipboard owns h once this succeeds
                 k.GlobalFree(h)
-        return True
+                took = False
+        return took
     finally:
         u.CloseClipboard()
 
 
-def _paste(s, hwnd, box, text):
-    """The text into the box: its cursor, one paste - and the clipboard put back as it was straight after. The text
-    is kept out of the clipboard's history (Windows+V) and its sync to other devices."""
+def _paste(s, hwnd, box, label, text):
+    """The text into the box: its cursor, one paste - the clipboard put back as it was once Teams shows the text (or
+    after a few seconds) -> (what the box reads, why it is still empty or "")."""
     import ctms_act
-    u, _ = _clip_api()
     _set_focus(box)
     time.sleep(0.4)
     keep = _clip_save()
-    ours = [(ctms_act.CF_UNICODETEXT, (text.replace("\r\n", "\n").replace("\n", "\r\n") + "\0").encode("utf-16-le"))]
-    ours += [(u.RegisterClipboardFormatW(n), b"\0\0\0\0") for n in CLIP_NO_HISTORY]
-    if not _clip_put(ours):
-        raise Stop("The work PC's clipboard is busy in another program, so nothing was pasted - nothing sent.")
+    ours = text.replace("\r\n", "\n").replace("\n", "\r\n")
+    if not _clip_put([(ctms_act.CF_UNICODETEXT, (ours + "\0").encode("utf-16-le"))]):
+        _clip_put(keep)
+        raise Stop("Windows would not put the message on the work PC's clipboard (busy in another program?) - "
+                   "nothing pasted, nothing sent.")
+    got, why = "", ""
     try:
         _keys(hwnd, ("ctrl", "v"))
-        time.sleep(1.0)                                          # Teams reads the clipboard as it handles the keys
+        end = time.time() + PASTE_SECONDS                        # Teams reads the clipboard as it handles the keys
+        while True:
+            time.sleep(0.3)
+            got = _value(s, box)
+            if not empty(got, label) or time.time() > end:
+                break
+        if empty(got, label):                                    # what it was, for the stop - our own text only
+            held = ctms_act._clip_text() == ours
+            why = (f"the clipboard {'held' if held else 'did NOT hold'} the message and the cursor was on "
+                   f"{_focused(s) or 'nothing'!r}")
     finally:
         _clip_put(keep)
+    return got, why
 
 
 def _picture(hwnd):
@@ -351,8 +366,9 @@ def _fill_and_send(s, hwnd, who, text, dry):
             raise Stop(f"Copies of this message left in the box with {who} by an earlier try would not clear (it "
                        f"reads {_show(_value(s, box))}) - nothing sent.")
     # from here the box was empty - anything that goes wrong empties it again, so nothing of ours is left in it
-    _paste(s, hwnd, box, text)
-    got = _value(s, box)
+    got, why = _paste(s, hwnd, box, label, text)
+    if why:
+        raise Stop(f"The paste left the message box with {who} empty ({why}) - nothing sent.")
     if not holds_only(got, text):
         _clear(s, hwnd, box, label)
         raise Stop(f"The message box with {who} read back {_show(got)}, not the message - emptied, nothing sent.")
