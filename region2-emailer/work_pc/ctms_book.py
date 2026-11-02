@@ -63,7 +63,6 @@ PLANNING_SAVE = (1337, 98)
 FORMS_OK = (1035, 505)
 ORDERS_BUTTON, PLANNED_CLOSE = (1360, 166), (1493, 447)
 ORDER_SAVE, ORDER_CLOSE = (337, 733), (424, 733)
-DISCARD_CANCEL = (1105, 507)
 CURRENT_ROW = "#FFCC00"            # the well's current row, from its From Loc across
 
 RANK = {"STANDARD": 0, "NEXT DAY": 1, "EMERGENCY": 2}
@@ -268,11 +267,15 @@ class Booking:
                 raise Stop("Planning would not open in CTMS.")
         if any(f.startswith("Order details for") for f in frames(self.els)):
             self.run([_click(ORDER_CLOSE, after=1.0)])
-            if self.seen("close-ask", ALERT):
-                self.run([_click(DISCARD_CANCEL, after=0.5)])
+            self.look()
+            asked = next((f for f in frames(self.els) if "discard your changes" in f), None)
+            if asked:
+                cancel = next((e for e in ctms_rows._frame(self.els, asked) or [] if e.get("r") == "push button"
+                               and str(e.get("nm") or "").startswith("Cancel")), None)
+                if cancel is not None:
+                    self.run([{"action": "click", "screen": _at(cancel), "after": 0.5}])
                 raise Stop("An order is open in CTMS with changes not saved. Nothing was touched: save or close it and "
                            "press Book again.")
-            self.look()
         if any(f.startswith("Order Summary") for f in frames(self.els)):       # the to-do's Run leaves it up, and its card
             if self.seen("os-card", ctms_orders.CARD_BOX):
                 self.run([_click((509, 226), after=0.5)])

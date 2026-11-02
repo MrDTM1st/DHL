@@ -3107,6 +3107,43 @@ def test_the_panels_book_switches_acting_on_for_itself_and_puts_it_back():
         S._queue.clear()
 
 
+def test_an_item_of_the_to_do_goes_to_the_work_pc_through_the_same_gate():
+    item = {"kind": "update", "lines": ["9100001-1-1", "bad ref!"], "set": {
+        "deliver": "05/11/26 08:00-12:00", "comments": "x" * 900, "veh": "rigid", "storage": 2, "anyway": True, "other": "dropped",
+        "services": {"HIAB": True, "PTS": False}}}
+    args = S._ctms_args("ctms_item", {"item": item, "first": 1, "last": 0})
+    got = args["item"]
+    assert got["kind"] == "update" and got["lines"] == ["9100001-1-1"] and args["first"] is True and args["last"] is False
+    assert got["set"]["services"] == {"HIAB": True, "PTS": False} and got["set"]["storage"] == 2 and got["set"]["anyway"] is True
+    assert len(got["set"]["comments"]) == 400 and "other" not in got["set"]
+    note = S._ctms_args("ctms_item", {"item": {"kind": "note", "lines": ["9100001-1-1"], "set": {"note": " - Emailed DO 02/11"}}})
+    assert note["item"] == {"kind": "note", "lines": ["9100001-1-1"], "set": {"note": " - Emailed DO 02/11"}}
+    assert "ctms_item" in S.CTMS_DRIVE
+
+
+def test_a_runs_progress_reaches_the_page_while_it_goes():
+    fresh()
+    try:
+        code, r = call("/api/ctms/todo/run", {"ids": ["a1", "b2"]})
+        assert code == 200
+        step = {"run": r["run"], "on": "9100001-1-1", "results": [{"id": "a1", "ok": True, "said": "done"},
+                                                                 {"id": "b2", "ok": False, "held": True, "said": "CTMS has it"}]}
+        assert call("/api/ctms/todo/progress", step, key=DASH)[0] == 401
+        assert call("/api/ctms/todo/progress", step, key=AGENT)[0] == 200
+        run = S._ctms["todo_run"]
+        assert run["state"] == "running" and run["on"] == "9100001-1-1" and [x["held"] for x in run["results"]] == [False, True]
+        assert call("/api/ctms/todo/progress", dict(step, run=999), key=AGENT)[0] == 200
+        assert S._ctms["todo_run"]["on"] == "9100001-1-1"              # another run's says nothing here
+        assert call("/api/ctms/todo/ran", {"run": r["run"], "ok": True, "said": "2 of 2", "seconds": 40.5,
+                                           "results": step["results"]}, key=AGENT)[0] == 200
+        run = S._ctms["todo_run"]
+        assert run["state"] == "done" and run["on"] == "" and run["seconds"] == 40.5 and run["results"][1]["held"] is True
+    finally:
+        S._ctms["control_until"] = 0.0
+        S._ctms["todo_run"] = None
+        S._queue.clear()
+
+
 def test_the_ctms_to_do_run_switches_acting_on_for_itself_and_puts_it_back():
     fresh()
     try:

@@ -370,14 +370,22 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
             {running ? 'Running in CTMS…' : `Run ${runnable.length} in CTMS`}
           </button>
           <span className="ctms-muted">{MODE} switches on for the run and back as it was after. Each order
-            is read back before it counts as done; the first thing not as expected stops the run.</span>
+            is read back before it counts as done. One that goes wrong is backed out of, unsaved, and the rest carry on.</span>
+        </div>
+      )}
+      {running && (
+        <div className="ctms-runlog">
+          <b>Running in CTMS: {(lastRun.results || []).length} of {(lastRun.ids || []).length} done.</b>
+          {lastRun.on ? ` Now on ${lastRun.on}.` : ''} Leave CTMS to it for now.
+          {(lastRun.results || []).map((r) => (
+            <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : (r.held ? '–' : '✗')} {r.said}</div>))}
         </div>
       )}
       {lastRun && lastRun.state === 'done' && (
         <div className="ctms-runlog">
           <b>Last run {lastRun.ended || lastRun.at}:</b> {lastRun.said}
           {(lastRun.results || []).map((r) => (
-            <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : '✗'} {r.said}</div>))}
+            <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : (r.held ? '–' : '✗')} {r.said}</div>))}
         </div>
       )}
       <div className="ctms-muted" style={{ marginTop: todo.length ? 8 : 0 }}>

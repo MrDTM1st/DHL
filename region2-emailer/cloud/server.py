@@ -85,6 +85,7 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "import_csv",                        # an upload CSV into CTMS (the map's Upload: /api/ctms/import)
               "ctms_check",                        # the map's orders looked up in CTMS (/api/ctms/check)
               "ctms_book",                         # one order's trips made in CTMS (/api/ctms/book)
+              "ctms_item",                         # one item of the CTMS to-do, as the home PC's Run hands it over
               "teams_send")                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
@@ -333,6 +334,19 @@ def _ctms_args(action, data):
         out["dry"] = bool(data.get("dry"))
         num("haulage", 0, 100000)
         num("vehicles", 1, 20, int)
+    if action == "ctms_item" and isinstance(data.get("item"), dict):
+        # a note or an update, each field checked: refs that read as refs, windows and words cut to size
+        it, s = data["item"], data["item"].get("set") if isinstance(data["item"].get("set"), dict) else {}
+        out["item"] = {"kind": "note" if it.get("kind") == "note" else "update",
+                       "lines": [str(x) for x in (it.get("lines") or [])[:40] if _CHECK_REF.fullmatch(str(x))],
+                       "set": {k: str(s[k])[:400] for k in ("note", "collect", "deliver", "comments", "veh") if s.get(k)}}
+        if isinstance(s.get("services"), dict):
+            out["item"]["set"]["services"] = {str(k)[:20]: bool(v) for k, v in list(s["services"].items())[:20]}
+        if s.get("storage"):
+            out["item"]["set"]["storage"] = int(s["storage"]) if str(s["storage"]).isdigit() else 0
+        if s.get("anyway"):
+            out["item"]["set"]["anyway"] = True
+        out["first"], out["last"] = bool(data.get("first")), bool(data.get("last"))
     if action == "ctms_check" and isinstance(data.get("orders"), list):
         # the map's orders to look up: a customer ref, the day it is due, whether to look at its Veh Type
         out["orders"] = [{"key": str(o.get("key") or "")[:80], "ref": str(o["ref"]),
@@ -2025,6 +2039,18 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
             return self._json(*out)
+        if path == "/api/ctms/todo/progress":
+            # the home PC says how a run is going, an item at a time, for the page to show
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["todo_run"]
+                if run and run["id"] == data.get("run") and run.get("state") == "running":
+                    run.update(on=str(data.get("on") or "")[:120],
+                               results=[{"id": str(r.get("id") or "")[:40], "ok": bool(r.get("ok")), "held": bool(r.get("held")),
+                                         "said": str(r.get("said") or "")[:300]}
+                                        for r in (data.get("results") or [])[:40] if isinstance(r, dict)])
+            return self._json(200, {"ok": True})
         if path == "/api/ctms/todo/ran":
             # the home PC says the run ended: what it did - and the switch back as it was before it
             if not self._is_agent():
@@ -2034,7 +2060,8 @@ class Handler(BaseHTTPRequestHandler):
                 if run and run["id"] == data.get("run"):
                     run.update(state="done", ok=bool(data.get("ok")), said=str(data.get("said") or "")[:500],
                                ended=datetime.now().strftime("%H:%M"),
-                               results=[{"id": str(r.get("id") or "")[:40], "ok": bool(r.get("ok")),
+                               on="", seconds=data.get("seconds"),
+                               results=[{"id": str(r.get("id") or "")[:40], "ok": bool(r.get("ok")), "held": bool(r.get("held")),
                                          "said": str(r.get("said") or "")[:300]}
                                         for r in (data.get("results") or [])[:40] if isinstance(r, dict)])
                     if _ctms["control_until"] == run["until"]:

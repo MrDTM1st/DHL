@@ -92,6 +92,7 @@ import ctms_drive
 import ctms_export
 import ctms_fast
 import ctms_import
+import ctms_items
 import ctms_jab
 import ctms_orders
 import ctms_tabs
@@ -127,6 +128,7 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "import_csv",     # Claude acting: this PC AND the dashboard must allow it
          "ctms_check",     # ... and the map's orders looked up in CTMS (searches only, nothing saved)
          "ctms_book",      # ... and the order panel's Book: one order's trips made in one go (ctms_book)
+         "ctms_item",      # ... and one item of the CTMS to-do done in one go (ctms_items)
          "teams_send")     # ... and a dashboard message sent to DHL NOC in this PC's Teams (ctms_teams)
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
@@ -144,7 +146,7 @@ ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # order number or a time, never a password: the bridge will not type into one).
 LOGGED = ("name", "on", "ref", "at", "to", "snap", "text", "key", "option", "url", "dir", "amount", "commit",
           "enter", "accept", "seconds", "tab", "branch", "scope", "by", "target", "steps", "folder",
-          "orders", "date", "carrier", "trailer", "haulage", "vehicles", "dry")
+          "orders", "date", "carrier", "trailer", "haulage", "vehicles", "dry", "item", "first", "last")
 RESTART = 75            # the child's exit code for "updated - start me again"
 
 SHOT_EVERY = 1.5        # seconds between pictures while the CTMS page is open
@@ -988,6 +990,55 @@ class Bridge:
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
                                             stages=job.stages, notes=job.said, stopped=stopped, seconds=took))
 
+    # -- one item of the CTMS to-do, done in one go (02/11, ctms_items) --
+    def todo_item(self, cmd, done):
+        """A note or an update, as the home PC's Run hands them over one at a time. Says whether it was done, held (CTMS has
+        it already), or stopped - and whether CTMS was left clean, so the next item can go ahead. first and last: the
+        run's first and last, which clear the way and put Planning back."""
+        item = cmd.get("item") if isinstance(cmd.get("item"), dict) else {}
+        kind = {"kind": "ctms_item"}
+        if not item.get("lines"):
+            return done(False, "That to-do item came with no order line.", dict(kind, clean=True))
+        if not self.scan_window(force=True) or self.target != "ctms":
+            return done(False, self.not_found() if self.target == "ctms" else
+                        "The bridge is working the tracker - use ctms first.", dict(kind, clean=False))
+        t = ctms_items.templates()
+        self.batch = {"off": (0, 0), "snaps": []}
+        t0, times = time.time(), []
+
+        def run(steps):
+            for step in steps:
+                ts = time.time()
+                try:
+                    self.window_step(step["action"], step)
+                finally:
+                    times.append(round(time.time() - ts, 2))
+
+        job = ctms_items.Items(run, lambda: ctms_jab.read_fields(self.win).get("elements") or [],
+                               lambda name, box: self._seen(t, name, box), t)
+        ok, held, clean, said = False, False, True, ""
+        try:
+            if cmd.get("first"):
+                job.begin()
+            said, ok = job.do(item), True
+        except ctms_items.Held as e:
+            said, held = str(e), True
+        except ctms_items.Busy as e:
+            said, clean = str(e), False
+        except Exception as e:
+            said = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
+            clean = job.clear_up()
+            if not clean:
+                said += " CTMS is left as it is, for a look."
+        if cmd.get("last") and clean:
+            try:
+                job.finish()
+            except Exception:
+                pass
+        took = round(time.time() - t0, 1)
+        return done(ok or held, said, dict(self._batch_look(times, t0), kind="ctms_item", done=ok, held=held, clean=clean,
+                                           stages=job.stages, seconds=took))
+
     def _seen(self, t, name, box):
         """Whether one of the check's templates shows in that part of CTMS's window now - one look, nothing clicked."""
         tp = t[name]
@@ -1472,6 +1523,8 @@ class Bridge:
                 return self.ctms_check(cmd, done)
             if action == "ctms_book":
                 return self.book_order(cmd, done)
+            if action == "ctms_item":
+                return self.todo_item(cmd, done)
             if action in ("prompt_press", "prompt_click"):
                 ps = ctms_window.prompts()
                 if not ps:

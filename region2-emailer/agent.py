@@ -1586,7 +1586,7 @@ def main():
                 # the dashboard switched Look mum, no hands on for this run, and switches it off when told it ended
                 ids = [str(i) for i in cmd.get("ids") or [] if i][:40]
                 report("running", f"Running {len(ids)} CTMS to-do item(s) on the work PC…")
-                out = run(["ctms_run.py", "run"] + ids, timeout=1800) if ids else ""
+                out = run(["ctms_run.py", "run", "--run", str(cmd.get("run") or "")] + ids, timeout=1800) if ids else ""
                 res = None
                 for line in reversed(out.splitlines()):
                     if line.startswith("{"):
@@ -1599,7 +1599,7 @@ def main():
                     res = {"ok": False, "said": "The run did not finish - see the output.", "results": []}
                 try:
                     _req("/api/ctms/todo/ran", {"run": cmd.get("run"), "ok": res["ok"], "said": res["said"],
-                                                "results": res["results"]})
+                                                "results": res["results"], "seconds": res.get("seconds")})
                 except Exception:
                     pass
                 push_panel()
