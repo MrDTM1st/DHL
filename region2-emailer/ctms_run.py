@@ -178,7 +178,10 @@ def _open(R, ref):
 
 
 def _close(R):
-    rc, _ = _quiet(R.run_steps, "order-close", R.RUN_STEPS["order-close"](_ns()))
+    """The open order's own Close, wherever CTMS has scrolled to. A plain click misses it when the page is scrolled and
+    lands on the window behind, which hides the order instead of closing it (02/11)."""
+    rc, _ = _quiet(R.send_batch, "order-close", R.parse_steps(["anchor", "click 1000,37 after=0.4", "anchor window",
+                                                               "click 424,733 react timeout=15"]))
     if rc:
         raise Failed("the order would not close")
 
