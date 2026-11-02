@@ -20,7 +20,8 @@ through the Access Bridge. In order, the way he books:
   6. the order checked on the manifest in Planned Orders, set Accepted, Save, read back
 
 Anything not as expected stops there with what was done so far, and any box left open is backed out of so nothing goes
-on half made. dry runs it all but presses No at the last box, so a run can be tried on a real order with nothing booked.
+on half made. dry runs it all but presses No at the last box, so a run can be tried with nothing booked - but CTMS keeps a
+trailer picked on the carrier screen as that line's Veh Type, whatever the last box is answered (seen 02/11).
 
 Every px point is on the recipes' pictures - the batch's anchor moves it to wherever CTMS sits now; a screen point is
 where the Access Bridge placed the thing.
@@ -69,7 +70,7 @@ RANK = {"STANDARD": 0, "NEXT DAY": 1, "EMERGENCY": 2}
 NOC = "DHL_NOC"
 NIGHT_FROM = 20                    # a delivery starting this late sits on the next day's schedule (seen 30/10, 02/11)
 PAGES = 6                          # pages of the well looked through
-LIST_PAGES = 4                     # looks down a drop-down
+LIST_PAGES = 8                     # looks down a drop-down: a letter of the carrier list can run to dozens
 MANIFEST = re.compile(r"(MAN-\d+)\s*\((\w+)\)")
 SCHEDULED_ON = re.compile(r"scheduled on trip:\s*(\d+)\s*/\s*(MAN-\d+)", re.I)
 ANCHOR = {"action": "anchor", "window": True}
@@ -230,6 +231,7 @@ class Booking:
         self.sched = ""
         self.flipped = False       # the Deliver column pressed: pressed again at the end, so it's as he left it
         self.trips = []
+        self.veh_kept = ""         # what CTMS now keeps as the Veh Type of the line taken to the carrier screen
         self.said = []
         self.stages = []
         self._t = time.time()
@@ -500,6 +502,7 @@ class Booking:
         else:
             self.pick_from(ALT_CARRIER_BOX, name, "carrier", letter=name[:1])
         self.run([_click(SELECT_CARRIER, after=0.1), _find(self.t, "cp-title", PAYMENT_TITLE, 8)])
+        self.veh_kept = trailer
 
     def create(self, row, carrier, trailer, haulage):
         """Create New Trip for this row, up to the manifest. Returns {"manifest", "carrier", "revenue", "cost"} - on a
@@ -564,11 +567,14 @@ class Booking:
 
     def trip(self, refs, carrier, trailer, haulage):
         """One vehicle: its first line's new trip, the others applied to it, the check, Accepted."""
-        got = self.create(self.on_screen(refs[0]), carrier, trailer, haulage)
+        self.carrier_window_away()         # the last vehicle's
+        row = self.on_screen(refs[0])
+        when = {"collect": row.get("collect", ""), "deliver": row.get("deliver", "")}
+        got = self.create(row, carrier, trailer, haulage)
         if self.dry:
-            self.trips.append(dict(got, lines=list(refs), status="rehearsed"))
+            self.trips.append(dict(got, lines=list(refs), status="rehearsed", **when))
             return
-        done = dict(got, lines=refs[:1], status="PLANNED")
+        done = dict(got, lines=refs[:1], status="PLANNED", **when)
         self.trips.append(done)
         for ref in refs[1:]:
             self.row_menu(self.on_screen(ref), "wm-apply-trip")

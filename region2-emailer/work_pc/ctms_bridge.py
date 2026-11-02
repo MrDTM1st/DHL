@@ -983,6 +983,8 @@ class Bridge:
                 f"{job.trips[0]['cost']}. Nothing booked." if job.trips and not stopped else
                 f"Stopped after {took:g}s: {stopped}"
                 + (f" Already made: {', '.join(x['manifest'] + ' ' + x['status'] for x in made)}." if made else ""))
+        if job.veh_kept and (stopped or cmd.get("dry")) and not made:
+            said += f" CTMS keeps {job.veh_kept} as the line's Veh Type from the carrier screen."
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
                                             stages=job.stages, notes=job.said, stopped=stopped, seconds=took))
 

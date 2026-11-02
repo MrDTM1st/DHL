@@ -259,6 +259,7 @@ def _slim_hauliers():
     """Just enough for the map's haulier layer. DO-NOT-USE hauliers are never
     published - they must not show up as an option anywhere."""
     try:
+        import carriers
         import hauliers
         out = []
         for h in hauliers.load().get("hauliers", []):
@@ -268,7 +269,8 @@ def _slim_hauliers():
                         "pc": h.get("postcode", ""), "tier": h.get("tier", ""),
                         "phone": (h.get("phone") or "")[:40],
                         "email": (h.get("emails") or [""])[0],
-                        "ctms": h.get("ctms", ""),           # its carrier code in CTMS, for the Book button
+                        "ctms": h.get("ctms", ""),           # the contact list's carrier code, and the one it's
+                        "book": carriers.book_code(h),       # booked under in CTMS (the panel's Book)
                         "fleet": bool(h.get("own_fleet")),   # DHL NOC - approached first
                         "no_go": h.get("no_go_areas", []),   # areas they don't cover
                         "no_go_scope": h.get("no_go_scope", "both"),  # which end it applies to
@@ -284,6 +286,7 @@ def _slim_hauliers():
                         "phone": (s.get("phone") or "")[:40],
                         "email": (s.get("emails") or [""])[0],
                         "fleet": False, "no_go": [], "no_go_scope": "both",
+                        "book": carriers.book_code(s),
                         "caps": [], "parcel": True})
         return out
     except Exception:
@@ -1605,7 +1608,8 @@ def main():
             elif action == "ctms_book":
                 # the order panel's Book: the trips made on the work PC, then what follows them from here - the DigiHaul
                 # row, the site's email, off the map (book_run.py). The dashboard switched Look mum, no hands on for it
-                job = {k: cmd.get(k) for k in ("record", "orders", "date", "carrier", "trailer", "haulage", "vehicles", "dry")}
+                job = {k: cmd.get(k) for k in ("record", "orders", "date", "carrier", "haulier", "trailer", "haulage",
+                                               "vehicles", "dry")}
                 report("running", f"Booking {' / '.join(job['orders'] or [])} with {job['carrier']} on the work PC…")
                 try:
                     out = run(["book_run.py", "run", json.dumps(job)], timeout=840)

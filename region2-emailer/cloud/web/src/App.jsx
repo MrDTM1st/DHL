@@ -302,6 +302,33 @@ export default function App() {
     pushToast('Upload still going', name + ' — no answer from the work PC yet; check the CTMS page.', 'warn');
   }, [pushToast]);
 
+  // the brief's Book: the work PC books it, the home PC follows up; followed here until the home PC says how it went
+  const [bookRun, setBookRun] = useState(null);
+  const onBook = useCallback(async (r, job) => {
+    setBookRun({ record: r.id, state: 'running', carrier: job.carrier });
+    let run;
+    try {
+      ({ run } = await api.ctmsBook({ ...job, record: r.id }));
+    } catch (e) {
+      setBookRun({ record: r.id, state: 'done', ok: false, said: e.message });
+      return;
+    }
+    const until = Date.now() + 15 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((ok) => setTimeout(ok, 2500));
+      let st;
+      try { st = await api.ctmsStatus(false); } catch { continue; }
+      const b = st.book_run;
+      if (b && b.id === run && b.state !== 'running') {
+        setBookRun({ record: r.id, ...b });
+        pushToast(b.ok ? 'Booked' : 'Not booked', b.said || '', b.ok ? 'go' : 'warn');
+        setTimeout(refreshTracker, 1500);
+        return;
+      }
+    }
+    setBookRun({ record: r.id, state: 'done', ok: false, said: 'No answer from the home PC yet: look at CTMS before pressing it again.' });
+  }, [pushToast, refreshTracker]);
+
   // booked ad hocs leave the map (they were never in the tracker)
   const onAdhocBooked = useCallback((r) => {
     if (!window.confirm('Mark ' + ordLabel(r) + ' as booked and remove it from the map?')) return;
@@ -391,7 +418,8 @@ export default function App() {
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); setPhoneFor(null); }}
             onCall={onCall} onPhoneUpdate={onPhoneUpdate} openPhone={phoneFor === selectedId}
-            onAdhocBooked={onAdhocBooked}
+            onAdhocBooked={onAdhocBooked} onBook={onBook}
+            bookRun={bookRun && bookRun.record === selectedId ? bookRun : null} onBookDone={() => setBookRun(null)}
             onCommand={onCommand} matTeams={panel.mat_teams || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
             asks={panel.asks || {}} nocTeams={panel.noc_teams || []} />

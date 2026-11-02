@@ -728,6 +728,8 @@ a.callbtn:hover{ color:var(--red); }
 .pf-row select, .pf-row input{ width:100%; min-width:0; }
 .pf-foot{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px; }
 .pf-miss{ flex:1 1 12rem; font-size:12px; color:var(--muted); }
+.pf-note{ font-size:12px; color:var(--muted); }
+.pf-said{ font-size:13px; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; }
 .sitecalls{ display:flex; flex-direction:column; gap:6px; }
 .sc-line{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .sc-from{ font-size:11px; font-weight:500; color:var(--muted); }

@@ -2069,7 +2069,7 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms_note_locked(f"Look mum, no hands mode switched on to book {' / '.join(job['orders'])} - back as it "
                                       "was when it ends.")
                     _queue.append(dict(job, action="ctms_book", record=str(data.get("record") or "")[:120],
-                                       run=rid, queued_at=time.time()))
+                                       haulier=str(data.get("haulier") or "")[:60], run=rid, queued_at=time.time()))
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
             return self._json(*out)

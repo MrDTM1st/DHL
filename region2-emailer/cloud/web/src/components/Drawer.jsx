@@ -10,6 +10,7 @@ import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
 import { RegionBadge } from './RegionBadge.jsx';
 import CallButton from './CallButton.jsx';
 import PhoneUpdate from './PhoneUpdate.jsx';
+import BookForm from './BookForm.jsx';
 import { ctmsTeams, ctmsStatus } from '../api.js';
 
 // A haulier's Call buttons - the contact sheet sometimes holds two numbers in
@@ -167,7 +168,7 @@ function clearEdit(id) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUpdate, openPhone,
-  onAdhocBooked, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks, nocTeams = [] }) {
+  onAdhocBooked, onBook, bookRun, onBookDone, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks, nocTeams = [] }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -179,6 +180,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
   // "Updated over the phone": the call's answers, asked right here (PhoneUpdate)
   const [phoning, setPhoning] = useState(false);
   useEffect(() => { setFull(!!openPhone); setPhoning(!!openPhone); }, [r.id, openPhone]);
+  // Book: who with, the price if they're a tier 2 - asked right here (BookForm)
+  const [booking, setBooking] = useState(false);
+  useEffect(() => { setBooking(false); }, [r.id]);
 
   const defaultSubject = () => `${(r.orders || []).join(' / ')} Delivery`;
 
@@ -501,6 +505,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
               belongs where you can always reach it. */}
           {/* ringing the site sits beside it - one tap from opening the brief */}
           <div className="drawer-acts">
+            {onBook && (
+              <button className={'btn drawer-act' + (booking || bookRun ? ' red' : '')} onClick={() => setBooking((v) => !v)}>
+                Book
+              </button>
+            )}
             {site.calls[0] && (
               <CallButton big number={site.calls[0].number} who={siteWho(site.calls[0])} onCall={onCall}
                 label={'Call ' + (siteWho(site.calls[0]).split(' ')[0] || 'site')} />
@@ -520,6 +529,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
           </div>
         </div>
         <div className="drawer-b">
+          {(booking || bookRun) && (
+            <BookForm record={r} hauliers={hauliers} recs={recs} run={bookRun} onBook={onBook}
+              onCancel={() => { setBooking(false); if (onBookDone) onBookDone(); }} />
+          )}
           {phoning && (
             <PhoneUpdate record={r} onCancel={() => setPhoning(false)}
               onSave={(answers) => { onPhoneUpdate(r, answers); setPhoning(false); }} />

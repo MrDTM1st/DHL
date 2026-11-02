@@ -154,6 +154,19 @@ export async function ctmsRail(week) {
   return d;
 }
 
+// The brief's Book (his design 02/11): one order booked in CTMS on the work PC - the home PC follows it with the DigiHaul
+// row, the site's email and taking it off the map. Look mum, no hands is switched on for this booking, back as it was after.
+export async function ctmsBook(job) {
+  const r = await req('/api/ctms/book', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(job),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 // The brief's Send in Teams for DHL NOC (his ask 01/11): the message sent in the work PC's Teams, to someone on the
 // home PC's NOC list only. Look mum, no hands is switched on for this one message when it is off.
 export async function ctmsTeams(email, text, dry = false) {

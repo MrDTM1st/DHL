@@ -3070,6 +3070,43 @@ def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
         S._queue.clear()
 
 
+def test_the_panels_book_switches_acting_on_for_itself_and_puts_it_back():
+    fresh()
+    job = {"record": "9100001|06/11/2026", "orders": ["9100001", "bad ref!"], "date": "06/11/2026", "carrier": "ACME_DH",
+           "haulier": "Acme Haulage", "trailer": "NR_ARTIC_FL", "haulage": 450, "vehicles": 2}
+    try:
+        assert call("/api/ctms/book", job, key=AGENT)[0] == 401
+        assert call("/api/ctms/book", dict(job, carrier="no carrier!"))[0] == 400
+        assert call("/api/ctms/book", dict(job, date="6/11/26"))[0] == 400
+        assert call("/api/ctms/book", dict(job, orders=["bad ref!"]))[0] == 400
+        code, r = call("/api/ctms/book", job)
+        assert code == 200 and S._ctms_armed()
+        sent = S._queue[-1]
+        assert sent["action"] == "ctms_book" and sent["orders"] == ["9100001"] and sent["carrier"] == "ACME_DH"
+        assert sent["haulage"] == 450 and sent["vehicles"] == 2 and sent["trailer"] == "NR_ARTIC_FL" and sent["dry"] is False
+        assert sent["record"] == job["record"] and sent["haulier"] == "Acme Haulage" and sent["run"] == r["run"]
+        assert call("/api/ctms/book", job)[0] == 409                      # one at a time
+        # what goes to the work PC goes through the same gate
+        args = S._ctms_args("ctms_book", dict(job, vehicles=99, haulage=-1))
+        assert "vehicles" not in args and "haulage" not in args and args["orders"] == ["9100001"]
+        # it ends: what it made is kept for the panel, and the switch goes back off
+        done = {"run": r["run"], "ok": True, "said": "MAN-01000001 ACCEPTED", "seconds": 41,
+                "trips": [{"manifest": "MAN-01000001", "status": "ACCEPTED", "revenue": "600", "cost": "450"}]}
+        assert call("/api/ctms/book/ran", done, key=DASH)[0] == 401
+        assert call("/api/ctms/book/ran", done, key=AGENT)[0] == 200
+        assert not S._ctms_armed()
+        run = S._ctms["book_run"]
+        assert run["state"] == "done" and run["ok"] is True and run["seconds"] == 41 and run["trips"][0]["manifest"] == "MAN-01000001"
+        # a to-do run going: book when it's done
+        S._ctms["todo_run"] = {"state": "running", "until": time.time() + 60}
+        assert call("/api/ctms/book", job)[0] == 409
+    finally:
+        S._ctms["control_until"] = 0.0
+        S._ctms["book_run"] = None
+        S._ctms["todo_run"] = None
+        S._queue.clear()
+
+
 def test_the_ctms_to_do_run_switches_acting_on_for_itself_and_puts_it_back():
     fresh()
     try:
