@@ -1386,7 +1386,7 @@ class Bridge:
                 return done(True, self.export_tabs_away(ctms_export.is_export))
             if action == "teams_send":
                 # a dashboard message to DHL NOC, sent in this PC's Teams (his ask 01/11) - ctms_teams checks the chat,
-                # the box and the text before Enter, and stops with nothing sent on anything else
+                # the box and the text before pressing Teams' own Send, and stops with nothing sent on anything else
                 try:
                     got = ctms_teams.send(cmd.get("email"), cmd.get("name"), cmd.get("text"), dry=bool(cmd.get("dry")))
                 except ctms_teams.Stop as e:

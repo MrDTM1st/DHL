@@ -3107,6 +3107,100 @@ def test_teams_opens_only_that_persons_chat_and_checks_it_by_its_title():
     assert TM._show("x" * 60).endswith(", 60 characters") and "'\\u2060'" in TM._show("⁠")
 
 
+class _FakeClipboard:
+    """Windows' clipboard for the paste test: formats -> bytes, each handle a real block of memory."""
+
+    def __init__(self, formats):
+        self.names, self.data, self.blocks, self.reads = {}, {}, {}, 0
+        for f, b in formats.items():
+            self.data[f if isinstance(f, int) else self.RegisterClipboardFormatW(f)] = b
+
+    def RegisterClipboardFormatW(self, name):
+        return self.names.setdefault(name, 0xC000 + len(self.names))
+
+    def IsClipboardFormatAvailable(self, f):
+        return f in self.data
+
+    def _block(self, b):
+        self.blocks[len(self.blocks) + 1] = ctypes.create_string_buffer(b, len(b))
+        return len(self.blocks)
+
+    def GetClipboardData(self, f):
+        self.reads += 1
+        return self._block(self.data[f]) if f in self.data else None
+
+    def GlobalAlloc(self, flags, size):
+        return self._block(b"\0" * size)
+
+    def GlobalLock(self, h):
+        return ctypes.addressof(self.blocks[h])
+
+    def GlobalSize(self, h):
+        return len(self.blocks[h])
+
+    def SetClipboardData(self, f, h):
+        self.data[f] = bytes(self.blocks[h])
+        return h
+
+    def EmptyClipboard(self):
+        self.data = {}
+        return True
+
+    def GlobalUnlock(self, h):
+        return True
+
+    def GlobalFree(self, h):
+        return None
+
+    def CloseClipboard(self):
+        return True
+
+
+def test_teams_paste_borrows_the_clipboard_and_puts_it_back_as_it_was():
+    import ctms_act
+    keep = (TM._clip_api, ctms_act._open_clipboard)
+    ours = [(13, "Hi Sam\0".encode("utf-16-le"))]
+    try:
+        ctms_act._open_clipboard = lambda: True
+        # cells copied in Excel: the text and its look come back - not a picture of the cells, rendered for nothing
+        cells = "Order\t20t\r\n\0".encode("utf-16-le")
+        clip = _FakeClipboard({13: cells, "HTML Format": b"<table>cells</table>", 8: b"BMpicture"})
+        TM._clip_api = lambda: (clip, clip)
+        saved = TM._clip_save()
+        assert sorted(f for f, _ in saved) == sorted([13, clip.names["HTML Format"]])
+        assert TM._clip_put(ours) and clip.data == {13: ours[0][1]}
+        assert TM._clip_put(saved) and clip.data == {13: cells, clip.names["HTML Format"]: b"<table>cells</table>"}
+        # a picture alone (a screenshot), or copied files, come back too
+        pic = _FakeClipboard({8: b"DIB" * 50, "PNG": b"\x89PNG-image"})
+        TM._clip_api = lambda: (pic, pic)
+        saved = TM._clip_save()
+        assert TM._clip_put(ours) and TM._clip_put(saved)
+        assert pic.data == {8: b"DIB" * 50, pic.names["PNG"]: b"\x89PNG-image"}
+        files = _FakeClipboard({15: b"DROPFILES-a.xlsx", "Preferred DropEffect": b"\x01\0\0\0"})
+        TM._clip_api = lambda: (files, files)
+        saved = TM._clip_save()
+        assert TM._clip_put(ours) and TM._clip_put(saved)
+        assert files.data == {15: b"DROPFILES-a.xlsx", files.names["Preferred DropEffect"]: b"\x01\0\0\0"}
+        # an empty clipboard is left empty; a password manager's copy is not even read, and not put back
+        none = _FakeClipboard({})
+        TM._clip_api = lambda: (none, none)
+        assert TM._clip_save() == [] and TM._clip_put(ours) and TM._clip_put([]) and none.data == {}
+        pw = _FakeClipboard({13: "pa55word\0".encode("utf-16-le"), "ExcludeClipboardContentFromMonitorProcessing": b""})
+        TM._clip_api = lambda: (pw, pw)
+        assert TM._clip_save() == [] and pw.reads == 0
+        # a busy clipboard stops the paste before anything is touched
+        ctms_act._open_clipboard = lambda: False
+        TM._clip_api = lambda: (clip, clip)
+        try:
+            TM._clip_save()
+            assert False, "a busy clipboard must stop it"
+        except TM.Stop as e:
+            assert "busy" in str(e)
+        assert not TM._clip_put(ours)
+    finally:
+        TM._clip_api, ctms_act._open_clipboard = keep
+
+
 def test_the_bridge_sends_in_teams_only_with_the_switch_and_says_why_it_stopped():
     keep = (TM.send, B.LOG)
     B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")

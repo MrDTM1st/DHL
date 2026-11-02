@@ -1,19 +1,24 @@
 """
 A Teams message from the work PC - his asks (01/11): "with DHL NOC, instead of an email button, can we get like a Teams
-message button ... I want you to send it on Teams on the work PC", then "build the quieter version": no keyboard and
-no clipboard, so nothing he is doing on the work PC can get in the way. The dashboard's Send in Teams hands over who and
-what, and each step is checked before the next:
+message button ... I want you to send it on Teams on the work PC", then "build the quieter version". The quietest that
+works: Teams' message box takes no text from UI Automation (the 01/11 dry run: Teams took the change and put its own
+text straight back), only typing or a paste - so it is one paste, with the clipboard put back as it was, and Teams'
+own Send button pressed through UI Automation, never Enter. The dashboard's Send in Teams hands over who and what, and
+each step is checked before the next:
 
   open    Teams' own link for a chat with that address (msteams:/l/chat/0/0?users=..) - nothing else is opened. Not
           the link's message part: Teams typed that into the box twice in the 01/11 test
   check   a Teams window titled with that chat ("Chat | Rich Brumby | Microsoft Teams"), and its message box (found
           through UI Automation by its name) empty - his own draft there, another chat, or none in time stops it with
           nothing sent
-  type    the text put in through UI Automation's Value pattern, and read back: this message and nothing else
-  send    Teams' own Send button pressed through UI Automation - never a key - and the box empty after; the window that
-          was in front is put back, and a picture of the chat comes back
+  type    the cursor put in that box through UI Automation, one paste, and read back: this message and nothing else.
+          The clipboard comes back as it was (text and its formatting, a picture, files); a copy a password manager
+          marked private is not put back; the message is kept out of the clipboard's history
+  send    Teams' own Send button, and the box empty after; the window that was in front is put back, and a picture of
+          the chat comes back
 
 Once the text is in, anything that goes wrong empties the box again - it was empty, so nothing of ours is left in it.
+Keys only ever go to Teams, and only while it is in front.
 
 Opening the chat brings Teams forward for those few seconds - the link does that. Only ever Teams' own window, only the
 chat the dashboard named, only the dashboard's text. A dry run does it all but Send, and empties the box again. Nothing
@@ -37,8 +42,15 @@ BOX_TYPES = (50004, 50030)          # UI Automation's Edit and Document: what Te
 BUTTON = 50000
 BOX_WORDS = ("type a message", "type a new message", "type your message")
 FIND_NODES = 6000                   # UI Automation elements looked at, at most, for the box and the Send button
-PATTERN_VALUE, IID_VALUE, VALUE_SET, VALUE_GET = 10002, "{A94CD8B1-0844-4CD6-9D2D-640537AB39E9}", 3, 4
+PATTERN_VALUE, IID_VALUE, VALUE_GET = 10002, "{A94CD8B1-0844-4CD6-9D2D-640537AB39E9}", 4
 PATTERN_LEGACY, IID_LEGACY, LEGACY_VALUE = 10018, "{828055AD-355B-4435-86D5-3B51C14A9B1B}", 8
+# the clipboard, borrowed for the paste and put back as it was
+CF_DIB, CF_HDROP = 8, 15
+CLIP_TEXT = ("HTML Format", "Rich Text Format")                  # kept with copied text: a page's or Office's look
+CLIP_OTHER = ("PNG", "HTML Format", "Preferred DropEffect", "FileNameW")    # with no text: a picture, or files
+CLIP_PRIVATE = ("ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore",
+                "CanIncludeInClipboardHistory")                  # how a password manager marks its copy
+CLIP_NO_HISTORY = ("CanIncludeInClipboardHistory", "CanUploadToCloudClipboard")
 
 
 class Stop(Exception):
@@ -180,26 +192,128 @@ def _value(s, el):
     return ""
 
 
-def _set_value(s, el, text):
-    """Put text in the box through UI Automation's Value pattern - no keys, no clipboard. False = it would not."""
+def _set_focus(box):
+    """The cursor into Teams' message box through UI Automation - no click."""
+    from ctms_tabs import _fn
+    _fn(box, 3)(box)                                             # IUIAutomationElement::SetFocus
+
+
+def _keys(hwnd, *combos):
+    """Chords to Teams, which must be in front for each: ("ctrl", "v") ... - the paste, and Ctrl+A then Delete to
+    empty the box of our own text. Never Enter: Send is Teams' own button."""
+    import ctms_act
+    for combo in combos:
+        if not ctms_act.to_front(hwnd):
+            raise Stop("Teams could not be brought to the front, so no keys were sent - nothing sent.")
+        *mods, key = combo
+        vk, ext = ctms_act.VK[key] if key in ctms_act.VK else (ord(key.upper()), False)
+        seq = [ctms_act._vk(ctms_act.MOD_VK[m], False) for m in mods]
+        seq += [ctms_act._vk(vk, ext), ctms_act._vk(vk, ext, up=True)]
+        seq += [ctms_act._vk(ctms_act.MOD_VK[m], False, up=True) for m in reversed(mods)]
+        ctms_act._send(seq)
+        time.sleep(0.25)
+
+
+def _clear(s, hwnd, box, label):
+    """Empty the box of our own text (copies of this message, or the paste just made): its cursor, Ctrl+A, Delete ->
+    is it empty now?"""
+    _set_focus(box)
+    time.sleep(0.3)
+    _keys(hwnd, ("ctrl", "a"), ("delete",))
+    time.sleep(0.5)
+    return empty(_value(s, box), label)
+
+
+def _clip_api():
     import ctypes
-    from ctms_tabs import _fn, oleaut32
+    from ctypes import wintypes
+    import ctms_act
+    u, k = ctms_act.user32, ctms_act.kernel32
+    u.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    u.IsClipboardFormatAvailable.restype = wintypes.BOOL
+    u.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    u.RegisterClipboardFormatW.restype = wintypes.UINT
+    k.GlobalSize.argtypes = [wintypes.HGLOBAL]
+    k.GlobalSize.restype = ctypes.c_size_t
+    return u, k
+
+
+def _clip_save():
+    """What is on the clipboard, to put back straight after the paste -> [(format, bytes)]: its text with a page's or
+    Office's formatting, a copied picture, copied files. A copy marked private - a password manager's - is not even
+    read, and not put back: it would outlive the manager's own clearing. Read only to be put back, never sent."""
+    import ctypes
+    import ctms_act
+    u, k = _clip_api()
+    if any(u.IsClipboardFormatAvailable(u.RegisterClipboardFormatW(n)) for n in CLIP_PRIVATE):
+        return []
+    if u.IsClipboardFormatAvailable(ctms_act.CF_UNICODETEXT):    # text: with its formatting, never a picture of it
+        kinds = [ctms_act.CF_UNICODETEXT] + [u.RegisterClipboardFormatW(n) for n in CLIP_TEXT]
+    else:
+        kinds = [CF_DIB, CF_HDROP] + [u.RegisterClipboardFormatW(n) for n in CLIP_OTHER]
+    kinds = [f for f in kinds if f and u.IsClipboardFormatAvailable(f)]
+    if not kinds:
+        return []
+    if not ctms_act._open_clipboard():
+        raise Stop("The work PC's clipboard is busy in another program, so nothing was pasted - nothing sent.")
+    saved = []
     try:
-        pat = _pattern(s, el, PATTERN_VALUE, IID_VALUE)
-    except OSError:
-        return False
-    if not pat:
-        return False
-    oleaut32.SysAllocString.argtypes = [ctypes.c_wchar_p]
-    oleaut32.SysAllocString.restype = ctypes.c_void_p
-    b = oleaut32.SysAllocString(str(text))
-    try:
-        _fn(pat, VALUE_SET, ctypes.c_void_p)(pat, b)
-        return True
-    except OSError:
-        return False
+        for f in kinds:
+            h = u.GetClipboardData(f)
+            p = k.GlobalLock(h) if h else None
+            if not p:
+                continue
+            try:
+                saved.append((f, ctypes.string_at(p, k.GlobalSize(h))))
+            finally:
+                k.GlobalUnlock(h)
     finally:
-        oleaut32.SysFreeString(b)
+        u.CloseClipboard()
+    return saved
+
+
+def _clip_put(items):
+    """The clipboard set to these [(format, bytes)] and nothing else - [] leaves it empty. False = it was busy."""
+    import ctypes
+    import ctms_act
+    u, k = _clip_api()
+    if not ctms_act._open_clipboard():
+        return False
+    try:
+        u.EmptyClipboard()
+        for f, data in items:
+            h = k.GlobalAlloc(ctms_act.GMEM_MOVEABLE, max(len(data), 1))
+            p = k.GlobalLock(h) if h else None
+            if not p:
+                if h:
+                    k.GlobalFree(h)
+                continue
+            ctypes.memmove(p, data, len(data))
+            k.GlobalUnlock(h)
+            if not u.SetClipboardData(f, h):                     # the clipboard owns h once this succeeds
+                k.GlobalFree(h)
+        return True
+    finally:
+        u.CloseClipboard()
+
+
+def _paste(s, hwnd, box, text):
+    """The text into the box: its cursor, one paste - and the clipboard put back as it was straight after. The text
+    is kept out of the clipboard's history (Windows+V) and its sync to other devices."""
+    import ctms_act
+    u, _ = _clip_api()
+    _set_focus(box)
+    time.sleep(0.4)
+    keep = _clip_save()
+    ours = [(ctms_act.CF_UNICODETEXT, (text.replace("\r\n", "\n").replace("\n", "\r\n") + "\0").encode("utf-16-le"))]
+    ours += [(u.RegisterClipboardFormatW(n), b"\0\0\0\0") for n in CLIP_NO_HISTORY]
+    if not _clip_put(ours):
+        raise Stop("The work PC's clipboard is busy in another program, so nothing was pasted - nothing sent.")
+    try:
+        _keys(hwnd, ("ctrl", "v"))
+        time.sleep(1.0)                                          # Teams reads the clipboard as it handles the keys
+    finally:
+        _clip_put(keep)
 
 
 def _picture(hwnd):
@@ -233,44 +347,36 @@ def _fill_and_send(s, hwnd, who, text, dry):
         if not only_copies(before, text):
             raise Stop(f"The message box with {who} already holds a draft ({_show(before)}) - left as it is, nothing "
                        "sent.")
-        took = _set_value(s, box, "")                            # this same message, left by an earlier try: ours
-        time.sleep(0.7)
-        after = _value(s, box)
-        if not empty(after, label):
-            raise Stop(f"Copies of this message left in the box with {who} by an earlier try would not clear through "
-                       f"UI Automation (Teams {'took' if took else 'refused'} the change and still reads "
-                       f"{_show(after)}) - left as it is, nothing sent.")
+        if not _clear(s, hwnd, box, label):                      # this same message, left by an earlier try: ours
+            raise Stop(f"Copies of this message left in the box with {who} by an earlier try would not clear (it "
+                       f"reads {_show(_value(s, box))}) - nothing sent.")
     # from here the box was empty - anything that goes wrong empties it again, so nothing of ours is left in it
-    if not _set_value(s, box, text):
-        raise Stop(f"Teams' message box with {who} refused the text through UI Automation - nothing sent.")
-    time.sleep(0.7)
+    _paste(s, hwnd, box, text)
     got = _value(s, box)
     if not holds_only(got, text):
-        _set_value(s, box, "")
-        if empty(got, label):
-            raise Stop(f"Teams' message box with {who} took the text through UI Automation but did not keep it - it "
-                       "reads empty again, nothing sent.")
+        _clear(s, hwnd, box, label)
         raise Stop(f"The message box with {who} read back {_show(got)}, not the message - emptied, nothing sent.")
     if dry:
-        _set_value(s, box, "")
-        time.sleep(0.7)
-        left = _value(s, box)
-        return {"ok": empty(left, label),
+        left = _clear(s, hwnd, box, label)
+        return {"ok": left,
                 "said": f"Dry run: the chat with {who} opened and its message box took the text and read it back "
-                        "exactly - emptied again, nothing sent." + ("" if empty(left, label) else
+                        "exactly - emptied again, nothing sent." + ("" if left else
                                                                    " BUT the text is still in the box - empty it in Teams.")}
     button, _ = find(s, hwnd, is_send, kinds=(BUTTON,))
     if not (button and s.invoke(button)):
-        _set_value(s, box, "")
+        _clear(s, hwnd, box, label)
         raise Stop(f"Teams' Send button could not be {'pressed' if button else 'found'} in the chat with {who} - "
                    "emptied, nothing sent.")
     time.sleep(1.5)
-    box2, _ = _box(s, hwnd, who)                                 # the box afresh: Teams redraws it once sent
-    left = _value(s, box2)
+    try:
+        box2, _ = _box(s, hwnd, who)                             # the box afresh: Teams redraws it once sent
+        left = _value(s, box2)
+    except (OSError, Stop):
+        return {"ok": False, "said": f"Send was pressed in the chat with {who}, but its message box could not be read "
+                                     "after - look at the chat in Teams to see whether it went."}
     if not empty(left, label):
-        _set_value(s, box2, "")
         return {"ok": False, "said": f"Send was pressed in the chat with {who} but the text stayed in the box - "
-                                     "emptied it; look at the chat in Teams to see whether it went."}
+                                     "look at the chat in Teams before sending again."}
     return {"ok": True, "said": f"Sent to {who} on Teams."}
 
 
@@ -289,7 +395,7 @@ def send(email, name, text, dry=False):
     hwnd = None
     try:
         # the plain chat link: a message riding in the link was typed into the box twice (01/11 test), so the text
-        # goes in through UI Automation once the box is seen to be empty
+        # is pasted once the box is seen to be empty
         os.startfile(chat_link(email))
         end = time.time() + OPEN_SECONDS
         while time.time() < end and not hwnd:
@@ -304,6 +410,9 @@ def send(email, name, text, dry=False):
             s = ctms_tabs._Session()
             try:
                 out = _fill_and_send(s, hwnd, who, text, dry)
+            except (OSError, ctms_act.Refused) as e:             # all before Send: after it, _fill_and_send says so
+                raise Stop(f"Windows would not let the keys or UI Automation through to Teams ({type(e).__name__}) - "
+                           f"nothing sent; if the message is in the box with {who}, empty it in Teams.")
             finally:
                 s.close()
         finally:
