@@ -180,6 +180,12 @@ def new_manifest(els, before):
     return new[0] if len(new) == 1 else picked[0] if len(picked) == 1 else None
 
 
+def card_ref(els):
+    """The Customer Ref on the open order's card - its window is named by the internal number, not the ref."""
+    return next((str(e.get("v") or "").strip() for e in ctms_rows._frame(els, "Order details for") or []
+                 if e.get("r") == "text" and str(e.get("nm") or "").strip() == "Customer Ref"), "")
+
+
 def planned_refs(els):
     """The customer refs on the Planned Orders panel, a window of its own."""
     return {str(e.get("v") or "").strip() for e in ctms_rows._frame(els, "Planned Orders") or []
@@ -267,7 +273,9 @@ class Booking:
                 raise Stop("An order is open in CTMS with changes not saved. Nothing was touched: save or close it and "
                            "press Book again.")
             self.look()
-        if any(f.startswith("Order Summary") for f in frames(self.els)):
+        if any(f.startswith("Order Summary") for f in frames(self.els)):       # the to-do's Run leaves it up, and its card
+            if self.seen("os-card", ctms_orders.CARD_BOX):
+                self.run([_click((509, 226), after=0.5)])
             self.run(ctms_orders.close_summary(self.t))
             self.look()
         self.carrier_window_away()
@@ -429,10 +437,10 @@ class Booking:
         self.run([{"action": "click", "screen": ctms_rows.point(row), "double": True, "react": True,
                    "box": [20, 121, 1250, 171], "timeout": 20},
                   ANCHOR, _find(self.t, "od-vehtype", (940, 250, 1100, 380), 5)])
-        card = next((f for f in frames(self.look()) if f.startswith("Order details for")), "")
-        if not card.endswith(ref):
+        got = card_ref(self.look())
+        if got.upper() != ref.upper():
             self.run([_click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
-            raise Stop(f"The well opened '{card}' for {ref}: closed it again, unchanged. Nothing was booked.")
+            raise Stop(f"The well opened {got or 'no order'} for {ref}: closed it again, unchanged. Nothing was booked.")
         self.run([_click((288, 187), react=True, box=[20, 200, 1250, 700], timeout=10),   # Add Detail
                   _click((273, 252), react=True, timeout=10),                              # Delivery Type's list
                   _click((960, 299), after=0.2), _key("home"), _key("shift+end"),

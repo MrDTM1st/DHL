@@ -90,7 +90,8 @@ class FakeCtms:
                 for i, name in enumerate(self.list):
                     els.append({"r": "label", "nm": name, "lv": 2, "at": [853, 309 + 22 * i, 239, 22]})
         if self.card:
-            els.append({"r": "internal frame", "nm": f"Order details for {self.card}", "lv": 0, "at": [20, 100, 1200, 600]})
+            els.append({"r": "internal frame", "nm": "Order details for 11000001", "lv": 0, "at": [20, 100, 1200, 600]})
+            els.append({"r": "text", "nm": "Customer Ref", "v": self.card, "lv": 2, "at": [594, 200, 150, 24]})
         return els
 
     def seen(self, name, box):
@@ -397,6 +398,14 @@ def test_the_delivery_type_only_ever_goes_up_by_his_bands():
     assert B.wanted_type("STANDARD", "", now) is None
 
 
+def test_an_urgent_order_is_put_up_on_its_own_card_before_the_trip():
+    ctms = FakeCtms([_row("9100001-1-1", "03/11/26 08:00")])
+    job = _book(ctms, date="03/11/2026")
+    assert "EMERGENCY%" in ctms.typed and ctms.typed.index("EMERGENCY%") < ctms.typed.index("<order saved>")
+    assert job.said == ["9100001-1-1 put up to EMERGENCY"] and job.trips[0]["status"] == "ACCEPTED"
+    assert ctms.card is None
+
+
 def test_a_card_that_isnt_the_lines_is_closed_unchanged():
     ctms = FakeCtms([_row("9100001-1-1", "03/11/26 08:00")])
     real = ctms.click
@@ -410,7 +419,7 @@ def test_a_card_that_isnt_the_lines_is_closed_unchanged():
         _book(ctms, date="03/11/2026")
         raise AssertionError("should have stopped")
     except B.Stop as e:
-        assert "opened 'Order details for 9999999-1-1'" in str(e)
+        assert "opened 9999999-1-1 for 9100001-1-1" in str(e)
     assert ctms.card is None and "EMERGENCY%" not in ctms.typed and ctms.tree == {}
 
 
