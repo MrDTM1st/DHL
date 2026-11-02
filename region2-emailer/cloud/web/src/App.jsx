@@ -10,7 +10,7 @@ import TrackerPage from './pages/TrackerPage.jsx';
 import Notifications from './pages/Notifications.jsx';
 import CtmsPage from './pages/CtmsPage.jsx';
 import { useStatus, useTracker } from './hooks.js';
-import { isUrgent, within3, ordLabel, dueText } from './lib/orders.js';
+import { isUrgent, within3, ordLabel, dueText, stamp, answerText } from './lib/orders.js';
 import * as api from './api.js';
 
 function ago(ms) {
@@ -123,6 +123,38 @@ export default function App() {
         read: false,
         orderId: r.id,
       })).filter((n) => !have.has(n.id)), ...ns];
+    });
+  }, [records]);
+
+  // ---- and when an order's email is answered by someone other than the site with the details (his 02/11): the
+  // materials team answering an escalation (a contact typed in, or a screenshot of one), or a reply with nothing to
+  // book with ("is the delivery date still ok?") - told as what they are, never as "Danny replied" ----
+  const knownAnswers = useRef(new Set());
+  useEffect(() => {
+    if (!records) return;
+    const fresh = [];
+    records.forEach((r) => {
+      if (r.reply_at) return;                       // the site's details are in - nothing to tell
+      const site = r.worksite || r.site || ordLabel(r);
+      const e = r.escalation_reply, n = r.needs_info;
+      if (e && e.at && !(n && n.at > e.at) && !knownAnswers.current.has('x' + r.id + e.at)) {
+        knownAnswers.current.add('x' + r.id + e.at);
+        fresh.push({ id: 'x-' + r.id + '-' + e.at, title: site + ': the materials team answered',
+          msg: answerText(e) + ' (' + ordLabel(r) + ') - not ' + (r.name || 'the site') + "'s reply.", orderId: r.id });
+      }
+      if (n && n.at && !knownAnswers.current.has('i' + r.id + n.at)) {
+        knownAnswers.current.add('i' + r.id + n.at);
+        fresh.push({ id: 'i-' + r.id + '-' + n.at, title: site + ': replied without details',
+          msg: (n.from || r.name || 'The site') + ' replied ' + stamp(n.at) + ' but gave no delivery details'
+            + (n.said ? ' ("' + n.said + '")' : '') + ' - email back for them (' + ordLabel(r) + ').', orderId: r.id });
+      }
+    });
+    if (!fresh.length) return;
+    const created = Date.now();
+    setNotes((ns) => {
+      const have = new Set(ns.map((x) => x.id));
+      return [...fresh.filter((f) => !have.has(f.id)).map((f) => ({ ...f, kind: 'urgent', createdAt: created,
+        read: false })), ...ns];
     });
   }, [records]);
 

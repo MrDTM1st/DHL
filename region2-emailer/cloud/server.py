@@ -335,7 +335,7 @@ _CHECK_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.-]{2,39}")       # an NR order
 _DDMMYYYY = re.compile(r"\d{2}/\d{2}/\d{4}")
 _CHECK_VEH_DAYS = 14        # an order due within this has its open lines' cards opened: Veh Type and weight
 _TODO_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")          # a CTMS to-do item's id
-_TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact"}
+_TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact", "already"}
 _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 _RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
 

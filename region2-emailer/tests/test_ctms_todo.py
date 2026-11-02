@@ -62,6 +62,9 @@ def test_a_reply_becomes_an_order_to_update_with_its_answers():
     assert it["kind"] == "update" and "Sam Example replied 30/10" in it["what"]
     assert it["details"]["details"]["time"] == "08:00"
     assert T.replied(dict(rec, kind="collection"), path=store) is None      # a supplier's collection reply
+    # named as whoever wrote it, not as the contact we wrote to (02/11: an answer read as "Danny replied")
+    it = T.replied(dict(rec, orders=["1234568"]), path=store, who="Jo Colleague")
+    assert "Jo Colleague replied 30/10" in it["what"] and "Sam Example" not in it["what"]
 
 
 def test_the_list_holds_the_trackers_notes_and_the_remembered_rest_and_done_takes_them_off():

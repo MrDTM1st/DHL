@@ -4,7 +4,9 @@ read back before it counts as done (his ask 01/11; the Run button on the dashboa
 
   note     the -1-1 line opened and its Special Instructions read: ending with the note already - nothing to type -
            else the note at its end, read back, Save, Close; opened again, it must end with the note
-  update   for each open line: opened, its Veh Type box and Services read, closed; then the one order-update batch -
+  update   for each open line: opened, its Veh Type box, deliver comment and Services read, closed - a Veh Type or a
+           comment already there means CTMS has it: HELD, nothing typed, the run goes on (his 02/11), unless he
+           picked "Type it in anyway"; then the one order-update batch -
            times, the deliver side's comment, services off and on (HIAB and MOFFETT live there), the Veh Type only
            when the box is empty (40ft rigid or 40ft artic flatbed, never a Moffett vehicle - his rule 01/11) - Save
            (the schedule question OK'd) and Close; then Order Summary read: Ready At and Deliver By must be what was
@@ -37,6 +39,15 @@ VEH_SHOWS = {"rigid": ("box-veh-rigid", "NR_Rigid (Up to 40ft)"), "artic": ("box
 
 class Failed(Exception):
     pass
+
+
+class Held(Exception):
+    """CTMS has the update already - nothing typed, the item stays for him, the run goes on to the next."""
+
+
+# LOC Detail, then its Comments sub-tab - where the deliver side's comment is read before anything is typed
+LOC_COMMENTS = ["anchor", "anchor window", "click 365,187 react box=20,200,1250,700 timeout=10",
+                "click 180,643 react box=20,500,1250,760 timeout=10"]
 
 
 def _client():
@@ -86,6 +97,27 @@ def special_instructions(els):
         if e.get("r") == "text" and "Special Instructions" in nm:
             return str(e.get("v") or "")
     return ""
+
+
+def deliver_comment(els):
+    """The open order's deliver-side comment (LOC Detail > Comments): the right-hand of the two boxes under the
+    selected Comments tab - None when that tab isn't up."""
+    card = _frame(els, "Order details for")
+    if card is None:
+        return None
+    i = next((k for k, e in enumerate(card) if e.get("r") == "page tab" and e.get("nm") == "Comments"
+              and "selected" in (e.get("st") or [])), None)
+    if i is None:
+        return None
+    boxes = []
+    for e in card[i + 1:]:
+        if e.get("r") == "page tab":
+            break
+        if e.get("r") == "text" and (e.get("at") or [-1])[0] >= 0:
+            boxes.append(e)
+    if len(boxes) < 2:
+        return None
+    return str(max(boxes, key=lambda e: e["at"][0]).get("v") or "")
 
 
 def services(els):
@@ -182,12 +214,26 @@ def run_update(R, p):
     want = s.get("services") or {}
     for ref in p["lines"]:
         _open(R, ref)
+        now = veh_now(R)
+        # typed in already - a Veh Type on it, or a deliver comment: the reply went in before (by hand, or a run), so
+        # nothing is typed over it unless he picked "type it in anyway" (his 02/11 "yeah, fix it" - the 01/11 repeats
+        # of 7116527/8 would have wiped a second contact from the comment)
+        if not s.get("anyway"):
+            rc, _ = _quiet(R.send_batch, "loc-comments", R.parse_steps(LOC_COMMENTS))
+            said = deliver_comment(_elements(R)) if not rc else None
+            if said is None:
+                raise Failed(f"{ref}: its LOC Detail comments would not read - left open, nothing typed")
+            if now != "" or said.strip():
+                _close(R)
+                there = [f"Veh Type {VEH_SHOWS[now][1] if now in VEH_SHOWS else 'set'}" if now != "" else "",
+                         f"deliver comment '{said.strip()}'" if said.strip() else ""]
+                raise Held(f"{ref}: CTMS has it already ({', '.join(x for x in there if x)}) - nothing typed; tick it "
+                           "off, or pick 'Type it in anyway' on the item")
         # the vehicle first, before anything is typed: the list is only opened on an empty box - on a filled one it
         # opens at its own value and the scroll lands elsewhere (6055920, 01/11) - and a vehicle already there that
         # isn't the plan's is his, never changed by the run
         veh = s.get("veh")
         if veh:
-            now = veh_now(R)
             if now == veh:
                 veh = None
             elif now != "":
@@ -262,8 +308,8 @@ def run(ids):
     for p in sorted(plan, key=lambda p: want.index(p["id"])):
         if p["status"] == "done":
             ctms_todo.done(p["id"])
-            results.append({"id": p["id"], "ok": True,
-                            "said": "CTMS has no line left to update - ticked off" + FILE(p)})
+            why = (p.get("explain") or ["CTMS has no line left to update"])[0]
+            results.append({"id": p["id"], "ok": True, "said": f"{why} - ticked off" + FILE(p)})
             continue
         if p["status"] != "ready":
             results.append({"id": p["id"], "ok": False, "said": f"not run - {p['status']}"})
@@ -271,6 +317,9 @@ def run(ids):
         try:
             R = R or _client()
             said = run_note(R, p) if p["kind"] == "note" else run_update(R, p)
+        except Held as e:                  # CTMS has it - left for him, and the run goes on
+            results.append({"id": p["id"], "ok": False, "held": True, "said": str(e)})
+            continue
         except Failed as e:
             results.append({"id": p["id"], "ok": False, "said": str(e)})
             break
@@ -282,10 +331,11 @@ def run(ids):
             said += FILE(p)
         results.append({"id": p["id"], "ok": True, "said": said})
     ok = sum(1 for r in results if r["ok"])
+    held = [r["said"] for r in results if r.get("held")]
     left = len(want) - len(results)
-    said = f"{ok} of {len(want)} done in CTMS" + (f", stopped at: {results[-1]['said']}" if results and
-                                                  not results[-1]["ok"] else "") + (f"; {left} not started"
-                                                                                     if left else "")
+    stopped = results and not results[-1]["ok"] and not results[-1].get("held")
+    said = (f"{ok} of {len(want)} done in CTMS" + (f"; held, CTMS has it already: {' | '.join(held)}" if held else "")
+            + (f", stopped at: {results[-1]['said']}" if stopped else "") + (f"; {left} not started" if left else ""))
     return {"ok": ok == len(want), "said": said, "results": results}
 
 

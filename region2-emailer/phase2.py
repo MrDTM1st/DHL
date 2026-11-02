@@ -383,6 +383,18 @@ def product_type_of(record):
     return bd.product_type(blob)
 
 
+# who answered an order's email, and with what (his 02/11) - reply_kind
+from reply_kind import gave_details, materials_team, message_pictures, said_line, typed_contacts  # noqa: E402
+
+
+def _received(item):
+    try:
+        s = item.ReceivedTime
+        return datetime(s.year, s.month, s.day, s.hour, s.minute).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return tracker._now()
+
+
 # ---------- main passes ----------
 def _collection_terms():
     """Recipient markers for the collect-first suppliers, from config."""
@@ -467,7 +479,7 @@ def check(ns=None):
     # Which orders were ALREADY finished before this run. Anything that becomes
     # finished DURING this run must survive to be saved - see the drop below.
     was_done = {r["id"] for r in d["records"] if r.get("sendoff_ready")}
-    replies = ooo = moved = 0
+    replies = ooo = moved = escalations = no_details = 0
     finder = _reply_finder(ns, [r for r in d["records"] if r.get("status") == "sent"
                                 and not r.get("reply_at") and not r.get("ooo_at")])
     for r in list(d["records"]):            # a copy: a reply's date can fold another record into this one
@@ -486,6 +498,36 @@ def check(ns=None):
             r["ooo_at"] = tracker._now()
             ooo += 1
         else:
+            body, who = str(item.Body or ""), str(getattr(item, "SenderName", "") or "")
+            eid = str(getattr(item, "EntryID", "") or "")
+            if r.get("kind", "delivery") == "delivery":
+                try:
+                    import chase_guard
+                    addr = chase_guard._smtp_of_sender(item)
+                except Exception:
+                    addr = str(getattr(item, "SenderEmailAddress", "") or "").lower()
+                # the team itself, unless the order's own contact is that team's address
+                team = materials_team(addr) if addr != str(r.get("to") or "").strip().lower() else ""
+                if team:
+                    # the materials team answering our escalation - a contact typed in, or a screenshot of one.
+                    # Told to him as theirs, never as the site's reply; the order still waits for the site
+                    if (r.get("escalation_reply") or {}).get("eid") != eid:
+                        r["escalation_reply"] = {
+                            "at": _received(item), "from": who, "team": team, "addr": addr, "eid": eid,
+                            "contacts": typed_contacts(body, skip=(addr, r.get("to"))),
+                            "pictures": message_pictures(getattr(item, "HTMLBody", "") or "")}
+                        escalations += 1
+                        metrics.log("escalation_answered", orders=r.get("orders", []), team=team)
+                    continue
+                if not gave_details(r, body, product_type_of(r), who):
+                    # an answer with nothing to type ("is the delivery date still ok?") - he emails them back; the
+                    # order keeps waiting for the details, and nothing goes on the CTMS to-do
+                    if (r.get("needs_info") or {}).get("eid") != eid:
+                        r["needs_info"] = {"at": _received(item), "from": who, "addr": addr, "eid": eid,
+                                           "said": said_line(body)}
+                        no_details += 1
+                        metrics.log("reply_no_details", orders=r.get("orders", []))
+                    continue
             r["reply_at"] = tracker._now()
             replies += 1
             # parse their answers into the structured fields CTMS needs, so the
@@ -508,9 +550,9 @@ def check(ns=None):
                 moved += tracker.move_date(d, r, dd.firm_date(r["details"]), "the site's reply")
             except Exception as e:
                 r["details_note"] = str(e)[:140]
-            try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list
-                import ctms_todo
-                ctms_todo.replied(r)
+            try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list, under the name of
+                import ctms_todo    # whoever wrote it
+                ctms_todo.replied(r, who=who)
             except Exception:
                 pass
             if r.get("kind") == "collection":
@@ -572,6 +614,7 @@ def check(ns=None):
     removed = tracker.drop_completed(d, keep_ids=finished_now)
     tracker.save(d)
     print(f"check: {replies} new repl(y/ies), {ooo} out-of-office flagged, "
+          f"{escalations} escalation answer(s) from the materials team, {no_details} repl(y/ies) without details, "
           f"{booked_removed} booked-by-you removed, "
           f"{removed} stale ready order(s) removed, {moved} delivery date(s) moved by a reply, "
           f"{repaired} product wording(s) repaired, {collfilled} collection(s) filled in.")

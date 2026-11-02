@@ -110,6 +110,24 @@ export function dateShort(dd) {
   return m ? m[1] + '/' + m[2] : String(dd || '');
 }
 
+// "2026-11-02 07:42" -> "02/11 07:42"
+export function stamp(at) {
+  const s = String(at || '');
+  return s.length >= 16 ? s.slice(8, 10) + '/' + s.slice(5, 7) + ' ' + s.slice(11, 16) : s;
+}
+
+// The materials team's answer to an escalation, in a line (his 02/11: "usually when we escalate, the people from
+// the network rail team will either give us a screenshot of another email contact or like type in another email
+// contact ... it's best you tell us") - who, when, and what they gave.
+export function answerText(e) {
+  if (!e || !e.at) return '';
+  const what = (e.contacts || []).length ? 'contact: ' + e.contacts.join(', ')
+    : e.pictures ? 'a screenshot of the contacts - open their email'
+      : 'no contact in their words - open their email';
+  return (e.team || 'The materials team') + (e.from ? ' (' + e.from + ')' : '') + ' answered ' + stamp(e.at)
+    + ' with ' + what;
+}
+
 // Detail-field helpers for the tracker's parsed delivery-detail chips.
 export const DFIELDS = [
   ['date', 'Date'], ['time', 'Time'], ['offloading', 'Offload'], ['artic_access', 'Artic'],

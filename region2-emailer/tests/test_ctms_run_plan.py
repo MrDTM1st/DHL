@@ -55,6 +55,25 @@ def test_a_clear_reply_is_ready_with_his_rules_applied():
     assert any(e.startswith("Rear steer left off") for e in p["explain"])
 
 
+def test_a_reply_ctms_already_has_is_held_for_him_never_typed_over():
+    # the look-up saw a Veh Type on the order: the reply went in already (by hand) - held with his two choices (02/11)
+    rec = _rec("9100079", "05/11/2026")
+    found = _found("9100079", "05/11/2026")
+    found["9100079|05/11/2026"]["veh"] = {"9100079-1-1": True}
+    p = P.plan([_item("9100079")], [rec], found)[0]
+    assert p["status"] == "held" and not p["set"].get("anyway")
+    c = [c for c in p["checks"] if c["field"] == "already"][0]
+    assert c["options"] == [P.TICK_OFF, P.TYPE_ANYWAY] and "9100079-1-1" in c["why"] and c["quote"] == ""
+    # his pick settles it: ticked off with nothing typed, or typed in over what CTMS has
+    p = P.plan([_item("9100079", answers={"already": P.TICK_OFF})], [rec], found)[0]
+    assert p["status"] == "done" and p["set"] == {} and "ticked it off" in p["explain"][0]
+    p = P.plan([_item("9100079", answers={"already": P.TYPE_ANYWAY})], [rec], found)[0]
+    assert p["status"] == "ready" and p["set"]["anyway"] is True and p["set"]["deliver"] == "05/11/26 08:00-12:00"
+    # no Veh Type seen: nothing to ask
+    p = P.plan([_item("9100079")], [rec], _found("9100079", "05/11/2026"))[0]
+    assert p["status"] == "ready" and not any(c["field"] == "already" for c in p["checks"])
+
+
 def test_a_heavy_hiab_load_is_an_artic_and_keeps_its_rear_steer():
     rec = dict(_rec("9100072", "05/11/2026"), ctms_weight=15000)
     p = P.plan([_item("9100072")], [rec], _found("9100072", "05/11/2026"))[0]

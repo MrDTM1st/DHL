@@ -42,6 +42,7 @@ OFFLOADING = ["HIAB", "MOFFETT", "SITE/NONE"]
 YES_NO = ["yes", "no"]
 VEHICLES = ["rigid", "artic"]
 COLLECT_DAYS = ["the day before", "the same day"]
+TICK_OFF, TYPE_ANYWAY = "Tick it off - CTMS has it", "Type it in anyway"   # an update CTMS looks to have already
 
 
 def _day(v):
@@ -89,6 +90,12 @@ def _lines_for(found, order, date):
     if mine or len({_day(r.get("deliver_by")) for r in open_}) <= 1:
         return open_
     return []
+
+
+def _veh_set(found, order):
+    """The order's lines the last CTMS look-up saw a Veh Type on."""
+    return sorted(ref for k, g in (found or {}).items() if k.split("|")[0] == str(order)
+                  for ref, filled in (g.get("veh") or {}).items() if filled)
 
 
 def _vehicle_said(v):
@@ -166,6 +173,24 @@ def plan_update(it, rec, found):
         return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
                 "status": "done", "lines": [], "set": {}, "explain": ["CTMS has no line left to update"],
                 "checks": []}
+    # -- typed in already? A Veh Type is the last thing an update puts on (his rule: Veh Type filled = the site's
+    # details are in) - a reply seen again, or a later one, is held for him rather than typed over what CTMS has
+    # (his 02/11 "yeah, fix it": the 01/11 repeats of 7116527/8 would have lost a second contact from the comment)
+    already = _veh_set(found, order)
+    if already:
+        pick = answers.get("already")
+        if pick == TICK_OFF:
+            return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
+                    "status": "done", "lines": [], "set": {},
+                    "explain": ["You ticked it off - CTMS has it already"], "checks": []}
+        if pick == TYPE_ANYWAY:
+            s["anyway"] = True
+            explain.append("You said type it in anyway - what CTMS has is typed over")
+        else:
+            checks.append({"field": "already", "label": "Already in CTMS?", "quote": "", "text": False,
+                           "options": [TICK_OFF, TYPE_ANYWAY],
+                           "why": f"CTMS already has a Veh Type on {', '.join(already)} - this reply looks typed in "
+                                  "already, and running it would type over the deliver comment"})
     # -- the delivery window
     tv = _field(d, "time")
     start, end = _hm(tv.get("earliest")), _hm(tv.get("latest"))

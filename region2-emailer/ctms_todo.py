@@ -105,13 +105,14 @@ def escalated(orders, when=None, path=None):
                 note=note, source="escalation", path=path, when=when) for o in _bases(orders)]
 
 
-def replied(rec, path=None, when=None):
+def replied(rec, path=None, when=None, who=None):
     """A site answered: the order is to be updated from the reply. Its parsed answers ride along, so the run has
     what it needs without reading the email again - and a delivery the reply puts at night or on a weekend is
-    remembered for its Night / Saturday / Sunday as well."""
+    remembered for its Night / Saturday / Sunday as well. `who`: whoever wrote the reply - named as they are, not
+    as the contact we wrote to (his 02/11: the materials team's answer read as "Danny replied")."""
     if rec.get("kind", "delivery") != "delivery" or not rec.get("orders"):
         return None
-    who = rec.get("name") or rec.get("to") or "The site"
+    who = str(who or "").strip() or rec.get("name") or rec.get("to") or "The site"
     day = str(rec.get("reply_at") or when or _now())[:10]
     try:
         day = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m")
