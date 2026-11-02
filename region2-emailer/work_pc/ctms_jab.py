@@ -273,6 +273,8 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         if "focused" in i["states"] and ctx["focus"] is None:
             ctx["focus"] = e["n"]
         below = level + 1
+    if role == "internal frame" and ctx.get("skip") and name.startswith(ctx["skip"]):
+        return                                  # named, so it's known to be up, but what's in it isn't wanted this time
     if role == "list" and (i["w"] <= 0 or i["h"] <= 0):
         return                                  # a drop-down that isn't open: none of its rows are on the screen, and
                                                 # one of Planning's holds thousands - most of a read's seven seconds (02/11)
@@ -290,8 +292,9 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         ctx["partial"] = True                   # that one thing read in part - the rest of the screen still read
 
 
-def read(hwnds, api=None):
-    """Everything worth naming in CTMS's Java windows - the reader's whole answer."""
+def read(hwnds, api=None, skip=()):
+    """Everything worth naming in CTMS's Java windows - the reader's whole answer. skip: the windows, by how their names
+    start, whose insides aren't wanted: a read of an order's card has no need of Planning's grid behind it."""
     t0 = time.time()
     api = api or Api()
     java = [h for h in hwnds if api.java_window(h)]
@@ -302,7 +305,7 @@ def read(hwnds, api=None):
         java += [h for h in api.top_windows() if h not in java and api.pid(h) in pids and api.java_window(h)]
     out = {"ok": True, "java_windows": len(java), "windows": [], "elements": [],
            "reader": f"{struct.calcsize('P') * 8}-bit Python {sys.version.split()[0]}"}
-    ctx = {"visited": 0, "cut": False, "partial": False, "deadline": t0 + SECONDS, "focus": None}
+    ctx = {"visited": 0, "cut": False, "partial": False, "deadline": t0 + SECONDS, "focus": None, "skip": tuple(skip)}
     tops = []
     try:
         for h in java:
@@ -398,7 +401,7 @@ def scrub(out):
     return out
 
 
-def read_fields(win, timeout=90):
+def read_fields(win, timeout=90, skip=()):
     """CTMS's fields, read by the reader in its own 32-bit Python, checked again here."""
     if not IS_WIN:
         raise NotReady("Reading CTMS's fields works on Windows only.")
@@ -407,7 +410,8 @@ def read_fields(win, timeout=90):
         raise need_python()
     hwnds = [int(win["hwnd"])] + [int(h) for h in win.get("java_hwnds") or []]
     try:
-        r = _run([py, "-I", os.path.abspath(__file__), "fields"] + [str(h) for h in hwnds], timeout)
+        r = _run([py, "-I", os.path.abspath(__file__), "fields"] + [str(h) for h in hwnds]
+                 + [f"--skip={s}" for s in skip], timeout)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"CTMS's Java did not answer the Access Bridge within {timeout}s - it may be busy "
                            "(a search running?). Try again in a moment.")
@@ -515,7 +519,8 @@ def setup(url=None):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "fields":
         try:
-            print(json.dumps(read([int(x) for x in sys.argv[2:]])))
+            print(json.dumps(read([int(x) for x in sys.argv[2:] if not x.startswith("--skip=")],
+                                  skip=[x[len("--skip="):] for x in sys.argv[2:] if x.startswith("--skip=")])))
         except Exception as e:
             print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}))
     else:

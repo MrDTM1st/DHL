@@ -443,7 +443,7 @@ def plan_update(it, rec, found):
     return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
             "status": status, "lines": [ln.get("ref") for ln in lines or []], "set": s, "explain": explain,
             "checks": checks,
-            "lookup": {"ref": str(order), "date": _day(rec.get("delivery_date"))} if look_up else None}
+            "lookup": {"ref": str(order), "date": _day(rec.get("delivery_date")), "cards": weighing} if look_up else None}
 
 
 def plan(items, records, found):

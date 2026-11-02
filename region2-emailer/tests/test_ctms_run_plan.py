@@ -240,7 +240,7 @@ def test_what_only_ctms_knows_is_read_when_run_is_pressed_never_asked():
     # never looked up: ready all the same, nothing to answer - the run looks it up first
     p = P.plan([_item("9100082")], [rec], {})[0]
     assert p["status"] == "ready" and p["checks"] == [] and p["lines"] == [] and "veh" not in p["set"], p
-    assert p["lookup"] == {"ref": "9100082", "date": "05/11/2026"}
+    assert p["lookup"] == {"ref": "9100082", "date": "05/11/2026", "cards": True}
     assert any(e.startswith("Read from CTMS when you press Run") for e in p["explain"])
     # its lines known, the card not opened: the weight is still to read
     p = P.plan([_item("9100082")], [rec], _found("9100082", "05/11/2026"))[0]

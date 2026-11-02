@@ -118,6 +118,16 @@ def test_an_update_with_no_line_left_is_ticked_off_and_its_chain_filed_with_noth
     assert out["ok"] and ticked == ["d"] and filed == ["d"] and fake.items == [] and out["results"][0]["said"].startswith("Booked - ticked off")
 
 
+def test_the_look_up_only_opens_cards_when_it_needs_the_weight():
+    weighing = dict(_update("w", "9100006-1-1"), lines=[], lookup={"ref": "9100006", "date": "05/11/2026", "cards": True})
+    known = dict(_update("k", "9100007-1-1"), lines=[], lookup={"ref": "9100007", "date": "05/11/2026", "cards": False})
+    fake = FakeRemote()
+    fake.looked = ({"ok": True}, {"kind": "ctms_check", "orders": {}})
+    _run([weighing, known], fake)
+    assert fake.items[0] == ("ctms_check", [{"ref": "9100006", "date": "05/11/2026", "veh": True, "key": "9100006|05/11/2026"},
+                                            {"ref": "9100007", "date": "05/11/2026", "veh": False, "key": "9100007|05/11/2026"}])
+
+
 def test_the_page_is_told_how_it_is_going():
     fake = FakeRemote()
     _run([_note("a"), _update("b")], fake, run_id=77)

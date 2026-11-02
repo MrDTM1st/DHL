@@ -58,6 +58,7 @@ SCHEDULE_OK = (952, 505)
 DISCARD_ASK = (840, 420, 1130, 450)        # "Do you want to discard your changes?"
 DISCARD_WORDS = "discard your changes"
 ANCHOR = {"action": "anchor", "window": True}
+NOT_READ = ("Planning", "OPOKUD")  # the windows behind: nothing here is read off them, and they're most of a read's time
 WINDOW = re.compile(r"\s*(\d{2}/\d{2}/\d{2})\s+(\d{1,2}:\d{2})\s*-\s*(?:(\d{2}/\d{2}/\d{2})\s+)?(\d{1,2}:\d{2})\s*")
 
 

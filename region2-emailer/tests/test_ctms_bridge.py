@@ -1896,6 +1896,17 @@ def test_a_drop_down_that_isnt_open_is_not_walked_but_an_open_ones_rows_are_read
     assert names == ["NR_ARTIC_FL"] and out["visited"] < 12
 
 
+def test_a_window_whose_insides_arent_wanted_is_named_and_not_walked():
+    # Planning's grid is most of a read's time, and nothing on an order's card needs it (02/11)
+    frame = _n("frame", kids=[_n("internal frame", "Order details for 1", kids=[_n("text", "Customer Ref", "9100001-1-1")]),
+                              _n("internal frame", "Planning", kids=[_n("text", "", f"r{i}") for i in range(30)])])
+    whole = J.read([11], api=_FakeJava({11: frame}))
+    out = J.read([11], api=_FakeJava({11: frame}), skip=("Planning",))
+    assert [e["nm"] for e in out["elements"] if e["r"] == "internal frame"] == ["Order details for 1", "Planning"]
+    assert any(e.get("v") == "9100001-1-1" for e in out["elements"]) and not any(e.get("v") == "r0" for e in out["elements"])
+    assert out["visited"] < whole["visited"] - 25
+
+
 def test_a_click_can_aim_at_a_screen_point_but_never_off_ctms():
     # where the Access Bridge places a field (an order well row's cell) is a screen point; taken of the picture's own
     # rectangle it is a fraction like any other - and one off CTMS is refused (02/11)

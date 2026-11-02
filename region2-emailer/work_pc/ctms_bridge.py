@@ -1014,7 +1014,7 @@ class Bridge:
                 finally:
                     times.append(round(time.time() - ts, 2))
 
-        job = ctms_items.Items(run, lambda: ctms_jab.read_fields(self.win).get("elements") or [],
+        job = ctms_items.Items(run, lambda: ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ).get("elements") or [],
                                lambda name, box: self._seen(t, name, box), t)
         ok, held, clean, said = False, False, True, ""
         try:
