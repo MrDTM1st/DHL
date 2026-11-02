@@ -84,6 +84,22 @@ def test_a_reply_update_ctms_shows_done_comes_off_the_to_do_list():
     assert C.todo_done(found, items) == ["t1", "t2"]
 
 
+def test_a_day_the_site_has_just_asked_for_stands_until_ctms_is_updated_from_the_reply():
+    lines = [{"ref": "9100500-1-1", "status": "UNSCHEDULED", "deliver_by": "16/11/26 16:01"}]
+    rec = {"id": "9100500|18/11/2026", "orders": ["9100500"], "delivery_date": "18/11/2026"}
+    key = "9100500|18/11/2026"
+    # CTMS still has the old day: the reply's stands
+    p = C.plan({key: {"lines": lines, "veh": {"9100500-1-1": False}}}, [dict(rec, date_moved_by="the site's reply")])
+    assert p["moved"] == [], p
+    # a Veh Type on it means CTMS was worked since - and the day it has is the day
+    p = C.plan({key: {"lines": lines, "veh": {"9100500-1-1": True}}}, [dict(rec, date_moved_by="the site's reply")])
+    assert p["moved"] == [(rec["id"], "16/11/2026")], p
+    # moved by anything else, or not at all: the dashboard follows CTMS, as ever
+    p = C.plan({key: {"lines": lines}}, [dict(rec, date_moved_by="CTMS")])
+    assert p["moved"] == [(rec["id"], "16/11/2026")], p
+    assert C.plan({key: {"lines": lines}}, [rec])["moved"] == [(rec["id"], "16/11/2026")]
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

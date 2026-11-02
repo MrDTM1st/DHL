@@ -384,7 +384,7 @@ def product_type_of(record):
 
 
 # who answered an order's email, and with what (his 02/11) - reply_kind
-from reply_kind import gave_details, materials_team, message_pictures, said_line, typed_contacts  # noqa: E402
+from reply_kind import materials_team, message_pictures, said_line, sort_out, typed_contacts  # noqa: E402
 
 
 def _received(item):
@@ -393,6 +393,17 @@ def _received(item):
         return datetime(s.year, s.month, s.day, s.hour, s.minute).strftime("%Y-%m-%d %H:%M")
     except Exception:
         return tracker._now()
+
+
+def _inbound_mail(item):
+    """A mail as reply_kind.sort_out reads it."""
+    try:
+        import chase_guard
+        addr = chase_guard._smtp_of_sender(item)
+    except Exception:
+        addr = str(getattr(item, "SenderEmailAddress", "") or "").lower()
+    return {"item": item, "addr": addr, "who": str(getattr(item, "SenderName", "") or ""),
+            "eid": str(getattr(item, "EntryID", "") or ""), "body": str(item.Body or "")}
 
 
 # ---------- main passes ----------
@@ -487,77 +498,69 @@ def check(ns=None):
             continue
         if r.get("reply_at"):
             continue
-        item = finder(r) if finder else find_reply(ns, r)
-        if not item:
+        found = finder(r) if finder else [x for x in [find_reply(ns, r)] if x]
+        people = [it for it in found if not is_auto_reply(it)]
+        if not people:
+            # An out-of-office used to end the search for good - the real reply that
+            # followed it was never looked for. Keep looking; note the OOO once.
+            if found and not r.get("ooo_at"):
+                r["ooo_at"] = tracker._now()
+                ooo += 1
             continue
-        # An out-of-office used to end the search for good - the real reply that
-        # followed it was never looked for. Keep looking; note the OOO once.
-        if r.get("ooo_at") and is_auto_reply(item):
-            continue
-        if is_auto_reply(item):
-            r["ooo_at"] = tracker._now()
-            ooo += 1
-        else:
-            body, who = str(item.Body or ""), str(getattr(item, "SenderName", "") or "")
-            eid = str(getattr(item, "EntryID", "") or "")
-            if r.get("kind", "delivery") == "delivery":
-                try:
-                    import chase_guard
-                    addr = chase_guard._smtp_of_sender(item)
-                except Exception:
-                    addr = str(getattr(item, "SenderEmailAddress", "") or "").lower()
-                # the team itself, unless the order's own contact is that team's address
-                team = materials_team(addr) if addr != str(r.get("to") or "").strip().lower() else ""
-                if team:
-                    # the materials team answering our escalation - a contact typed in, or a screenshot of one.
-                    # Told to him as theirs, never as the site's reply; the order still waits for the site
-                    if (r.get("escalation_reply") or {}).get("eid") != eid:
-                        r["escalation_reply"] = {
-                            "at": _received(item), "from": who, "team": team, "addr": addr, "eid": eid,
-                            "contacts": typed_contacts(body, skip=(addr, r.get("to"))),
-                            "pictures": message_pictures(getattr(item, "HTMLBody", "") or "")}
-                        escalations += 1
-                        metrics.log("escalation_answered", orders=r.get("orders", []), team=team)
-                    continue
-                if not gave_details(r, body, product_type_of(r), who):
-                    # an answer with nothing to type ("is the delivery date still ok?") - he emails them back; the
-                    # order keeps waiting for the details, and nothing goes on the CTMS to-do
-                    if (r.get("needs_info") or {}).get("eid") != eid:
-                        r["needs_info"] = {"at": _received(item), "from": who, "addr": addr, "eid": eid,
-                                           "said": said_line(body)}
-                        no_details += 1
-                        metrics.log("reply_no_details", orders=r.get("orders", []))
-                    continue
-            r["reply_at"] = tracker._now()
-            replies += 1
-            # parse their answers into the structured fields CTMS needs, so the
-            # brief is pre-filled and the chaser can ask for ONLY what's missing
-            try:
-                pt = product_type_of(r)
-                r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt,
-                                              sender=str(getattr(item, "SenderName", "") or ""))
-                try:   # no site contact in the reply: the person who sent it, name and number off the order's
-                    import site_contacts    # Excel sheet (his rule 01/11)
-                    site_contacts.fill_reply(r, item)
-                except Exception:
-                    pass
-                r["missing"] = dd.missing(r["details"], pt)
-                metrics.log("reply_parsed", orders=r.get("orders", []),
-                            missing=len(r["missing"]))
-                # the date the site asks for is the date the order gets in CTMS (his rule for updating an order
-                # from a reply) - and the dashboard shows the same (his ask, 31/10). A date that is not firm waits
-                # for his confirm on the Tracker page (learn_detail), which moves it then.
-                moved += tracker.move_date(d, r, dd.firm_date(r["details"]), "the site's reply")
-            except Exception as e:
-                r["details_note"] = str(e)[:140]
-            try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list, under the name of
-                import ctms_todo    # whoever wrote it
-                ctms_todo.replied(r, who=who)
+        item = people[0]
+        if r.get("kind", "delivery") == "delivery":
+            answer, team, blank = sort_out(r, [_inbound_mail(it) for it in people], product_type_of(r))
+            if team and (r.get("escalation_reply") or {}).get("eid") != team["eid"]:
+                # the materials team answering our escalation - a contact typed in, or a screenshot of one.
+                # Told to him as theirs, never as the site's reply; the order still waits for the site
+                r["escalation_reply"] = {
+                    "at": _received(team["item"]), "from": team["who"], "team": materials_team(team["addr"]),
+                    "addr": team["addr"], "eid": team["eid"],
+                    "contacts": typed_contacts(team["body"], skip=(team["addr"], r.get("to"))),
+                    "pictures": message_pictures(getattr(team["item"], "HTMLBody", "") or "")}
+                escalations += 1
+                metrics.log("escalation_answered", orders=r.get("orders", []), team=r["escalation_reply"]["team"])
+            if not answer:
+                # an answer with nothing to type ("is the delivery date still ok?") - he emails them back; the
+                # order keeps waiting for the details, and nothing goes on the CTMS to-do
+                if blank and (r.get("needs_info") or {}).get("eid") != blank["eid"]:
+                    r["needs_info"] = {"at": _received(blank["item"]), "from": blank["who"], "addr": blank["addr"],
+                                       "eid": blank["eid"], "said": said_line(blank["body"])}
+                    no_details += 1
+                    metrics.log("reply_no_details", orders=r.get("orders", []))
+                continue
+            item = answer["item"]
+        who = str(getattr(item, "SenderName", "") or "")
+        r["reply_at"] = tracker._now()
+        replies += 1
+        # parse their answers into the structured fields CTMS needs, so the
+        # brief is pre-filled and the chaser can ask for ONLY what's missing
+        try:
+            pt = product_type_of(r)
+            r["details"] = dd.parse_reply(str(item.Body or ""), product_type=pt,
+                                          sender=str(getattr(item, "SenderName", "") or ""))
+            try:   # no site contact in the reply: the person who sent it, name and number off the order's
+                import site_contacts    # Excel sheet (his rule 01/11)
+                site_contacts.fill_reply(r, item)
             except Exception:
                 pass
-            if r.get("kind") == "collection":
-                continue   # supplier replied with collection details - nothing to book from it here
-            r["sendoff_ready"] = True   # replied: ready to book (the SEND OUT brief it used to get is gone)
+            r["missing"] = dd.missing(r["details"], pt)
+            metrics.log("reply_parsed", orders=r.get("orders", []),
+                        missing=len(r["missing"]))
+            # the date the site asks for is the date the order gets in CTMS (his rule for updating an order
+            # from a reply) - and the dashboard shows the same (his ask, 31/10). A date that is not firm waits
+            # for his confirm on the Tracker page (learn_detail), which moves it then.
+            moved += tracker.move_date(d, r, dd.firm_date(r["details"]), "the site's reply")
+        except Exception as e:
+            r["details_note"] = str(e)[:140]
+        try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list, under the name of
+            import ctms_todo    # whoever wrote it
+            ctms_todo.replied(r, who=who)
+        except Exception:
+            pass
+        if r.get("kind") == "collection":
+            continue   # supplier replied with collection details - nothing to book from it here
+        r["sendoff_ready"] = True   # replied: ready to book (the SEND OUT brief it used to get is gone)
     # remove orders YOU'VE booked yourself - your "this order has been arranged
     # with ..." email (incl. a MAN ref) in Sent Items - so they stop being tracked
     # and never get chased. This is the "if you say an order's booked, drop it"
@@ -650,17 +653,18 @@ def _reply_finder(ns, records):
     now = datetime.now()
 
     def find(r):
-        got = cr.reply_mails(guard.with_mailbox_facts(ns, r), idx.mails, ctx, idx.text_of, now)
+        got = cr.reply_mails(guard.with_mailbox_facts(ns, r), idx.mails, ctx, idx.text_of, now, firm=True)
         if got is None:
-            return find_reply(ns, r)             # the rules cannot judge it: old search
+            one = find_reply(ns, r)              # the rules cannot judge it: old search
+            return [one] if one else []
         replies, ooo = got
-        m = (replies or ooo or [None])[-1]       # the newest, as find_reply returned
-        if m is None:
-            return None
-        try:
-            return ns.GetItemFromID(m["eid"], idx.store_id)
-        except Exception:
-            return None
+        items = []
+        for m in reversed(replies or ooo[-1:]):  # newest first: the newest needn't be the one with the answer in it
+            try:
+                items.append(ns.GetItemFromID(m["eid"], idx.store_id))
+            except Exception:
+                pass
+        return items
     return find
 
 

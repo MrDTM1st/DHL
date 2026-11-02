@@ -75,6 +75,9 @@ class FakeCTMS:
         return 0
 
     def ask(self, action, wait_total=90, **args):
+        if action == "ctms_check":
+            self.calls.append((action, args["orders"]))
+            return self.looked
         return {"ok": True}, {"kind": "fields", "elements": self.reads.pop(0)}
 
 
@@ -178,6 +181,51 @@ def test_an_update_ctms_already_has_is_held_untouched_and_the_run_goes_on():
         out = X.run(["u", "n"])
         assert ticked == ["n"] and out["results"][0]["held"] is True and out["results"][1]["ok"] is True, out
         assert out["said"].startswith("1 of 2 done in CTMS; held, CTMS has it already: 9100098-1-1"), out["said"]
+    finally:
+        ctms_run_plan.load, ctms_todo.done, X._client, X.FILE = keep
+
+
+def test_a_run_looks_up_what_only_ctms_knows_first_then_plans_it_again():
+    import ctms_run_plan
+    import ctms_todo
+    want = {"id": "t9", "kind": "update", "orders": ["9100400"], "status": "ready", "set": {}, "explain": [],
+            "checks": [], "lines": [], "lookup": {"ref": "9100400", "date": "05/11/2026"}}
+    plain = {"id": "n1", "kind": "note", "orders": ["9100401"], "status": "ready", "lines": ["9100401-1-1"],
+             "set": {"note": " - Emailed DO 28/10"}, "explain": [], "checks": []}
+    found = {"9100400|05/11/2026": {"lines": [{"ref": "9100400-1-1", "status": "UNSCHEDULED"}], "weight": {"9100400-1-1": 7000}}}
+    typed = dict(want, lookup=None, lines=["9100400-1-1"], set={"deliver": "05/11/26 08:00-10:00", "veh": "rigid"})
+    keep = (ctms_run_plan.load, ctms_todo.done, X._client, X.FILE)
+    ticked, seen = [], []
+
+    def load(fresh=None):
+        seen.append(fresh)
+        return [plain, typed] if fresh else [plain, want]
+    try:
+        ctms_run_plan.load, ctms_todo.done, X.FILE = load, ticked.append, (lambda p: "")
+        fake = FakeCTMS([_card("x - Emailed DO 28/10"), _loc(""), _card(services=()),
+                         _summary("9100400-1-1", "", "05/11/26 10:00")])
+        fake.looked = ({"ok": True}, {"kind": "ctms_check", "orders": found})
+        X._client = lambda: fake
+        out = X.run(["n1", "t9"])
+        assert seen == [None, found] and fake.calls[0][0] == "ctms_check", (seen, fake.calls[:1])
+        assert fake.calls[0][1] == [{"key": "9100400|05/11/2026", "ref": "9100400", "date": "05/11/2026", "veh": True}]
+        assert out["ok"] and ticked == ["n1", "t9"], out                 # looked up, then typed
+        # the look-up turns up a doubt: nothing typed, and why is said
+        doubtful = dict(want, status="held", lookup=None, checks=[{"field": "already", "why": "CTMS already has it"}])
+        ctms_run_plan.load = lambda fresh=None: [doubtful] if fresh else [want]
+        fake = FakeCTMS([])
+        fake.looked = ({"ok": True}, {"kind": "ctms_check", "orders": found})
+        X._client = lambda: fake
+        out = X.run(["t9"])
+        assert not out["ok"] and "CTMS already has it" in out["said"] and "stopped" not in out["said"], out
+        assert [c[0] for c in fake.calls] == ["ctms_check"]
+        # the look-up refused: those items wait, the rest still go
+        ctms_run_plan.load, ticked[:] = (lambda fresh=None: [plain, want]), []
+        fake = FakeCTMS([_card("x - Emailed DO 28/10")])
+        fake.looked = ({"ok": False, "detail": "the work PC was busy"}, None)
+        X._client = lambda: fake
+        out = X.run(["n1", "t9"])
+        assert ticked == ["n1"] and "the work PC was busy" in out["said"] and "stopped" not in out["said"], out
     finally:
         ctms_run_plan.load, ctms_todo.done, X._client, X.FILE = keep
 

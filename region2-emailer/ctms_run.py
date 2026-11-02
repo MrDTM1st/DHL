@@ -4,11 +4,14 @@ read back before it counts as done (his ask 01/11; the Run button on the dashboa
 
   note     the -1-1 line opened and its Special Instructions read: ending with the note already - nothing to type -
            else the note at its end, read back, Save, Close; opened again, it must end with the note
+  look-up  an update the plan marks "lookup" - its open lines or weight not known yet - is looked up first, on the work
+           PC, and planned again; searches and reads only. What that turns up (a Veh Type on it, a doubt) holds it
   update   for each open line: opened, its Veh Type box, deliver comment and Services read, closed - a Veh Type or a
            comment already there means CTMS has it: HELD, nothing typed, the run goes on (his 02/11), unless he
            picked "Type it in anyway"; then the one order-update batch -
            times, the deliver side's comment, services off and on (HIAB and MOFFETT live there), the Veh Type only
-           when the box is empty (40ft rigid or 40ft artic flatbed, never a Moffett vehicle - his rule 01/11) - Save
+           when the box is empty (40ft rigid, 40ft artic flatbed or 60ft artic, never a Moffett vehicle - his rule
+           01/11) - Save
            (the schedule question OK'd) and Close; then Order Summary read: Ready At and Deliver By must be what was
            typed. A Veh Type already set to another vehicle stops it before anything is typed
   done     CTMS has no line left to update - ticked off, nothing typed
@@ -30,11 +33,13 @@ import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVICE_ROWS = 14                  # the Services grid's rows, as the Access Bridge reads them
-# The open order's Veh Type box (its Detail tab), and what it shows - pictures of CTMS's own vehicle names, cut 01/11.
-# Only these two are ever picked: "the vehicle tab, we don't use that rigid Moffett thing ... We just use the 40-foot
+# The open order's Veh Type box (its Detail tab), and what it shows - pictures of CTMS's own vehicle names, cut 01-02/11.
+# Only these are ever picked: "the vehicle tab, we don't use that rigid Moffett thing ... We just use the 40-foot
 # rigid" (his rule 01/11) - a HIAB or a Moffett goes in Services.
 VEH_BOX = "1052,298,1204,324"
-VEH_SHOWS = {"rigid": ("box-veh-rigid", "NR_Rigid (Up to 40ft)"), "artic": ("box-veh-artic", "NR_40ft Artic Flatbed")}
+VEH_SHOWS = {"rigid": ("box-veh-rigid", "NR_Rigid (Up to 40ft)"), "artic": ("box-veh-artic", "NR_40ft Artic Flatbed"),
+             "60ft": ("box-veh-60ft", "NR_60ft Artic Flatbed")}
+LOOK_UP_SECONDS = 420              # the bridge's own limit on a look-up (CHECK_SECONDS), and a margin
 
 
 class Failed(Exception):
@@ -239,7 +244,7 @@ def run_update(R, p):
             elif now != "":
                 _close(R)
                 raise Failed(f"{ref}: its Veh Type is already "
-                             + (VEH_SHOWS[now][1] if now else "a vehicle other than the 40ft rigid or artic")
+                             + (VEH_SHOWS[now][1] if now else "a vehicle other than the ones the run picks")
                              + f", not {VEH_SHOWS[veh][1]} - left as it is, nothing typed")
         rc, _ = _quiet(R.send_batch, "services-tab",
                        R.parse_steps(["anchor", "anchor window", "click 750,186 react box=20,200,1250,700 timeout=10"]))
@@ -299,12 +304,30 @@ def file_emails(p):
 FILE = file_emails                 # the tests put a stand-in here
 
 
+def look_up(R, plan):
+    """What only CTMS can say about these plan items - their open lines, Veh Type and weight - read on the work PC, as
+    the bridge's own look-up does: searches and reads, nothing typed. {"ref|date": what it found}."""
+    orders = {f"{p['lookup']['ref']}|{p['lookup']['date']}": dict(p["lookup"], veh=True) for p in plan}
+    (result, payload), _ = _quiet(R.ask, "ctms_check", wait_total=LOOK_UP_SECONDS,
+                                  orders=[dict(o, key=k) for k, o in orders.items()])
+    if not result.get("ok"):
+        raise Failed(f"CTMS could not be looked up: {result.get('detail')}")
+    return (payload or {}).get("orders") or {}
+
+
 def run(ids):
     import ctms_run_plan
     import ctms_todo
     want = [str(i) for i in ids]
     plan = [p for p in ctms_run_plan.load() if p["id"] in want]
-    results, R = [], None
+    results, R, not_looked = [], None, ""
+    if any(p.get("lookup") and p["status"] == "ready" for p in plan):
+        try:
+            R = _client()
+            found = look_up(R, [p for p in plan if p.get("lookup") and p["status"] == "ready"])
+            plan = [p for p in ctms_run_plan.load(found) if p["id"] in want]
+        except Exception as e:             # a Stop, a lost connection, a look-up refused: those items wait
+            not_looked = f"{type(e).__name__}: {e}" if not isinstance(e, Failed) else str(e)
     for p in sorted(plan, key=lambda p: want.index(p["id"])):
         if p["status"] == "done":
             ctms_todo.done(p["id"])
@@ -312,7 +335,13 @@ def run(ids):
             results.append({"id": p["id"], "ok": True, "said": f"{why} - ticked off" + FILE(p)})
             continue
         if p["status"] != "ready":
-            results.append({"id": p["id"], "ok": False, "said": f"not run - {p['status']}"})
+            why = "; ".join(c["why"] for c in p.get("checks") or [] if c.get("why"))
+            results.append({"id": p["id"], "ok": False, "waits": True,
+                            "said": f"not run - {p['status']}" + (f": {why}" if why else "")})
+            continue
+        if p.get("lookup"):                # looked up and still not known, or the look-up itself failed
+            results.append({"id": p["id"], "ok": False, "waits": True,
+                            "said": f"not run - {not_looked or 'the CTMS look-up did not reach it'}"})
             continue
         try:
             R = R or _client()
@@ -332,9 +361,11 @@ def run(ids):
         results.append({"id": p["id"], "ok": True, "said": said})
     ok = sum(1 for r in results if r["ok"])
     held = [r["said"] for r in results if r.get("held")]
+    waits = [r["said"] for r in results if r.get("waits")]
     left = len(want) - len(results)
-    stopped = results and not results[-1]["ok"] and not results[-1].get("held")
+    stopped = results and not results[-1]["ok"] and not results[-1].get("held") and not results[-1].get("waits")
     said = (f"{ok} of {len(want)} done in CTMS" + (f"; held, CTMS has it already: {' | '.join(held)}" if held else "")
+            + (f"; {' | '.join(waits)}" if waits else "")
             + (f", stopped at: {results[-1]['said']}" if stopped else "") + (f"; {left} not started" if left else ""))
     return {"ok": ok == len(want), "said": said, "results": results}
 

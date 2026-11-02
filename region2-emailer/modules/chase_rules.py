@@ -398,17 +398,25 @@ def _inbound(fr, mails, ctx, text_of, now):
     return out
 
 
-def reply_mails(rec, mails, ctx, text_of, now):
+def reply_mails(rec, mails, ctx, text_of, now, firm=False):
     """(replies, out_of_office) for a record, oldest first, as mail dicts -
     for the reply check that parses the answer and drafts the send-off brief.
     The same rules as the chaser, so the two can never disagree about whether
     someone has replied. None if the rules cannot judge the record (the caller
-    falls back to the old search)."""
+    falls back to the old search). firm: with the replies, anyone else at the
+    contact's own firm who wrote about the order - the contact handing it to a
+    colleague, whose answer is the site's (02/11). A firm as big as Network Rail
+    is no proof of a reply to the chaser's rules, so they are the caller's to read."""
     fr = _frame(rec, mails, ctx, now)
     if fr is None:
         return None
     ib = _inbound(fr, mails, ctx, text_of, now)
-    return [m for m, _ in ib["replies"]], [m for m, _ in ib["ooo"]]
+    replies = [m for m, _ in ib["replies"]]
+    if firm:
+        theirs = {domain(c) for c in fr["contacts"]}
+        replies = sorted(replies + [m for m, _ in ib["others"] if domain(m["from"]) in theirs],
+                         key=lambda m: m["at"])
+    return replies, [m for m, _ in ib["ooo"]]
 
 
 def assess(rec, mails, ctx, text_of, now):

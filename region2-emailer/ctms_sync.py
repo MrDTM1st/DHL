@@ -8,7 +8,8 @@ it found to the home PC as a "ctms_orders" job. His rules decide what it means:
     booked in and dealt with" (29/10), and a cancelled or aborted line is dealt with too. It comes off the map and
     the tracker, remembered so no sweep brings it back - the same as a "this order has been arranged with" email
   * the date: a delivery whose day CTMS no longer has, every open line of the order now on one other day, moves to
-    that day (tracker.move_date) - the dashboard follows CTMS
+    that day (tracker.move_date) - the dashboard follows CTMS, unless a site's reply moved it and CTMS is still to be
+    updated from that reply
   * ready: a Veh Type filled on its open line - "if there's a vehicle type in there, it already means that we've
     got all the details for it and we just need to book it in" (30/10) - for details that came by phone
   * the weight: its open lines' weights off their cards, added up - the map decides rigid or artic from it (his
@@ -77,9 +78,11 @@ def plan(found, records, jobs=()):
         if what == "booked":
             out["booked"].append(r["id"])
             continue
-        if what == "moved":
-            out["moved"].append((r["id"], new))
         vehs = [v for g in got for v in (g.get("veh") or {}).values()]
+        # a site's reply moved it and CTMS hasn't been updated from that reply yet: the reply's day stands, or the look-up
+        # would put the order back on the day the site has just changed
+        if what == "moved" and (any(vehs) or r.get("date_moved_by") != "the site's reply"):
+            out["moved"].append((r["id"], new))
         if vehs:
             out["veh"][r["id"]] = any(vehs)
         kgs = {ref: kg for g in got for ref, kg in (g.get("weight") or {}).items()}

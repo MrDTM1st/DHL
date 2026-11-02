@@ -10,8 +10,6 @@ import re
 import delivery_details as dd
 
 QUOTE_START = re.compile(r"^\s*(?:From:|-----\s*Original Message|_{8,})", re.M | re.I)
-SIGN_OFF = re.compile(r"^\s*(?:kind regards|best regards|warm regards|regards|many thanks|thanks|thank you|cheers)\b",
-                      re.M | re.I)
 HTML_SIGN_OFF = re.compile(r"(?:kind|best|warm)\s+regards|\bregards\b|many\s+thanks|\bcheers\b", re.I)
 HTML_QUOTE = re.compile(r"From:\s*</b>|>\s*From:\s|-----\s*Original Message", re.I)
 
@@ -35,9 +33,7 @@ def own_text(body):
 
 def message_part(body):
     """Their own words without their signature: up to the sign-off."""
-    t = own_text(body)
-    m = SIGN_OFF.search(t)
-    return t[:m.start()] if m else t
+    return dd.above_sign_off(own_text(body))
 
 
 def typed_contacts(body, skip=()):
@@ -71,12 +67,15 @@ def said_line(body, limit=200):
 
 
 def gave_details(record, body, product_type=None, sender=""):
-    """Did their own words give CTMS anything? A time, offloading, access, rear steer, PTS, a vehicle, What3Words, a
-    contact with a number - or a day other than the one the order has. Read from their text only: the quoted mail
-    holds our own questions and dates (Danny's "is the delivery date still ok for the 5/11/26" read back as 05/11, and
-    "alternative contact needed" from the quoted subject as a contact called "needed")."""
+    """Did their own words give CTMS anything? Our questions answered - or, written out, a time, offloading, access,
+    rear steer, PTS, a vehicle, What3Words, a contact with a number, a day other than the one the order has. Read from
+    their text only: the quoted mail holds our own questions and dates ("is the delivery date still ok for the 5/11/26"
+    read back as 05/11, and "alternative contact needed" from the quoted subject as a contact called "needed"), and a
+    signature is nobody's delivery ("you have the wrong person" read as details off the writer's own footer, 02/11)."""
     try:
-        d = dd.parse_reply(own_text(body), product_type=product_type, sender=sender) or {}
+        if dd.extract_fields(own_text(body)):
+            return True
+        d = dd.parse_reply(message_part(body), product_type=product_type, sender=sender) or {}
     except Exception:
         return True                                             # never let a parse fault hide a real reply
     val = lambda k: (d.get(k) or {}).get("value")              # noqa: E731
@@ -89,3 +88,20 @@ def gave_details(record, body, product_type=None, sender=""):
         return True
     day = val("date")
     return bool(day) and day != str(record.get("delivery_date") or "")
+
+
+def sort_out(record, mails, product_type=None):
+    """Which of an order's inbound mails, newest first (each {"addr", "who", "body", ...}), is the site's answer: the
+    newest whose own words give the details. The newest from the materials team and the newest with nothing to type are
+    handed back to be told as what they are - neither ever hides the answer behind it (his 02/11: a "wrong person,
+    my namesake will help" then the namesake's answer). (answer, team, blank), any of them None."""
+    own = str(record.get("to") or "").strip().lower()
+    team = blank = None
+    for m in mails:
+        if m.get("addr") != own and materials_team(m.get("addr")):
+            team = team or m
+        elif gave_details(record, m.get("body"), product_type, m.get("who") or ""):
+            return m, team, blank
+        else:
+            blank = blank or m
+    return None, team, blank

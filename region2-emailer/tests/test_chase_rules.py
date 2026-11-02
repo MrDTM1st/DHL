@@ -289,6 +289,21 @@ def test_reply_mails_for_the_reply_check_and_earliest_across_months():
     assert d["action"] == cr.BLOCK and d["evidence"]["ts"] == "2026-09-30 10:00", d   # 30/09, not 01/10
 
 
+def test_a_colleague_at_the_contacts_own_firm_is_the_callers_to_read_never_a_haulier():
+    # "the wrong person, my namesake will help" then the namesake's answer: a firm as big as this one is no proof of a
+    # reply to the chaser, but the reply check reads it for the details
+    r = rec(["5900600"], "sam.example@networkrail.co.uk", "2026-11-02 10:32")
+    mails = [out("2026-11-02 10:32", "sam.example@networkrail.co.uk", "5900600 Exampletown", "S"),
+             inn("2026-11-02 10:52", "sam.example@networkrail.co.uk", "RE: 5900600 Exampletown", "S"),
+             inn("2026-11-02 11:25", "sam.example3@networkrail.co.uk", "RE: 5900600 Exampletown", "S"),
+             inn("2026-11-02 11:40", "ops@haulier.example", "RE: 5900600 Exampletown", "S"),
+             inn("2026-11-02 11:41", "stranger@otherfirm.example", "RE: 5900600 Exampletown", "S")]
+    now, ctx = T("2026-11-02 12:00"), dict(CTX, haulier_addresses={"ops@haulier.example"}, haulier_domains={"haulier.example"})
+    assert [m["from"] for m in cr.reply_mails(r, mails, ctx, lambda e: "", now)[0]] == ["sam.example@networkrail.co.uk"]
+    got = cr.reply_mails(r, mails, ctx, lambda e: "", now, firm=True)[0]
+    assert [m["from"] for m in got] == ["sam.example@networkrail.co.uk", "sam.example3@networkrail.co.uk"], got
+
+
 def test_booked_wording():
     assert cr.booked_in("Hi,\n\nThis order has been arranged with Lawsons. Here is the ref number MAN-01563625")
     assert cr.booked_in("booked in")

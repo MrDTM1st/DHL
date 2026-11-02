@@ -930,7 +930,8 @@ class Bridge:
                    " CTMS was left as it is - the picture shows where."))
         if stopped:
             said = f"Stopped {stopped}. " + said
-        return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_check", checked=len(found)))
+        return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_check", checked=len(found),
+                                            orders=found))
 
     def _seen(self, t, name, box):
         """Whether one of the check's templates shows in that part of CTMS's window now - one look, nothing clicked."""

@@ -69,9 +69,11 @@ def test_only_a_firm_date_in_a_reply_moves_the_order():
 
 
 def test_a_real_reply_with_a_new_day_settles_on_it():
-    body = ("Hi,\nDelivery date: 12/11/2026\nDelivery time: 08:00 - 10:00\nHIAB on site for offloading.\n"
+    body = (f"Hi,\nDelivery date: {_day(10)}\nDelivery time: 08:00 - 10:00\nHIAB on site for offloading.\n"
             "Contact: Sam Example 07700 900123\n")
-    assert D.firm_date(D.parse_reply(body)) == "12/11/2026"
+    assert D.firm_date(D.parse_reply(body)) == _day(10)
+    # a day already gone never moves the order: a footer's date took one to 2003, and the stale sweep took it off (02/11)
+    assert D.firm_date(D.parse_reply(f"Hi,\nDelivery date: {_day(-10)}\nDelivery time: 08:00\n")) is None
 
 
 if __name__ == "__main__":

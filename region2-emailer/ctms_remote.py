@@ -669,11 +669,12 @@ def cut_template(name, box, src=None):
 
 # Vehicle types: the template of each one's line in an order's Veh Type list, and how many presses of the list's
 # down arrow (after its thumb is dragged up the list) bring that line into view - found live 29-30/10.
-# The only two vehicles an update picks (his rule 01/11): "the vehicle tab, we don't use that rigid Moffett thing ...
-# We just use the 40-foot rigid" - a HIAB or a Moffett goes in Services, never in the vehicle. The list is scrolled
+# The only vehicles an update picks (his rule 01/11): "the vehicle tab, we don't use that rigid Moffett thing ...
+# We just use the 40-foot rigid" - a HIAB or a Moffett goes in Services, never in the vehicle - and the 60ft artic that
+# a 60ft rail needs (02/11). The list is scrolled
 # from an EMPTY box, where it opens at its end; on a filled box it opens at its own value and the downs land elsewhere
 # (6055920, 01/11) - so the CTMS to-do run reads the box first (ctms_run.veh_now) and leaves a set one alone.
-VEH = {"rigid": ("veh-rigid-40ft", 20), "artic": ("veh-artic-40ft-flatbed", 6)}
+VEH = {"rigid": ("veh-rigid-40ft", 20), "artic": ("veh-artic-40ft-flatbed", 6), "60ft": ("veh-artic-60ft", 6)}
 SERVICE_ROW_Y = 295            # the Services grid's first row; each next row 23 px lower
 # Where the Order Search card shows, and the box CTMS asks "Change schedule to: <yymmdd>?" in (31/10).
 CARD_BOX = "430,50,830,270"

@@ -12,13 +12,18 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
              services  HIAB or MOFFETT when the site needs ours - always in Services, never a vehicle type ("whenever
                        we're adding a HIAB or a Moffett, we do it in the services tab", his rule 01/11); rear steer
                        on an artic only; PTS only ever on rails ("PTS is only for Rails", his rule 01/11)
-             veh type  as stated, else by the weight - bagged ballast's bags in tonnes ("if it's 60 bags of ballast,
-                       it will always be 60 tons", his 01/11), else CTMS's - a HIAB load of 10,000 kg or less goes on a
-                       rigid. Only
-                       ever NR_Rigid (Up to 40ft) or NR_40ft Artic Flatbed - never RIGID MOFFETT and the like (his
-                       rule 01/11). A Moffett job goes on a 40ft artic ("Moffetts are usually on 40ft artics", his
-                       01/11) - picked only when the site takes no artics
+             veh type  whatever fits, worked out rather than asked (his 02/11: "you'd be able to figure it out by what
+                       the material is and how much it weighs ... sleepers weigh 7 tons, you put it under a rigid").
+                       Rails by their length: over a normal trailer a 60ft artic. Everything else by the weight -
+                       bagged ballast's bags in tonnes ("if it's 60 bags of ballast, it will always be 60 tons", his
+                       01/11), else CTMS's: up to 10,000 kg a rigid, over it an artic, which the booking splits if it
+                       must. A site that takes no artics gets rigids; a Moffett a 40ft artic ("Moffetts are usually on
+                       40ft artics", his 01/11). Only ever NR_Rigid (Up to 40ft), NR_40ft Artic Flatbed or the 60ft
+                       artic - never RIGID MOFFETT and the like (his rule 01/11)
   booking, other   his to do - never run
+
+What only CTMS knows - the order's open lines, its weight - isn't asked for either: the item is marked "lookup" and the
+run reads CTMS on the work PC first (ctms_run.look_up), then plans it again.
 
 Anything it can't be sure of HOLDS the item. Each doubt names the field, the site's own words from the email (only
 ever their words - anything of ours goes in the reason), and the choices for a drop-down (his 01/11: "tell me
@@ -36,7 +41,8 @@ from datetime import datetime, timedelta
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOOKED_UP = os.path.join(HERE, "_ctms_orders.json")
 OPEN = "UNSCHEDULED"
-RIGID_HIAB_KG = 10000
+RIGID_KG = 10000                   # what goes on a rigid (his rigid HIAB's most, 31/10) - over it an artic
+RIGID_M, ARTIC_M, SIXTY_M = 12.19, 13.6, 18.3   # the longest rail on each: "Up to 40ft", a normal trailer, a 60ft flat
 BAG_KG = 1000                      # a bag of ballast is a tonne, always (his 01/11)
 OFFLOADING = ["HIAB", "MOFFETT", "SITE/NONE"]
 YES_NO = ["yes", "no"]
@@ -98,6 +104,18 @@ def _veh_set(found, order):
                   for ref, filled in (g.get("veh") or {}).items() if filled)
 
 
+def _weight_found(found, order):
+    """The weight of an order's lines the last CTMS look-up read off their cards - None when it read none."""
+    kgs = {ref: kg for k, g in (found or {}).items() if k.split("|")[0] == str(order)
+           for ref, kg in (g.get("weight") or {}).items()}
+    return round(sum(kgs.values()), 2) if kgs else None
+
+
+def _card_read(found, order):
+    """Whether the last CTMS look-up opened this order's line cards, the only place its weight shows."""
+    return any(g.get("veh") for k, g in (found or {}).items() if k.split("|")[0] == str(order))
+
+
 def _vehicle_said(v):
     s = str(v or "").lower()
     if not s:
@@ -109,12 +127,17 @@ def _vehicle_said(v):
     return ""
 
 
+def tipped(rec):
+    """Loose ballast or stoneblower stone - what goes on a tipper. 100500/001 is the loose stock code."""
+    return bool(re.search(r"loose|stone\s*-?\s*blower", str(rec.get("materials") or ""), re.I) or any(
+        str(c).strip().endswith("100500/001") for c in rec.get("product_codes") or []))
+
+
 def ballast_bags(rec):
     """The 1 t bags of ballast an order is, when that is all it is - none loose, nothing else on it - so their count
     is its weight in tonnes; 0 otherwise (an aggregate bag's weight isn't known)."""
     mats = str(rec.get("materials") or "")
-    if re.search(r"loose|stone\s*-?\s*blower", mats, re.I) or any(
-            str(c).strip().endswith("100500/001") for c in rec.get("product_codes") or []):    # the loose stock code
+    if tipped(rec):
         return 0
     n = 0
     for part in (p for p in re.split(r"[,;]", mats) if p.strip()):
@@ -125,9 +148,26 @@ def ballast_bags(rec):
     return n
 
 
+def _rail_items(rec):
+    """The order's rail lines (S&C with them), by its materials and product wording. A sleeper's stock line can name
+    the rail it is for ("GUARD RAIL SLEEPER") and is still a sleeper."""
+    items = re.split(r"[,;]", str(rec.get("materials") or "")) + [str(c) for c in rec.get("product_codes") or []]
+    return [x for x in items if not re.search(r"sleeper|bearer|trough", x, re.I)
+            and re.search(r"\brails?\b|s&c|switch|crossing|half set", x, re.I)]
+
+
 def is_rails(rec):
-    """Rails on the order (S&C with them) - the only loads PTS is ever for."""
-    return bool(re.search(r"\brails?\b|s&c|switch|crossing", str(rec.get("materials") or ""), re.I))
+    """Rails on the order - the only loads PTS is ever for."""
+    return bool(_rail_items(rec))
+
+
+def rail_metres(rec):
+    """The longest rail named on the order, in metres ("18.288M", "60ft") - None when none is."""
+    text = " ".join(_rail_items(rec))
+    got = [float(n) for n in re.findall(r"(\d+(?:\.\d+)?)\s*m\b", text, re.I)]
+    got += [float(n) * 0.3048 for n in re.findall(r"(\d+(?:\.\d+)?)\s*(?:ft|feet)\b", text, re.I)]
+    got = [m for m in got if 0 < m < 200]
+    return max(got) if got else None
 
 
 def plan_note(it):
@@ -166,10 +206,8 @@ def plan_update(it, rec, found):
     date = _day(date)
     # -- its lines in CTMS, from the last look-up
     lines = _lines_for(found, order, date or _day(rec.get("delivery_date")))
-    if lines is None:
-        checks.append({"field": "lines", "label": "CTMS lines", "quote": "", "options": [], "text": False,
-                       "why": "Not looked up in CTMS yet - press Check CTMS now first"})
-    elif not lines:
+    look_up = lines is None            # what only CTMS can say is read when the run starts, never asked for
+    if lines is not None and not lines:
         return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
                 "status": "done", "lines": [], "set": {}, "explain": ["CTMS has no line left to update"],
                 "checks": []}
@@ -228,45 +266,73 @@ def plan_update(it, rec, found):
             explain.append("PTS left off: PTS is only for rails (your rule)")
     elif pts not in YES_NO:
         pts = doubt("pts", "PTS", pv.get("raw") or pv.get("value"), YES_NO, "Not certain")
-    # -- the vehicle: as stated, else by the weight - bagged ballast's bags in tonnes, else CTMS's
-    veh = answers.get("veh") or _vehicle_said(_field(d, "vehicle").get("value"))
+    # -- the vehicle: whatever fits - rails by their length, the rest by the weight (see the top of this file). Only
+    #    what the site's own words rule out, or what nothing on the order can say, comes to him
     bags = ballast_bags(rec)
-    kg = bags * BAG_KG or rec.get("ctms_weight")
+    kg = bags * BAG_KG or rec.get("ctms_weight") or _weight_found(found, order)
     weighs = f"{bags} bags of ballast at 1 t each - {bags * BAG_KG:,} kg" if bags else f"{float(kg or 0):,.0f} kg in CTMS"
-    no_artics = _field(d, "artic_access").get("value") == "no"
-    if not veh:
-        if off == "MOFFETT":
-            # "Moffetts are usually on 40ft artics" (his 01/11) - a site that takes no artics is his pick
-            if no_artics:
-                veh = doubt("veh", "Vehicle", _field(d, "artic_access").get("raw"), VEHICLES,
-                            "A Moffett usually goes on a 40ft artic, but the site takes no artics - pick the vehicle")
-            else:
-                veh = "artic"
-                explain.append("A Moffett job - on a 40ft artic (Moffetts usually are, your rule)")
-        elif off == "HIAB" and kg:
-            veh = "rigid" if float(kg) <= RIGID_HIAB_KG else "artic"
-            explain.append(f"{weighs} - " + ("a rigid HIAB (up to 10,000 kg)" if veh == "rigid"
-                                             else "an artic HIAB (over 10,000 kg)"))
-            if veh == "artic" and no_artics:
-                veh = doubt("veh", "Vehicle", _field(d, "artic_access").get("raw"), VEHICLES,
-                            f"{weighs} - over a rigid HIAB's 10,000 kg - but the site takes no artics")
-        elif no_artics and (not kg or float(kg) <= RIGID_HIAB_KG):
-            veh = "rigid"
-            explain.append("No artic access - a rigid")
-        elif off == "HIAB":
-            veh = doubt("veh", "Vehicle", "", VEHICLES, "Weight not read from CTMS yet - press Check CTMS now, "
-                        "or pick")
-        elif off == "SITE/NONE":
-            veh = doubt("veh", "Vehicle", "", VEHICLES,
-                        (f"{weighs} - " if kg else "") + "no HIAB: the most a rigid takes without one isn't set")
-        # offloading not settled yet: the vehicle waits for it
+    artics = _field(d, "artic_access")
+    no_artics = artics.get("value") == "no"
+    said = _vehicle_said(_field(d, "vehicle").get("value"))
+    rails, metres = _rail_items(rec), rail_metres(rec)
+    veh, weighing = answers.get("veh") or "", False
+    if veh:
+        pass
+    elif tipped(rec):
+        checks.append({"field": "veh_tipper", "label": "Vehicle", "quote": "", "options": [], "text": False,
+                       "why": "Loose stone goes on a tipper, which the run doesn't pick - do the vehicle by hand"})
+    elif rails and metres is None:
+        veh = doubt("veh", "Vehicle", "", VEHICLES + ["60ft"], "The order's wording doesn't say how long its rails are, "
+                    "so which vehicle fits can't be worked out")
+    elif metres and metres > SIXTY_M:
+        checks.append({"field": "veh_long", "label": "Vehicle", "quote": "", "options": [], "text": False,
+                       "why": f"{metres:g} m rails are over 60ft: a trombone, which the run doesn't pick - do the "
+                              "vehicle by hand"})
+    elif metres and metres > RIGID_M:
+        fits, named = ("60ft", "a 60ft artic") if metres > ARTIC_M else ("artic", "an artic")
+        if no_artics or said == "rigid":
+            veh = doubt("veh", "Vehicle", artics.get("raw") or _field(d, "vehicle").get("raw"), [fits],
+                        f"{metres:g} m rails only fit {named}, but the site says it takes no artics"
+                        + (" - though it asks for rear steer, which only an artic has" if rear == "yes" else "")
+                        + ". Pick it to go ahead, or ring them")
+        else:
+            veh = fits
+            explain.append(f"{metres:g} m rails - {named}, the shortest that takes them")
+    elif said:
+        veh = said
+        explain.append(f"A {said} - the site said so")
+    elif off not in OFFLOADING:
+        pass                           # the vehicle waits for the offloading: a Moffett goes on an artic
+    elif no_artics:
+        veh = "rigid"
+        explain.append("No artic access - a rigid" + (
+            f": {weighs} is over one rigid's {RIGID_KG:,} kg, so the booking splits it" if float(kg or 0) > RIGID_KG else ""))
+    elif off == "MOFFETT":
+        veh = "artic"
+        explain.append("A Moffett job - on a 40ft artic (Moffetts usually are, your rule)")
+    elif kg:
+        veh = "rigid" if float(kg) <= RIGID_KG else "artic"
+        explain.append(f"{weighs} - " + (f"a rigid (up to {RIGID_KG:,} kg)" if veh == "rigid"
+                                         else f"an artic (over {RIGID_KG:,} kg)"))
+    elif _card_read(found, order):
+        veh = doubt("veh", "Vehicle", "", VEHICLES, "CTMS shows no weight on its lines, so which vehicle fits can't be "
+                    "worked out")
+    else:
+        weighing = look_up = True
+    if look_up:
+        explain.append("Read from CTMS when you press Run: " + (
+            "its open lines and its weight, which picks the vehicle" if lines is None and weighing else
+            "its open lines" if lines is None else "its weight, which picks the vehicle"))
+    if veh == "rigid" and rear not in YES_NO:      # a rigid never needs rear steer (his 30/10): nothing to ask
+        checks[:] = [c for c in checks if c["field"] != "rear_steer"]
+        rear = "no"
     if veh:
         s["veh"] = veh
     # -- services: HIAB or MOFFETT when ours is needed (Services, never a vehicle type), rear steer on an artic only,
     #    PTS only on rails
     if off in OFFLOADING and rear in YES_NO and pts in YES_NO and veh:
         s["services"] = {"HIAB": off == "HIAB", "MOFFETT": off == "MOFFETT",
-                         "REAR STEER": rear == "yes" and veh == "artic", "PTS": pts == "yes"}
+                         "REAR STEER": rear == "yes" and veh != "rigid", "PTS": pts == "yes"}
         if rear == "yes" and veh == "rigid":
             explain.append("Rear steer left off: the site said yes, but a rigid never needs it (your rule)")
     # -- the collection: a morning delivery the day before in yard hours, never on a weekend
@@ -324,7 +390,11 @@ def plan_update(it, rec, found):
     w3w = str(_field(d, "what3words").get("value") or "").strip()
     if date and start and name:
         when_said = f"{start}-{end}" if said_window else start
-        bits = [f"{datetime.strptime(date, '%d/%m/%Y'):%d/%m/%y} {when_said}", f"{name} {phone}".strip()]
+        who = f"{name} {phone}".strip()
+        alt = _field(d, "alt_contact")
+        if alt.get("phone") and not answers.get("contact"):     # both contacts, as he types them (his 30/10)
+            who += " / " + " ".join(w.capitalize() for w in f"{alt.get('name') or ''} {re.sub(r'[^0-9]', '', alt['phone'])}".split())
+        bits = [f"{datetime.strptime(date, '%d/%m/%Y'):%d/%m/%y} {when_said}", who]
         if off == "HIAB":
             bits.append("HIAB required")
         if off == "MOFFETT":
@@ -337,7 +407,8 @@ def plan_update(it, rec, found):
     status = "held" if checks else "ready"
     return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
             "status": status, "lines": [ln.get("ref") for ln in lines or []], "set": s, "explain": explain,
-            "checks": checks}
+            "checks": checks,
+            "lookup": {"ref": str(order), "date": _day(rec.get("delivery_date"))} if look_up else None}
 
 
 def plan(items, records, found):
@@ -361,14 +432,18 @@ def plan(items, records, found):
     return out
 
 
-def load():
-    """The plan from this PC's files: the CTMS to-do, the tracker and the last look-up."""
+def load(fresh=None):
+    """The plan from this PC's files: the CTMS to-do, the tracker and the last look-up - and `fresh`, what a look-up has
+    just found (ctms_run), in place of what the last one had for those orders."""
     import ctms_todo
     try:
         with open(LOOKED_UP, encoding="utf-8") as f:
             found = (json.load(f) or {}).get("orders") or {}
     except (OSError, ValueError):
         found = {}
+    if fresh:
+        now = {k.split("|")[0] for k in fresh}
+        found = dict({k: v for k, v in found.items() if k.split("|")[0] not in now}, **fresh)
     import site_contacts
     recs = site_contacts.enrich({"records": ctms_todo._tracker_records()})["records"]   # each order's sheet contact
     return plan(ctms_todo.listing(), recs, found)

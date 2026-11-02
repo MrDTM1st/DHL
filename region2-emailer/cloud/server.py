@@ -366,11 +366,13 @@ def _check_list_locked():
             add(o, r.get("delivery_date"), False)
     # ... and the CTMS to-do's "update the order from the reply" orders not on the map already: a Veh Type filled
     # there ticks the item off on the home PC (his "you didn't update the to-do list", 01/11)
-    have = {o["ref"] for o in out}
+    have = {o["ref"]: o for o in out}
     for it in _panel.get("ctms_todo") or []:
         if it.get("kind") == "update":
             for o in it.get("orders") or []:
-                if str(o) not in have:
+                if str(o) in have:
+                    have[str(o)]["veh"] = True      # its weight picks the update's vehicle, however far off it is
+                else:
                     add(o, "", True)
     return out[:40]
 

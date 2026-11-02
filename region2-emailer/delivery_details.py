@@ -169,6 +169,10 @@ def parse_time_window(text):
 
 
 # ---------------------------------------------------------------- dates
+def _today():
+    return datetime.now().date()
+
+
 def find_dates(text, default_year=None):
     """Every date in the text as date objects (dd/mm first - UK)."""
     s = _clean(text).lower()
@@ -209,8 +213,9 @@ def pick_date(dates, consolidatable=None):
 
 
 def parse_date(text, consolidatable=None):
-    """-> (date, flexible, options, confidence)."""
-    ds = find_dates(text)
+    """-> (date, flexible, options, confidence). A day already gone is no delivery they are asking for: a footer's "20
+    years' service from 11 August 2003" moved an order to 2003, and the stale sweep then took it off the tracker (02/11)."""
+    ds = [x for x in find_dates(text) if x >= _today()]
     s = _clean(text).lower()
     vague = bool(re.search(r"flexible|any\s*day|any\s*date|asap|whenever|tbc", s))
     dayrange = bool(re.search(r"(%s)\w*\s*(?:-|to|till|until)\s*(%s)" %
@@ -458,6 +463,21 @@ _QUOTE_MARKERS = ("-----original message-----", "\nfrom:", "\nsent:", "________"
                   " wrote:", "on behalf of")
 
 
+# A sign-off on a line of its own, at most a name after it: "Thanks," "Kind regards" "Regards Sam". "Thanks for that,
+# deliver on the 12th" carries on, and so does a "Thanks Sam" with nothing typed above it - that's a greeting.
+SIGN_OFF = re.compile(r"^[ \t]*(?:(?:kind|best|warm|many)\s+(?:regards|thanks)|regards|thanks|thank\s+you|cheers)\b"
+                      r"[ \t,.!-]*(?:\w+[ \t,.!]*)?\r?$", re.M | re.I)
+
+
+def above_sign_off(text):
+    """What they typed above their sign-off - a signature's dates and numbers are nobody's delivery."""
+    t = str(text or "")
+    for m in SIGN_OFF.finditer(t):
+        if re.sub(r"\bOFFICIAL(?:-SENSITIVE)?\b", "", t[:m.start()]).strip():
+            return t[:m.start()]
+    return t
+
+
 def _top(body):
     """Just the text they typed, above any quoted original."""
     s = str(body or "")
@@ -497,7 +517,7 @@ def _prose(body):
         if _PHONE.search(l):
             key = "altcontact" if re.search(r"alternat|\balt\b|second|backup", low) else "contact"
             out.setdefault(key, l)
-    out.setdefault("datetime", t)     # dates/times hunted across the whole reply
+    out.setdefault("datetime", above_sign_off(t))     # dates/times hunted across what they typed, not their footer
     return out
 
 
@@ -572,6 +592,11 @@ def parse_reply(body, product_type=None, consolidatable=None, sender=None):
         # else in their mail (Delali's rule, 30/10)
         cp = cp or sender_phone(body, sender)
         d["contact"].update(name=sender_name(sender), phone=cp, confidence=HIGH if cp else AMBER, source="sender")
+
+    if f.get("contact") and f.get("altcontact"):      # "contact name(s) with phone numbers" go in the comment (his 30/10)
+        an, ap, _ = parse_contact(f["altcontact"])
+        if ap and ap != d["contact"].get("phone"):
+            d["alt_contact"] = {"name": an, "phone": ap, "confidence": HIGH, "raw": f["altcontact"]}
 
     d["notes"] = {"value": f.get("notes") or None, "confidence": HIGH, "raw": f.get("notes", "")}
     return d

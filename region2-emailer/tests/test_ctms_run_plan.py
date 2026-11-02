@@ -32,6 +32,9 @@ def _found(order, date, status="UNSCHEDULED"):
     return {f"{order}|{date}": {"lines": [{"ref": f"{order}-1-1", "status": status, "deliver_by": f"{dd} 16:01"}]}}
 
 
+RAIL_60FT = "RAIL SHORT, 56E1, 260 GRADE, 18.288M, UNDRILLED"
+
+
 def _item(order, kind="update", **extra):
     return dict({"id": f"t{order}", "kind": kind, "orders": [order], "what": "Sam replied - update the order"}, **extra)
 
@@ -128,8 +131,6 @@ def test_what_cannot_be_typed_safely_is_left_for_him():
     two = dict(_rec("9100077", "05/11/2026"), collections=[{"pc": "A"}, {"pc": "B"}])
     p = P.plan([_item("9100077")], [two], _found("9100077", "05/11/2026"))[0]
     assert p["status"] == "held" and any(c["field"] == "collect" and "2 pick-ups" in c["why"] for c in p["checks"])
-    p = P.plan([_item("9100078")], [_rec("9100078", "05/11/2026")], {})[0]   # never looked up in CTMS
-    assert p["status"] == "held" and any(c["field"] == "lines" for c in p["checks"])
     p = P.plan([_item("9100079")], [_rec("9100079", "05/11/2026")],
                _found("9100079", "05/11/2026", "SCHEDULED"))[0]
     assert p["status"] == "done"                                        # CTMS has nothing left to update
@@ -145,10 +146,15 @@ def test_pts_is_only_ever_for_rails():
         rec = dict(_rec("9100081", "05/11/2026", pts={"value": None}), materials=mats)   # not asked: nothing to doubt
         assert not any(c["field"] == "pts" for c in P.plan([_item("9100081")], [rec],
                                                             _found("9100081", "05/11/2026"))[0]["checks"])
-    rec = dict(_rec("9100084", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials="2x rails")
+    rec = dict(_rec("9100084", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials="2x rails",
+               product_codes=[RAIL_60FT])
     assert P.plan([_item("9100084")], [rec], _found("9100084", "05/11/2026"))[0]["set"]["services"]["PTS"] is True
-    rec = dict(_rec("9100084", "05/11/2026", pts={"value": None, "raw": ""}), materials="2x rails")
+    rec = dict(_rec("9100084", "05/11/2026", pts={"value": None, "raw": ""}), materials="2x rails",
+               product_codes=[RAIL_60FT])
     assert any(c["field"] == "pts" for c in P.plan([_item("9100084")], [rec], _found("9100084", "05/11/2026"))[0]["checks"])
+    # a sleeper's stock line can name the rail it is for, and is still a sleeper
+    rec = dict(_rec("9100084", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials="60x GUARD RAIL SLEEPER")
+    assert P.plan([_item("9100084")], [rec], _found("9100084", "05/11/2026"))[0]["set"]["services"]["PTS"] is False
 
 
 def test_bagged_ballast_weighs_a_tonne_a_bag_whatever_ctms_says():
@@ -156,7 +162,7 @@ def test_bagged_ballast_weighs_a_tonne_a_bag_whatever_ctms_says():
                ctms_weight=None)
     p = P.plan([_item("9100085")], [rec], _found("9100085", "05/11/2026"))[0]
     assert p["set"]["veh"] == "artic" and p["set"]["services"]["REAR STEER"] is True, p
-    assert "60 bags of ballast at 1 t each - 60,000 kg - an artic HIAB (over 10,000 kg)" in p["explain"]
+    assert "60 bags of ballast at 1 t each - 60,000 kg - an artic (over 10,000 kg)" in p["explain"]
     rec = dict(rec, materials="8x ballast", ctms_weight=30000)
     assert P.plan([_item("9100085")], [rec], _found("9100085", "05/11/2026"))[0]["set"]["veh"] == "rigid"
     assert P.ballast_bags({"materials": "9x ballast, 7x aggregate"}) == 0         # an aggregate bag isn't known
@@ -165,11 +171,117 @@ def test_bagged_ballast_weighs_a_tonne_a_bag_whatever_ctms_says():
     assert P.ballast_bags({"materials": "10x 1t bags of ballast"}) == 10
 
 
-def test_without_a_weight_the_vehicle_is_asked_not_assumed():
+def test_the_vehicle_is_whatever_fits_the_weight_with_or_without_a_hiab():
+    # his 02/11: "sleepers weigh 7 tons, you put it under a rigid" - and nobody is asked
+    none = {"value": "SITE/NONE", "confidence": "high", "raw": "no"}
+    for kg, veh in ((7000, "rigid"), (10000, "rigid"), (10001, "artic"), (40000, "artic")):
+        rec = dict(_rec("9100082", "05/11/2026", offloading=none), ctms_weight=kg)
+        p = P.plan([_item("9100082")], [rec], _found("9100082", "05/11/2026"))[0]
+        assert p["status"] == "ready" and p["set"]["veh"] == veh and not p["lookup"], (kg, p)
+    # the weight the last look-up read counts, whichever key it read it under
+    found = _found("9100082", "05/11/2026")
+    found["9100082|"] = {"lines": [], "veh": {"9100082-1-1": False}, "weight": {"9100082-1-1": 12500.0}}
+    p = P.plan([_item("9100082")], [dict(_rec("9100082", "05/11/2026"), ctms_weight=None)], found)[0]
+    assert p["set"]["veh"] == "artic" and any("12,500 kg in CTMS" in e for e in p["explain"])
+
+
+def test_what_only_ctms_knows_is_read_when_run_is_pressed_never_asked():
     rec = dict(_rec("9100082", "05/11/2026"), ctms_weight=None)
+    # never looked up: ready all the same, nothing to answer - the run looks it up first
+    p = P.plan([_item("9100082")], [rec], {})[0]
+    assert p["status"] == "ready" and p["checks"] == [] and p["lines"] == [] and "veh" not in p["set"], p
+    assert p["lookup"] == {"ref": "9100082", "date": "05/11/2026"}
+    assert any(e.startswith("Read from CTMS when you press Run") for e in p["explain"])
+    # its lines known, the card not opened: the weight is still to read
     p = P.plan([_item("9100082")], [rec], _found("9100082", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["lookup"] and any(e.endswith("which picks the vehicle") for e in p["explain"]), p
+    # looked up, the card opened, and CTMS shows no weight: only now can nothing say
+    found = _found("9100082", "05/11/2026")
+    found["9100082|05/11/2026"]["veh"] = {"9100082-1-1": False}
+    p = P.plan([_item("9100082")], [rec], found)[0]
     c = next(c for c in p["checks"] if c["field"] == "veh")
-    assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and "Weight not read" in c["why"]
+    assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and "no weight" in c["why"] and not p["lookup"]
+    # a plan with everything needs no look-up
+    p = P.plan([_item("9100082")], [dict(rec, ctms_weight=5000)], _found("9100082", "05/11/2026"))[0]
+    assert not p["lookup"]
+
+
+def test_rails_go_by_their_length_not_their_weight():
+    # one 60ft rail weighs a tonne: by its weight a rigid, which can't carry it
+    rec = dict(_rec("9100090", "05/11/2026"), materials="1x rails", product_codes=[RAIL_60FT], ctms_weight=1030)
+    p = P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "60ft", p
+    assert p["set"]["services"]["REAR STEER"] is True and "Rear steer required" in p["set"]["comments"]
+    assert any("18.288 m rails - a 60ft artic" in e for e in p["explain"])
+    # the length decides it: no weight needed, no look-up for one
+    rec = dict(rec, ctms_weight=None)
+    assert P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]["set"]["veh"] == "60ft"
+    # no longer than a normal trailer: a 40ft artic; no longer than a rigid: by the weight, as anything else
+    rec = dict(rec, product_codes=["RAIL SHORT, 56E1, 13.5M"])
+    assert P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]["set"]["veh"] == "artic"
+    rec = dict(rec, product_codes=["RAIL SHORT, 56E1, 9.144M"], ctms_weight=2000)
+    assert P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]["set"]["veh"] == "rigid"
+    # over 60ft: a trombone, which the run doesn't pick
+    rec = dict(rec, product_codes=["RAIL LONG, 56E1, 36.576M"])
+    p = P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "veh_long")
+    assert p["status"] == "held" and "trombone" in c["why"] and not c["options"]
+    # rails nobody says the length of can't be worked out
+    rec = dict(rec, product_codes=[], ctms_weight=2000)
+    p = P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "veh")
+    assert p["status"] == "held" and c["options"] == ["rigid", "artic", "60ft"], p
+
+
+def test_a_site_ruling_out_the_only_thing_that_fits_is_the_one_question_with_their_words():
+    # no artics, rear steer yes, 60ft rails: nothing else carries them - his to settle, never a silent guess
+    rec = dict(_rec("9100091", "05/11/2026", artic_access={"value": "no", "confidence": "high", "raw": "no"}),
+               materials="2x rails", product_codes=[RAIL_60FT])
+    item = _item("9100091")
+    p = P.plan([item], [rec], _found("9100091", "05/11/2026"))[0]
+    assert p["status"] == "held" and [c["field"] for c in p["checks"]] == ["veh"], p["checks"]
+    c = p["checks"][0]
+    assert c["quote"] == "no" and c["options"] == ["60ft"] and "18.288 m rails only fit a 60ft artic" in c["why"]
+    assert "rear steer" in c["why"]
+    p = P.plan([dict(item, answers={"veh": "60ft"})], [rec], _found("9100091", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "60ft" and p["set"]["services"]["REAR STEER"] is True
+    assert "Rear steer required" in p["set"]["comments"]
+
+
+def test_no_artics_means_rigids_and_the_booking_splits_what_one_cant_take():
+    rec = dict(_rec("9100092", "05/11/2026", artic_access={"value": "no", "confidence": "high", "raw": "no"}),
+               ctms_weight=15000)
+    p = P.plan([_item("9100092")], [rec], _found("9100092", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "rigid", p
+    assert any("15,000 kg in CTMS is over one rigid's 10,000 kg" in e for e in p["explain"])
+    assert p["set"]["services"]["REAR STEER"] is False
+    # the site named one: theirs
+    rec = dict(_rec("9100092", "05/11/2026", vehicle={"value": "rigid", "confidence": "high"}), ctms_weight=15000)
+    assert P.plan([_item("9100092")], [rec], _found("9100092", "05/11/2026"))[0]["set"]["veh"] == "rigid"
+
+
+def test_a_rigid_is_never_asked_about_rear_steer():
+    rec = dict(_rec("9100093", "05/11/2026", rear_steer={"value": None, "confidence": "amber", "raw": "tbc"}),
+               ctms_weight=5000)
+    p = P.plan([_item("9100093")], [rec], _found("9100093", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["services"]["REAR STEER"] is False, p
+    rec = dict(rec, ctms_weight=15000)                                  # an artic: still asked
+    p = P.plan([_item("9100093")], [rec], _found("9100093", "05/11/2026"))[0]
+    assert p["status"] == "held" and any(c["field"] == "rear_steer" for c in p["checks"])
+
+
+def test_loose_stone_goes_on_a_tipper_which_the_run_leaves_to_him():
+    rec = dict(_rec("9100094", "05/11/2026"), materials="80x loose ballast")
+    p = P.plan([_item("9100094")], [rec], _found("9100094", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "veh_tipper")
+    assert p["status"] == "held" and "tipper" in c["why"] and not c["options"] and "veh" not in p["set"]
+
+
+def test_the_alternative_contact_goes_in_the_comment_as_he_types_it():
+    alt = {"name": "jo backup", "phone": "07700 900777", "confidence": "high"}
+    rec = _rec("9100095", "05/11/2026", alt_contact=alt)
+    p = P.plan([_item("9100095")], [rec], _found("9100095", "05/11/2026"))[0]
+    assert " - Sam Example 07700900123 / Jo Backup 07700900777 - HIAB required" in p["set"]["comments"], p
 
 
 def test_a_moffett_job_goes_in_services_on_a_40ft_artic():
@@ -181,14 +293,11 @@ def test_a_moffett_job_goes_in_services_on_a_40ft_artic():
     assert p["set"]["services"] == {"HIAB": False, "MOFFETT": True, "REAR STEER": False, "PTS": False}
     assert p["set"]["veh"] == "artic" and any("40ft artic" in e for e in p["explain"])   # not the 5.1t's rigid
     assert "Moffett required" in p["set"]["comments"] and "HIAB required" not in p["set"]["comments"]
-    # a site that takes no artics: his pick, the site's own words beside it
+    # a site that takes no artics: the 40ft rigid ("We just use the 40-foot rigid", his 01/11), the Moffett in Services
     rec = _rec("9100083", "05/11/2026", offloading={"value": "MOFFETT", "confidence": "high", "raw": "yes moffett"},
                artic_access={"value": "no", "confidence": "high", "raw": "no artics, tight access"})
     p = P.plan([item], [rec], _found("9100083", "05/11/2026"))[0]
-    c = next(c for c in p["checks"] if c["field"] == "veh")
-    assert p["status"] == "held" and c["options"] == ["rigid", "artic"] and c["quote"] == "no artics, tight access"
-    p = P.plan([dict(item, answers={"veh": "rigid"})], [rec], _found("9100083", "05/11/2026"))[0]
-    assert p["status"] == "ready" and p["set"]["veh"] == "rigid" and p["set"]["services"]["MOFFETT"] is True
+    assert p["status"] == "ready" and p["set"]["veh"] == "rigid" and p["set"]["services"]["MOFFETT"] is True, p
 
 
 def test_no_site_contact_in_the_reply_means_the_sender_on_the_sheets_name_and_number():

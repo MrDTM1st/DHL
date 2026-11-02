@@ -126,7 +126,8 @@ function planText(p) {
   if (p.kind === 'note') return `Adds "${(s.note || '').trim()}" at the end of ${(p.lines || [])[0]}'s Special Instructions`;
   const svc = s.services ? Object.entries(s.services).map(([k, on]) => (on ? k : 'no ' + k)).join(', ') : '';
   return [(p.lines || []).join(' + '), s.deliver && 'deliver ' + s.deliver,
-    s.collect && 'collect ' + s.collect + (s.storage ? ' + STORAGE x' + s.storage : ''), s.veh, svc,
+    s.collect && 'collect ' + s.collect + (s.storage ? ' + STORAGE x' + s.storage : ''),
+    s.veh === '60ft' ? '60ft artic' : s.veh, svc,
     s.comments && 'comment "' + s.comments + '"'].filter(Boolean).join(' · ');
 }
 
