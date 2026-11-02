@@ -193,5 +193,28 @@ def lookup(ns, order, out_path):
     return None, None
 
 
+def lookup_all(ns, order, out_path):
+    """Every sheet the index has an order on, each saved over out_path in turn: yields (path, filename). An order's lines
+    can be on several - its British Steel line on one, its Inframat line on another (02/11)."""
+    d = load()
+    base = str(order).split("-")[0].upper()
+    done = set()
+    for key in dict.fromkeys((base, str(order).upper())):
+        for loc in d["orders"].get(key, []):
+            if loc["f"] in done:
+                continue
+            try:
+                it = ns.GetItemFromID(loc["e"], loc["s"])
+                for j in range(1, it.Attachments.Count + 1):
+                    att = it.Attachments.Item(j)
+                    if str(att.FileName) == loc["f"]:
+                        att.SaveAsFile(out_path)
+                        done.add(loc["f"])
+                        yield out_path, loc["f"]
+                        break
+            except Exception:
+                continue
+
+
 if __name__ == "__main__":
     refresh()

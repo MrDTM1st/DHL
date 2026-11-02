@@ -15,6 +15,7 @@ import sys, os, json, re, html as _html
 from collections import defaultdict, OrderedDict
 import postcodes
 import site_contacts
+import source_sheets
 import tracker
 import waitlist
 
@@ -24,7 +25,8 @@ CFG = json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))
 REGION = CFG["regions"][CFG["active_region"]]
 AREAS = set(REGION["postcode_areas"])
 SOURCE_PREFIX = CFG["email_source"]["only_file"].lower()
-BS_MARKERS = [m.lower() for m in CFG["email_source"].get("also_batches", [])]
+BS_MARKERS = ([m.lower() for m in CFG["email_source"].get("also_batches", [])]
+              + [source_sheets.MASTER + SOURCE_PREFIX])     # the wide 30-day net: a Master sheet can be all an order is on
 
 # ---- never-email-yourself (team profiles) ----
 _TEAM_CFG = None
@@ -51,20 +53,11 @@ def clean_to_cc(to, cc=""):
 
 def is_wanted_extract(filename, subject=""):
     """True if this attachment is a file the emailer should read: the normal
-    Haulier Extract, OR a BS batch file (British Steel) identified by name or by
-    the email subject. BS batches carry the same columns as the extract and hold
-    real Region 2 orders, so they're processed identically. Master files and the
-    other batch processes (Inframat/Rail Plan/S&C) are still ignored."""
-    low = (filename or "").lower()
-    if low.startswith("master"):
-        return False   # a processed Master output (even "Master - ... BS"), never a source
-    if low.startswith(SOURCE_PREFIX):
-        return True
-    if low.endswith((".xlsx", ".xlsm")):
-        subj = (subject or "").lower()
-        if any(m in low or m in subj for m in BS_MARKERS):
-            return True
-    return False
+    Haulier Extract, a BS batch file (British Steel) identified by name or by
+    the email subject, or a Master sheet of either - see source_sheets. They carry
+    the same columns as the extract and hold real Region 2 orders, so they're
+    processed identically."""
+    return source_sheets.is_wanted(filename, subject, SOURCE_PREFIX, BS_MARKERS)
 
 QUESTIONS = """    Date and time of delivery?
     Who will be the contact for delivery?

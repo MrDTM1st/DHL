@@ -288,6 +288,16 @@ def resolve_orders(ns, order_string):
         for r in rows:
             if r[C["order"]] and _gkey(r, C) in keys:
                 collected.append((r, C, fn))
+        # ... and its lines on any other sheet: an order's British Steel line and its Inframat line come apart (a site
+        # was told "x10 rails" of an order that was also 32 bullhead, 09/10). build_from_collected drops true repeats.
+        for path2, fn2 in order_index.lookup_all(ns, tok, tmp):
+            if fn2 == fn:
+                continue
+            more = _rows_for(path2, tok)
+            if more:
+                rows2, C2, base2 = more
+                keys2 = {_gkey(r, C2) for r in base2}
+                collected += [(r, C2, fn2) for r in rows2 if r[C2["order"]] and _gkey(r, C2) in keys2]
     return collected, tokens, not_found
 
 
