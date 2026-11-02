@@ -48,6 +48,9 @@ export default function BookForm({ record: r, hauliers, recs, run, onBook, onCan
   const guess = defaultVehicles(r, job, trailer);
   const [vehicles, setVehicles] = useState(null);       // null: what the weight says
   const [price, setPrice] = useState('');
+  const [siteTo, setSiteTo] = useState('');
+  const oneOff = r.kind === 'adhoc' || r.kind === 'dts';
+  const contactName = (((r.details || {}).contact) || {}).name;
   const h = fits.concat(others).find((x) => x.name === name);
   const rank = h ? rankOf(h) : null;
   const n = vehicles === null ? guess.n : vehicles;
@@ -66,6 +69,7 @@ export default function BookForm({ record: r, hauliers, recs, run, onBook, onCan
   const book = () => onBook(r, {
     orders: r.orders || [], date: r.delivery_date, carrier: code.trim(), haulier: h.name, trailer, vehicles: n,
     ...(Number(price) > 0 ? { haulage: Number(price) } : {}),
+    ...(siteTo.trim() ? { site_to: siteTo.trim() } : {}),
   });
 
   if (going || (run && run.state === 'done')) {
@@ -130,6 +134,13 @@ export default function BookForm({ record: r, hauliers, recs, run, onBook, onCan
             placeholder={rank === 1 ? 'off the matrix (leave blank)' : 'ex VAT, the agreed quote'} />
         </label>
       ))}
+      {oneOff && (
+        <label className="pf-row">
+          <span>Email the site at</span>
+          <input type="email" value={siteTo} onChange={(e) => setSiteTo(e.target.value)}
+            placeholder={`${contactName || 'the contact'}'s address, if it isn't on the request`} />
+        </label>
+      )}
       <div className="pf-foot">
         <span className="pf-miss">{missing.length ? 'Still to pick: ' + missing.join(', ')
           : 'Books it in CTMS, ' + (code.toUpperCase().endsWith('_DH') ? 'writes the DigiHaul row, ' : '') + 'emails the site and takes it off the map.'}</span>

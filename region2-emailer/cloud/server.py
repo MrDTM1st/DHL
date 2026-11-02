@@ -2068,8 +2068,11 @@ class Handler(BaseHTTPRequestHandler):
                                          "state": "running", "at": datetime.now().strftime("%H:%M"), "said": ""}
                     _ctms_note_locked(f"Look mum, no hands mode switched on to book {' / '.join(job['orders'])} - back as it "
                                       "was when it ends.")
+                    to = str(data.get("site_to") or "").strip()
                     _queue.append(dict(job, action="ctms_book", record=str(data.get("record") or "")[:120],
-                                       haulier=str(data.get("haulier") or "")[:60], run=rid, queued_at=time.time()))
+                                       haulier=str(data.get("haulier") or "")[:60],
+                                       site_to=to[:120] if re.fullmatch(r"[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+", to) else "",
+                                       run=rid, queued_at=time.time()))
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
             return self._json(*out)

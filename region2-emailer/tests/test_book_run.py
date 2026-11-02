@@ -83,17 +83,20 @@ def test_an_update_or_booking_item_on_the_to_do_stops_it_a_note_doesnt():
 def test_a_haulier_is_never_taken_for_the_site_on_a_mail_with_the_order_in_its_subject():
     site = "9100001 example yard en1 1aa"
     args = dict(orders=["9100001"], site_topic=site, contact="site@example.net", not_site={"ops@acme-haulage.example"})
-    assert B.is_site_mail("RE: 9100001 Example Yard EN1 1AA", {"site@example.net"}, **args) is True
-    assert B.is_site_mail("RE: 9100001 Other words", {"site@example.net"}, **args) is True      # the contact, reworded
-    assert B.is_site_mail("9100001 Delivery", {"ops@acme-haulage.example"}, **args) is False     # a cover request
-    assert B.is_site_mail("9100001 Delivery", {"someone@else.example"}, **args) is False
-    assert B.is_site_mail("9100001 Yard - alternative contact needed", {"site@example.net"}, **args) is False
+    assert B.site_rank("RE: 9100001 Example Yard EN1 1AA", {"site@example.net"}, **args) == 2
+    assert B.site_rank("RE: 9100001 Other words", {"site@example.net"}, **args) == 1          # only the contact says so
+    assert B.site_rank("9100001 Delivery", {"ops@acme-haulage.example"}, **args) == 0         # a cover request
+    assert B.site_rank("9100001 Delivery", {"someone@else.example"}, **args) == 0
+    assert B.site_rank("9100001 Yard - alternative contact needed", {"site@example.net"}, **args) == 0
+    assert B.site_rank("RE: other words", {"x@y.example"}, orders=["9100001"], site_topic=site, contact="site@example.net",
+                       conv="C1", thread_conv="C1") == 2                                      # our first email's own thread
 
 
 def test_the_site_email_is_his_wording_with_the_window_and_no_price():
     rec = {"details": {"time": {"earliest": "08:00", "latest": "12:00"}}}
     text = B.words("Sam", "ACME_DH", "Acme Haulage", "06/11/2026", [TRIP], rec)
-    assert "Hi Sam," in text and "arranged with Acme Haulage for Friday 06/11/2026" in text
+    assert "Hi Sam," in text and "This order has been arranged with Acme Haulage for Friday 06/11/2026" in text
+    assert "Thanks. This order" in B.words("Sam", "ACME_DH", "Acme Haulage", "06/11/2026", [TRIP], rec, thanks=True)
     assert "delivering between 08:30 and 12:00" in text and "Here is the ref number MAN-01000001" in text
     assert "450" not in text
 
@@ -104,6 +107,21 @@ def test_our_own_fleet_and_several_lorries_read_as_he_writes_them():
     text = B.words("", "DHL_NOC", "DHL NOC", "06/11/2026", two, rec)
     assert "Hi there," in text and "our own DHL fleet" in text and "delivering from 08:30" in text
     assert "It will come on two lorries. Here are the ref numbers: MAN-01000001 and MAN-01000002" in text
+
+
+def test_a_reply_greets_the_name_the_order_has_for_its_contact_never_himself():
+    rec = {"to": "christopher.j@example.net", "name": "Chris"}
+    assert B.greeting("Christopher J", "Christopher.J@example.net", rec) == "Chris"     # theirs: as he knows them
+    assert B.greeting("Delali Opoku", "/O=EXCHANGELABS/CN=X", rec) == "Chris"           # the newest mail is his own
+    assert B.greeting("Ray Ellis", "ray@example.net", rec) == "Ray"                     # a colleague answered
+    assert B.greeting("Delali Opoku", "/O=EXCHANGELABS/CN=X", {"to": "x@example.net"}) == ""
+
+
+def test_a_reply_has_to_reach_the_contact():
+    assert B.reaches(["sam.smith@example.net", "other@example.net"], "Sam.Smith@example.net")
+    assert B.reaches(["sam.smith3@example.net"], "sam.smith@example.net")                 # the order's is a letter out
+    assert not B.reaches(["materials.team@example.net"], "sam.smith@example.net")
+    assert B.reaches(["anyone@example.net"], "")
 
 
 def test_who_is_greeted():

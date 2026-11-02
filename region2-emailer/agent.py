@@ -1609,7 +1609,7 @@ def main():
                 # the order panel's Book: the trips made on the work PC, then what follows them from here - the DigiHaul
                 # row, the site's email, off the map (book_run.py). The dashboard switched Look mum, no hands on for it
                 job = {k: cmd.get(k) for k in ("record", "orders", "date", "carrier", "haulier", "trailer", "haulage",
-                                               "vehicles", "dry")}
+                                               "vehicles", "dry", "site_to")}
                 report("running", f"Booking {' / '.join(job['orders'] or [])} with {job['carrier']} on the work PC…")
                 try:
                     out = run(["book_run.py", "run", json.dumps(job)], timeout=840)

@@ -151,8 +151,9 @@ def row_text(trip, carrier, now):
                       "Y" if is_urgent(trip.get("collect"), now) else "N"])
 
 
-def tracker_rows(R, trips, carrier, now=None):
-    """Each manifest on the DigiHaul tracker, a row at a time. Returns (rows written, why it stopped or "")."""
+def tracker_rows(R, trips, carrier, now=None, look_only=False):
+    """Each manifest on the DigiHaul tracker, a row at a time. Returns (rows written, why it stopped or "").
+    look_only: gets to the row and says what it found there, nothing pasted."""
     from PIL import Image
     now = now or datetime.now()
     result, _ = _quiet(R.ask, "use", target="page")
@@ -176,6 +177,8 @@ def tracker_rows(R, trips, carrier, now=None):
                 steps = [{"action": "key", "key": "down"}, {"action": "wait", "seconds": 0.7}]   # half typed by a colleague
             else:
                 return done, "no empty row where one should be"
+            if look_only:
+                return done, f"would paste here: {row_text(trip, carrier, now)!r}"
             result, _ = _quiet(R.ask, "paste", text=row_text(trip, carrier, now))
             if not result.get("ok"):
                 return done, f"the paste was refused ({result.get('detail')})"
@@ -208,9 +211,17 @@ def and_list(items):
 LORRIES = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
 
 
-def words(greet, carrier, haulier, date, trips, rec):
-    """His own wording (30/10): "This order has been arranged with ... for <day>, delivering between ... and .... Here is
-    the ref number MAN-...". The start is CTMS's, the end the site's window. Never a price."""
+def greeting(sender, sender_address, rec):
+    """Who a reply greets: the name the order has for its contact, when the mail is theirs or ours; else whoever wrote it."""
+    who = first_name(sender)
+    if not who or who == PLANNER or str(sender_address or "").lower() == str(rec.get("to") or "").lower():
+        return first_name(rec.get("name")) or ("" if who == PLANNER else who)
+    return who
+
+
+def words(greet, carrier, haulier, date, trips, rec, thanks=False):
+    """His own wording (30/10): "Thanks. This order has been arranged with ... for <day>, delivering between ... and ....
+    Here is the ref number MAN-...". The start is CTMS's, the end the site's window. Never a price."""
     day = datetime.strptime(date, "%d/%m/%Y").strftime("%A %d/%m/%Y")
     t = (rec.get("details") or {}).get("time") or {}
     start = str(trips[0].get("deliver") or "").strip()[9:14] or str(t.get("earliest") or "")
@@ -221,7 +232,7 @@ def words(greet, carrier, haulier, date, trips, rec):
     n = len(mans)
     last = f"Here is the ref number {mans[0]}" if n == 1 else (
         f"It will come on {LORRIES.get(n, n)} lorries. Here are the ref numbers: {and_list(mans)}")
-    return (f"Hi {greet or 'there'},<br><br>This order has been arranged with {who} for {day}"
+    return (f"Hi {greet or 'there'},<br><br>{'Thanks. ' if thanks else ''}This order has been arranged with {who} for {day}"
             + (f", {when}" if when else "") + f". {last}<br><br>")
 
 
@@ -282,24 +293,22 @@ def _people(item):
     return got
 
 
-def is_site_mail(subject, people, orders, site_topic, contact, conv=None, thread_conv=None, not_site=frozenset()):
-    """Whether a mail with an order number in its subject is on the site's thread - not a haulier's cover request ("<order>
-    Delivery") and not the materials team's "alternative contact" chain, which start with the order number too."""
+def site_rank(subject, people, orders, site_topic, contact, conv=None, thread_conv=None, not_site=frozenset()):
+    """How surely a mail with an order number in its subject is on the site's thread: 2 our site email's own thread, 1 the
+    contact is on it and it opens with the order, 0 not at all - a haulier's cover request ("<order> Delivery") and the
+    materials team's "alternative contact" chain start with the order number too."""
     import file_chain
     topic = file_chain.topic(subject)
-    if people & not_site:
-        return False
-    if "alternative contact" in topic:
-        return False
-    if thread_conv and conv == thread_conv:
-        return True
-    if site_topic and topic == site_topic:
-        return True
-    return bool(contact) and contact in people and any(topic.startswith(str(o).lower()) for o in orders)
+    if people & not_site or "alternative contact" in topic:
+        return 0
+    if (thread_conv and conv == thread_conv) or (site_topic and topic == site_topic):
+        return 2
+    return 1 if contact and contact in people and any(topic.startswith(str(o).lower()) for o in orders) else 0
 
 
 def site_thread(ns, rec):
-    """The newest mail of the order's site thread - the Inbox, where he files them, or Sent Items - or None."""
+    """(the newest mail of the order's site thread, how sure) - the Inbox, where he files them, or Sent Items - or (None, 0).
+    Our own thread when there is one; a mail that only has the contact on it, when there isn't."""
     import build_drafts as bd
     import file_chain
     root = bd.dhl_store(ns)
@@ -315,19 +324,24 @@ def site_thread(ns, rec):
         except Exception:
             pass
     not_site = haulier_addresses()
-    best = None
+    best, how = None, 0
     for box in boxes:
         if box is None:
             continue
         for o in orders:
             for it in box.Items.Restrict('@SQL=("urn:schemas:httpmail:subject" LIKE \'%' + o.replace("'", "''") + '%\')'):
                 subj = str(getattr(it, "Subject", "") or "")
-                if not is_site_mail(subj, _people(it), orders, site_topic, contact,
-                                    str(getattr(it, "ConversationID", "") or ""), thread_conv, not_site):
-                    continue
-                if best is None or _when(it) > _when(best):
-                    best = it
-    return best
+                rank = site_rank(subj, _people(it), orders, site_topic, contact,
+                                 str(getattr(it, "ConversationID", "") or ""), thread_conv, not_site)
+                if rank and (rank, _when(it)) > (how, _when(best) if best is not None else datetime(2000, 1, 1)):
+                    best, how = it, rank
+    return best, how
+
+
+def reaches(addresses, contact):
+    """Whether a reply gets to the order's contact - the address on the order can be a letter out of the real one's."""
+    who = str(contact or "").lower().split("@")[0]
+    return any(str(a).lower().split("@")[0].startswith(who) for a in addresses) if who else True
 
 
 def adhoc_address(src, name):
@@ -367,8 +381,9 @@ def checks(top, trips, got, mine):
     return bad
 
 
-def site_email(rec, job, trips):
-    """The site told. Returns (sent, what was done, in words): it never raises for want of a thread - he is told."""
+def site_email(rec, job, trips, send=True):
+    """The site told. Returns (sent, what was done, in words): it never raises for want of a thread - he is told.
+    send False: built, checked and thrown away, the words said back."""
     import build_drafts as bd
     import send_order
     ns = bd.get_ns()
@@ -378,20 +393,26 @@ def site_email(rec, job, trips):
         return False, "the DHL account wasn't found"
     carrier, haulier, date = job["carrier"], job.get("haulier") or "", job["date"]
     oneoff = rec.get("kind") in ("adhoc", "dts")
+    thanks = False
     if oneoff:
         entry = (rec.get("mail") or {}).get("entryid")
         if not entry:
             return False, "no request email on this ad hoc to forward"
         src = ns.GetItemFromID(entry)
         contact = ((rec.get("details") or {}).get("contact") or {}).get("name") or ""
-        to = adhoc_address(src, contact)
+        to = job.get("site_to") or adhoc_address(src, contact)
         if not to:
             return False, f"no address for {contact or 'the delivery contact'} on the request"
         m = src.Forward()
         m.To = to
         greet = first_name(contact)
     else:
-        src = site_thread(ns, rec)
+        src, _ = site_thread(ns, rec)
+        if src is not None:
+            m = src.ReplyAll()
+            if rec.get("to") and not reaches([a for _, a in _addresses(m)], rec["to"]):
+                m.Close(1)               # its last word was someone else's - a materials team's - and wouldn't reach the site
+                src = None
         if src is None:
             if not rec.get("to"):
                 return False, "no site thread and no contact"
@@ -401,10 +422,10 @@ def site_email(rec, job, trips):
                                        rec.get("postcode") or "", rec.get("po") or {})
             greet = first_name(rec.get("name"))
         else:
-            m = src.ReplyAll()
-            who = str(getattr(src, "SenderEmailAddress", "") or "").lower()
-            greet = first_name(rec.get("name") if bd.DHL_SMTP.lower() in who else getattr(src, "SenderName", ""))
-    body = words(greet, carrier, haulier, date, trips, rec)
+            sender = str(getattr(src, "SenderName", "") or "")
+            greet = greeting(sender, getattr(src, "SenderEmailAddress", ""), rec)
+            thanks = first_name(sender) != PLANNER
+    body = words(greet, carrier, haulier, date, trips, rec, thanks)
     if oneoff or src is not None:
         new, n = re.subn(r"(<body[^>]*>)", lambda mm: mm.group(1) + f'<div style="{FONT}">{body}</div>', m.HTMLBody,
                          count=1, flags=re.I)
@@ -422,8 +443,12 @@ def site_email(rec, job, trips):
     got = [a for _, a in _addresses(m)]
     top = re.split(r"\n\s*(?:From:|-#-#-|________________)", str(m.Body or ""))[0]
     bad = checks(top, trips, got, haulier_addresses())
-    if bad:
+    if bad and send:
         return False, "; ".join(bad)
+    if not send:
+        said = f"to {got} subject {m.Subject!r} problems {bad}: {re.sub(r'(\r?\n)+', ' / ', top).strip()[:500]}"
+        m.Close(1)                       # thrown away
+        return False, said
     m.Display(False)                     # a reply open in the reading pane refuses a plain Send
     m.Send()
     try:
