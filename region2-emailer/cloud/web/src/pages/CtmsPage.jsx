@@ -22,6 +22,7 @@ const DOING = {
   dialog: 'answering a dialog box', wait: 'waiting for the page', tabs: 'listing tabs', tab: 'switching tab',
   update: 'updating its code from GitHub', steps: 'working through a run of steps', paste: 'pasting',
   drag: 'dragging', use: 'bringing a window up', fields: 'reading the fields', probe: 'checking the window',
+  ctms_item: 'working through the to-do', ctms_book: 'booking an order', ctms_check: 'looking orders up',
 };
 const DURATIONS = [[15, '15 min'], [60, '1 hour'], [240, '4 hours']];
 const leftText = (s) => (s >= 3600 ? Math.floor(s / 3600) + ' h ' + Math.floor((s % 3600) / 60) + ' min'

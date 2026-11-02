@@ -795,12 +795,14 @@ def _on_screen(name, box, timeout=0.0):
 
 
 def run_steps(name, steps):
-    """A fixed sequence of steps in CTMS's own window, sent as ONE batch (send_batch)."""
-    batch = []
+    """A fixed sequence of steps in CTMS's own window, sent as ONE batch (send_batch), lined up on where CTMS sits now: with
+    no anchor its page sitting 21 px up put a note into Cost Centre (02/11)."""
+    batch = [{"action": "anchor"}]
     for action, args in steps:
         args = dict(args)
         if "at_px" in args:
-            args["at"] = _window_point(*args.pop("at_px"))
+            args["px"] = list(args.pop("at_px"))
+            args["at"] = _window_point(*args["px"])
         batch.append(dict(args, action=action))
     return send_batch(name, batch)
 
@@ -970,6 +972,8 @@ def _one_by_one(name, batch):
     for step in batch:
         args = {k: v for k, v in step.items() if k != "action"}
         action = step["action"]
+        if action == "anchor":             # only a batch can line itself up
+            continue
         result, payload = ask(action, **args)
         trace(f"{name}:{action}", args, result, payload)
         if payload and payload.get("kind") == "window":

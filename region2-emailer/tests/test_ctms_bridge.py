@@ -1636,17 +1636,17 @@ def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
     R.trace, R.save_state, R.print_screen = (lambda *a, **k: None), (lambda p: None), (lambda *a, **k: None)
     try:
         assert R.run(types.SimpleNamespace(cmd="order-find", order="1234567")) == 0
-        assert [x[0] for x in asked] == ["click", "key", "key", "type", "click", "wait"]
-        assert asked[3][1]["text"] == "1234567%"                         # the order's lines, by its ref and a %
-        assert asked[0][1]["at"] == [728 / 1910, 123 / 915]              # Customer Ref box, as a fraction
+        assert [x[0] for x in asked] == ["anchor", "click", "key", "key", "type", "click", "wait"]
+        assert asked[4][1]["text"] == "1234567%"                         # the order's lines, by its ref and a %
+        assert asked[1][1]["px"] == [728, 123]                           # Customer Ref box, moved to wherever CTMS sits
         # the card's Clear empties the results, not the box - so the old ref is selected
         # and the new one replaces it, never appended to it (29/10 a second ref landed on the first)
-        assert [x[1]["key"] for x in asked[1:3]] == ["home", "shift+end"]
+        assert [x[1]["key"] for x in asked[2:4]] == ["home", "shift+end"]
         asked.clear()
         assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 0
         # the end of the whole text, not of the line clicked: a wrapped one took the note mid-text (02/11)
-        assert [x[0] for x in asked] == ["click", "key", "type"] and asked[1][1]["key"] == "ctrl+end"
-        assert asked[0][1]["at"] == [1200 / 1910, 682 / 915]             # the box's bottom right
+        assert [x[0] for x in asked] == ["anchor", "click", "key", "type"] and asked[2][1]["key"] == "ctrl+end"
+        assert asked[1][1]["px"] == [1200, 682]                          # the box's bottom right
         asked.clear()
         # the work PC stops the batch at the refused step (test_steps_run_on_the_work_pc_...); here, the run says so
         answers["steps"] = ({"ok": False, "detail": "Stopped at step 2 of 3 (key): Refused: CTMS could not be "

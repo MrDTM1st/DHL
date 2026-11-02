@@ -361,10 +361,12 @@ class Items:
             return f"{ref}: '{note.strip()}' was there already"
         fields = other_fields(self.els)
         x, y, w, h = si_box(self.els)["at"]
-        self.run([{"action": "click", "screen": [x + w - 40, y + h - 8], "after": 0.3}])
-        self.look()
-        here = focused(self.els)
-        if here is None or here != si_box(self.els):
+        for _ in range(2):                 # the first click after CTMS comes to the front can only give its Java the focus
+            self.run([{"action": "click", "screen": [x + w - 40, y + h - 8], "after": 0.3}])
+            self.look()
+            if focused(self.els) is not None and focused(self.els) == si_box(self.els):
+                break
+        else:
             raise Stop(f"{ref}: the cursor wouldn't go into Special Instructions, so nothing was typed.")
         # End alone stops at the end of the line clicked, and a long one wraps (02/11)
         self.run([_key("ctrl+end", 0.1), _type(note, 0.2)])
