@@ -502,7 +502,7 @@ def book(job, R=None, now=None):
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
     wait = min(600, 150 + 90 * int(job.get("vehicles") or 1))
-    result, payload = _quiet(R.ask, "ctms_book", wait_total=wait, **args)
+    result, payload = _quiet(R.ask_waiting, "ctms_book", wait_total=wait, **args)
     payload = payload or {}
     trips = payload.get("trips") or []
     out.update(trips=[{k: t.get(k) for k in ("manifest", "status", "revenue", "cost")} for t in trips],

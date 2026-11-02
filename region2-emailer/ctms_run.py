@@ -52,7 +52,7 @@ def do_item(R, p, first, last):
     """One item, on the work PC: {"done", "held", "clean", "said", "seconds"}."""
     item = {"kind": p["kind"], "lines": p.get("lines") or [], "set": p.get("set") or {}}
     wait = ITEM_SECONDS + LINE_SECONDS * max(1, len(item["lines"]))
-    (result, payload), _ = _quiet(R.ask, "ctms_item", wait_total=wait, item=item, first=first, last=last)
+    (result, payload), _ = _quiet(R.ask_waiting, "ctms_item", wait_total=wait, item=item, first=first, last=last)
     try:
         _quiet(R.trace, f"item-{p['id']}", {"item": item}, result, payload)
     except Exception:
@@ -89,7 +89,7 @@ def look_up(R, plan):
     isn't known: each line's Veh Type gets read as it's done (a 7-line order's look-up took 73 s). {"ref|date": what it found}."""
     orders = {f"{p['lookup']['ref']}|{p['lookup']['date']}": {"ref": p["lookup"]["ref"], "date": p["lookup"]["date"],
                                                               "veh": p["lookup"].get("cards", True)} for p in plan}
-    (result, payload), _ = _quiet(R.ask, "ctms_check", wait_total=LOOK_UP_SECONDS,
+    (result, payload), _ = _quiet(R.ask_waiting, "ctms_check", wait_total=LOOK_UP_SECONDS,
                                   orders=[dict(o, key=k) for k, o in orders.items()])
     if not result.get("ok"):
         raise Failed(f"CTMS could not be looked up: {result.get('detail')}")

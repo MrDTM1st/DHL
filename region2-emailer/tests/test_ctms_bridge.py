@@ -3118,6 +3118,42 @@ def test_the_panels_book_switches_acting_on_for_itself_and_puts_it_back():
         S._queue.clear()
 
 
+def test_a_job_that_can_wait_asks_again_when_the_work_pc_was_busy():
+    keep = R.ask
+    answers = [({"ok": False, "detail": "Not run - the work PC did not pick this up within 60s, so nothing was done."}, None),
+               ({"ok": False, "detail": "Not run - the work PC did not pick this up within 60s, so nothing was done."}, None),
+               ({"ok": True, "detail": "done"}, {"done": True})]
+    asked = []
+
+    def ask(action, wait_total=90, **a):
+        asked.append((action, a))
+        return answers.pop(0)
+    R.ask = ask
+    try:
+        result, payload = R.ask_waiting("ctms_item", item={"lines": ["x"]})
+        assert result["ok"] and payload == {"done": True} and len(asked) == 3 and asked[0][1] == {"item": {"lines": ["x"]}}
+        # any other answer is the answer, and patience runs out
+        answers[:] = [({"ok": False, "detail": "Refused"}, None)]
+        assert R.ask_waiting("ctms_item")[0]["detail"] == "Refused"
+        answers[:] = [({"ok": False, "detail": "did not pick this up"}, None)]
+        assert "did not pick" in R.ask_waiting("ctms_item", patience=-1)[0]["detail"]
+    finally:
+        R.ask = keep
+
+
+def test_a_long_command_is_busy_not_offline():
+    fresh()
+    S._ctms["seen"] = time.time() - 200
+    try:
+        assert S._ctms_online() is False
+        S._ctms["running"] = {"id": 1, "action": "ctms_check", "since": time.time() - 200}
+        assert S._ctms_online() is True
+        S._ctms["running"]["since"] = time.time() - S._CTMS_BUSY - 5      # gone quiet for longer than anything takes
+        assert S._ctms_online() is False
+    finally:
+        S._ctms["running"] = None
+
+
 def test_an_item_of_the_to_do_goes_to_the_work_pc_through_the_same_gate():
     item = {"kind": "update", "lines": ["9100001-1-1", "bad ref!"], "set": {
         "deliver": "05/11/26 08:00-12:00", "comments": "x" * 900, "veh": "rigid", "storage": 2, "anyway": True, "other": "dropped",

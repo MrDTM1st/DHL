@@ -198,6 +198,16 @@ def ask(action, wait_total=90, **args):
             return w["result"], w.get("payload")
 
 
+def ask_waiting(action, wait_total=90, patience=420, **args):
+    """ask, when it's a job that can wait its turn: a command the work PC doesn't pick up in a minute expires unrun, and a
+    look-up can have it busy for six. Nothing was done when that comes back, so it's asked again, up to patience seconds."""
+    started = time.time()
+    while True:
+        result, payload = ask(action, wait_total=wait_total, **args)
+        if "did not pick this up" not in str(result.get("detail")) or time.time() - started > patience:
+            return result, payload
+
+
 # ---- what gets printed ---------------------------------------------------------
 def fmt_el(e):
     s = f"[{e['n']}] {e.get('r', '?')}"

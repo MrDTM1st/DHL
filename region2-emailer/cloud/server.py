@@ -100,6 +100,7 @@ CTMS_ACTIONS = CTMS_OBSERVE + CTMS_READ + CTMS_DRIVE + CTMS_ADMIN
 # online or not. (The home agent's queue deliberately keeps its backlog; this
 # one deliberately does not.)
 _CTMS_TTL = 60
+_CTMS_BUSY = 480           # the longest a command that's been picked up counts as the bridge busy (a look-up's own limit is 360)
 _CTMS_MAX_CAPTURES = 20
 _CTMS_MAX_CAPTURE_B64 = 80_000_000   # all held captures together, in memory
 _CTMS_MAX_PAYLOADS = 8               # screens sent back for Claude, newest kept
@@ -143,8 +144,10 @@ _ctms_cv = threading.Condition(_lock)
 def _ctms_online():
     # The bridge checks in every 1-10s (a check-in is held open while it waits
     # for work), and capturing a heavy page holds it for several seconds
-    # between check-ins - 20s rides that out.
-    return _ctms["polling"] > 0 or (time.time() - _ctms["seen"]) < 20
+    # between check-ins - 20s rides that out. One long command (a look-up can run six minutes, and the bridge doesn't check
+    # in while it works) is busy, not offline: the page said "offline" for the length of every look-up.
+    busy = _ctms["running"] and time.time() - _ctms["running"]["since"] < _CTMS_BUSY
+    return _ctms["polling"] > 0 or (time.time() - _ctms["seen"]) < 20 or bool(busy)
 
 
 def _ctms_armed():
@@ -2561,4 +2564,7 @@ if __name__ == "__main__":
         sys.exit(1)
     ui = f"React build ({_WEB_INDEX_PATH})" if _WEB_INDEX is not None else "inline fallback page"
     print(f"Cloud control plane on {HOST}:{PORT} — serving {ui}")
+    # a restart forgets which set-time look-up ran: a deploy is no reason to take CTMS for another (02/11, one ran mid-test)
+    if _check_slot_now(_uk_now()):
+        _check_slot["done"].append(_check_slot_now(_uk_now()))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

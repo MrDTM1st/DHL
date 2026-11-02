@@ -41,6 +41,8 @@ class FakeRemote:
             raise answer
         return {"ok": True, "detail": answer["said"]}, {"kind": "ctms_item", "seconds": 12, **answer}
 
+    ask_waiting = ask
+
     def trace(self, *a):
         pass
 
