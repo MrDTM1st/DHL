@@ -130,6 +130,14 @@ def test_the_look_up_only_opens_cards_when_it_needs_the_weight():
                                             {"ref": "9100007", "date": "05/11/2026", "veh": False, "key": "9100007|05/11/2026"}])
 
 
+def test_a_reply_covering_two_orders_looks_both_up():
+    both = dict(_update("b", "9100008-1-1"), lines=[], lookup={"ref": "9100008", "date": "05/11/2026", "cards": False, "also": ["9100009"]})
+    fake = FakeRemote()
+    fake.looked = ({"ok": True}, {"kind": "ctms_check", "orders": {}})
+    _run([both], fake)
+    assert [o["ref"] for o in fake.items[0][1]] == ["9100008", "9100009"]
+
+
 def test_the_page_is_told_how_it_is_going():
     fake = FakeRemote()
     _run([_note("a"), _update("b")], fake, run_id=77)

@@ -89,36 +89,44 @@ def _window(day, start, end, last=""):
     return f"{d0:%d/%m/%y} {start}-{t1:%d/%m/%y} {end}"
 
 
+def _orders(order):
+    """One order number or several, as the look-up's keys start with them."""
+    return {str(order)} if isinstance(order, (str, int)) else {str(o) for o in order}
+
+
 def _lines_for(found, order, date):
-    """The open lines of a delivery due `date` from the last CTMS look-up - that day's own, else (moved) the one other
-    day's. None when the look-up never covered it."""
-    got = [g for k, g in (found or {}).items() if k.split("|")[0] == str(order)]
-    if not got:
-        return None
-    rows = [ln for g in got for ln in g.get("lines") or []]
-    mine = [r for r in rows if _day(r.get("deliver_by")) == date]
-    open_ = sorted((r for r in (mine or rows) if r.get("status") == OPEN), key=lambda r: r.get("ref", ""))
-    if mine or len({_day(r.get("deliver_by")) for r in open_}) <= 1:
-        return open_
-    return []
+    """The open lines of a delivery due `date` from the last CTMS look-up - each of its orders' (one reply can cover two, and
+    the second's were left out till 02/11): that day's own, else (moved) the one other day's. None when the look-up never
+    covered one of them."""
+    out = []
+    for o in sorted(_orders(order)):
+        got = [g for k, g in (found or {}).items() if k.split("|")[0] == o]
+        if not got:
+            return None
+        rows = [ln for g in got for ln in g.get("lines") or []]
+        mine = [r for r in rows if _day(r.get("deliver_by")) == date]
+        open_ = [r for r in (mine or rows) if r.get("status") == OPEN]
+        if mine or len({_day(r.get("deliver_by")) for r in open_}) <= 1:
+            out += open_
+    return sorted(out, key=lambda r: r.get("ref", ""))
 
 
 def _veh_set(found, order):
     """The order's lines the last CTMS look-up saw a Veh Type on."""
-    return sorted(ref for k, g in (found or {}).items() if k.split("|")[0] == str(order)
+    return sorted(ref for k, g in (found or {}).items() if k.split("|")[0] in _orders(order)
                   for ref, filled in (g.get("veh") or {}).items() if filled)
 
 
 def _weight_found(found, order):
     """The weight of an order's lines the last CTMS look-up read off their cards - None when it read none."""
-    kgs = {ref: kg for k, g in (found or {}).items() if k.split("|")[0] == str(order)
+    kgs = {ref: kg for k, g in (found or {}).items() if k.split("|")[0] in _orders(order)
            for ref, kg in (g.get("weight") or {}).items()}
     return round(sum(kgs.values()), 2) if kgs else None
 
 
 def _card_read(found, order):
     """Whether the last CTMS look-up opened this order's line cards, the only place its weight shows."""
-    return any(g.get("veh") for k, g in (found or {}).items() if k.split("|")[0] == str(order))
+    return any(g.get("veh") for k, g in (found or {}).items() if k.split("|")[0] in _orders(order))
 
 
 def _vehicle_said(v):
@@ -220,7 +228,8 @@ def plan_update(it, rec, found):
     if len(days) > 1:
         explain.append(f"Staged over {len(days)} days, all on this line - it's split at booking (your rule)")
     # -- its lines in CTMS, from the last look-up
-    lines = _lines_for(found, order, date or _day(rec.get("delivery_date")))
+    every = it.get("orders") or [order]
+    lines = _lines_for(found, every, date or _day(rec.get("delivery_date")))
     look_up = lines is None            # what only CTMS can say is read when the run starts, never asked for
     if lines is not None and not lines:
         return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
@@ -229,7 +238,7 @@ def plan_update(it, rec, found):
     # -- typed in already? A Veh Type is the last thing an update puts on (his rule: Veh Type filled = the site's
     # details are in) - a reply seen again, or a later one, is held for him rather than typed over what CTMS has
     # (his 02/11 "yeah, fix it": the 01/11 repeats of 7116527/8 would have lost a second contact from the comment)
-    already = _veh_set(found, order)
+    already = _veh_set(found, every)
     if already:
         pick = answers.get("already")
         if pick == TICK_OFF:
@@ -286,7 +295,7 @@ def plan_update(it, rec, found):
     # -- the vehicle: whatever fits - rails by their length, the rest by the weight (see the top of this file). Only
     #    what the site's own words rule out, or what nothing on the order can say, comes to him
     bags = ballast_bags(rec)
-    kg = bags * BAG_KG or rec.get("ctms_weight") or _weight_found(found, order)
+    kg = bags * BAG_KG or rec.get("ctms_weight") or _weight_found(found, every)
     weighs = f"{bags} bags of ballast at 1 t each - {bags * BAG_KG:,} kg" if bags else f"{float(kg or 0):,.0f} kg in CTMS"
     artics = _field(d, "artic_access")
     no_artics = artics.get("value") == "no"
@@ -336,7 +345,7 @@ def plan_update(it, rec, found):
         veh = "rigid" if float(kg) <= RIGID_KG else "artic"
         explain.append(f"{weighs} - " + (f"a rigid (up to {RIGID_KG:,} kg)" if veh == "rigid"
                                          else f"an artic (over {RIGID_KG:,} kg)"))
-    elif _card_read(found, order):
+    elif _card_read(found, every):
         veh = doubt("veh", "Vehicle", "", VEHICLES, "CTMS shows no weight on its lines, so which vehicle fits can't be "
                     "worked out")
     else:
@@ -443,7 +452,8 @@ def plan_update(it, rec, found):
     return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
             "status": status, "lines": [ln.get("ref") for ln in lines or []], "set": s, "explain": explain,
             "checks": checks,
-            "lookup": {"ref": str(order), "date": _day(rec.get("delivery_date")), "cards": weighing} if look_up else None}
+            "lookup": ({"ref": str(order), "date": _day(rec.get("delivery_date")), "cards": weighing,
+                        **({"also": [str(o) for o in every[1:]]} if len(every) > 1 else {})} if look_up else None)}
 
 
 def plan(items, records, found):

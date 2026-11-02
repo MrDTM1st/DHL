@@ -87,8 +87,8 @@ def look_up(R, plan):
     """What only CTMS can say about these plan items - their open lines, Veh Type and weight - read on the work PC, as
     the bridge's own look-up does: searches and reads, nothing typed. Its cards are only opened for the weight when that
     isn't known: each line's Veh Type gets read as it's done (a 7-line order's look-up took 73 s). {"ref|date": what it found}."""
-    orders = {f"{p['lookup']['ref']}|{p['lookup']['date']}": {"ref": p["lookup"]["ref"], "date": p["lookup"]["date"],
-                                                              "veh": p["lookup"].get("cards", True)} for p in plan}
+    orders = {f"{ref}|{p['lookup']['date']}": {"ref": ref, "date": p["lookup"]["date"], "veh": p["lookup"].get("cards", True)}
+              for p in plan for ref in [p["lookup"]["ref"]] + list(p["lookup"].get("also") or [])}
     (result, payload), _ = _quiet(R.ask_waiting, "ctms_check", wait_total=LOOK_UP_SECONDS,
                                   orders=[dict(o, key=k) for k, o in orders.items()])
     if not result.get("ok"):

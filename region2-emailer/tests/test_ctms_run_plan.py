@@ -235,6 +235,24 @@ def test_the_vehicle_is_whatever_fits_the_weight_with_or_without_a_hiab():
     assert p["set"]["veh"] == "artic" and any("12,500 kg in CTMS" in e for e in p["explain"])
 
 
+def test_a_reply_covering_two_orders_does_both_orders_lines():
+    # one reply for two orders: all of both, not the first's alone and the item ticked off (02/11)
+    line = lambda ref, day: {"ref": ref, "status": "UNSCHEDULED", "deliver_by": f"{day}/11/26 16:00"}  # noqa: E731
+    rec = dict(_rec("9100083", "05/11/2026"), orders=["9100083", "9100084"], ctms_weight=2000)
+    it = dict(_item("9100083"), orders=["9100083", "9100084"])
+    found = {"9100083|05/11/2026": {"lines": [line("9100083-1-1", "05"), line("9100083-2-1", "05")]},
+             "9100084|05/11/2026": {"lines": [line("9100084-1-1", "13")]}}      # CTMS still has this one on another day
+    p = P.plan([it], [rec], found)[0]
+    assert p["lines"] == ["9100083-1-1", "9100083-2-1", "9100084-1-1"] and p["lookup"] is None
+    # one of them not looked up yet: both read when Run's pressed
+    p = P.plan([it], [rec], {"9100083|05/11/2026": found["9100083|05/11/2026"]})[0]
+    assert p["lookup"] == {"ref": "9100083", "date": "05/11/2026", "cards": False, "also": ["9100084"]}
+    # a Veh Type on the second counts too
+    found["9100084|05/11/2026"]["veh"] = {"9100084-1-1": True}
+    p = P.plan([it], [rec], found)[0]
+    assert p["status"] == "held" and any("9100084-1-1" in c.get("why", "") for c in p["checks"])
+
+
 def test_what_only_ctms_knows_is_read_when_run_is_pressed_never_asked():
     rec = dict(_rec("9100082", "05/11/2026"), ctms_weight=None)
     # never looked up: ready all the same, nothing to answer - the run looks it up first
