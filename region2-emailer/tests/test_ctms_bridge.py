@@ -305,6 +305,18 @@ def test_claude_waits_for_its_answer_and_gets_the_screen_with_it():
     assert len(S._ctms["payloads"]) == S._CTMS_MAX_PAYLOADS and cid not in S._ctms["payloads"]
 
 
+def test_a_recipe_only_looking_which_way_to_go_is_marked_so_the_page_shows_no_failure():
+    fresh()
+    looking = call("/api/ctms/command", {"action": "see", "look": True}, key=AGENT)[1]["id"]
+    real = call("/api/ctms/command", {"action": "see"}, key=AGENT)[1]["id"]
+    for cid in (looking, real):
+        call("/api/ctms/result", {"id": cid, "action": "see", "ok": False, "detail": "not on the screen"}, key=BRIDGE)
+    res = {r["id"]: r for r in call("/api/ctms/status")[1]["results"]}
+    assert res[looking]["look"] is True and res[real]["look"] is False, res
+    # whoever asked still gets the answer they waited for
+    assert call(f"/api/ctms/result?id={looking}&wait=0", key=AGENT)[1]["result"]["ok"] is False
+
+
 def test_waiting_on_a_command_that_never_ran_says_so():
     fresh()
     cid = call("/api/ctms/command", {"action": "see"}, key=AGENT)[1]["id"]

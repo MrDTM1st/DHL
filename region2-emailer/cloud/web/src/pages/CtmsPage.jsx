@@ -127,7 +127,7 @@ function planText(p) {
   const svc = s.services ? Object.entries(s.services).map(([k, on]) => (on ? k : 'no ' + k)).join(', ') : '';
   return [(p.lines || []).join(' + '), s.deliver && 'deliver ' + s.deliver,
     s.collect && 'collect ' + s.collect + (s.storage ? ' + STORAGE x' + s.storage : ''),
-    s.veh === '60ft' ? '60ft artic' : s.veh, svc,
+    { '60ft': '60ft artic', '80ft': '80ft artic', tipper: 'rigid tipper' }[s.veh] || s.veh, svc,
     s.comments && 'comment "' + s.comments + '"'].filter(Boolean).join(' · ');
 }
 
@@ -300,7 +300,8 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
   const attached = online && !!s.attached;
   const shotMeta = st && st.shot;
   const fresh = attached && !!shotMeta && shotMeta.ago < 6;
-  const results = (st && st.results) || [];
+  // a recipe only looking to see which way to go isn't activity: its "not on the screen" read as a failure (02/11)
+  const results = ((st && st.results) || []).filter((r) => !r.look);
   const queued = (st && st.queued) || [];
   const ctl = (st && st.control) || { armed: false, left: 0 };
   // an older bridge does not say - it refuses on its own side anyway

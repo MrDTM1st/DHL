@@ -14,12 +14,12 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
                        on an artic only; PTS only ever on rails ("PTS is only for Rails", his rule 01/11)
              veh type  whatever fits, worked out rather than asked (his 02/11: "you'd be able to figure it out by what
                        the material is and how much it weighs ... sleepers weigh 7 tons, you put it under a rigid").
-                       Rails by their length: over a normal trailer a 60ft artic. Everything else by the weight -
+                       Rails by their length: over a normal trailer a 60ft artic, over 18.3 m the 80ft artic, with its
+                       escort ("only the 80ft trombones need an escort", his 31/10). A stoneblower on the rigid tipper
+                       JG Vesty's go on. A Moffett only ever on an artic (his 02/11). Everything else by the weight -
                        bagged ballast's bags in tonnes ("if it's 60 bags of ballast, it will always be 60 tons", his
                        01/11), else CTMS's: up to 10,000 kg a rigid, over it an artic, which the booking splits if it
-                       must. A site that takes no artics gets rigids; a Moffett a 40ft artic ("Moffetts are usually on
-                       40ft artics", his 01/11). Only ever NR_Rigid (Up to 40ft), NR_40ft Artic Flatbed or the 60ft
-                       artic - never RIGID MOFFETT and the like (his rule 01/11)
+                       must. A site that takes no artics gets rigids. Never RIGID MOFFETT and the like (his rule 01/11)
   booking, other   his to do - never run
 
 What only CTMS knows - the order's open lines, its weight - isn't asked for either: the item is marked "lookup" and the
@@ -47,6 +47,7 @@ BAG_KG = 1000                      # a bag of ballast is a tonne, always (his 01
 OFFLOADING = ["HIAB", "MOFFETT", "SITE/NONE"]
 YES_NO = ["yes", "no"]
 VEHICLES = ["rigid", "artic"]
+NO_REAR_STEER = ("rigid", "tipper")   # "If it's a rigid vehicle, we would never need rear steer" (his 30/10)
 COLLECT_DAYS = ["the day before", "the same day"]
 TICK_OFF, TYPE_ANYWAY = "Tick it off - CTMS has it", "Type it in anyway"   # an update CTMS looks to have already
 
@@ -127,9 +128,15 @@ def _vehicle_said(v):
     return ""
 
 
+def stoneblower(rec):
+    """Stoneblower stone, however the order words it."""
+    return bool(re.search(r"stone\s*-?\s*blower", " ".join(
+        [str(rec.get("materials") or "")] + [str(c) for c in rec.get("product_codes") or []]), re.I))
+
+
 def tipped(rec):
     """Loose ballast or stoneblower stone - what goes on a tipper. 100500/001 is the loose stock code."""
-    return bool(re.search(r"loose|stone\s*-?\s*blower", str(rec.get("materials") or ""), re.I) or any(
+    return stoneblower(rec) or bool(re.search(r"loose", str(rec.get("materials") or ""), re.I) or any(
         str(c).strip().endswith("100500/001") for c in rec.get("product_codes") or []))
 
 
@@ -278,18 +285,18 @@ def plan_update(it, rec, found):
     veh, weighing = answers.get("veh") or "", False
     if veh:
         pass
+    elif stoneblower(rec):
+        veh = "tipper"
+        explain.append("A stoneblower - the rigid tipper they all go on")
     elif tipped(rec):
         checks.append({"field": "veh_tipper", "label": "Vehicle", "quote": "", "options": [], "text": False,
-                       "why": "Loose stone goes on a tipper, which the run doesn't pick - do the vehicle by hand"})
+                       "why": "Loose ballast goes on a tipper, and which one isn't set - do the vehicle by hand"})
     elif rails and metres is None:
-        veh = doubt("veh", "Vehicle", "", VEHICLES + ["60ft"], "The order's wording doesn't say how long its rails are, "
-                    "so which vehicle fits can't be worked out")
-    elif metres and metres > SIXTY_M:
-        checks.append({"field": "veh_long", "label": "Vehicle", "quote": "", "options": [], "text": False,
-                       "why": f"{metres:g} m rails are over 60ft: a trombone, which the run doesn't pick - do the "
-                              "vehicle by hand"})
+        veh = doubt("veh", "Vehicle", "", VEHICLES + ["60ft", "80ft"], "The order's wording doesn't say how long its "
+                    "rails are, so which vehicle fits can't be worked out")
     elif metres and metres > RIGID_M:
-        fits, named = ("60ft", "a 60ft artic") if metres > ARTIC_M else ("artic", "an artic")
+        fits, named = (("80ft", "the 80ft artic") if metres > SIXTY_M else ("60ft", "a 60ft artic")
+                       if metres > ARTIC_M else ("artic", "an artic"))
         if no_artics or said == "rigid":
             veh = doubt("veh", "Vehicle", artics.get("raw") or _field(d, "vehicle").get("raw"), [fits],
                         f"{metres:g} m rails only fit {named}, but the site says it takes no artics"
@@ -298,6 +305,14 @@ def plan_update(it, rec, found):
         else:
             veh = fits
             explain.append(f"{metres:g} m rails - {named}, the shortest that takes them")
+    elif off == "MOFFETT":             # "the Moffetts only go on artics, so you don't put it on a rigid" (his 02/11)
+        if no_artics or said == "rigid":
+            veh = doubt("veh", "Vehicle", artics.get("raw") or _field(d, "vehicle").get("raw"), ["artic"],
+                        "A Moffett only goes on an artic, but the site says it takes no artics. Pick it to go ahead, "
+                        "or ring them")
+        else:
+            veh = "artic"
+            explain.append("A Moffett job - on a 40ft artic, the only thing a Moffett goes on (your rule)")
     elif said:
         veh = said
         explain.append(f"A {said} - the site said so")
@@ -307,9 +322,6 @@ def plan_update(it, rec, found):
         veh = "rigid"
         explain.append("No artic access - a rigid" + (
             f": {weighs} is over one rigid's {RIGID_KG:,} kg, so the booking splits it" if float(kg or 0) > RIGID_KG else ""))
-    elif off == "MOFFETT":
-        veh = "artic"
-        explain.append("A Moffett job - on a 40ft artic (Moffetts usually are, your rule)")
     elif kg:
         veh = "rigid" if float(kg) <= RIGID_KG else "artic"
         explain.append(f"{weighs} - " + (f"a rigid (up to {RIGID_KG:,} kg)" if veh == "rigid"
@@ -323,18 +335,24 @@ def plan_update(it, rec, found):
         explain.append("Read from CTMS when you press Run: " + (
             "its open lines and its weight, which picks the vehicle" if lines is None and weighing else
             "its open lines" if lines is None else "its weight, which picks the vehicle"))
-    if veh == "rigid" and rear not in YES_NO:      # a rigid never needs rear steer (his 30/10): nothing to ask
+    if veh in NO_REAR_STEER and rear not in YES_NO:      # nothing to ask: it never needs it
         checks[:] = [c for c in checks if c["field"] != "rear_steer"]
         rear = "no"
+    if veh == "tipper":                # tipped off: no offloading to ask about, and never a HIAB on a tipper
+        checks[:] = [c for c in checks if c["field"] != "offloading"]
+        off = "SITE/NONE"
     if veh:
         s["veh"] = veh
     # -- services: HIAB or MOFFETT when ours is needed (Services, never a vehicle type), rear steer on an artic only,
     #    PTS only on rails
     if off in OFFLOADING and rear in YES_NO and pts in YES_NO and veh:
         s["services"] = {"HIAB": off == "HIAB", "MOFFETT": off == "MOFFETT",
-                         "REAR STEER": rear == "yes" and veh != "rigid", "PTS": pts == "yes"}
-        if rear == "yes" and veh == "rigid":
+                         "REAR STEER": rear == "yes" and veh not in NO_REAR_STEER, "PTS": pts == "yes"}
+        if rear == "yes" and veh in NO_REAR_STEER:
             explain.append("Rear steer left off: the site said yes, but a rigid never needs it (your rule)")
+        if veh == "80ft":
+            s["services"]["ESCORTS"] = True
+            explain.append("The 80ft artic needs an escort (your rule) - ESCORTS added")
     # -- the collection: a morning delivery the day before in yard hours, never on a weekend
     colls = rec.get("collections") or []
     if len(colls) != 1:

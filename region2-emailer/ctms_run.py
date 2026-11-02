@@ -10,8 +10,7 @@ read back before it counts as done (his ask 01/11; the Run button on the dashboa
            comment already there means CTMS has it: HELD, nothing typed, the run goes on (his 02/11), unless he
            picked "Type it in anyway"; then the one order-update batch -
            times, the deliver side's comment, services off and on (HIAB and MOFFETT live there), the Veh Type only
-           when the box is empty (40ft rigid, 40ft artic flatbed or 60ft artic, never a Moffett vehicle - his rule
-           01/11) - Save
+           when the box is empty (never a Moffett vehicle - his rule 01/11) - Save
            (the schedule question OK'd) and Close; then Order Summary read: Ready At and Deliver By must be what was
            typed. A Veh Type already set to another vehicle stops it before anything is typed
   done     CTMS has no line left to update - ticked off, nothing typed
@@ -38,7 +37,8 @@ SERVICE_ROWS = 14                  # the Services grid's rows, as the Access Bri
 # rigid" (his rule 01/11) - a HIAB or a Moffett goes in Services.
 VEH_BOX = "1052,298,1204,324"
 VEH_SHOWS = {"rigid": ("box-veh-rigid", "NR_Rigid (Up to 40ft)"), "artic": ("box-veh-artic", "NR_40ft Artic Flatbed"),
-             "60ft": ("box-veh-60ft", "NR_60ft Artic Flatbed")}
+             "60ft": ("box-veh-60ft", "NR_60ft Artic Flat"), "80ft": ("box-veh-80ft", "NR_80ft-115ft trombone"),
+             "tipper": ("box-veh-tipper", "NR_26ft 8 X 4 Rigid Tipper")}
 LOOK_UP_SECONDS = 420              # the bridge's own limit on a look-up (CHECK_SECONDS), and a margin
 
 
@@ -184,11 +184,13 @@ def _close(R):
 
 
 def veh_now(R):
-    """What the open order's Veh Type box shows: "rigid", "artic", "" when empty - or None, another vehicle."""
+    """What the open order's Veh Type box shows: a key of VEH_SHOWS, "" when empty - or None, another vehicle."""
+    if R._on_screen("box-veh-empty", VEH_BOX):
+        return ""
     for k, (tpl, _) in VEH_SHOWS.items():
         if R._on_screen(tpl, VEH_BOX):
             return k
-    return "" if R._on_screen("box-veh-empty", VEH_BOX) else None
+    return None
 
 
 def run_note(R, p):

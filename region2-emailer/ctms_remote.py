@@ -670,11 +670,12 @@ def cut_template(name, box, src=None):
 # Vehicle types: the template of each one's line in an order's Veh Type list, and how many presses of the list's
 # down arrow (after its thumb is dragged up the list) bring that line into view - found live 29-30/10.
 # The only vehicles an update picks (his rule 01/11): "the vehicle tab, we don't use that rigid Moffett thing ...
-# We just use the 40-foot rigid" - a HIAB or a Moffett goes in Services, never in the vehicle - and the 60ft artic that
-# a 60ft rail needs (02/11). The list is scrolled
+# We just use the 40-foot rigid" - a HIAB or a Moffett goes in Services, never in the vehicle - and the 60ft and 80ft
+# artics long rails need, and the stoneblowers' rigid tipper (02/11). The list is scrolled
 # from an EMPTY box, where it opens at its end; on a filled box it opens at its own value and the downs land elsewhere
 # (6055920, 01/11) - so the CTMS to-do run reads the box first (ctms_run.veh_now) and leaves a set one alone.
-VEH = {"rigid": ("veh-rigid-40ft", 20), "artic": ("veh-artic-40ft-flatbed", 6), "60ft": ("veh-artic-60ft", 6)}
+VEH = {"rigid": ("veh-rigid-40ft", 20), "artic": ("veh-artic-40ft-flatbed", 6), "60ft": ("veh-artic-60ft", 6),
+       "80ft": ("veh-artic-80ft", 9), "tipper": ("veh-tipper-26ft-8x4", 6)}
 SERVICE_ROW_Y = 295            # the Services grid's first row; each next row 23 px lower
 # Where the Order Search card shows, and the box CTMS asks "Change schedule to: <yymmdd>?" in (31/10).
 CARD_BOX = "430,50,830,270"
@@ -694,7 +695,7 @@ def order_update_items(a, card_open=False):
         raise Stop("No commas in CTMS comments - his habit (30/10): ' - ' between the parts.")
     if veh and veh not in VEH:
         raise Stop(f"--veh is one of {', '.join(VEH)}.")
-    if veh == "rigid" and ("REAR STEER" in adds or "rear steer" in (comments or "").lower()):
+    if veh in ("rigid", "tipper") and ("REAR STEER" in adds or "rear steer" in (comments or "").lower()):
         raise Stop("A rigid never needs rear steer (his rule 30/10) - leave it out of the comments and services.")
     if getattr(a, "ballast", False) and "PTS" in adds:
         raise Stop("A ballast order never gets PTS, whatever the site said (his rule 30/10) - leave it off.")
@@ -785,8 +786,10 @@ def order_save_close():
 
 def _on_screen(name, box, timeout=0.0):
     """Whether a template shows in that part of CTMS's screen - one look, or a short wait; neither printed nor
-    logged. How a recipe picks its way, where a batch only ever runs straight through."""
-    result, _ = ask("steps", wait_total=60,
+    logged, and marked "look" so the dashboard's Activity doesn't show a plain "no" as something that went wrong (his
+    02/11: "you said something about the OS card not being where it should be"). How a recipe picks its way, where a
+    batch only ever runs straight through."""
+    result, _ = ask("steps", wait_total=60, look=True,
                     steps=parse_steps(["anchor", "anchor window", f"find {name} box={box} timeout={timeout:g}"]))
     return bool(result.get("ok"))
 

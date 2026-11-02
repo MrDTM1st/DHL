@@ -112,6 +112,7 @@ _ctms = {
     # new run must not be mistaken for the one it already has.
     "next_id": int(time.time()),
     "results": [],         # newest first
+    "looks": set(),        # command ids that only look to see which way a recipe goes: their "no" is no failure
     "shot": None,          # the latest picture of the CTMS tab
     "next_shot": int(time.time()),
     "watch_until": 0.0,    # a dashboard has the CTMS page open until then
@@ -184,7 +185,7 @@ def _ctms_ticket_until(ticket):
 def _ctms_result_locked(res):
     res = dict(res, ts=time.time(), at=datetime.now().strftime("%H:%M:%S"))
     _ctms["results"].insert(0, res)
-    del _ctms["results"][30:]
+    del _ctms["results"][60:]
 
 
 def _ctms_note_locked(detail):
@@ -254,7 +255,7 @@ def _ctms_args(action, data):
         name = re.sub(r"[^A-Za-z0-9 ._-]+", "-", str(data.get("name") or ""))[:48].strip(" .-")
         out["name"] = name or "screen"
     for k in ("on", "commit", "enter", "append", "paste", "double", "right", "accept", "marks", "picture",
-              "react", "not", "window", "click"):
+              "react", "not", "window", "click", "look"):
         if k in data:
             out[k] = bool(data[k])
     num("ref", 1, 100000, int)
@@ -1829,8 +1830,11 @@ class Handler(BaseHTTPRequestHandler):
                                    by="dashboard" if dash else "home PC", queued_at=time.time())
                         _ctms["queue"].append(cmd)
                         _ctms["asked"][cmd["id"]] = cmd["by"]
+                        if cmd.get("look"):
+                            _ctms["looks"].add(cmd["id"])
                         for old in list(_ctms["asked"])[:-100]:
                             _ctms["asked"].pop(old, None)
+                            _ctms["looks"].discard(old)
                         _ctms_cv.notify_all()
                     online = _ctms_online()
             if refused:
@@ -2217,7 +2221,7 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms_result_locked({"id": cid, "action": str(data.get("action") or "")[:20],
                                      "name": str(data.get("name") or "")[:60], "ok": bool(data.get("ok")),
                                      "detail": str(data.get("detail") or "")[:1000],
-                                     "by": _ctms["asked"].get(cid, ""),
+                                     "by": _ctms["asked"].get(cid, ""), "look": cid in _ctms["looks"],
                                      "pic": bool(payload and payload.get("img"))})
                 if cid in _ctms["importing"] or (cid is not None and _ctms["armed_for"] == cid):
                     _ctms_upload_answered_locked(cid, imported=bool(payload and payload.get("imported")))
