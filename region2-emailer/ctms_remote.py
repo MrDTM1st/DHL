@@ -465,6 +465,8 @@ def cmd_status(_a):
     else:
         print("CTMS tab: " + (f"{s.get('tab_title') or '?'}  |  {s.get('tab_url', '')}" if s.get("attached")
                               else (s.get("error") or "none attached")))
+    if isinstance(s.get("idle"), int) and s["idle"] >= 0 and st.get("online"):
+        print(f"Work PC last used: {s['idle']}s before its last check-in")
     if s.get("dialog"):
         print("DIALOG BOX OPEN: " + s["dialog"])
     allowed = s.get("control")

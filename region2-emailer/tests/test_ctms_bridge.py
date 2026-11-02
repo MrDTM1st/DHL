@@ -90,6 +90,15 @@ def test_bridge_derives_the_same_key_as_the_dashboard():
     assert BRIDGE not in (DASH, AGENT)
 
 
+def test_the_bridge_says_how_long_the_work_pc_has_sat_unused():
+    # so a job can wait for CTMS to be free instead of taking it from under him (02/11)
+    fresh()
+    assert poll({"version": "1", "idle": 412})[0] == 200
+    st = call("/api/ctms/status", key=AGENT)[1]["state"]
+    assert st["idle"] == 412 and st["idle_at"] > 0
+    assert isinstance(B._idle_now(), int)                       # whole seconds, or -1 where it can't be asked
+
+
 def test_bridge_key_opens_the_bridge_channel_and_nothing_else():
     fresh()
     assert poll()[0] == 200

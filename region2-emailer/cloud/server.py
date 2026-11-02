@@ -513,12 +513,14 @@ def _ctms_take_state_locked(s):
     for k in ("attached", "net", "control", "autostart"):
         if k in s:
             st[k] = bool(s[k])
-    for k in ("tabs", "net_count"):
+    for k in ("tabs", "net_count", "idle"):          # idle: seconds since the work PC was last used
         if k in s:
             try:
                 st[k] = int(s[k])
             except (TypeError, ValueError):
                 pass
+    if "idle" in s:
+        st["idle_at"] = time.time()                  # when it was said - it ages until the next check-in
     for k, n in (("browser", 80), ("tab_title", 200), ("tab_url", 500), ("mode", 20),
                  ("error", 300), ("version", 20), ("match", 80), ("machine", 60),
                  ("code", 60), ("code_at", 30), ("dialog", 300), ("rolled_back", 300), ("view", 20),

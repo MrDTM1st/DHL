@@ -283,6 +283,15 @@ def code_label():
     return f"{cur.get('branch') or '?'}@{str(cur.get('commit') or '')[:7]}" if cur.get("commit") else ""
 
 
+def _idle_now():
+    """Whole seconds since this PC's keyboard or mouse was last used; -1 where that can't be asked."""
+    try:
+        q = ctms_window.idle_seconds()
+    except Exception:
+        q = None
+    return -1 if q is None else int(q)
+
+
 # ---- the dashboard -----------------------------------------------------------
 class Desk:
     """The Haulage Desk's control plane, reached the way this PC reaches the web.
@@ -1611,7 +1620,9 @@ class Bridge:
               "autostart": autostart_on(),
               "match": self.match,
               "machine": platform.node(),
-              "filing": shared_folder.state()}
+              "filing": shared_folder.state(),
+              # how long since anyone touched this PC - so a job can wait until CTMS is free, never take it from him
+              "idle": _idle_now()}
         if self.rolled_back:
             rb = self.rolled_back
             st["rolled_back"] = (f"{rb.get('branch')} {str(rb.get('commit') or '')[:7]} was rolled back "
