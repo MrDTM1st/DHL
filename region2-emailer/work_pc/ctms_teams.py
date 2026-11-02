@@ -51,6 +51,8 @@ CLIP_OTHER = ("PNG", "HTML Format", "Preferred DropEffect", "FileNameW")    # wi
 CLIP_PRIVATE = ("ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore",
                 "CanIncludeInClipboardHistory")                  # how a password manager marks its copy
 PASTE_SECONDS = 4                   # for Teams to show the pasted text before the clipboard is put back
+SETTLE_SECONDS = 1.0                # then for Teams to finish with the box (a clear straight after a paste missed)
+CLEAR_SECONDS = 2.0                 # for an emptied box to read empty
 
 
 class Stop(Exception):
@@ -214,14 +216,26 @@ def _keys(hwnd, *combos):
         time.sleep(0.25)
 
 
+def _settled(s, box, label, want_empty, seconds):
+    """Wait for the box to read empty (or not) -> what it reads last."""
+    got, end = _value(s, box), time.time() + seconds
+    while empty(got, label) != want_empty and time.time() < end:
+        time.sleep(0.25)
+        got = _value(s, box)
+    return got
+
+
 def _clear(s, hwnd, box, label):
-    """Empty the box of our own text (copies of this message, or the paste just made): its cursor, Ctrl+A, Delete ->
-    is it empty now?"""
-    _set_focus(box)
-    time.sleep(0.3)
-    _keys(hwnd, ("ctrl", "a"), ("delete",))
-    time.sleep(0.5)
-    return empty(_value(s, box), label)
+    """Empty the box of our own text (copies of this message, or the paste just made): its cursor, Ctrl+A, Delete -
+    once more with Backspace if Teams was still busy with the box -> is it empty now?"""
+    for delete in ("delete", "backspace"):
+        _set_focus(box)
+        time.sleep(0.4)
+        _keys(hwnd, ("ctrl", "a"), (delete,))
+        if empty(_settled(s, box, label, True, CLEAR_SECONDS), label):
+            return True
+        time.sleep(1.0)
+    return False
 
 
 def _clip_api():
@@ -316,13 +330,11 @@ def _paste(s, hwnd, box, label, text):
     got, why = "", ""
     try:
         _keys(hwnd, ("ctrl", "v"))
-        end = time.time() + PASTE_SECONDS                        # Teams reads the clipboard as it handles the keys
-        while True:
-            time.sleep(0.3)
+        got = _settled(s, box, label, False, PASTE_SECONDS)      # Teams reads the clipboard as it handles the keys
+        if not empty(got, label):
+            time.sleep(SETTLE_SECONDS)                           # and finishes with the box before the next step
             got = _value(s, box)
-            if not empty(got, label) or time.time() > end:
-                break
-        if empty(got, label):                                    # what it was, for the stop - our own text only
+        else:                                                    # what it was, for the stop - our own text only
             held = ctms_act._clip_text() == ours
             why = (f"the clipboard {'held' if held else 'did NOT hold'} the message and the cursor was on "
                    f"{_focused(s) or 'nothing'!r}")
