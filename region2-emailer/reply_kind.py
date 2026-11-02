@@ -67,13 +67,14 @@ def said_line(body, limit=200):
 
 
 def gave_details(record, body, product_type=None, sender=""):
-    """Did their own words give CTMS anything? Our questions answered - or, written out, a time, offloading, access,
-    rear steer, PTS, a vehicle, What3Words, a contact with a number, a day other than the one the order has. Read from
-    their text only: the quoted mail holds our own questions and dates ("is the delivery date still ok for the 5/11/26"
-    read back as 05/11, and "alternative contact needed" from the quoted subject as a contact called "needed"), and a
-    signature is nobody's delivery ("you have the wrong person" read as details off the writer's own footer, 02/11)."""
+    """Did they give CTMS anything? Our questions answered, in their text or in the mail they quote ("details below in
+    red") - or, written out above their sign-off, a time, offloading, access, rear steer, PTS, a vehicle, What3Words, a
+    contact with a number, a day other than the one the order has. Nothing else in the quoted mail counts: it holds our
+    own dates ("is the delivery date still ok for the 5/11/26" read back as 05/11) and subject ("alternative contact
+    needed" read as a contact called "needed"), and a signature is nobody's delivery ("you have the wrong person" read
+    as details off the writer's own footer, 02/11)."""
     try:
-        if dd.extract_fields(own_text(body)):
+        if set(dd.extract_fields(str(body or ""))) - {"altcontact"}:
             return True
         d = dd.parse_reply(message_part(body), product_type=product_type, sender=sender) or {}
     except Exception:
