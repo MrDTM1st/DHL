@@ -434,7 +434,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
       return vl && vl !== code.toLowerCase() ? `${vl} (${code})` : code;
     })()],
     ['Collect', [r.collection_date, detVal('time', d.collection_time)].filter(Boolean).join(' · ')],
-    [r.collection_date ? 'Delivery time' : 'Time', v('time')],
+    // the delivery's own day with its time, as Collect has (his 02/11: "give me the date for the delivery as well")
+    ['Deliver', [r.delivery_date, v('time')].filter(Boolean).join(' · ')],
     ['Return', r.return_leg ? [
       [r.return_leg.collection_date, detVal('time', r.return_leg.collection_time)].filter(Boolean).join(' '),
       '→ ' + [r.return_leg.to_site, r.return_leg.to_pc].filter(Boolean).join(' '),
