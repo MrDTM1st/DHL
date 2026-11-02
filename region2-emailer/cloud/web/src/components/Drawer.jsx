@@ -3,6 +3,7 @@ import {
   ordLabel, statusLabel, dueText, dateShort, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
   fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, siteContactOf, stamp, answerText,
+  emailedBack,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
@@ -418,7 +419,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
     ['Escalation', answerText(r.escalation_reply)],
     ['Replied', r.needs_info && !r.reply_at ? (r.needs_info.from || r.name || 'The site') + ' '
       + stamp(r.needs_info.at) + ' with no delivery details' + (r.needs_info.said ? ': "' + r.needs_info.said + '"' : '')
-      + ' - email back for them' : ''],
+      + (emailedBack(r) ? ' - emailed back ' + stamp(r.last_emailed_at) + ', waiting for the details'
+        : ' - email back for them') : ''],
     ['Delivery', dueText(r) + (r.date_was ? ' · moved from ' + dateShort(r.date_was)
       + (r.date_moved_by ? ' by ' + r.date_moved_by : '') : '')],
     ['CTMS', r.ctms_at ? 'Looked up ' + r.ctms_at.slice(8, 10) + '/' + r.ctms_at.slice(5, 7) + ' ' + r.ctms_at.slice(11)

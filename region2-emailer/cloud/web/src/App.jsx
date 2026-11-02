@@ -10,7 +10,7 @@ import TrackerPage from './pages/TrackerPage.jsx';
 import Notifications from './pages/Notifications.jsx';
 import CtmsPage from './pages/CtmsPage.jsx';
 import { useStatus, useTracker } from './hooks.js';
-import { isUrgent, within3, ordLabel, dueText, stamp, answerText } from './lib/orders.js';
+import { isUrgent, within3, ordLabel, dueText, stamp, answerText, emailedBack } from './lib/orders.js';
 import * as api from './api.js';
 
 function ago(ms) {
@@ -142,7 +142,7 @@ export default function App() {
         fresh.push({ id: 'x-' + r.id + '-' + e.at, title: site + ': the materials team answered',
           msg: answerText(e) + ' (' + ordLabel(r) + ') - not ' + (r.name || 'the site') + "'s reply.", orderId: r.id });
       }
-      if (n && n.at && !knownAnswers.current.has('i' + r.id + n.at)) {
+      if (n && n.at && !emailedBack(r) && !knownAnswers.current.has('i' + r.id + n.at)) {
         knownAnswers.current.add('i' + r.id + n.at);
         fresh.push({ id: 'i-' + r.id + '-' + n.at, title: site + ': replied without details',
           msg: (n.from || r.name || 'The site') + ' replied ' + stamp(n.at) + ' but gave no delivery details'

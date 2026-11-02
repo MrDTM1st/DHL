@@ -128,6 +128,11 @@ export function answerText(e) {
     + ' with ' + what;
 }
 
+// A reply without details that we have since emailed back about - the order is waiting on them again.
+export function emailedBack(r) {
+  return !!(r && r.needs_info && r.needs_info.at && r.last_emailed_at && r.last_emailed_at > r.needs_info.at);
+}
+
 // Detail-field helpers for the tracker's parsed delivery-detail chips.
 export const DFIELDS = [
   ['date', 'Date'], ['time', 'Time'], ['offloading', 'Offload'], ['artic_access', 'Artic'],
