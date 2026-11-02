@@ -377,6 +377,8 @@ class Booking:
             got.update((r["cust_ref"], r) for r in lines_of(rows, orders, date))
             if not rows or (not got and not hunt) or (got and not belongs(rows[-1]["cust_ref"], orders)):
                 break                          # the last of them is above the page's end: there are no more under it
+            if not got and date and self.all_before(rows, date):
+                break                          # latest first and this page is already before that day
             top = rows[0]["cust_ref"]
             self.page_down(rows)
             rows = self.well()
@@ -384,11 +386,20 @@ class Booking:
                 break
         return [got[k] for k in sorted(got)]
 
+    def well_days(self, rows):
+        """The delivery days of these rows, in the order they show."""
+        return [datetime.strptime(r["deliver"][:8], "%d/%m/%y") for r in rows
+                if re.match(r"\d{2}/\d{2}/\d{2}", str(r.get("deliver") or ""))]
+
+    def all_before(self, rows, date):
+        """Whether a page running latest first has nothing as late as that dd/mm/yyyy."""
+        days = self.well_days(rows)
+        return bool(days) and days[0] >= days[-1] and days[0] < datetime.strptime(date, "%d/%m/%Y")
+
     def latest_first(self):
         """His way to an order in the well: "put the schedule to date on the delivery date, and then you press the deliver
         column, it reverses the sort order" - the latest first, so with To on its day the order is on top."""
-        days = [datetime.strptime(r["deliver"][:8], "%d/%m/%y") for r in self.well()
-                if re.match(r"\d{2}/\d{2}/\d{2}", str(r.get("deliver") or ""))]
+        days = self.well_days(self.well())
         if len(days) < 2 or days[0] <= days[-1]:
             self.press_deliver()
 
@@ -477,10 +488,13 @@ class Booking:
         self.run([ANCHOR])
         self.look()
         self.carrier_window_away()
-        if self.flipped:
-            self.press_deliver()
         if self.to_was and not self.unsaved():
             self.move_to(self.to_was)
+            self.look()
+        days = self.well_days(self.well())             # the carrier screen can put the sort back itself (seen 02/11)
+        if self.flipped and (len(days) < 2 or days[0] >= days[-1]):
+            self.press_deliver()
+        self.flipped = False
 
     def unsaved(self):
         """Whether Planning's Save is lit."""

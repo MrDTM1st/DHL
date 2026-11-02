@@ -357,6 +357,25 @@ def test_the_wells_own_to_goes_on_the_delivery_day_so_the_order_is_on_top_and_go
     assert ctms.to == "261113" and ctms.to_list is None and ctms.reversed is False
 
 
+def test_a_sort_ctms_already_put_back_isnt_turned_round_again():
+    ctms = FakeCtms([_row("9000200-1-1", "03/11/26 08:00")] + [_row(f"90000{i:02d}-1-1", "05/11/26 08:00") for i in range(40)] + [_row("9100001-1-1")])
+    job = _book(ctms, dry=True)
+    assert job.flipped is True
+    ctms.reversed = False                # the carrier screen did it
+    job.tidy()
+    assert ctms.reversed is False and job.flipped is False
+
+
+def test_the_hunt_stops_at_a_page_already_before_the_day():
+    ctms = FakeCtms([_row(f"90000{i:03d}-1-1", "03/11/26 08:00") for i in range(200)])
+    try:
+        _book(ctms)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "isn't in the order well" in str(e)
+    assert sum(1 for s in ctms.steps if s.get("key") == "pagedown") < 15
+
+
 def test_a_to_already_on_the_day_has_its_list_shut_and_nothing_pressed():
     ctms = FakeCtms([_row("9100001-1-1")], sched="261106", to="261106")
     job = _book(ctms)
