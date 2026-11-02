@@ -1020,7 +1020,7 @@ class Bridge:
         try:
             if cmd.get("first"):
                 job.begin()
-            said, ok = job.do(item), True
+            said, ok = job.do(item, dry=bool(cmd.get("dry"))), True
         except ctms_items.Held as e:
             said, held = str(e), True
         except ctms_items.Busy as e:

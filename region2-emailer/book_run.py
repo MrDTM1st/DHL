@@ -189,7 +189,9 @@ def tracker_rows(R, trips, carrier, now=None, look_only=False):
                 why = f"{trip['manifest']}'s row didn't read back as filled: look at it"
                 break
     finally:
-        _quiet(R.ask, "use", target="ctms")
+        (_, payload) = _quiet(R.ask, "use", target="ctms")
+        if payload and payload.get("kind") == "window":
+            R.save_state(payload)          # the page's picture was the last on file: what's next aims at CTMS
     return done, why
 
 

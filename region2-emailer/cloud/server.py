@@ -346,7 +346,7 @@ def _ctms_args(action, data):
             out["item"]["set"]["storage"] = int(s["storage"]) if str(s["storage"]).isdigit() else 0
         if s.get("anyway"):
             out["item"]["set"]["anyway"] = True
-        out["first"], out["last"] = bool(data.get("first")), bool(data.get("last"))
+        out["first"], out["last"], out["dry"] = bool(data.get("first")), bool(data.get("last")), bool(data.get("dry"))
     if action == "ctms_check" and isinstance(data.get("orders"), list):
         # the map's orders to look up: a customer ref, the day it is due, whether to look at its Veh Type
         out["orders"] = [{"key": str(o.get("key") or "")[:80], "ref": str(o["ref"]),

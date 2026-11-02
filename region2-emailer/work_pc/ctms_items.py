@@ -343,11 +343,15 @@ class Items:
         self.run(ctms_orders.close_summary(self.t))
 
     # -- the items
-    def do(self, item):
+    def do(self, item, dry=False):
+        """One item. dry: an update's first line typed and thrown away, for trying the run with nothing kept - not the deliver
+        comment, whose box saves by itself."""
         s = item.get("set") or {}
         self.refs = list(item.get("lines") or [])
         if item.get("kind") == "note":
             return self.note(item["lines"][0], s.get("note") or "")
+        if dry:
+            return self.update(item["lines"][0], s, dry=True)
         return "; ".join(self.update(ref, s) for ref in item.get("lines") or [])
 
     def note(self, ref, note):
@@ -384,7 +388,7 @@ class Items:
             return ""
         return next((k for k, (tpl, _) in VEH_SHOWS.items() if self.seen(tpl, VEH_BOX)), None)
 
-    def update(self, ref, s):
+    def update(self, ref, s, dry=False):
         self.open(ref)
         now = self.veh_now()
         self.stage("opened")
@@ -448,7 +452,7 @@ class Items:
             steps += [_click((1195, 312), after=0.08)] * downs
             steps += [ctms_orders._find(self.t, name, VEH_LIST, 3, click=True, react=True)]
         # the comment: LOC Detail > Comments, the deliver side's Edit, its own Save. Only there (where it's read, 30/10)
-        if comments:
+        if comments and not dry:
             steps += [_click(TAB_LOC, react=True, box=TAB_BODY, timeout=10), _click(LOC_COMMENTS, after=0.6),
                       _click(LOC_EDIT, react=True, timeout=10), _click(LOC_BOX_LINE, after=0.3), _key("home"), _key("shift+end"),
                       _type(comments), _click(LOC_BOX_SAVE, react=True, timeout=10)]
@@ -457,6 +461,10 @@ class Items:
         except RuntimeError as e:
             raise Stop(f"{ref}: the update stopped part way ({e}), so nothing of this line was saved.")
         self.stage("typed")
+        if dry:
+            if not self.clear_up():
+                raise Stop(f"{ref}: rehearsed, but CTMS wouldn't let it go - look at it.")
+            return f"{ref}: rehearsed, nothing kept"
         self.save_close(ref)
         self.stage("saved")
         got = summary_line(self.look(), ref)

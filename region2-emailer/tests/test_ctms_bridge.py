@@ -1729,19 +1729,19 @@ def test_the_import_and_weight_runs_type_only_what_they_are_given():
     try:
         path = "C:\\Downloads\\NR_heavy_AH01-01-2026-AB-CD_01012026120000.csv"
         assert R.run(types.SimpleNamespace(cmd="import-file", path=path)) == 0
-        assert [x[0] for x in asked] == ["click", "key", "key", "type"]
-        assert [x[1]["key"] for x in asked[1:3]] == ["home", "shift+end"]     # the c:\temp default is replaced
-        assert asked[3][1]["text"] == path and asked[0][1]["at"] == [357 / 1910, 267 / 915]
+        assert [x[0] for x in asked] == ["anchor", "click", "key", "key", "type"]
+        assert [x[1]["key"] for x in asked[2:4]] == ["home", "shift+end"]     # the c:\temp default is replaced
+        assert asked[4][1]["text"] == path and asked[1][1]["px"] == [357, 267]
         asked.clear()
         assert R.run(types.SimpleNamespace(cmd="order-weight", kg="12")) == 0
-        assert [x[0] for x in asked] == ["click", "wait", "click", "wait", "click", "key", "key", "type"]
-        assert asked[-1][1]["text"] == "12" and asked[4][1]["at"] == [182 / 1910, 405 / 915]
+        assert [x[0] for x in asked] == ["anchor", "click", "wait", "click", "wait", "click", "key", "key", "type"]
+        assert asked[-1][1]["text"] == "12" and asked[5][1]["px"] == [182, 405]
         assert not any(x[1].get("commit") for x in asked)                     # typing a weight saves nothing
         asked.clear()
         assert R.run(types.SimpleNamespace(cmd="order-weight-save")) == 0
-        assert [x[1]["at"] for x in asked if x[0] == "click"] == [[182 / 1910, 499 / 915],   # item Save
-                                                                 [663 / 1910, 499 / 915],   # item Exit
-                                                                 [337 / 1910, 733 / 915]]   # order Save
+        assert [x[1]["px"] for x in asked if x[0] == "click"] == [[182, 499],    # item Save
+                                                                 [663, 499],    # item Exit
+                                                                 [337, 733]]    # order Save
         # an ad hoc's ref is searched whole; an NR order by its 7-digit base
         assert R._search_ref("AH01/01/2026/AB-CD") == "AH01/01/2026/AB-CD"
         assert R._search_ref("1234567-1-1") == R._search_ref("1234567") == "1234567"

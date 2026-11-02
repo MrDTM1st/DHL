@@ -370,6 +370,14 @@ def test_a_step_failing_part_way_keeps_nothing():
     assert o.saved == 0
 
 
+def test_a_rehearsal_types_a_line_and_throws_it_away():
+    o = _updated()
+    job = _items(o)
+    said = job.do({"kind": "update", "lines": [o.ref, "9100001-2-1"], "set": SET}, dry=True)
+    assert "rehearsed" in said and o.saved == 0 and o.discarded == 1 and not o.open_card
+    assert "04/11/26" in o.typed and "05/11/26 08:00 - Sam" not in o.typed        # the comment's box saves by itself
+
+
 def test_an_item_does_each_of_its_lines():
     o = _updated()
     job = _items(o)
