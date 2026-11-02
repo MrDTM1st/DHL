@@ -536,7 +536,7 @@ def _prompt_point(x, y):
 CTMS_AT = {
     "menu_modules": (121, 37), "menu_order_mgmt": (135, 63), "menu_orders": (240, 67),
     "search_clear": (626, 226), "search_custref": (728, 123), "search_refresh": (742, 226),
-    "si_end": (1000, 639), "order_save": (337, 733), "order_close": (424, 733),
+    "si_end": (1200, 682), "order_save": (337, 733), "order_close": (424, 733),
     # Administration > File Interfaces > Imports, and the Import card (File Type's list
     # opens downward from AUTO, so NRHEAVY_Order_Import is its second line)
     "menu_admin": (230, 37), "menu_file_ifaces": (231, 159), "menu_imports": (362, 163),
@@ -576,8 +576,9 @@ RUN_STEPS = {
                              ("key", {"key": "shift+end"}),
                              ("type", {"text": _search_ref(a.order) + "%"}),
                              ("click", _at("search_refresh")), ("wait", {"seconds": 4})],
-    # the contact note at the END of Special Instructions on the open order
-    "order-note": lambda a: [("click", _at("si_end")), ("key", {"key": "end"}), ("type", {"text": a.note})],
+    # the contact note at the END of Special Instructions on the open order: the box's bottom right, then Ctrl+End -
+    # End alone stops at the end of the line clicked, and a long one wraps (02/11 6055818's landed mid-text)
+    "order-note": lambda a: [("click", _at("si_end")), ("key", {"key": "ctrl+end"}), ("type", {"text": a.note})],
     "order-save": lambda a: [("click", _at("order_save")), ("wait", {"seconds": 3})],
     "order-close": lambda a: [("click", _at("order_close")), ("wait", {"seconds": 2})],
     # Administration > File Interfaces > Imports with File Type NRHEAVY_Order_Import.

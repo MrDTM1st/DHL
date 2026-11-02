@@ -1623,7 +1623,9 @@ def test_the_note_run_steps_go_in_order_and_stop_at_the_first_refusal():
         assert [x[1]["key"] for x in asked[1:3]] == ["home", "shift+end"]
         asked.clear()
         assert R.run(types.SimpleNamespace(cmd="order-note", note=" - Emailed DO 28/10")) == 0
-        assert [x[0] for x in asked] == ["click", "key", "type"] and asked[1][1]["key"] == "end"
+        # the end of the whole text, not of the line clicked: a wrapped one took the note mid-text (02/11)
+        assert [x[0] for x in asked] == ["click", "key", "type"] and asked[1][1]["key"] == "ctrl+end"
+        assert asked[0][1]["at"] == [1200 / 1910, 682 / 915]             # the box's bottom right
         asked.clear()
         # the work PC stops the batch at the refused step (test_steps_run_on_the_work_pc_...); here, the run says so
         answers["steps"] = ({"ok": False, "detail": "Stopped at step 2 of 3 (key): Refused: CTMS could not be "

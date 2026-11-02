@@ -70,6 +70,11 @@ def test_a_single_time_gets_two_hours_and_the_comment_keeps_their_time():
     rec = _rec("9100073", "05/11/2026", time={"earliest": "09:00", "confidence": "high"})
     p = P.plan([_item("9100073")], [rec], _found("9100073", "05/11/2026"))[0]
     assert p["set"]["deliver"] == "05/11/26 09:00-11:00" and any("+2h" in e for e in p["explain"])
+    # a single time the parser read as "08:00 to 08:00" is that one time - never a window into the next day (02/11)
+    rec = _rec("9100073", "13/11/2026", time={"earliest": "08:00", "latest": "08:00", "confidence": "high",
+                                              "expanded": False})
+    p = P.plan([_item("9100073")], [rec], _found("9100073", "13/11/2026"))[0]
+    assert p["set"]["deliver"] == "13/11/26 08:00-10:00" and p["set"]["comments"].startswith("13/11/26 08:00 - ")
 
 
 def test_a_monday_delivery_collects_on_friday_with_storage_x2():

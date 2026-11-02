@@ -169,6 +169,8 @@ def plan_update(it, rec, found):
     # -- the delivery window
     tv = _field(d, "time")
     start, end = _hm(tv.get("earliest")), _hm(tv.get("latest"))
+    if end == start:                     # a single time read as "08:00 to 08:00" - not a window into the next day
+        end = ""                         # (7116527's "13/11/26 @ 0800", 02/11)
     said_window = bool(start and end and not tv.get("expanded"))
     if answers.get("time"):
         m = re.fullmatch(r"\s*(\d{1,2}:\d{2})\s*(?:-\s*(\d{1,2}:\d{2}))?\s*", answers["time"])
