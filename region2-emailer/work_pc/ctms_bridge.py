@@ -828,7 +828,8 @@ class Bridge:
     # -- the map's orders looked up in CTMS: booked or not, their dates, the Veh Type (01/11, ctms_orders) --
     def ctms_check(self, cmd, done):
         """Each order the dashboard sends ({ref, date, veh}) searched in Order Summary and its lines read through the
-        Access Bridge - and, for one with veh (due within a fortnight), its open lines' cards opened (up to four) to
+        Access Bridge - and, for one with veh (due within a fortnight), its open lines' cards opened (up to twelve: the
+        weight adds up over all of them, and four of seven lines could call a 14 t order 8 t and rigid, 02/11) to
         see whether the Veh Type is filled and read the weight, which decides rigid or artic on the map. Searches and
         reads only: nothing typed into an order, nothing saved. Order Summary
         is closed after, so Planning shows as before. What was found goes to the dashboard (/api/ctms/orders), which
@@ -877,7 +878,7 @@ class Bridge:
             except Exception:
                 pass                    # nothing found leaves the list empty - CTMS's answer changed nothing
             try:
-                rows = ctms_orders.lines(ctms_jab.read_fields(self.win))
+                rows = ctms_orders.lines(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ))
             except Exception as e:
                 stopped = f"reading {o['ref']}'s lines: {why(e)}"
                 break
@@ -888,14 +889,14 @@ class Bridge:
             for line in ctms_orders.open_lines(got["lines"], str(o.get("date") or "")) if o.get("veh") else []:
                 try:
                     run(ctms_orders.search(line["ref"]))            # the line alone: the list's first row
-                    one = [r for r in ctms_orders.lines(ctms_jab.read_fields(self.win)) or []
+                    one = [r for r in ctms_orders.lines(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)) or []
                            if r["ref"] == line["ref"]]
                     if one and one[0]["status"] == ctms_orders.OPEN:     # unscheduled: opening it asks nothing
                         run(ctms_orders.open_line(t))
                         bgra, w, h = self._frame()
                         got.setdefault("veh", {})[line["ref"]] = ctms_orders.veh_filled(
                             bgra, w, h, self.batch.get("off", (0, 0)))
-                        kg = ctms_orders.card_weight(ctms_jab.read_fields(self.win))
+                        kg = ctms_orders.card_weight(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ))
                         if kg is not None:
                             got.setdefault("weight", {})[line["ref"]] = kg
                         run(ctms_orders.close_line(t))

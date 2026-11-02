@@ -2985,7 +2985,7 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
         b._seen = lambda t, name, box: seen.get(name, False)
         b._frame = lambda: (bytes(filled), 1910, 915)
 
-        def read(win):
+        def read(win, skip=()):
             r = reads.pop(0)
             if isinstance(r, Exception):
                 raise r

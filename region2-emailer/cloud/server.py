@@ -2032,7 +2032,8 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms["next_id"] += 1
                     rid = _ctms["next_id"]
                     before = _ctms["control_until"]
-                    until = max(before, time.time() + min(30, 3 + 3 * len(ids)) * 60)
+                    # an item can be many lines (two of them took 10 minutes, 02/11); it goes back the moment the run ends
+                    until = max(before, time.time() + min(60, 10 + 6 * len(ids)) * 60)
                     _ctms["control_until"], _ctms["armed_for"] = until, None
                     _ctms["todo_run"] = {"id": rid, "ids": ids, "before": before, "until": until, "state": "running",
                                          "at": datetime.now().strftime("%H:%M"), "said": "", "results": []}

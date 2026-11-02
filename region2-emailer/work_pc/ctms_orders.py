@@ -139,7 +139,7 @@ def day(v):
     return f"{m.group(1)}/{m.group(2)}/20{m.group(3)}" if m else ""
 
 
-def open_lines(rows, date, most=4):
+def open_lines(rows, date, most=12):
     """The open lines whose cards are opened for a delivery due `date` (dd/mm/yyyy) - for the Veh Type and the
     weight: that day's own - none when that day's lines are all scheduled, booked already - else, CTMS having no
     line that day (the delivery moved) and every open line on one other day, that day's. [] when nothing is open, or
