@@ -20,7 +20,7 @@ Design rules that keep it reliable:
     python waitlist.py            # print the wait list
     python waitlist.py due        # show what is due to send now
 """
-import os, json
+import os, json, re
 from datetime import datetime, date
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +50,14 @@ def save(d):
         json.dump(d, f, indent=2)
 
 
+# An address a mail can reach. A sheet's "Danny Smith email: dannysmith.co.uk" (no @) or "john@networkrail" can't.
+_ADDRESS = r"[^@\s;,]+@[^@\s;,.]+(?:\.[^@\s;,.]+)+"
+
+
+def has_address(to):
+    return bool(re.search(_ADDRESS, str(to or "")))
+
+
 def _id(orders, delivery_date):
     return "-".join(str(o).strip() for o in orders) + "|" + str(delivery_date)
 
@@ -77,12 +85,16 @@ def add(email):
     k = _id(email.get("orders", []), email.get("date"))
     for e in d["entries"]:
         if e["id"] == k:
+            if e.get("status") == "waiting" and not has_address(e.get("to")) and has_address(email.get("to")):
+                e["to"] = email["to"]                # a later sheet has it right
+                save(d)
             return False
     d["entries"].append({
         "id": k,
         "orders": email.get("orders", []),
         "po": email.get("po", {}),               # customer PO, carried to the tracker on release
         "to": email.get("to", ""),
+        "contact_said": email.get("contact_said", ""),   # the sheet's own words, for when they hold no address
         "cc": email.get("cc", ""),
         "name": email.get("name", ""),
         "subject": email.get("subject", ""),
@@ -125,6 +137,48 @@ def due(lead_days=None, today=None):
         if n is not None and 0 <= n <= lead:
             out.append(e)
     return out
+
+
+def no_address(d=None):
+    """Waiting entries no email can go to, soonest first - the sheet's address is mistyped or missing. The release can't
+    send them, and when that only reached its log an order sat here unasked for from 21/10 to 02/11 (6055827)."""
+    return sorted((e for e in waiting(d) if not has_address(e.get("to"))),
+                  key=lambda e: parse_date(e.get("date")) or date.max)
+
+
+def due_or_stuck(lead_days=None, today=None):
+    """What a release looks at: everything due, and everything no email can go to however far off it is. Those can't be
+    sent, but they close like any other once the order has been dealt with, by hand or under another email."""
+    out = due(lead_days, today)
+    seen = {e["id"] for e in out}
+    for e in no_address():
+        n = days_until(e["date"], today)
+        if e["id"] not in seen and n is not None and n >= 0:
+            out.append(e)
+    return out
+
+
+def set_address(entry_id, to):
+    """The right address for a waiting entry, as he typed it. False when it isn't one address or the entry isn't waiting."""
+    to = str(to or "").strip()
+    if not re.fullmatch(_ADDRESS, to):
+        return False
+    d = load()
+    for e in d["entries"]:
+        if e["id"] == entry_id and e.get("status") == "waiting":
+            e["to"], e["address_typed_at"] = to, _now()
+            save(d)
+            return True
+    return False
+
+
+def dealt_with(entry_id):
+    """He has seen to an order no email could go to some other way: it comes off the list. Never one with an address -
+    those have the release's own checks."""
+    for e in no_address():
+        if e["id"] == entry_id:
+            return mark(entry_id, "sent", note="no address on the sheet - you dealt with it yourself")
+    return False
 
 
 def overdue(today=None):

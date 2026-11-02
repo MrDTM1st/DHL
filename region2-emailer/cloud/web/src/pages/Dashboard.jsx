@@ -420,6 +420,58 @@ function InputCard({ ic, title, desc, placeholder, buttonLabel, kind, onSubmit }
   );
 }
 
+// ---- orders no email can go to ----
+// The sheet's address is mistyped or missing, so the wait list can't send them. They stay here until the right address
+// is given, or he has seen to it himself.
+const AN_ADDRESS = /^[^@\s;,]+@[^@\s;,.]+(\.[^@\s;,.]+)+$/;
+
+function daysLeft(n) {
+  if (n === null || n === undefined) return '';
+  if (n < 0) return 'date passed';
+  return n === 0 ? 'today' : n === 1 ? 'tomorrow' : 'in ' + n + ' days';
+}
+
+function NoAddress({ rows, onCommand }) {
+  const [typed, setTyped] = useState({});
+  if (!rows || !rows.length) return null;
+  const save = (e) => {
+    const to = String(typed[e.id] || '').trim();
+    if (AN_ADDRESS.test(to)) onCommand({ action: 'waitlist_address', data: { id: e.id, to } });
+  };
+  const dealtWith = (e) => {
+    if (window.confirm('Take ' + (e.orders || []).join(' / ') + ' off? The desk won\'t email or chase it.')) {
+      onCommand({ action: 'waitlist_dealt_with', data: { id: e.id } });
+    }
+  };
+  return (
+    <div className="card noaddress">
+      <div className="noaddress-head">
+        <h3>{rows.length === 1 ? '1 order' : rows.length + ' orders'} we can&rsquo;t email</h3>
+        <span className="noaddress-why">The sheet has no working address. Type the right one, or press Dealt with if you&rsquo;ve emailed them yourself.</span>
+      </div>
+      {rows.map((e) => {
+        const to = String(typed[e.id] || '').trim();
+        return (
+          <div className="noaddress-row" key={e.id}>
+            <div className="noaddress-what">
+              <div className="noaddress-order">{(e.orders || []).join(' / ')}<span className={'noaddress-when' + (e.days !== null && e.days <= 3 ? ' soon' : '')}>{e.date}{e.days !== null && e.days !== undefined ? ' · ' + daysLeft(e.days) : ''}</span></div>
+              <div className="noaddress-site">{[e.site, e.postcode].filter(Boolean).join(' ')}</div>
+              <div className="noaddress-said">The sheet says: &ldquo;{e.contact_said || 'nothing we can read'}&rdquo;</div>
+            </div>
+            <div className="noaddress-fix">
+              <input type="email" placeholder="The right email address" aria-label={'The right email address for ' + (e.orders || []).join(' / ')}
+                value={typed[e.id] || ''} onChange={(ev) => setTyped((t) => ({ ...t, [e.id]: ev.target.value }))}
+                onKeyDown={(ev) => { if (ev.key === 'Enter') save(e); }} />
+              <button className="btn mini go" disabled={!AN_ADDRESS.test(to)} onClick={() => save(e)}>Use it</button>
+              <button className="btn mini" onClick={() => dealtWith(e)}>Dealt with</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Dashboard({
   records, status, panel, setPage, onCommand, onUpload, currentOrder, setCurrentOrder,
   agentOnline, ttlText, onClearDropped, uploadBusy,
@@ -458,6 +510,8 @@ export default function Dashboard({
         </div>
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
+
+      <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
 
       <MyWeek week={panel && panel.planner_week} />
 

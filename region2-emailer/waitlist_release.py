@@ -91,9 +91,9 @@ def release(send=False):
         print("release: another wait-list release is already running - skipping.")
         return {"sent": [], "skipped": [], "missed": [], "failed": []}
     ns = bd.get_ns()
-    due = waitlist.due()
+    due = waitlist.due_or_stuck()
     over = waitlist.overdue()
-    report = {"sent": [], "skipped": [], "missed": [], "failed": []}
+    report = {"sent": [], "skipped": [], "missed": [], "failed": [], "no_address": []}
 
     # re-check guards against the LIVE mailbox at send time
     done = bd._already_done_orders()
@@ -131,6 +131,9 @@ def release(send=False):
             waitlist.mark(e["id"], "missed", note="delivery date passed before release")
             report["missed"].append(label)
             continue
+        if not waitlist.has_address(e.get("to")):       # shown on the dashboard until the right address is given
+            report["no_address"].append(label)
+            continue
         if not send:
             report["sent"].append(label + "  (DRY RUN - would send)")
             continue
@@ -166,8 +169,9 @@ def main():
     for k, head in (("sent", "SENT" if send else "WOULD SEND"),
                     ("skipped", "SKIPPED (already handled)"),
                     ("failed", "FAILED - NEEDS ATTENTION"),
+                    ("no_address", "NO ADDRESS TO EMAIL - on the dashboard until it is given"),
                     ("missed", "!! MISSED - delivery date passed while waiting (ACTION NEEDED)")):
-        if r[k]:
+        if r.get(k):
             print(f"{head}:")
             for line in r[k]:
                 print("   " + line)

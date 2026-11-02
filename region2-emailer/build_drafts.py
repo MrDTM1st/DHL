@@ -1211,6 +1211,7 @@ def build_emails_multi(files):
                            site=clean(r0[C0['daddr']]), worksite=worksite_of(wsite),
                            postcode=dpc, source=sources,
                            site_contact=scon, site_phone=sphone,
+                           contact_said=clean(r0[C0['dcon']])[:160],
                            collections=colls,
                            collection_site=colls[0]["site"] if colls else "",
                            collection_pc=colls[0]["pc"] if colls else ""))
@@ -1384,6 +1385,9 @@ def main():
                     skipped_sent.append(e)
             elif not _is_future(e["date"]):
                 skipped_past.append(e)
+            elif not waitlist.has_address(e.get("to")):
+                # nothing can send it: the wait list keeps it, and the dashboard shows it until the address is given
+                waitlisted.append(e)
             elif target is not None:
                 # week mode: send everything DELIVERING in the chosen week (pull it
                 # forward past the wait-list hold); park anything outside that week.
@@ -1441,7 +1445,8 @@ def main():
         for e in waitlisted:
             n = waitlist.days_until(e["date"])
             print(f"   ~ {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | deliver {e['date']} "
-                  f"(in {n}d) -> sends ~{n - waitlist.LEAD_DAYS}d from now")
+                  + (f"(in {n}d) -> sends ~{n - waitlist.LEAD_DAYS}d from now" if waitlist.has_address(e.get("to"))
+                     else f"(in {n}d) -> NO ADDRESS on the sheet ({e.get('contact_said')}) - on the dashboard"))
         print()
     if skipped_booked:
         print("Region 2 orders NOT emailed - you REPLIED in the thread (booked in):")

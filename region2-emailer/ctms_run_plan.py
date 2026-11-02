@@ -4,7 +4,8 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
 
   note     ' - Emailed DO 28/10' at the end of the -1-1 line's Special Instructions - always ready
   update   the site's reply onto its open line(s), by his rules (30/10):
-             deliver   the day and window the site gave - a single time is time..time+2h
+             deliver   the day and window the site gave - a single time is time..time+2h. Staged over several days
+                       on the one line, the window runs from the first to the last: split only at booking (his 31/10)
              collect   a morning delivery is collected the day before, in the supplier's yard hours; never on a
                        weekend - a Monday delivery collects on Friday, with STORAGE x2
              comment   LOC Detail, deliver side: date time - contact phone - HIAB required (or Moffett required) -
@@ -49,6 +50,7 @@ YES_NO = ["yes", "no"]
 VEHICLES = ["rigid", "artic"]
 NO_REAR_STEER = ("rigid", "tipper")   # "If it's a rigid vehicle, we would never need rear steer" (his 30/10)
 COLLECT_DAYS = ["the day before", "the same day"]
+AND = " and "                      # a date picked as "18/11/2026 and 19/11/2026" - staged over both days
 TICK_OFF, TYPE_ANYWAY = "Tick it off - CTMS has it", "Type it in anyway"   # an update CTMS looks to have already
 
 
@@ -73,9 +75,11 @@ def _field(d, name):
     return v if isinstance(v, dict) else {"value": v}
 
 
-def _window(day, start, end):
-    """The recipe's "DD/MM/YY HH:MM-HH:MM" - or "...-DD/MM/YY HH:MM" when it runs past midnight."""
+def _window(day, start, end, last=""):
+    """The recipe's "DD/MM/YY HH:MM-HH:MM" - or "...-DD/MM/YY HH:MM" when it runs past midnight, or on to a last day."""
     d0 = datetime.strptime(day, "%d/%m/%Y")
+    if last and last != day:
+        return f"{d0:%d/%m/%y} {start}-{datetime.strptime(last, '%d/%m/%Y'):%d/%m/%y} {end}"
     t0 = datetime.strptime(f"{day} {start}", "%d/%m/%Y %H:%M")
     t1 = datetime.strptime(f"{day} {end}", "%d/%m/%Y %H:%M")
     if t1 <= t0:
@@ -207,10 +211,14 @@ def plan_update(it, rec, found):
         if dv.get("value") and dv.get("confidence") == "high" and not dv.get("flexible") and len(opts) <= 1:
             date = _day(dv["value"])
         else:
-            date = _day(doubt("date", "Delivery date", dv.get("raw") or dv.get("value"), opts,
-                              "Not one firm day" if opts else "No delivery date the parser could be sure of",
-                              text=not opts) or "")
-    date = _day(date)
+            date = doubt("date", "Delivery date", dv.get("raw") or dv.get("value"),
+                         opts + ([AND.join(opts)] if len(opts) > 1 else []),
+                         "Not one firm day" if opts else "No delivery date the parser could be sure of",
+                         text=not opts) or ""
+    days = sorted({_day(x) for x in str(date).split(AND) if _day(x)}, key=lambda x: datetime.strptime(x, "%d/%m/%Y"))
+    date, last = (days[0], days[-1]) if days else ("", "")
+    if len(days) > 1:
+        explain.append(f"Staged over {len(days)} days, all on this line - it's split at booking (your rule)")
     # -- its lines in CTMS, from the last look-up
     lines = _lines_for(found, order, date or _day(rec.get("delivery_date")))
     look_up = lines is None            # what only CTMS can say is read when the run starts, never asked for
@@ -254,7 +262,7 @@ def plan_update(it, rec, found):
         end = (datetime.strptime(start, "%H:%M") + timedelta(hours=2)).strftime("%H:%M")
         explain.append(f"Delivery {start} becomes {start}-{end} (your +2h rule)")
     if date and start:
-        s["deliver"] = _window(date, start, end)
+        s["deliver"] = _window(date, start, end, last)
     # -- offloading, rear steer, PTS
     ov = _field(d, "offloading")
     off = answers.get("offloading") or (ov.get("value") if ov.get("confidence") == "high" else None)
@@ -377,7 +385,10 @@ def plan_update(it, rec, found):
                 checks.append({"field": "collect_weekend", "label": "Collection day", "quote": "", "options": [],
                                "text": False, "why": f"The collection would be {day:%a %d/%m}, a weekend - no rule "
                                                      "for that: do it by hand"})
-            s["collect"] = _window(day.strftime("%d/%m/%Y"), yard0, yard1)
+            upto = datetime.strptime(last, "%d/%m/%Y") - timedelta(days=1 if when == "the day before" else 0)
+            while upto.weekday() >= 5:         # the last load's collection, off the weekend like the first's
+                upto -= timedelta(days=1)
+            s["collect"] = _window(day.strftime("%d/%m/%Y"), yard0, yard1, upto.strftime("%d/%m/%Y"))
             if storage:
                 s["storage"] = storage
             if when == "the day before":
@@ -412,7 +423,8 @@ def plan_update(it, rec, found):
         alt = _field(d, "alt_contact")
         if alt.get("phone") and not answers.get("contact"):     # both contacts, as he types them (his 30/10)
             who += " / " + " ".join(w.capitalize() for w in f"{alt.get('name') or ''} {re.sub(r'[^0-9]', '', alt['phone'])}".split())
-        bits = [f"{datetime.strptime(date, '%d/%m/%Y'):%d/%m/%y} {when_said}", who]
+        said_days = AND.join(f"{datetime.strptime(x, '%d/%m/%Y'):%d/%m/%y}" for x in days)
+        bits = [f"{said_days} {when_said}", who]
         if off == "HIAB":
             bits.append("HIAB required")
         if off == "MOFFETT":
@@ -421,6 +433,9 @@ def plan_update(it, rec, found):
             bits.append("Rear steer required")
         if w3w:
             bits.append(f"W3W {w3w if w3w.startswith('///') else '///' + w3w}")
+        extra = str(_field(d, "comment_extra").get("value") or "").strip()
+        if extra:                      # the site's own instruction for the load ("X84 per lorry", 6055858)
+            bits.append(extra)
         s["comments"] = " - ".join(bits).replace(",", "")
     status = "held" if checks else "ready"
     return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",

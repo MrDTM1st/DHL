@@ -531,9 +531,22 @@ def push_panel():
             "ctms_plan": _ctms_plan(),
             "planner_week": _planner_week(),
             "noc_teams": _noc_teams(),
+            "no_address": _no_address(),
         })
     except Exception:
         pass
+
+
+def _no_address():
+    """Held orders no email can go to (waitlist.no_address) - they stay on the dashboard until the address is given."""
+    try:
+        import waitlist
+        keys = ("id", "orders", "site", "postcode", "date", "name", "contact_said")
+        return [dict({k: e.get(k) for k in keys}, days=waitlist.days_until(e.get("date")),
+                     due=(waitlist.days_until(e.get("date")) or 0) <= waitlist.LEAD_DAYS)
+                for e in waitlist.no_address()]
+    except Exception:
+        return []
 
 
 def _planner_week():
@@ -1720,6 +1733,25 @@ def main():
                 else:
                     state = "error" if ("missed" in low or "failed" in low) else "done"
                     report(state, "Wait-list release run.", tail(out, 14))
+            elif action == "waitlist_address":
+                d = cmd.get("data") or {}
+                import waitlist
+                if waitlist.set_address(d.get("id"), d.get("to")):
+                    report("done", f"{d.get('to')} saved. The email goes with the next wait-list send, in working hours"
+                                   f" once it is within {waitlist.LEAD_DAYS} days of delivery.")
+                else:
+                    report("error", f"Not saved - {d.get('to')} isn't one email address, or the order has gone off the "
+                                    "wait list.")
+                push_waitlist()
+                push_panel()
+            elif action == "waitlist_dealt_with":
+                import waitlist
+                if waitlist.dealt_with((cmd.get("data") or {}).get("id")):
+                    report("done", "Taken off the wait list - the desk won't email it.")
+                else:
+                    report("error", "Nothing changed - that order has gone off the list already, or has an address now.")
+                push_waitlist()
+                push_panel()
             elif action == "waitlist_scan":
                 report("running", "Scanning for far-ahead orders to hold…")
                 out = run(["build_drafts.py", "waitscan"])

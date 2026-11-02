@@ -126,6 +126,27 @@ export default function App() {
     });
   }, [records]);
 
+  // ---- and when an order turns up that no email can go to: the sheet's address is mistyped or missing ----
+  const knownNoAddress = useRef(new Set());
+  useEffect(() => {
+    const fresh = ((panel && panel.no_address) || []).filter((e) => !knownNoAddress.current.has(e.id));
+    fresh.forEach((e) => knownNoAddress.current.add(e.id));
+    if (!fresh.length) return;
+    const created = Date.now();
+    setNotes((ns) => {
+      const have = new Set(ns.map((n) => n.id));
+      return [...fresh.map((e) => ({
+        id: 'a-' + e.id,
+        kind: 'urgent',
+        title: (e.orders || []).join(' / ') + ': no address to email',
+        msg: 'The sheet says "' + (e.contact_said || 'nothing we can read') + '". It stays on the Dashboard until the '
+          + 'right address is given.',
+        createdAt: created,
+        read: false,
+      })).filter((n) => !have.has(n.id)), ...ns];
+    });
+  }, [panel]);
+
   // ---- and when an order's email is answered by someone other than the site with the details (his 02/11): the
   // materials team answering an escalation (a contact typed in, or a screenshot of one), or a reply with nothing to
   // book with ("is the delivery date still ok?") - told as what they are, never as "Danny replied" ----

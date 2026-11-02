@@ -804,3 +804,19 @@ a.callbtn:hover{ color:var(--red); }
      leaves it zoomed - so every box gets 16px on a touch screen */
   input, select, textarea{ font-size:16px !important; }
 }
+
+/* orders no email can go to - stays on the Dashboard until the address is given */
+.noaddress { padding: 14px 16px; margin-bottom: 14px; border-left: 4px solid var(--red); }
+.noaddress-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 8px; }
+.noaddress-head h3 { margin: 0; }
+.noaddress-why { color: var(--faint); font-size: 13px; }
+.noaddress-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 0; border-top: 1px solid var(--line); }
+.noaddress-what { min-width: 0; flex: 1 1 280px; }
+.noaddress-order { font-weight: 600; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
+.noaddress-when { font-weight: 400; font-size: 13px; color: var(--faint); }
+.noaddress-when.soon { color: var(--red); font-weight: 600; }
+.noaddress-site { font-size: 13px; overflow-wrap: anywhere; }
+.noaddress-said { font-size: 13px; color: var(--faint); overflow-wrap: anywhere; }
+.noaddress-fix { display: flex; gap: 6px; align-items: center; flex: 1 1 320px; max-width: 480px; min-width: 0; }
+.noaddress-fix .btn { flex: none; }
+.noaddress-fix input { flex: 1 1 auto; min-width: 0; margin: 0; }

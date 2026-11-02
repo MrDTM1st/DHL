@@ -39,6 +39,48 @@ def _item(order, kind="update", **extra):
     return dict({"id": f"t{order}", "kind": kind, "orders": [order], "what": "Sam replied - update the order"}, **extra)
 
 
+def _two_days(**answers):
+    rec = _rec("9100090", "18/11/2026")
+    rec["details"]["date"] = {"value": "19/11/2026", "flexible": True, "confidence": "high", "raw": "X70 18/11/26 X70 19/11/26",
+                              "options": ["18/11/2026", "19/11/2026"]}
+    rec["materials"], rec["product_codes"] = "140x rails", [RAIL_60FT]
+    return P.plan([_item("9100090", answers=answers)], [rec], _found("9100090", "18/11/2026"))[0]
+
+
+def test_a_reply_naming_two_days_can_be_picked_as_both():
+    p = _two_days()
+    c = next(c for c in p["checks"] if c["field"] == "date")
+    assert c["options"] == ["18/11/2026", "19/11/2026", "18/11/2026 and 19/11/2026"], c
+
+
+def test_one_line_staged_over_two_days_runs_from_the_first_to_the_last():
+    p = _two_days(date="18/11/2026 and 19/11/2026")                     # Wed and Thu, his 6055858 way
+    assert p["status"] == "ready", p["checks"]
+    assert p["set"]["deliver"] == "18/11/26 08:00-19/11/26 12:00"
+    assert p["set"]["collect"] == "17/11/26 08:00-18/11/26 15:45"       # each the day before, in the yard's hours
+    assert p["set"]["comments"].startswith("18/11/26 and 19/11/26 08:00-12:00 - Sam Example 07700900123 - HIAB required")
+    assert p["set"]["veh"] == "60ft"
+
+
+def test_picking_one_of_the_two_days_is_still_one_day():
+    p = _two_days(date="19/11/2026")
+    assert p["set"]["deliver"] == "19/11/26 08:00-12:00" and p["set"]["collect"] == "18/11/26 08:00-15:45"
+    assert p["set"]["comments"].startswith("19/11/26 08:00-12:00")
+
+
+def test_the_last_loads_collection_keeps_off_the_weekend():
+    rec = _rec("9100091", "06/11/2026")
+    p = P.plan([_item("9100091", answers={"date": "06/11/2026 and 09/11/2026"})], [rec], _found("9100091", "06/11/2026"))[0]
+    assert p["set"]["deliver"] == "06/11/26 08:00-09/11/26 12:00"       # a Friday and the Monday
+    assert p["set"]["collect"] == "05/11/26 08:00-06/11/26 15:45"       # Thursday to Friday, not the Sunday
+
+
+def test_the_sites_instruction_for_the_load_ends_the_comment():
+    rec = _rec("9100092", "05/11/2026", comment_extra={"value": "X84 per lorry"})
+    p = P.plan([_item("9100092")], [rec], _found("9100092", "05/11/2026"))[0]
+    assert p["set"]["comments"].endswith(" - W3W ///one.two.three - X84 per lorry")
+
+
 def test_a_note_is_always_ready():
     p = P.plan([{"id": "n1", "kind": "note", "orders": ["9100070"], "ref": "9100070-1-1", "note": " - Emailed DO 28/10",
                  "what": "Add 'Emailed DO 28/10'"}], [], {})
