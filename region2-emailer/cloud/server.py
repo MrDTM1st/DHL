@@ -266,11 +266,12 @@ def _ctms_args(action, data):
     num("after", 0, 10)                    # a step's own pause instead of the usual one
     num("tol", 0, 255, int)                # how near a waited-for colour must be
     # a point (at/to: fractions; px/px2: the picture's own pixels, which the bridge moves by its anchor)
-    for k in ("at", "to", "px", "px2"):
+    for k in ("at", "to", "px", "px2", "screen"):
         pt = data.get(k)
         if isinstance(pt, (list, tuple)) and len(pt) == 2:
-            try:
-                out[k] = [max(0.0, min(float(pt[0]), 20000.0)), max(0.0, min(float(pt[1]), 20000.0))]
+            lo = -20000.0 if k == "screen" else 0.0    # screen: where the Access Bridge places a field - a second
+            try:                                      # monitor can sit left of the first
+                out[k] = [max(lo, min(float(pt[0]), 20000.0)), max(lo, min(float(pt[1]), 20000.0))]
             except (TypeError, ValueError):
                 pass
     box = data.get("box")                  # a part of the screen: watched by react, kept by snap

@@ -1855,6 +1855,38 @@ def test_a_huge_screen_is_cut_short_and_says_so_and_still_gives_everything_back(
         J.LIMIT = keep
 
 
+def test_one_very_long_part_of_a_screen_no_longer_stops_the_rest_being_read():
+    # Planning's canvas holds over 500 things: its order well's later columns went unread when one big part cut the
+    # whole walk (02/11). Now that part is read up to the cap, and everything after it still is
+    keep = J.KIDS
+    J.KIDS = 30
+    try:
+        big = _n("panel", kids=[_n("text", "", f"r{i}") for i in range(60)])
+        java = _FakeJava({11: _n("frame", kids=[big, _n("push button", "Order Filters")])})
+        out = J.read([11], api=java)
+        assert out["cut"] is False and out["partial"] is True
+        assert any(e["r"] == "push button" and e["nm"] == "Order Filters" for e in out["elements"])
+        assert sum(1 for e in out["elements"] if e["r"] == "text") == 30 and java.held == set()
+    finally:
+        J.KIDS = keep
+
+
+def test_a_click_can_aim_at_a_screen_point_but_never_off_ctms():
+    # where the Access Bridge places a field (an order well row's cell) is a screen point; taken of the picture's own
+    # rectangle it is a fraction like any other - and one off CTMS is refused (02/11)
+    b = B.Bridge(_Rec(), 1, "", allow_control=True)
+    b.win = dict(FAKE_WIN)                                               # content [8, 120, 992, 692]
+    fx, fy = b._point({"screen": [500, 406]})
+    assert abs(fx - 0.5) < 1e-9 and abs(fy - 0.5) < 1e-9
+    fx, fy = b._point({"screen": [2000, 406]})
+    try:
+        A._point(fx, fy, FAKE_WIN["content"])
+        assert False, "a point off CTMS must be refused"
+    except A.Refused:
+        pass
+    assert S._ctms_args("click", {"screen": [-40, 300.5]})["screen"] == [-40.0, 300.5]   # a second monitor
+
+
 def test_the_bridge_checks_the_readers_answer_again_before_it_leaves_the_pc():
     out = {"windows": [{"w": 1, "title": "C-TMS"}, {"w": 2, "title": "Oracle Forms - Logon"}],
            "elements": [{"n": 1, "w": 1, "lv": 0, "r": "internal frame", "nm": "Sign In"},

@@ -56,7 +56,8 @@ PY32_SIZE = 9960069
 
 LIMIT = 1500         # things sent back, at most (Planning with an order open runs to several hundred)
 VISIT = 8000         # Java objects looked at, at most
-KIDS = 500           # children of any one thing looked at, at most
+KIDS = 4000          # children of any one thing looked at, at most (Planning's canvas holds over 500 - its order
+                     # well's later columns sat past 500 and went unread, 02/11)
 SECONDS = 30         # the walk stops after this, and says it was cut short
 VALUE_MAX = 2000     # characters of a field's contents: Special Instructions whole - the contact note goes at its END
 # Never read what is in a field named like this...
@@ -283,7 +284,7 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         if ctx["cut"]:
             return
     if i["children"] > KIDS:
-        ctx["cut"] = True
+        ctx["partial"] = True                   # that one thing read in part - the rest of the screen still read
 
 
 def read(hwnds, api=None):
@@ -298,7 +299,7 @@ def read(hwnds, api=None):
         java += [h for h in api.top_windows() if h not in java and api.pid(h) in pids and api.java_window(h)]
     out = {"ok": True, "java_windows": len(java), "windows": [], "elements": [],
            "reader": f"{struct.calcsize('P') * 8}-bit Python {sys.version.split()[0]}"}
-    ctx = {"visited": 0, "cut": False, "deadline": t0 + SECONDS, "focus": None}
+    ctx = {"visited": 0, "cut": False, "partial": False, "deadline": t0 + SECONDS, "focus": None}
     tops = []
     try:
         for h in java:
@@ -323,7 +324,8 @@ def read(hwnds, api=None):
     finally:
         for vm, t in tops:
             api.release(vm, t)
-    out.update(cut=ctx["cut"], focus=ctx["focus"], visited=ctx["visited"], took=round(time.time() - t0, 2))
+    out.update(cut=ctx["cut"], partial=ctx["partial"], focus=ctx["focus"], visited=ctx["visited"],
+               took=round(time.time() - t0, 2))
     return out
 
 
@@ -447,6 +449,7 @@ def summary(out):
             + (f"the cursor is in {describe(focus)}." if focus else "no field reports the cursor (CTMS is not "
                "the active window, or nothing in it has focus).")
             + (f" CUT SHORT at {len(els)} - not everything was read." if out.get("cut") else "")
+            + (" One very long list was read only in part." if out.get("partial") and not out.get("cut") else "")
             + "".join(" " + n for n in state_notes(out)))
 
 

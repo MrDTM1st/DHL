@@ -1026,6 +1026,12 @@ class Bridge:
             w, h = self.batch.get("size") or self._frame()[1:]
             dx, dy = self.batch.get("off", (0, 0))
             return [(float(px[0]) + dx) / w, (float(px[1]) + dy) / h]
+        # a screen point, as the Access Bridge places CTMS's fields (an order well row's cell, 02/11) - taken of the
+        # picture's own rectangle, so it is refused like any other point that falls off CTMS
+        sc = args.get("screen") if at_key == "at" else None
+        if isinstance(sc, (list, tuple)) and len(sc) == 2:
+            left, top, right, bottom = (int(v) for v in ctms_window.content_area(self.win))
+            return [(float(sc[0]) - left) / max(1, right - left), (float(sc[1]) - top) / max(1, bottom - top)]
         return args.get(at_key)
 
     def _react(self, before, args):

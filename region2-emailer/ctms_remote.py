@@ -65,6 +65,9 @@ An upload into CTMS, and the weight after it (CTMS's import reads no weight):
 A booking, from the order well (Planning):
     python ctms_remote.py planning-open           C-TMS Modules > Trip Management > Planning
     python ctms_remote.py planning-save           Planning's Save - after Create Trip, after Accepted
+    python ctms_remote.py well [--all]            the order well's rows, read as text (--all: page through)
+    python ctms_remote.py well --find REF         page through until that order number turns up
+    python ctms_remote.py well --open REF         ... and double-click its row: its order card opens
 
 N is a number from the latest picture. Every action answers with a fresh one,
 so the numbers to use next are always the ones just printed.
@@ -1070,6 +1073,10 @@ def main(argv=None):
     sub.add_parser("order-weight-save", help="item Save + Exit, then the order's Save")
     sub.add_parser("planning-open", help="C-TMS Modules > Trip Management > Planning")
     sub.add_parser("planning-save", help="Planning's Save button")
+    p = sub.add_parser("well", help="the order well (Planning) read as text - order numbers, places, dates")
+    p.add_argument("--all", action="store_true", help="page through the whole list, not just the rows on screen")
+    p.add_argument("--find", default="", help="an order number (Cust Ref) to look for, a page at a time")
+    p.add_argument("--open", default="", help="an order number to find and double-click - its card opens")
     p = sub.add_parser("order-update", help="open an order by its customer ref and type the site's details in "
                                             "(one batch, snaps of each part, NOT saved)")
     p.add_argument("order", help="the whole customer ref, e.g. 1234567-1-1")
@@ -1254,6 +1261,8 @@ def run(a):
         if payload:
             print_probe(payload)
         return 0 if result.get("ok") else 3
+    if c == "well":
+        return cmd_well(a)
     if c == "fields":
         result, payload = ask("fields", wait_total=150)
         trace(c, {}, result, payload)
@@ -1274,6 +1283,90 @@ def run(a):
                     **({"kind": "rail"} if a.rail else {}), **({"text": a.map} if a.rail and a.map else {}))
         return report(c, args, *ask("shared_folder", wait_total=120, **args))
     raise Stop(f"Unknown command {c}")
+
+
+# ---- the order well, read as text (his "yes, build it", 02/11) -------------------------------
+WELL_PAGES = 15                    # Page Downs at most - 15 rows a page
+
+
+def well_read():
+    """The order well's rows on screen, through the Access Bridge. Stops when Planning isn't open."""
+    import ctms_well
+    result, payload = ask("fields", wait_total=150)
+    if not result.get("ok") or not payload:
+        raise Stop(f"CTMS's fields could not be read: {result.get('detail')}")
+    els = payload.get("elements") or []
+    if ctms_well._frame(els) is None:
+        raise Stop("Planning is not open in CTMS - open it first: python ctms_remote.py planning-open")
+    return ctms_well.rows(els), els
+
+
+def well_rows(every=False, until=""):
+    """(every row seen, the page on screen now): the rows on screen - and, with every or until, a page at a time: the
+    first row's order number clicked (the grid's own cursor - nothing is changed by it) then Page Down, until a page
+    brings nothing new or `until` turns up. A row's place on the screen is right for the page on screen now only."""
+    import ctms_well
+    page, _ = well_read()
+    seen = list(page)
+    if not page or not (every or until) or (until and ctms_well.find(page, until)):
+        return seen, page
+    if send_batch("well-cursor", [{"action": "click", "screen": ctms_well.point(page[0])}]):
+        raise Stop("The order well would not take the cursor - nothing else was done.")
+    for _ in range(WELL_PAGES):
+        if send_batch("well-page", [{"action": "key", "key": "pagedown"}, {"action": "wait", "seconds": 1.5}]):
+            raise Stop("Page Down did not go through in the order well.")
+        page, _ = well_read()
+        new = ctms_well.merge(seen, page)
+        if until and ctms_well.find(page, until):
+            break
+        if not new:
+            break
+    return seen, page
+
+
+def print_well(rows_):
+    print(f"{len(rows_)} order(s) in the order well:")
+    for r in rows_:
+        print(f"  {r.get('cust_ref', ''):<14} {r.get('booking_ref', ''):<17} {r.get('from_post', ''):>8} -> "
+              f"{r.get('to_post', ''):<8} {r.get('to_reg', ''):<4} collect {r.get('collect', '') or '?':<9} "
+              f"deliver {r.get('deliver', '') or '?':<9} {r.get('del_type', ''):<9} {r.get('weight', ''):>7} "
+              f"{r.get('product', '')} {r.get('vehicle', '')}".rstrip())
+
+
+def well_open(ref):
+    """Find an order in the order well and double-click its row - then its card must be the one that opened."""
+    import ctms_well
+    seen, page = well_rows(until=ref)
+    row = ctms_well.find(page, ref)
+    if not row:
+        raise Stop(f"{ref} is not in the order well as it is filtered now ({len(seen)} order(s) looked at) - "
+                   "nothing opened. Its schedule (the delivery day) may be outside Sched From / To.")
+    if send_batch("well-open", [{"action": "click", "screen": ctms_well.point(row), "double": True},
+                                {"action": "wait", "seconds": 4}], [ref]):
+        raise Stop(f"The double-click on {ref}'s row did not go through.")
+    result, payload = ask("fields", wait_total=150)
+    els = (payload or {}).get("elements") or []
+    card = ctms_well._frame(els, "Order details for") or []
+    got = next((str(e.get("v") or "").strip() for e in card
+                if e.get("r") == "text" and str(e.get("nm") or "").strip() == "Customer Ref"), "")
+    if got.upper() != ref.upper():
+        raise Stop(f"Double-clicked {ref}'s row, but the card that is open reads {got or 'no order'} - look at CTMS.")
+    print(f"DONE  {ref} found in the order well and opened - its card reads Customer Ref {got}.")
+    return 0
+
+
+def cmd_well(a):
+    import ctms_well
+    if a.open:
+        return well_open(a.open.strip())
+    seen, page = well_rows(every=a.all, until=a.find.strip())
+    print_well(seen)
+    if a.find:
+        row = ctms_well.find(page, a.find.strip())
+        print(f"{a.find}: " + (f"on screen now, its order number at screen point {ctms_well.point(row)}" if row
+                               else "not in the order well as it is filtered now"))
+        return 0 if row else 3
+    return 0
 
 
 def cmd_update(a):
