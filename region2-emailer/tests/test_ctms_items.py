@@ -40,6 +40,7 @@ class FakeOrder:
         self.missing = set()
         self.found = True
         self.discarded = 0
+        self.once_saved = None          # (ready, deliver_by) Order Summary shows after the save
 
     # -- what the Access Bridge hands over
     def read(self):
@@ -142,6 +143,8 @@ class FakeOrder:
             if self.save_works:
                 self.saved += 1
                 self.dirty = False
+                if self.once_saved:
+                    self.ready, self.deliver_by = self.once_saved
         elif px == I.ORDER_CLOSE:
             if self.dirty:
                 self.asked = "Do you want to discard your changes?"
@@ -336,6 +339,71 @@ def test_this_very_update_already_in_counts_as_done():
     assert "has this update already" in said and o.saved == 0 and o.typed.count("05/11/26 08:00 - Sam") == 0
 
 
+DELIVER_ONLY = {"deliver": "18/11/26 09:00-11:00", "comments": "18/11/26 09:00 - Sam", "veh": "rigid",
+                "services": {"HIAB": True, "REAR STEER": False, "PTS": False}}
+
+
+def test_a_collection_left_after_the_new_delivery_moves_to_the_day_before():
+    o = FakeOrder(ready="19/11/26 08:00", deliver_by="19/11/26 16:46", have=("HIAB",))   # a Wednesday's delivery
+    o.once_saved = ("17/11/26 08:00", "18/11/26 11:00")
+    said = _items(o).update(o.ref, DELIVER_ONLY)
+    dated = [t for t in o.typed if "/" in t]
+    assert dated[:2] == ["17/11/26", "17/11/26"] and dated[2] == "18/11/26"     # its dates first, and only its dates
+    assert "08:00" not in o.typed
+    assert "collection moved to 17/11/26 (it was 19/11/26 08:00" in said
+
+
+def test_a_monday_delivery_pulled_forward_collects_friday_with_storage():
+    s = dict(DELIVER_ONLY, deliver="16/11/26 09:00-11:00", comments="16/11/26 09:00 - Sam")
+    o = FakeOrder(ready="17/11/26 08:00", deliver_by="17/11/26 16:00", have=("HIAB",))
+    o.once_saved = ("13/11/26 08:00", "16/11/26 11:00")
+    _items(o).update(o.ref, s)
+    assert "13/11/26" in o.typed and "STORAGE" in o.typed and "2" in [str(t) for t in o.typed]
+
+
+def test_a_collection_that_cant_move_by_the_rule_stops_with_nothing_typed():
+    s = dict(DELIVER_ONLY, deliver="15/11/26 09:00-11:00")               # a Sunday's: the day before is a Saturday
+    o = FakeOrder(ready="16/11/26 08:00", deliver_by="16/11/26 16:00", have=("HIAB",))
+    try:
+        _items(o).update(o.ref, s)
+        raise AssertionError("should have stopped")
+    except I.Stop as e:
+        assert "Saturday" in str(e)
+    assert o.typed == [o.ref]                                            # only its search
+
+
+def test_a_collection_already_before_the_delivery_is_left_alone():
+    o = FakeOrder(ready="17/11/26 08:00", deliver_by="19/11/26 16:46", have=("HIAB",))
+    o.once_saved = ("17/11/26 08:00", "18/11/26 11:00")
+    said = _items(o).update(o.ref, DELIVER_ONLY)
+    assert [t for t in o.typed if "/" in t][0] == "18/11/26" and "collection moved" not in said
+
+
+def test_a_plan_with_the_collection_after_the_delivery_types_nothing():
+    o = FakeOrder(ready="17/11/26 08:00", deliver_by="19/11/26 16:46", have=("HIAB",))
+    try:
+        _items(o).update(o.ref, dict(DELIVER_ONLY, collect="19/11/26 08:00-16:00"))
+        raise AssertionError("should have stopped")
+    except I.Stop as e:
+        assert "isn't before the delivery" in str(e)
+    assert o.typed == [o.ref]
+
+
+def test_going_later_types_the_delivery_first():
+    o = _updated()
+    o.ready, o.deliver_by = "01/11/26 08:00", "02/11/26 12:00"
+    o.once_saved = ("04/11/26 08:00", "05/11/26 12:00")
+    _items(o).update(o.ref, SET)
+    assert [t for t in o.typed if "/" in t][0] == "05/11/26"
+
+
+def test_the_same_comment_with_the_dates_not_kept_is_typed_again_not_ticked():
+    o = FakeOrder(ready="17/11/26 08:00", deliver_by="19/11/26 16:46", have=("HIAB",), comment="18/11/26 09:00 - Sam", veh="rigid")
+    o.once_saved = ("17/11/26 08:00", "18/11/26 11:00")
+    said = _items(o).update(o.ref, DELIVER_ONLY)
+    assert "has this update already" not in said and o.saved == 1 and "18/11/26" in o.typed
+
+
 def test_times_that_dont_read_back_are_said():
     o = FakeOrder(ready="04/11/26 09:00", deliver_by="05/11/26 12:00", have=())
     try:
@@ -348,7 +416,7 @@ def test_times_that_dont_read_back_are_said():
 def test_his_rules_stop_what_shouldnt_be_typed():
     for s, words in ((dict(SET, comments="08:00, Sam"), "No commas"),
                      (dict(SET, services={"REAR STEER": True}), "rigid never needs rear steer"),
-                     (dict(SET, collect="05/11/26 08:00-15:00", services={}, storage=2), "Storage")):
+                     (dict(SET, collect="05/11/26 07:00-15:00", services={}, storage=2), "Storage")):
         o = _updated(have=())
         try:
             _items(o).update(o.ref, s)

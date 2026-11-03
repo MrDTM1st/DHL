@@ -22,6 +22,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timedelta
 
 import ctms_book
 import ctms_orders
@@ -209,6 +210,42 @@ def ends(window):
     return f"{d1} {t1}", f"{d2} {t2}"
 
 
+def _when(text):
+    try:
+        return datetime.strptime(str(text or "").strip()[:14], "%d/%m/%y %H:%M")
+    except ValueError:
+        return None
+
+
+def collection_fix(ref, s, line):
+    """The collection has to come before the delivery, or CTMS doesn't keep the dates (his 03/11, 6055827: delivery pulled
+    forward a day past a collection nobody touched). {} when it does as it stands; else what the collection's dates move to,
+    by his rule: the day before, a Monday's on the Friday with STORAGE x2. A collection the plan itself has wrong, or one
+    that can't be told or can't be moved by the rule, stops the line with nothing typed."""
+    if not s.get("deliver"):
+        return {}
+    start = _when(ends(s["deliver"])[0])
+    if s.get("collect"):
+        if _when(ends(s["collect"])[0]) >= start:
+            raise Stop(f"{ref}: the collection ({s['collect']}) isn't before the delivery ({s['deliver']}), so nothing was typed.")
+        return {}
+    ready = _when((line or {}).get("ready_at"))
+    if ready is None:
+        raise Stop(f"{ref}: its collection couldn't be read to check it against the new delivery, so nothing was typed.")
+    if ready < start:
+        return {}
+    day = start.replace(hour=0, minute=0) - timedelta(days=1)
+    storage = 0
+    if day.weekday() == 6:
+        day -= timedelta(days=2)
+        storage = 2
+    elif day.weekday() == 5:
+        raise Stop(f"{ref}: its collection ({line['ready_at']}) is after the new delivery, and the day before is a Saturday - "
+                   "no rule for that, so nothing was typed. Do this one by hand.")
+    shown = day.strftime("%d/%m/%y")
+    return {"day": shown, "storage": storage, "was": line["ready_at"], "ready_at": f"{shown} {ready:%H:%M}"}
+
+
 def rails(s, adds):
     """Delali's rules on what an update may type - the plan keeps to them, and nothing is typed that doesn't."""
     if "," in str(s.get("comments") or ""):
@@ -284,14 +321,16 @@ class Items:
                 self.run([{"action": "anchor"}] + ctms_orders.to_orders(self.t))
         self.run(ctms_orders.card(self.t))
 
-    def open(self, ref):
+    def open(self, ref, read_line=False):
         """One line's card, proved to be that line's by its Customer Ref. A scheduled line asks "are you sure?" instead of
-        opening, and stops here."""
+        opening, and stops here. read_line: Order Summary's times for it kept first, as self.line."""
         self.to_search()
         try:
             self.run(ctms_orders.search(ref))
         except RuntimeError:
             raise Stop(f"{ref}: CTMS's search found nothing for it.")
+        if read_line:
+            self.line = summary_line(self.look(), ref)
         try:
             self.run(ctms_orders.open_line(self.t))
         except RuntimeError:
@@ -394,7 +433,9 @@ class Items:
         return next((k for k, (tpl, _) in VEH_SHOWS.items() if self.seen(tpl, VEH_BOX)), None)
 
     def update(self, ref, s, dry=False):
-        self.open(ref)
+        self.open(ref, read_line=True)
+        line = self.line
+        fix = collection_fix(ref, s, line)
         now = self.veh_now()
         self.stage("opened")
         comments = str(s.get("comments") or "")
@@ -405,9 +446,11 @@ class Items:
             if said is None:
                 raise Stop(f"{ref}: its LOC Detail comments would not read, so nothing was typed.")
             if comments and said.strip() == comments.strip():
-                self.close_quietly()           # this very update went in before: a run stopped part way, or a repeat
-                return f"{ref}: has this update already"
-            if now != "" or said.strip():
+                # this very update went in before: a run stopped part way, or a repeat - unless CTMS didn't keep its dates
+                if not s.get("deliver") or (line or {}).get("deliver_by") == ends(s["deliver"])[1]:
+                    self.close_quietly()
+                    return f"{ref}: has this update already"
+            elif now != "" or said.strip():
                 self.close_quietly()
                 there = [f"Veh Type {VEH_SHOWS[now][1] if now in VEH_SHOWS else 'set'}" if now != "" else "",
                          f"deliver comment '{said.strip()}'" if said.strip() else ""]
@@ -429,8 +472,9 @@ class Items:
         want = s.get("services") or {}
         removes = sorted((i + 1 for i, sid in enumerate(have) if sid in want and not want[sid]), reverse=True)
         adds = [code for code, on in want.items() if on and code not in have]
-        if s.get("storage") and "STORAGE" not in have:
-            adds.append(f"STORAGE:{s['storage']}")
+        storage = s.get("storage") or fix.get("storage")
+        if storage and "STORAGE" not in have:
+            adds.append(f"STORAGE:{storage}")
         wrong = rails(s, adds)
         if wrong:
             raise Stop(f"{ref}: {wrong} Nothing was typed.")
@@ -445,7 +489,14 @@ class Items:
                       dict(_key("tab"), react=True, timeout=8), _type(qty or 1), _key("tab", 0.2)]
         # the times
         steps += [_click(TAB_DETAIL, react=True, box=TAB_BODY, timeout=10)]
-        for val, y in ((s.get("collect"), COLLECT_Y), (s.get("deliver"), DELIVER_Y)):
+        if fix:                            # its dates only: the hours stay the yard's
+            for x in (TIMES_X[0], TIMES_X[2]):
+                steps += [_click((x, COLLECT_Y), after=0.15), _key("home"), _key("shift+end"), _type(fix["day"])]
+        times = [(s.get("collect"), COLLECT_Y), (s.get("deliver"), DELIVER_Y)]
+        was, new = _when((line or {}).get("deliver_by")), _when(ends(s.get("deliver"))[1])
+        if was and new and new > was:      # going later: the delivery first, so the two are never the wrong way round
+            times.reverse()
+        for val, y in times:
             if val:
                 for x, v in zip(TIMES_X, window_parts(val)):
                     steps += [_click((x, y), after=0.15), _key("home"), _key("shift+end"), _type(v)]
@@ -474,13 +525,16 @@ class Items:
         self.stage("saved")
         got = summary_line(self.look(), ref)
         c0, _ = ends(s.get("collect"))
+        c0 = c0 or fix.get("ready_at", "")
         _, d1 = ends(s.get("deliver"))
         if got is None:
             raise Stop(f"{ref}: saved, but Order Summary did not list it to check.")
         if (c0 and got["ready_at"] != c0) or (d1 and got["deliver_by"] != d1):
             raise Stop(f"{ref}: saved, but CTMS reads Ready At {got['ready_at']} / Deliver By {got['deliver_by']} - not {c0} / {d1}.")
         self.stage("checked")
-        bits = [f"collect {s['collect']}" if s.get("collect") else "", f"deliver {s['deliver']}" if s.get("deliver") else "",
+        bits = [f"collect {s['collect']}" if s.get("collect") else "",
+                f"collection moved to {fix['day']} (it was {fix['was']}, not before the delivery)" if fix else "",
+                f"deliver {s['deliver']}" if s.get("deliver") else "",
                 VEH_SHOWS[veh][1] if veh else (f"{VEH_SHOWS[s['veh']][1]} already" if s.get("veh") else ""),
                 ("+" + "+".join(c.split(":")[0] for c in adds)) if adds else "", f"-{len(removes)} service(s)" if removes else ""]
         return f"{ref}: {', '.join(x for x in bits if x)}"
