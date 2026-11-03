@@ -134,3 +134,10 @@ def test_the_to_dos_update_runs_first_and_a_hand_item_still_stops_it(monkeypatch
     monkeypatch.setattr(ctms_run, "run", lambda ids, run_id=0: {"ok": False, "said": "0 of 1 done; held, CTMS has it"})
     ok, how = book_run.run_owed([{"id": "u1", "kind": "update", "what": "Update 9100001"}])
     assert not ok and "didn't all go" in how
+
+
+def test_a_tab_pages_prefix_said_over_and_over_is_still_the_same_field():
+    # live 03/11: each visit to Order Items put "Order Items tab page " on its first Identifier once more
+    els = _card("Order Items", items=[("WHEELSETS", 8)])
+    els[3]["nm"] = "Order Items tab page Order Items tab page Order Items tab page Identifier Required"
+    assert [(i["identifier"], i["ordered"]) for i in L.items(els)] == [("WHEELSETS", 8.0)]

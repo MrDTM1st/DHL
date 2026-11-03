@@ -61,7 +61,7 @@ def same(a, b):
 
 def _name(e):
     """A field's name without the tab page it sits on ("Order Items tab page Identifier Required" -> "Identifier")."""
-    nm = re.sub(r"^.*? tab page ", "", str(e.get("nm") or "")).strip()
+    nm = re.sub(r"^.* tab page ", "", str(e.get("nm") or "")).strip()     # live 03/11: once per visit to the tab
     return re.sub(r"\s+Required$", "", nm)
 
 
