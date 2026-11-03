@@ -666,6 +666,10 @@ def book(job, R=None, now=None):
     made = [t for t in trips if t.get("status") == "ACCEPTED"]
     said = [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in {payload.get('seconds')} seconds"
             + (f" (cost {made[0]['cost']}, revenue {made[0]['revenue']})" if len(made) == 1 else "") + "."]
+    for t in made:
+        if len(t.get("lines") or []) > 1:
+            said.append(f"{t['manifest']} has {len(t['lines'])} lines: {t.get('took', 1)} went on from selecting them in one go"
+                        + (f", the other {len(t['lines']) - t.get('took', 1)} by Apply to Trip." if t.get("took", 1) < len(t["lines"]) else "."))
     rec = record_of(job.get("record")) or {"orders": orders}
     if str(job["carrier"]).upper().endswith("_DH"):
         try:

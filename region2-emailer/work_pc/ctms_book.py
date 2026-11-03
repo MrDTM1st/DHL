@@ -14,10 +14,11 @@ through the Access Bridge. In order, the way he books:
   4. one line going on several vehicles: split equally through Order Summary, which brings the weight down with it
      (his rule: "whatever weight it had when it initially came into CTMS is the original weight you're supposed to be
      splitting it down to" - nothing is typed into a weight here)
-  5. each vehicle's trip: Create New Trip on its first line, the carrier, the trailer, the haulage (typed only when he
-     gave one: tier 1 comes off the matrix, DHL NOC stays 0), Create Trip, Yes once the box names the right carrier and
-     a real cost; the vehicle's other lines by Apply to Trip; Save
-  6. the order checked on the manifest in Planned Orders, set Accepted, Save, read back
+  5. each vehicle's trip: its lines selected in one go (his way 03/11: Shift-click down to the last, Ctrl-click when
+     others sit between them), Create New Trip, the carrier, the trailer, the haulage (typed only when he gave one: tier 1
+     comes off the matrix, DHL NOC stays 0), Create Trip, Yes once the box names the right carrier and a real cost; Save;
+     Planned Orders says what the trip took - a line of ours it didn't gets Apply to Trip, one that isn't ours stops it
+  6. every line checked on the manifest, set Accepted, Save, read back
 
 Anything not as expected stops there with what was done so far, and any box left open is backed out of so nothing goes
 on half made. dry runs it all but presses No at the last box, so a run can be tried with nothing booked - but CTMS keeps a
@@ -460,15 +461,49 @@ class Booking:
             raise Stop(f"{ref} went from the order well.")
         return row
 
-    def row_menu(self, row, template):
+    def row_menu(self, row, template, keep=False):
         """The row made current - shown by its colour, as a right-click works on the current record - then its menu's
-        item (the menu's place moves with the row)."""
+        item (the menu's place moves with the row). keep: it was the last of several selected, and a plain click would
+        lose the others."""
         pt = ctms_rows.point(row)
+        self.run(([] if keep else self.make_current(row)) + [{"action": "click", "screen": pt, "right": True, "after": 0.3},
+                                                             _find(self.t, template, ROW_MENU, 3, click=True, after=0.2)])
+
+    def make_current(self, row):
         x, y = row["cell"][:2]
-        self.run([{"action": "click", "screen": pt, "after": 0.2},
-                  {"action": "waitfor", "screen": [x + ctms_rows.OFFSETS["to_reg"] + 30, y + 2], "color": CURRENT_ROW, "timeout": 5},
-                  {"action": "click", "screen": pt, "right": True, "after": 0.3},
-                  _find(self.t, template, ROW_MENU, 3, click=True, after=0.2)])
+        return [{"action": "click", "screen": ctms_rows.point(row), "after": 0.2},
+                {"action": "waitfor", "screen": [x + ctms_rows.OFFSETS["to_reg"] + 30, y + 2], "color": CURRENT_ROW, "timeout": 5}]
+
+    def showing(self, refs):
+        """Those of these lines the well shows now, top down."""
+        return [r for r in self.well() if r.get("cust_ref") in refs]
+
+    def select_lines(self, refs):
+        """His way: all of a vehicle's lines selected before Create New Trip. Returns (the row for the menu, the refs
+        selected). Lines a page apart can't all be clicked: the trip then picks them up by Apply to Trip."""
+        first = self.on_screen(refs[0])
+        got = self.showing(refs)
+        if len(refs) == 1 or len(got) == len(refs):
+            pass
+        else:
+            self.page_down(self.well())
+            below = self.showing(refs)
+            if len(below) > len(got):
+                got = below
+            else:
+                first = self.on_screen(refs[0])
+                got = self.showing(refs)
+        if len(got) < 2:
+            return first, [refs[0]]
+        rows = self.well()
+        at = [i for i, r in enumerate(rows) if r.get("cust_ref") in refs]
+        steps = self.make_current(got[0])
+        if at[-1] - at[0] == len(at) - 1:
+            steps.append({"action": "click", "screen": ctms_rows.point(got[-1]), "hold": ["shift"], "after": 0.3})
+        else:
+            steps += [{"action": "click", "screen": ctms_rows.point(r), "hold": ["ctrl"], "after": 0.2} for r in got[1:]]
+        self.run(steps)
+        return got[-1], [r["cust_ref"] for r in got]
 
     def back_out(self):
         """Any box of the trip still up closed without booking, each looked for first: a click that finds its box gone lands
@@ -587,11 +622,11 @@ class Booking:
         self.run([_click(SELECT_CARRIER, after=0.1), _find(self.t, "cp-title", PAYMENT_TITLE, 8)])
         self.veh_kept = trailer
 
-    def create(self, row, carrier, trailer, haulage):
+    def create(self, row, carrier, trailer, haulage, keep=False):
         """Create New Trip for this row, up to the manifest. Returns {"manifest", "carrier", "revenue", "cost"} - on a
         dry run the box's figures, the last box answered No."""
         before = manifests(self.els)
-        self.row_menu(row, "wm-create-trip")
+        self.row_menu(row, "wm-create-trip", keep=keep)
         self.run([_find(self.t, "sc-title", CARRIER_TITLE, 10)])
         self.carrier(carrier, trailer)
         self.stage("the carrier")
@@ -623,13 +658,19 @@ class Booking:
         raise Stop("The trip was confirmed and saved, but no new manifest showed on the tree - look at Planning. "
                    "Pressing Book again would not make another: the line has gone from the well.")
 
-    def check_order(self, manifest, ref):
-        """Planned Orders: the manifest's order is the one meant."""
+    def planned(self):
+        """The lines Planned Orders shows on the manifest just made."""
         self.run([_click(ORDERS_BUTTON, after=0.9)])
         self.look()
         self.run([_click(PLANNED_CLOSE, after=0.4)])
-        if ref not in planned_refs(self.els):
-            raise Stop(f"{manifest} doesn't show {ref} in Planned Orders, so it's still PLANNED: look at it before anything else.")
+        return planned_refs(self.els)
+
+    def check_order(self, manifest, refs):
+        """Planned Orders: the manifest's lines are the ones meant."""
+        there = self.planned()
+        for ref in refs:
+            if ref not in there:
+                raise Stop(f"{manifest} doesn't show {ref} in Planned Orders, so it's still PLANNED: look at it before anything else.")
 
     def accept(self, manifest):
         """Set Status > Accepted, its OK, Save, read back. The manifest has to be on the screen: it is the one just made."""
@@ -651,21 +692,32 @@ class Booking:
     def trip(self, refs, carrier, trailer, haulage):
         """One vehicle: its first line's new trip, the others applied to it, the check, Accepted."""
         self.carrier_window_away()         # the last vehicle's
-        row = self.on_screen(refs[0])
+        row, picked = self.select_lines(refs)
         when = {"collect": row.get("collect", ""), "deliver": row.get("deliver", "")}
-        got = self.create(row, carrier, trailer, haulage)
+        got = self.create(row, carrier, trailer, haulage, keep=len(picked) > 1)
         if self.dry:
-            self.trips.append(dict(got, lines=list(refs), status="rehearsed", **when))
+            self.trips.append(dict(got, lines=list(refs), status="rehearsed", picked=len(picked), **when))
             return
-        done = dict(got, lines=refs[:1], status="PLANNED", **when)
+        done = dict(got, lines=refs[:1], status="PLANNED", picked=len(picked), **when)
         self.trips.append(done)
-        for ref in refs[1:]:
-            self.row_menu(self.on_screen(ref), "wm-apply-trip")
-            self.run([{"action": "settle", "quiet": 0.4, "timeout": 15}, _click(PLANNING_SAVE, after=0.8)])
-            self.look()
-            done["lines"].append(ref)
+        if len(refs) > 1:
+            there = self.planned()
+            strays = sorted(there - set(refs))
+            if strays:
+                raise Stop(f"{got['manifest']} has {', '.join(strays)} on it as well as what was meant, so it's still PLANNED: "
+                           "look at it before anything else.")
+            done["lines"] = [r for r in refs if r in there] or refs[:1]
+            done["took"] = len(done["lines"])
+            left = [r for r in refs if r not in done["lines"]]
+            if left:
+                self.refresh_well()        # the well isn't live: what the trip took has to go from it first
+            for ref in left:
+                self.row_menu(self.on_screen(ref), "wm-apply-trip")
+                self.run([{"action": "settle", "quiet": 0.4, "timeout": 15}, _click(PLANNING_SAVE, after=0.8)])
+                self.look()
+                done["lines"].append(ref)
         self.stage("the trip")
-        self.check_order(got["manifest"], refs[0])
+        self.check_order(got["manifest"], refs)
         self.accept(got["manifest"])
         done["status"] = "ACCEPTED"
         self.stage("accepted")

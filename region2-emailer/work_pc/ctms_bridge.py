@@ -1301,7 +1301,8 @@ class Bridge:
                     raise RuntimeError("In CTMS's window, click a point on the picture: click --at X,Y. "
                                        "There are no numbered things to click here.")
                 detail = ctms_act.click(self.win["hwnd"], at[0], at[1], ctms_window.content_area(self.win),
-                                        double=bool(args.get("double")), right=bool(args.get("right")))
+                                        double=bool(args.get("double")), right=bool(args.get("right")),
+                                        **({"hold": args["hold"]} if args.get("hold") else {}))
             else:
                 to = self._point(args, "to", "px2")
                 if not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in (at, to)):

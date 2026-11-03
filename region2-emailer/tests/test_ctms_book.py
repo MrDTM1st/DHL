@@ -57,6 +57,9 @@ class FakeCtms:
         self.frames_extra = []
         self.status_line = ""
         self.panel = None
+        self.selection = []
+        self.honours_selecting = True   # False: CTMS's Create New Trip takes the current row alone
+        self.rows_a_page = 15
 
     # -- what the Access Bridge hands over
     def upto(self):
@@ -65,7 +68,7 @@ class FakeCtms:
 
     def rows_shown(self):
         rows = list(reversed(self.upto())) if self.reversed else self.upto()
-        return rows[self.page * 15:self.page * 15 + 15]
+        return rows[self.page * self.rows_a_page:self.page * self.rows_a_page + self.rows_a_page]
 
     def read(self):
         self.reads += 1
@@ -89,7 +92,8 @@ class FakeCtms:
                 els.append(dict(_cell(col, i, r.get(col, "")), lv=2))
         if self.panel:
             els.insert(0, {"r": "internal frame", "nm": "Planned Orders", "lv": 0, "at": [503, 513, 1006, 332]})
-            els.insert(1, {"r": "text", "nm": "Cust Ref", "v": self.panel, "lv": 2, "at": [694, 558, 160, 23]})
+            for i, ref in enumerate(self.panel):
+                els.insert(1, {"r": "text", "nm": "Cust Ref", "v": ref, "lv": 2, "at": [694, 558 + 23 * i, 160, 23]})
         if self.up == "confirm":
             els.insert(0, {"r": "internal frame", "nm": f"Confirm Create Trip Carrier  {self.carrier_picked}\nRevenue         562.62\n"
                                                         f"Cost                {self.cost}\nDo you want to continue?", "lv": 0})
@@ -134,7 +138,7 @@ class FakeCtms:
         if name == "wm-create-trip":
             assert self.current, "a row made current first"
             self.up = "carrier"
-            self.creating = self.current
+            self.creating = list(self.selection) if self.honours_selecting and self.selection else [self.current]
         elif name == "sc-title" and self.up != "carrier":
             raise RuntimeError("'sc-title' is not on the screen")
         elif name == "cp-title" and self.up != "payment":
@@ -161,7 +165,7 @@ class FakeCtms:
             for i, r in enumerate(self.rows_shown()):
                 y = Y0 + 23 * i
                 if abs(sc[1] - (y + 11)) < 12 and X0 <= sc[0] <= X0 + 100:
-                    self.current = r["cust_ref"]
+                    self.click_row(r["cust_ref"], s.get("hold") or [])
                     if s.get("double"):
                         self.card = r["cust_ref"]
                     return
@@ -202,11 +206,12 @@ class FakeCtms:
             self.next_man += 1
             self.tree[man] = "PLANNED"
             self.selected = man
-            self.trip_lines[man] = [self.creating]
-            self.well = [r for r in self.well if r["cust_ref"] != self.creating]
+            self.trip_lines[man] = list(self.creating)
+            self.well = [r for r in self.well if r["cust_ref"] not in self.creating]
+            self.selection = []
             self.status_line = f"Order 11351960 scheduled on trip: {self.sched} / {man}"
         elif px == B.ORDERS_BUTTON:
-            self.panel = (self.trip_lines.get(self.selected) or [""])[0]
+            self.panel = list(self.trip_lines.get(self.selected) or [""])
         elif px == B.PLANNED_CLOSE:
             self.panel = None
         elif px == B.PLANNING_SAVE:
@@ -220,6 +225,17 @@ class FakeCtms:
         elif px == B.ORDER_CLOSE:
             self.card = None
 
+    def click_row(self, ref, hold):
+        shown = [r["cust_ref"] for r in self.rows_shown()]
+        if "shift" in hold:
+            a, b = sorted((shown.index(self.current), shown.index(ref)))
+            self.selection = shown[a:b + 1]
+        elif "ctrl" in hold:
+            self.selection = self.selection + [ref]
+        else:
+            self.selection = [ref]
+        self.current = ref
+
     def key(self, k):
         if self.to_list and k in ("up", "down"):
             d = datetime.strptime(self.to_list, "%y%m%d") + timedelta(days=1 if k == "down" else -1)
@@ -230,6 +246,8 @@ class FakeCtms:
             self.page = 0
         elif k == "enter":
             self.sched = self.want_sched if getattr(self, "want_sched", None) else self.sched
+        elif k == "pageup":
+            self.page = max(0, self.page - 1)
         elif k == "pagedown":
             if (self.page + 1) * 15 < len(self.upto()):
                 self.page += 1
@@ -429,11 +447,73 @@ def test_an_order_the_well_hasnt_got_says_what_it_might_be():
         assert "isn't in the order well" in str(e) and "filters" in str(e)
 
 
-def test_several_lines_go_on_one_manifest_by_apply_to_trip():
-    ctms = FakeCtms([_row("9100001-1-1"), _row("9100001-2-1"), _row("9100001-3-1")])
+def _lines(n, order="9100001"):
+    return [f"{order}-{i}-1" for i in range(1, n + 1)]
+
+
+def test_seven_lines_side_by_side_go_on_one_manifest_selected_in_one_go():
+    ctms = FakeCtms([_row(r) for r in _lines(7)])
     job = _book(ctms)
-    assert len(job.trips) == 1 and job.trips[0]["lines"] == ["9100001-1-1", "9100001-2-1", "9100001-3-1"]
-    assert ctms.trip_lines["MAN-01000100"] == ["9100001-1-1", "9100001-2-1", "9100001-3-1"]
+    assert ctms.trip_lines["MAN-01000100"] == _lines(7)
+    assert job.trips[0]["lines"] == _lines(7) and job.trips[0]["took"] == 7 and job.trips[0]["status"] == "ACCEPTED"
+    held = [s for s in ctms.steps if s.get("hold")]
+    assert [s["hold"] for s in held] == [["shift"]]               # first row clicked, Shift-click on the last
+    menu = next(i for i, s in enumerate(ctms.steps) if s.get("name") == "wm-create-trip")
+    plain = [i for i, s in enumerate(ctms.steps) if s["action"] == "click" and s.get("screen") and not s.get("hold") and not s.get("right")]
+    assert not [i for i in plain if ctms.steps.index(held[0]) < i < menu]     # nothing plain after, to lose the selection
+    assert not any(s.get("name") == "wm-apply-trip" for s in ctms.steps)
+
+
+def test_other_orders_between_the_lines_are_ctrl_clicked_round():
+    well = [_row("9100001-1-1"), _row("9100002-1-1"), _row("9100001-2-1"), _row("9100001-3-1")]
+    ctms = FakeCtms(well)
+    _book(ctms)
+    assert ctms.trip_lines["MAN-01000100"] == _lines(3)
+    assert [s["hold"] for s in ctms.steps if s.get("hold")] == [["ctrl"], ["ctrl"]]
+    assert [r["cust_ref"] for r in ctms.well] == ["9100002-1-1"]
+
+
+def test_lines_ctms_wouldnt_take_from_the_selection_go_on_by_apply_to_trip():
+    ctms = FakeCtms([_row(r) for r in _lines(3)])
+    ctms.honours_selecting = False
+    job = _book(ctms)
+    assert sorted(ctms.trip_lines["MAN-01000100"]) == _lines(3)
+    assert sum(1 for s in ctms.steps if s.get("name") == "wm-apply-trip") == 2
+    assert job.trips[0]["took"] == 1 and job.trips[0]["status"] == "ACCEPTED"
+
+
+def test_lines_a_page_apart_are_picked_up_by_apply_to_trip():
+    well = [_row(f"9100009-{i}-1") for i in range(1, 15)] + [_row("9100001-1-1"), _row("9100001-2-1")]
+    ctms = FakeCtms(well)
+    job = _book(ctms)
+    assert ctms.trip_lines["MAN-01000100"] == _lines(2) and job.trips[0]["status"] == "ACCEPTED"
+    assert not [s for s in ctms.steps if s.get("hold")]
+
+
+def test_a_line_that_isnt_ours_on_the_manifest_stops_it_before_accepted():
+    ctms = FakeCtms([_row(r) for r in _lines(2)] + [_row("9100002-1-1")])
+    real = ctms.click
+
+    def stray(s):
+        real(s)
+        if tuple(s.get("px") or ()) == B.CONFIRM_YES:
+            ctms.trip_lines[ctms.selected].append("9100002-1-1")
+
+    ctms.click = stray
+    job = _job(ctms)
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert "9100002-1-1" in str(e) and "still PLANNED" in str(e)
+    assert ctms.tree["MAN-01000100"] == "PLANNED"
+
+
+def test_a_dry_run_selects_them_all_and_says_no():
+    ctms = FakeCtms([_row(r) for r in _lines(7)])
+    job = _book(ctms, dry=True)
+    assert job.trips[0]["picked"] == 7 and job.trips[0]["status"] == "rehearsed"
+    assert not ctms.tree and len(ctms.well) == 7
 
 
 def test_two_order_numbers_of_one_delivery_share_a_manifest():

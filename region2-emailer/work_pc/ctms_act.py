@@ -281,7 +281,7 @@ def _point(fx, fy, area, what="click"):
             min(bottom - 1, top + round(fy * (bottom - top))))
 
 
-def click(hwnd, fx, fy, area, double=False, right=False):
+def click(hwnd, fx, fy, area, double=False, right=False, hold=()):
     """Click CTMS at a fraction (fx, fy) of its picture - 0..1 across and down.
 
     The fraction is turned into a screen point inside `area` (CTMS's content
@@ -289,9 +289,14 @@ def click(hwnd, fx, fy, area, double=False, right=False):
     click can only land on CTMS itself. He positions nothing; this is the whole
     pointer move and button, at the one point. right=True presses the right
     button instead, which opens CTMS's right-click menu there and nothing more.
+    hold: "shift" or "ctrl" down for the press, how several rows of a list are
+    selected; all of it goes in one send, so a key can't be left held down.
     """
     if right and double:
         raise Refused("A right-click is a single press - there is no right double-click.")
+    held = [str(m).lower() for m in hold or ()]
+    if any(m not in ("shift", "ctrl") for m in held):
+        raise Refused("Only Shift or Ctrl can be held for a click.")
     x, y = _point(fx, fy, area)
     _require_front(hwnd)
     nx, ny = _absolute(x, y)
@@ -303,8 +308,10 @@ def click(hwnd, fx, fy, area, double=False, right=False):
     if double:                                  # a second press/release at the same point = a double-click
         seq += [_mouse_event(nx, ny, down | base),
                 _mouse_event(nx, ny, up | base)]
+    seq = [_vk(MOD_VK[m], False) for m in held] + seq + [_vk(MOD_VK[m], False, up=True) for m in reversed(held)]
     _send(seq)
     how = "Right-clicked" if right else "Double-clicked" if double else "Clicked"
+    how = "+".join(m.capitalize() for m in held) + " " + how.lower() if held else how
     return f"{how} CTMS at {round(float(fx) * 100)}% across, {round(float(fy) * 100)}% down"
 
 
