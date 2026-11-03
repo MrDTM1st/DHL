@@ -9,6 +9,7 @@ import MapPage from './pages/MapPage.jsx';
 import TrackerPage from './pages/TrackerPage.jsx';
 import Notifications from './pages/Notifications.jsx';
 import CtmsPage from './pages/CtmsPage.jsx';
+import SettingsPage from './pages/SettingsPage.jsx';
 import { useStatus, useTracker } from './hooks.js';
 import { isUrgent, within3, ordLabel, dueText, stamp, answerText, emailedBack } from './lib/orders.js';
 import * as api from './api.js';
@@ -413,7 +414,9 @@ export default function App() {
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
         )}
         {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} todo={panel.ctms_todo || []}
-          plan={panel.ctms_plan || []} />}
+          plan={panel.ctms_plan || []} onSettings={() => setPage('settings')} />}
+        {page === 'settings' && <SettingsPage panel={panel} status={status} agentOnline={agentOnline}
+          onCommand={onCommand} onAuthFail={onAuthFail} pushToast={pushToast} />}
         {selectedRecord && (
           <Drawer record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); setPhoneFor(null); }}

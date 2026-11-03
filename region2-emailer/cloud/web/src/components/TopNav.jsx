@@ -38,6 +38,9 @@ export default function TopNav({ page, setPage, unread, agentOnline, agentText, 
           <span className="pdot" /><span className="ptext">{agentText}</span>
         </div>
         <div className="clock mono">{clock}</div>
+        {/* Settings, kept out of the way (his ask 03/11): updating the two PCs */}
+        <button className={'bell gearbtn' + (page === 'settings' ? ' active' : '')} onClick={() => setPage('settings')}
+          title="Settings" aria-label="Settings">{I.gear}</button>
         <button className={'bell' + (bellOpen ? ' active' : '')} onClick={onBell} title="Notifications">
           {I.bell}{unread > 0 && <span className="badge">{unread}</span>}
         </button>
