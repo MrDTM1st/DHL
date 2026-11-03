@@ -226,3 +226,18 @@ export async function ctmsControl(on, minutes) {
   if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
   return d;
 }
+
+// ---- work mail channel (Claude's drafts waiting for his OK) ----
+export const mailPending = () => getJSON('/api/mail/pending');
+export async function mailApprove(id, ok) {
+  const r = await req('/api/mail/approve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ok }),
+  });
+  return r.json();
+}
+export async function mailControl(on) {
+  const r = await req('/api/mail/control', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }),
+  });
+  return r.json();
+}

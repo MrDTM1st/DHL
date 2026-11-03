@@ -10,6 +10,7 @@ the control plane - nothing connects in to this PC.
 """
 import sys, time, json, subprocess, os, threading, socket, re
 import urllib.request
+import urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8787"
@@ -897,10 +898,62 @@ class BackgroundJobs:
                        else "Automatic chasers ran.", tail(out, 18))
 
 
+
+def _mail_answer(cmd):
+    """Run one mail command (mail_ops.py, its own process: Outlook's COM stays
+    out of this thread) and return (ok, result). The verdict is mail_ops's
+    MAIL_RESULT line - no line means it died, which is a failure."""
+    try:
+        proc = subprocess.run([sys.executable, "mail_ops.py"], cwd=HERE, input=json.dumps(cmd),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=180, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        out = proc.stdout or ""
+    except subprocess.TimeoutExpired:
+        return False, {"error": "Outlook took more than 3 minutes - is it frozen?"}
+    for line in reversed(out.splitlines()):
+        if line.startswith("MAIL_RESULT "):
+            try:
+                got = json.loads(line[len("MAIL_RESULT "):])
+                return bool(got.get("ok")), got.get("result") or {}
+            except ValueError:
+                break
+    return False, {"error": "mail_ops.py gave no answer: " + tail((out or "") + (proc.stderr or ""), 4)}
+
+
+def mail_worker():
+    """The cloud's work-mail channel (/api/mail/*): Claude's searches, reads and
+    drafts, and the sends Delali approved on the dashboard. A thread of its own
+    so a mail look-up never waits behind a ten-minute extract in the main loop."""
+    while True:
+        try:
+            cmd = _req("/api/mail/next?wait=20", timeout=35)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:          # a dashboard without the mail channel yet
+                time.sleep(300)
+            else:
+                time.sleep(10)
+            continue
+        except Exception:
+            time.sleep(5)
+            continue
+        if not cmd or not cmd.get("id"):
+            continue
+        ok, res = _mail_answer(cmd)
+        print(f"mail: {cmd.get('action')} #{cmd.get('id')} -> {'ok' if ok else res.get('error', 'failed')}")
+        for _ in range(3):
+            try:
+                _req("/api/mail/result", {"id": cmd["id"], "ok": ok, "result": res}, timeout=30)
+                break
+            except Exception:
+                time.sleep(3)
+
+
 def main():
     _lock = single_instance()   # noqa: F841 - held for process lifetime
     print(f"Agent polling {BASE} every {POLL_SECONDS}s. Ctrl+C to stop.")
     threading.Thread(target=heartbeat, daemon=True).start()
+    if not IS_LOCAL:                # work mail rides on the cloud dashboard only
+        threading.Thread(target=mail_worker, daemon=True).start()
     report("idle", "Agent connected.")
     push_tracker()
     push_waitlist()

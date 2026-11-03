@@ -141,6 +141,84 @@ _ctms = {
 _ctms_cv = threading.Condition(_lock)
 
 
+# ---- Work mail channel (Outlook on the home PC) ---------------------------
+# Lets a Claude session (outlook_remote.py, holding AGENT_KEY) search, read and
+# draft in the DHL mailbox through the home PC's Outlook - and SEND only what
+# Delali approves on the dashboard. Its own small queue, NOT /api/next: that
+# queue drives the dashboard's state card, and a mailbox search must neither
+# show up there nor wait behind a ten-minute extract run.
+#
+# Who may do what:
+#   Claude (AGENT_KEY)     search / read / folders / draft, and "send" - which
+#                          only DRAFTS the message and puts it on the approval
+#                          list. It can never queue the real send itself.
+#   the dashboard (DASH)   approve or refuse a send (only then is send_draft
+#                          queued, carrying the fingerprint of what was shown);
+#                          switch the whole channel off and on
+#   the home PC (AGENT)    pulls the commands (/api/mail/next) and answers them
+# Everything is in memory: mail text passes through and is dropped (results
+# after _MAIL_KEEP seconds, the newest _MAIL_MAX_RESULTS only).
+MAIL_CLAUDE = ("search", "read", "folders", "draft", "send")
+_MAIL_TTL = 120              # an unclaimed command expires: the home PC is away
+_MAIL_KEEP = 600             # a result is held this long for its asker
+_MAIL_MAX_RESULTS = 30
+_MAIL_MAX_RESULT_BYTES = 3_000_000
+_MAIL_MAX_PENDING = 20
+_MAIL_MAX_WAIT = 20
+_mail = {
+    "on": os.environ.get("MAIL_CHANNEL", "on").strip().lower() not in ("off", "0", "no", "false"),
+    "queue": [],
+    "next_id": int(time.time()),
+    "results": {},           # id -> {done, ok, result, ts, action, by}
+    "pending": [],           # sends waiting for his OK: {id, cmd, draft..., state, at, ts}
+    "seen": 0.0,             # the home PC last asked for mail work
+}
+_mail_cv = threading.Condition(_lock)
+
+
+def _mail_sweep_locked(now=None):
+    now = now or time.time()
+    keep = []
+    for c in _mail["queue"]:
+        if now - c["queued_at"] > _MAIL_TTL:
+            _mail["results"][c["id"]] = {"done": True, "ok": False, "ts": now, "action": c["action"],
+                                         "by": c["by"], "result": {"error": "The home PC did not pick this up "
+                                                                   f"within {_MAIL_TTL}s - is it on, and the desk running?"}}
+            if c["action"] == "send_draft":
+                for p in _mail["pending"]:
+                    if p["id"] == c["args"].get("pending"):
+                        p["state"], p["said"] = "failed", "the home PC did not pick the send up in time - nothing sent"
+        else:
+            keep.append(c)
+    _mail["queue"] = keep
+    old = [k for k, r in _mail["results"].items() if r.get("done") and now - r["ts"] > _MAIL_KEEP]
+    for k in old:
+        _mail["results"].pop(k, None)
+    while len(_mail["results"]) > _MAIL_MAX_RESULTS:
+        _mail["results"].pop(min(_mail["results"]))
+    # decided approvals drop off after a day; undecided ones stay until he decides
+    _mail["pending"] = [p for p in _mail["pending"]
+                        if p["state"] in ("waiting", "sending") or now - p["ts"] < 86400]
+
+
+def _mail_queue_locked(action, args, by):
+    _mail["next_id"] += 1
+    cid = _mail["next_id"]
+    _mail["queue"].append({"id": cid, "action": action, "args": args, "by": by, "queued_at": time.time()})
+    _mail["results"][cid] = {"done": False, "ts": time.time(), "action": action, "by": by}
+    _mail_cv.notify_all()
+    return cid
+
+
+def _mail_online():
+    return time.time() - _mail["seen"] < 45
+
+
+def _mail_pending_view(p):
+    return {k: p.get(k) for k in ("id", "state", "said", "at", "to", "cc", "bcc", "subject", "body",
+                                  "attachments", "reply_to", "why")}
+
+
 def _ctms_online():
     # The bridge checks in every 1-10s (a check-in is held open while it waits
     # for work), and capturing a heavy page holds it for several seconds
@@ -2361,6 +2439,172 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         return self._json(404, {"error": "not found"})
 
+    # ---- Work mail channel (see _mail above) ----
+    def _mail_get(self):
+        from urllib.parse import parse_qs
+        path, _, query = self.path.partition("?")
+        q = parse_qs(query)
+        if path == "/api/mail/status":
+            if not (self._is_dash() or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                _mail_sweep_locked()
+                now = time.time()
+                return self._json(200, {
+                    "on": _mail["on"], "home_pc": _mail_online(),
+                    "seen_ago": int(now - _mail["seen"]) if _mail["seen"] else None,
+                    "queued": [{"id": c["id"], "action": c["action"], "age": int(now - c["queued_at"])}
+                               for c in _mail["queue"]],
+                    "pending": [_mail_pending_view(p) for p in _mail["pending"]],
+                })
+        if path == "/api/mail/pending":
+            if not (self._is_dash() or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                _mail_sweep_locked()
+                return self._json(200, {"on": _mail["on"], "home_pc": _mail_online(),
+                                        "pending": [_mail_pending_view(p) for p in _mail["pending"]]})
+        if path == "/api/mail/result":
+            if not (self._is_dash() or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            try:
+                cid = int((q.get("id") or ["0"])[0])
+                wait = min(_MAIL_MAX_WAIT, max(0.0, float((q.get("wait") or ["0"])[0])))
+            except ValueError:
+                return self._json(400, {"error": "id and wait are numbers"})
+            end = time.time() + wait
+            with _lock:
+                while True:
+                    _mail_sweep_locked()
+                    r = _mail["results"].get(cid)
+                    if r is None:
+                        return self._json(404, {"error": "no such command (or its result has been dropped)"})
+                    if r["done"] or time.time() >= end:
+                        break
+                    _mail_cv.wait(max(0.05, end - time.time()))
+                out = {k: v for k, v in r.items() if k != "ts"}
+            return self._json(200, out)
+        if path == "/api/mail/next":
+            # the home PC asks for mail work, held open up to `wait` seconds
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            try:
+                wait = min(_MAIL_MAX_WAIT, max(0.0, float((q.get("wait") or ["0"])[0])))
+            except ValueError:
+                wait = 0.0
+            end = time.time() + wait
+            with _lock:
+                while True:
+                    _mail["seen"] = time.time()
+                    _mail_sweep_locked()
+                    if _mail["queue"]:
+                        c = _mail["queue"].pop(0)
+                        return self._json(200, {"id": c["id"], "action": c["action"], "args": c["args"]})
+                    if time.time() >= end:
+                        return self._json(200, {})
+                    _mail_cv.wait(max(0.05, end - time.time()))
+        return self._json(404, {"error": "not found"})
+
+    def _mail_post(self, data, length):
+        path = self.path.partition("?")[0]
+        if not isinstance(data, dict):
+            data = {}
+        if path == "/api/mail/command":
+            dash = self._is_dash()
+            if not (dash or self._agent_key_ok()):
+                return self._json(401, {"error": "auth"})
+            action = str(data.get("action", ""))
+            args = data.get("args") if isinstance(data.get("args"), dict) else {}
+            if action not in MAIL_CLAUDE:
+                # send_draft above all: only an approval queues that
+                return self._json(400, {"error": f"unknown mail action '{action}' - one of {', '.join(MAIL_CLAUDE)}"})
+            if length > 2_000_000:
+                return self._json(413, {"error": "too large"})
+            with _lock:
+                if not _mail["on"]:
+                    return self._json(409, {"error": "The mail channel is switched off on the dashboard."})
+                cid = _mail_queue_locked(action, args, "dashboard" if dash else "Claude")
+                online = _mail_online()
+            return self._json(200, {"ok": True, "id": cid, "home_pc": online})
+        if path == "/api/mail/result":
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            try:
+                cid = int(data.get("id"))
+            except (TypeError, ValueError):
+                return self._json(400, {"error": "id"})
+            res = data.get("result") if isinstance(data.get("result"), dict) else {}
+            if length > _MAIL_MAX_RESULT_BYTES:
+                res = {"error": "the answer was too big to pass on - narrow the search or read fewer messages"}
+                data["ok"] = False
+            ok = bool(data.get("ok"))
+            with _lock:
+                r = _mail["results"].get(cid)
+                if r is None:
+                    return self._json(200, {"ok": True, "late": True})
+                r.update(done=True, ok=ok, result=res, ts=time.time())
+                if r["action"] == "send" and ok and res.get("id"):
+                    # Claude's send: drafted in Outlook - now it waits for him
+                    pid = cid
+                    _mail["pending"].append({
+                        "id": pid, "state": "waiting", "said": "", "at": datetime.now().strftime("%d/%m %H:%M"),
+                        "ts": time.time(), "entry_id": res["id"], "fingerprint": res.get("fingerprint", ""),
+                        "to": res.get("to", ""), "cc": res.get("cc", ""), "bcc": res.get("bcc", ""),
+                        "subject": res.get("subject", ""), "body": str(res.get("body", ""))[:20000],
+                        "attachments": res.get("attachments") or [], "reply_to": res.get("reply_to") or "",
+                        "why": str((res.get("why") or ""))[:500]})
+                    while sum(1 for p in _mail["pending"] if p["state"] == "waiting") > _MAIL_MAX_PENDING:
+                        oldest = next(p for p in _mail["pending"] if p["state"] == "waiting")
+                        oldest.update(state="expired", said="too many waiting - left in Outlook Drafts, not sent")
+                    res["approval"] = pid
+                    res["waiting_for"] = "Delali's OK on the dashboard"
+                if r["action"] == "send_draft":
+                    for p in _mail["pending"]:
+                        if p["id"] == r.get("pending"):
+                            p["state"] = "sent" if ok else "failed"
+                            p["said"] = res.get("said") or res.get("error") or ""
+                            p["ts"] = time.time()
+                _mail_cv.notify_all()
+            return self._json(200, {"ok": True})
+        if path == "/api/mail/approve":
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            try:
+                pid = int(data.get("id"))
+            except (TypeError, ValueError):
+                return self._json(400, {"error": "id"})
+            with _lock:
+                p = next((x for x in _mail["pending"] if x["id"] == pid), None)
+                if p is None:
+                    return self._json(404, {"error": "no such send waiting"})
+                if p["state"] != "waiting":
+                    return self._json(409, {"error": f"already {p['state']}"})
+                p["ts"] = time.time()
+                if not data.get("ok"):
+                    p.update(state="refused", said="not sent - left in Outlook Drafts")
+                    _mail_cv.notify_all()
+                    return self._json(200, {"ok": True, "state": "refused"})
+                p.update(state="sending", said="")
+                cid = _mail_queue_locked("send_draft", {"id": p["entry_id"], "fingerprint": p["fingerprint"],
+                                                        "pending": pid}, "dashboard")
+                _mail["results"][cid]["pending"] = pid
+            return self._json(200, {"ok": True, "state": "sending", "command": cid})
+        if path == "/api/mail/control":
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                _mail["on"] = bool(data.get("on"))
+                if not _mail["on"]:
+                    # what Claude queued goes; an approved send already on its way stays
+                    now = time.time()
+                    for c in [c for c in _mail["queue"] if c["action"] != "send_draft"]:
+                        _mail["results"][c["id"]] = {"done": True, "ok": False, "ts": now, "action": c["action"],
+                                                     "by": c["by"], "result": {"error": "the mail channel was switched off"}}
+                    _mail["queue"] = [c for c in _mail["queue"] if c["action"] == "send_draft"]
+                    _mail_cv.notify_all()
+            return self._json(200, {"ok": True, "on": _mail["on"]})
+        return self._json(404, {"error": "not found"})
+
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
             body = _index_bytes()
@@ -2392,6 +2636,7 @@ class Handler(BaseHTTPRequestHandler):
                 out["dropped"] = list(_dropped)
                 out["panel"] = _panel
                 out["ctms_online"] = _ctms_online()
+                out["mail_pending"] = sum(1 for p in _mail["pending"] if p["state"] == "waiting")
             self._json(200, out)
         elif self.path == "/api/next":
             seen_before = _agent_seen
@@ -2450,6 +2695,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "files": True, "ctms_setup": os.path.isfile(_SETUP_TEMPLATE)})
         elif self.path.startswith("/api/ctms/"):
             self._ctms_get()
+        elif self.path.startswith("/api/mail/"):
+            self._mail_get()
         else:
             self._json(404, {"error": "not found"})
 
@@ -2468,6 +2715,8 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
         if self.path.startswith("/api/ctms/"):
             self._ctms_post(data, length)
+        elif self.path.startswith("/api/mail/"):
+            self._mail_post(data, length)
         elif self.path == "/api/command":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
