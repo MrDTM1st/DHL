@@ -203,6 +203,53 @@ anything else restarts up to three times in ten minutes. Verified end to end on
 the home PC: good update, update that does not compile (refused), update that
 crashes on start (rolled back by itself).
 
+### The booking journal and Book approved (03/11)
+
+"Let's build the most robust booking automation": hardening first, then booking many at once.
+
+- **Never booked twice.** `book_journal.py` writes every press of Book down before the work PC is asked and after
+  every step. A press on an order it has booked finishes what is left (DigiHaul row, Parcel Pass, site email, filing,
+  off the map) and asks CTMS nothing. A manifest left short of ACCEPTED, or an ask nobody can say the outcome of, is
+  held for him (the Dashboard's "bookings not finished" card: Clear once he has looked in CTMS).
+- **A lost answer is found again.** The command's id is kept as soon as the dashboard numbers it; the work PC keeps its
+  own record of each Book's outcome (`work_pc/book_record.py`, `_book_journal.jsonl`) before it answers, and
+  `book_recall` (a look, no switch) hands it back. The dashboard's own copy is tried first.
+- **Failed steps come round again.** The local agent's `book_retry` (every 3 min) retries Outlook's steps up to three
+  times, 3 then 10 minutes apart, looking in Sent Items first so an email that went is never sent twice. The DigiHaul
+  row is typed on the work PC, so it waits for his Retry (a press of Book, which switches acting on). Filing waits
+  for the site email, so a retry still finds the thread.
+- **Book approved.** The Dashboard's "ready to book" card lists only strictly ready orders (replied or phoned, nothing
+  missing, nothing amber, nothing owed on the CTMS to-do, not being finished, someone who fits). It proposes the
+  haulier already asked, else the first who fits; the trailer and vehicles by his rules; the price only for our fleet
+  (0) and tier 1 (the matrix) - a tier 2 needs his quote. His tick is also his word that the haulier agreed: nothing on
+  file records a yes. `POST /api/ctms/book_batch` arms acting for the run; `book_run.py batch` re-checks readiness,
+  books each in turn through the journal, and stops at the first that leaves CTMS needing a look (anything but booked
+  or "Nothing was booked"), Stop pressed included.
+
+### Book on the work PC: adaptive, quick, precise (03/11)
+
+His ask: "adaptability, speed, and precision ... if there are missing parts in the order lines that are crucial for
+booking in, you deal with it instead of just going right by it ... book it in under a minute" (ACCEPTED in CTMS, one
+vehicle). The screens are in `CTMS_SCREENS.md`, learned live that day.
+
+- **Speed.** One Access Bridge reader kept running (`ctms_jab.serve` / `Reader`): a read was 1.9-3.1 s, 1.5 s of it
+  the bridge finding Java again in a fresh Python; now a Planning read is the walk alone (1.4-1.8 s live, less with what
+  Book never reads left out: the manifest tree except around a trip, closed menus, the Stops and Resources pages, and
+  Planning altogether while a card is up). A drop-down's value is read through the Access Bridge's selection (live:
+  To, Sched From, the layout read for the first time). The one-shot reader is the fallback; `CTMS_JAB_ONESHOT=1` forces it.
+- **Each line put right before the trip** (`work_pc/ctms_lines.py`), its card opened once: every Order Items item the
+  Detail tab's Product Type (Edit/Delete, Identifier, Ctrl+L, the top choice); the quantity the order's (Detail Qty and
+  the item's Ordered both); the delivery type up to his band; one Save. The desk's quantity only where it is certain
+  (`book_run.quantities`); otherwise the two CTMS figures must agree or he is asked. A rehearsal says, types nothing.
+- **The CTMS to-do's update** owed for the order runs first, through the to-do's own run (`book_run.run_owed`), instead
+  of refusing the booking: times, the deliver comment, services, the Veh Type.
+- **Not in the well?** Order Summary is asked (`why_missing`), with its "up to" moved far enough ahead to list the order
+  at all: booked already, on another day, not in CTMS yet - or unscheduled on that day, when the well's filters
+  (`work_pc/ctms_filters.py`) are read, cleared the way a clean well has them, and put back after the booking however it
+  ended, each read back; what won't go back is said for him.
+- **CTMS's questions.** One nobody asked for is answered OK, else No / Cancel, never Yes, and the booking stops with its
+  words; a notice already up before the booking (live: "FRM-92220: access to system clipboard denied") is OK'd and said.
+
 ## Safety model — human-in-the-loop, staged
 
 Consistent with the toolkit's existing "draft/preview, you approve" philosophy.

@@ -36,12 +36,14 @@ Standard library only.
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -139,6 +141,16 @@ class Api:
                 ("releaseJavaObject", None, [vm, obj])):
             f = getattr(d, name)
             f.restype, f.argtypes = res, args
+        # a drop-down's picked row (03/11: Veh Type, Product, every filter read as '' - a closed list's rows are never
+        # walked, and the box's own text isn't handed over). Optional: an older DLL without them reads as before
+        self.has_selection = True
+        for name, res, args in (("getAccessibleSelectionCountFromContext", ctypes.c_int, [vm, obj]),
+                                ("getAccessibleSelectionFromContext", obj, [vm, obj, ctypes.c_int])):
+            try:
+                f = getattr(d, name)
+                f.restype, f.argtypes = res, args
+            except AttributeError:
+                self.has_selection = False
         u = self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.enum_proc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
         u.EnumWindows.argtypes = [self.enum_proc, wt.LPARAM]
@@ -183,7 +195,32 @@ class Api:
             return None
         return {"role": i.role_en_US, "name": i.name.strip(), "description": i.description.strip(),
                 "states": {s for s in i.states_en_US.split(",") if s}, "children": max(0, i.childrenCount),
-                "x": i.x, "y": i.y, "w": i.width, "h": i.height, "text": bool(i.accessibleText)}
+                "x": i.x, "y": i.y, "w": i.width, "h": i.height, "text": bool(i.accessibleText),
+                "selection": bool(i.accessibleSelection)}
+
+    def picked(self, vm, ac, inside=None):
+        """The name of the row a drop-down has picked: through the box's own selection, else its list's - None when
+        neither says. inside: the box's list, when the box itself hands over no selection."""
+        if not self.has_selection:
+            return None
+        for holder in (ac, inside):
+            if not holder:
+                continue
+            try:
+                if self.dll.getAccessibleSelectionCountFromContext(vm, holder) < 1:
+                    continue
+                row = self.dll.getAccessibleSelectionFromContext(vm, holder, 0)
+            except Exception:
+                continue
+            if not row:
+                continue
+            try:
+                got = self.info(vm, row)
+            finally:
+                self.release(vm, row)
+            if got and got["name"]:
+                return got["name"]
+        return None
 
     def child(self, vm, ac, k):
         return self.dll.getAccessibleChildFromContext(vm, ac, k) or 0
@@ -265,6 +302,10 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
                 v = api.text(vm, ac, VALUE_MAX)
                 if v is not None:
                     e["v"] = v
+        if role == "combo box" and not secret and not e.get("v"):
+            v = _combo_value(api, vm, ac, i)
+            if v:
+                e["v"] = v[:200]
         st = flags(i["states"], role)
         if st:
             e["st"] = st
@@ -273,8 +314,12 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         if "focused" in i["states"] and ctx["focus"] is None:
             ctx["focus"] = e["n"]
         below = level + 1
-    if role == "internal frame" and ctx.get("skip") and name.startswith(ctx["skip"]):
+    if role in ("internal frame", "page tab") and ctx.get("skip") and name.startswith(ctx["skip"]):
         return                                  # named, so it's known to be up, but what's in it isn't wanted this time
+    if role == "menu" and "menu" in ctx.get("skip_roles", ()) and not ({"expanded", "selected"} & i["states"]):
+        return                                  # a closed menu: its items are off the screen (70 of a Planning read)
+    if role in ctx.get("skip_roles", ()) and role != "menu":
+        return                                  # Planning's manifest tree: 112 rows on 03/11, wanted only after a trip
     if role == "list" and (i["w"] <= 0 or i["h"] <= 0):
         return                                  # a drop-down that isn't open: none of its rows are on the screen, and
                                                 # one of Planning's holds thousands - most of a read's seven seconds (02/11)
@@ -292,9 +337,28 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         ctx["partial"] = True                   # that one thing read in part - the rest of the screen still read
 
 
-def read(hwnds, api=None, skip=()):
+def _combo_value(api, vm, ac, i):
+    """What a drop-down shows. Its picked row by the Access Bridge's selection - the box's own, else its list's (the
+    box's first child); a Forms box that holds its words in a text child (Planning's Sched) gives them there."""
+    if not hasattr(api, "picked"):
+        return None
+    first = api.child(vm, ac, 0) if i.get("children") else 0
+    try:
+        got = api.picked(vm, ac if i.get("selection") else None, first)
+        if got is None and first:
+            k = api.info(vm, first)
+            if k and k["role"] == "text" and k.get("text"):
+                got = api.text(vm, first, 200) or None
+        return got
+    finally:
+        if first:
+            api.release(vm, first)
+
+
+def read(hwnds, api=None, skip=(), skip_roles=()):
     """Everything worth naming in CTMS's Java windows - the reader's whole answer. skip: the windows, by how their names
-    start, whose insides aren't wanted: a read of an order's card has no need of Planning's grid behind it."""
+    start, whose insides aren't wanted: a read of an order's card has no need of Planning's grid behind it. skip_roles:
+    things whose insides aren't wanted this time, by role - "tree", Planning's manifests, when only the well is."""
     t0 = time.time()
     api = api or Api()
     java = [h for h in hwnds if api.java_window(h)]
@@ -305,7 +369,8 @@ def read(hwnds, api=None, skip=()):
         java += [h for h in api.top_windows() if h not in java and api.pid(h) in pids and api.java_window(h)]
     out = {"ok": True, "java_windows": len(java), "windows": [], "elements": [],
            "reader": f"{struct.calcsize('P') * 8}-bit Python {sys.version.split()[0]}"}
-    ctx = {"visited": 0, "cut": False, "partial": False, "deadline": t0 + SECONDS, "focus": None, "skip": tuple(skip)}
+    ctx = {"visited": 0, "cut": False, "partial": False, "deadline": t0 + SECONDS, "focus": None, "skip": tuple(skip),
+           "skip_roles": tuple(skip_roles)}
     tops = []
     try:
         for h in java:
@@ -333,6 +398,40 @@ def read(hwnds, api=None, skip=()):
     out.update(cut=ctx["cut"], partial=ctx["partial"], focus=ctx["focus"], visited=ctx["visited"],
                took=round(time.time() - t0, 2))
     return out
+
+
+def serve(stdin=None, stdout=None, api=None):
+    """The reader kept open (03/11: 1.5 s of every read was the Access Bridge finding Java again, in a fresh Python -
+    12 to 14 times a booking). One request a line on stdin - {"hwnds": [...], "skip": [...], "skip_roles": [...]} - one
+    answer a line on stdout. Windows' messages keep being pumped between requests, on this thread, while another
+    waits on stdin: the Access Bridge talks through them, and a Java started while nobody pumps would wait on us."""
+    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    api = api or Api()
+    asks = queue.Queue()
+
+    def listen():
+        for line in stdin:
+            asks.put(line)
+        asks.put(None)                          # the bridge went: so does the reader
+    threading.Thread(target=listen, daemon=True).start()
+    stdout.write(json.dumps({"ok": True, "ready": True}) + "\n")
+    stdout.flush()
+    while True:
+        api.pump(0.02)
+        try:
+            line = asks.get(timeout=0.03)
+        except queue.Empty:
+            continue
+        if line is None:
+            return
+        try:
+            ask = json.loads(line)
+            out = read([int(h) for h in ask.get("hwnds") or []], api=api, skip=ask.get("skip") or (),
+                       skip_roles=ask.get("skip_roles") or ())
+        except Exception as e:
+            out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        stdout.write(json.dumps(out) + "\n")
+        stdout.flush()
 
 
 # ---- the bridge's side: runs in the bridge's own Python ----------------------------
@@ -401,24 +500,109 @@ def scrub(out):
     return out
 
 
-def read_fields(win, timeout=90, skip=()):
-    """CTMS's fields, read by the reader in its own 32-bit Python, checked again here."""
+class Reader:
+    """The 32-bit reader kept running (serve), so a read costs the walk alone. One request at a time; a reader that
+    stops answering is killed and the next read starts a new one - a slow read is never left to pile up."""
+
+    START = 20          # seconds a new reader has to say it is ready: the Access Bridge finding Java
+
+    def __init__(self, cmd, popen=subprocess.Popen):
+        self.cmd, self.popen = cmd, popen
+        self.proc, self.lines = None, None
+        self.lock = threading.Lock()
+
+    def _start(self):
+        self.proc = self.popen(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               text=True, encoding="utf-8", errors="replace", bufsize=1, cwd=HERE,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.lines = queue.Queue()
+        proc, lines = self.proc, self.lines
+
+        def pipe():
+            for ln in proc.stdout:
+                lines.put(ln)
+            lines.put(None)
+        threading.Thread(target=pipe, daemon=True).start()
+        first = self._line(self.START)
+        if not first.get("ready"):
+            raise RuntimeError(first.get("error") or "the reader did not start")
+
+    def _line(self, timeout):
+        deadline = time.time() + timeout
+        while True:
+            try:
+                ln = self.lines.get(timeout=max(0.01, deadline - time.time()))
+            except queue.Empty:
+                self.stop()
+                raise subprocess.TimeoutExpired(self.cmd, timeout)
+            if ln is None:
+                self.stop()
+                raise RuntimeError("the reader stopped")
+            if ln.startswith("{"):
+                return json.loads(ln)
+
+    def read(self, hwnds, skip=(), skip_roles=(), timeout=90):
+        with self.lock:
+            if self.proc is None or self.proc.poll() is not None:
+                self._start()
+            self.proc.stdin.write(json.dumps({"hwnds": hwnds, "skip": list(skip), "skip_roles": list(skip_roles)})
+                                  + "\n")
+            self.proc.stdin.flush()
+            return self._line(timeout)
+
+    def stop(self):
+        p, self.proc = self.proc, None
+        if p is not None:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+
+_reader = None
+ONE_SHOT = os.environ.get("CTMS_JAB_ONESHOT") == "1"    # the old way, a fresh reader per read, if this one misbehaves
+
+
+def _kept(py):
+    global _reader
+    if _reader is None or _reader.cmd[0] != py:
+        _reader = Reader([py, "-I", os.path.abspath(__file__), "serve"])
+    return _reader
+
+
+def read_fields(win, timeout=90, skip=(), skip_roles=()):
+    """CTMS's fields, read by the reader in its own 32-bit Python, checked again here. The kept reader first; if it
+    fails, a reader of its own for this read (the way every read went before 03/11), so a fault there costs speed,
+    never the read."""
     if not IS_WIN:
         raise NotReady("Reading CTMS's fields works on Windows only.")
     py = python32()
     if not py:
         raise need_python()
     hwnds = [int(win["hwnd"])] + [int(h) for h in win.get("java_hwnds") or []]
-    try:
-        r = _run([py, "-I", os.path.abspath(__file__), "fields"] + [str(h) for h in hwnds]
-                 + [f"--skip={s}" for s in skip], timeout)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"CTMS's Java did not answer the Access Bridge within {timeout}s - it may be busy "
-                           "(a search running?). Try again in a moment.")
-    lines = [ln for ln in (r.stdout or "").splitlines() if ln.startswith("{")]
-    if not lines:
-        raise RuntimeError(f"The fields reader stopped (exit {r.returncode}): {(r.stderr or '').strip()[-300:]}")
-    out = json.loads(lines[-1])
+    out = None
+    if not ONE_SHOT:
+        try:
+            out = _kept(py).read(hwnds, skip, skip_roles, timeout)
+            if out.get("ok") and not out.get("java_windows"):
+                _reader.stop()                  # a CTMS started since it began: a new reader finds its Java
+                out = None
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"CTMS's Java did not answer the Access Bridge within {timeout}s - it may be busy "
+                               "(a search running?). Try again in a moment.")
+        except Exception:
+            out = None
+    if out is None:
+        try:
+            r = _run([py, "-I", os.path.abspath(__file__), "fields"] + [str(h) for h in hwnds]
+                     + [f"--skip={s}" for s in skip] + [f"--skip-role={s}" for s in skip_roles], timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"CTMS's Java did not answer the Access Bridge within {timeout}s - it may be busy "
+                               "(a search running?). Try again in a moment.")
+        lines = [ln for ln in (r.stdout or "").splitlines() if ln.startswith("{")]
+        if not lines:
+            raise RuntimeError(f"The fields reader stopped (exit {r.returncode}): {(r.stderr or '').strip()[-300:]}")
+        out = json.loads(lines[-1])
     if not out.get("ok"):
         raise RuntimeError("The fields reader could not read CTMS: " + str(out.get("error"))[:300])
     if not out.get("java_windows"):
@@ -519,9 +703,16 @@ def setup(url=None):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "fields":
         try:
-            print(json.dumps(read([int(x) for x in sys.argv[2:] if not x.startswith("--skip=")],
-                                  skip=[x[len("--skip="):] for x in sys.argv[2:] if x.startswith("--skip=")])))
+            a = sys.argv[2:]
+            print(json.dumps(read([int(x) for x in a if not x.startswith("--")],
+                                  skip=[x[len("--skip="):] for x in a if x.startswith("--skip=")],
+                                  skip_roles=[x[len("--skip-role="):] for x in a if x.startswith("--skip-role=")])))
         except Exception as e:
             print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}))
+    elif len(sys.argv) > 1 and sys.argv[1] == "serve":
+        try:
+            serve()
+        except Exception as e:
+            print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}), flush=True)
     else:
         print(__doc__)

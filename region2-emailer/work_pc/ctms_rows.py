@@ -115,3 +115,25 @@ def merge(seen, page):
     new = [r for r in page if r["cust_ref"] not in have]
     seen.extend(new)
     return len(new)
+
+
+def question(els):
+    """A Forms question up on the screen: (its words, {its buttons' first word, lower case: element}), or None. It comes
+    as a window with an option pane straight under it. Its words sit in the window's name (Confirm Create Trip, the
+    schedule question), or in the pane and its label under a window just named "Forms" (live 03/11: "FRM-92220:
+    access to system clipboard denied") - all of them are given, so a check on its words finds them either way."""
+    window = None
+    for e in els:
+        if e.get("r") == "internal frame":
+            window = str(e.get("nm") or "")
+        elif e.get("r") == "option pane" and window is not None:
+            inside = _frame(els, window) or []
+            words = [window, str(e.get("nm") or "")] + [str(x.get("nm") or "") for x in inside if x.get("r") == "label"]
+            said = []
+            for w in words:
+                w = w.strip()
+                if w and not any(w in x for x in said) and not (w == "Forms" and len(words) > 1):
+                    said.append(w)
+            return " ".join(said) or window, {str(b.get("nm") or "").split()[0].lower(): b for b in inside
+                                              if b.get("r") == "push button" and str(b.get("nm") or "").strip()}
+    return None

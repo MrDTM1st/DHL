@@ -1,42 +1,10 @@
 import { useMemo, useState } from 'react';
 import { jobOf, RANK_LABEL } from '../lib/orders.js';
+import { TRAILERS, rankOf, defaultTrailer, defaultVehicles } from '../lib/bookQueue.js';
 
 // The brief's Book (his design 02/11): "book with who?", the price per vehicle if they're a tier 2, and the work PC books
 // it in CTMS. His press of Book it is the go-ahead for this one order. What follows the booking - the DigiHaul row for a
 // _DH carrier, the site's email, off the map - follows by itself (book_run.py).
-
-const TRAILERS = ['NR_ARTIC_FL', 'NR_60_ART_FL', 'NR_TROM_80FT', 'NR_FLAT_RIG', 'NR_R_TIP26_8', 'NR_ART_40_CT', 'NR_CS_MOF',
-  'NR_TRANSIT', 'NR_7.5T', 'NR_7.5T_TAIL', 'NR_LOW_LOAD', 'NR_BULK_SKIP', 'NR_OTHER'];
-// what a vehicle carries, as he has given them (31/10); no figure, no sum: he picks how many
-const ARTIC_HIAB_KG = 20280;
-const ARTIC_KG = 25500;
-const RIGID_HIAB_KG = 10000;
-
-const rankOf = (h) => (h.rank !== undefined ? h.rank : (h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2)));
-
-// The trailer the job goes on: the one on the order, else his rules - rails by their length, stoneblowers on the rigid
-// tipper, the rest by weight. '' when none of that says.
-function defaultTrailer(r, job) {
-  const said = String((((r.details || {}).vehicle) || {}).value || '').toUpperCase();
-  if (TRAILERS.includes(said)) return said;
-  const mats = `${r.materials || ''} ${(r.product_codes || []).join(' ')}`;
-  if (/stone\s*-?\s*blower/i.test(mats)) return 'NR_R_TIP26_8';
-  if (job.metres !== null && job.metres > 18.3) return 'NR_TROM_80FT';
-  if (job.metres !== null && job.metres > 13.6) return 'NR_60_ART_FL';
-  if (job.byWeight === 'rigid') return 'NR_FLAT_RIG';
-  if (job.byWeight === 'artic' || job.rails) return 'NR_ARTIC_FL';
-  return '';
-}
-
-// How many vehicles the weight fills, each to its maximum - with what it went on, or 1 and no reason when a maximum isn't known.
-function defaultVehicles(r, job, trailer) {
-  const hiab = ((r.details || {}).offloading || {}).value === 'HIAB';
-  const max = trailer === 'NR_FLAT_RIG' ? (hiab ? RIGID_HIAB_KG : null)
-    : trailer === 'NR_ARTIC_FL' ? (hiab ? ARTIC_HIAB_KG : ARTIC_KG) : null;
-  if (!job.kg || !max) return { n: 1, why: '' };
-  const n = Math.max(1, Math.ceil(job.kg / max));
-  return { n, why: `${Math.round(job.kg).toLocaleString('en-GB')} kg at ${max.toLocaleString('en-GB')} kg a vehicle` };
-}
 
 export default function BookForm({ record: r, hauliers, recs, run, onBook, onCancel }) {
   const job = useMemo(() => jobOf(r), [r]);
