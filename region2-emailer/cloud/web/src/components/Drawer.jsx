@@ -11,6 +11,7 @@ import { RegionBadge } from './RegionBadge.jsx';
 import CallButton from './CallButton.jsx';
 import PhoneUpdate from './PhoneUpdate.jsx';
 import BookForm from './BookForm.jsx';
+import { BookingStatus, bookingOf } from './BookingsCard.jsx';
 import { ctmsTeams, ctmsStatus } from '../api.js';
 
 // A haulier's Call buttons - the contact sheet sometimes holds two numbers in
@@ -168,7 +169,8 @@ function clearEdit(id) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUpdate, openPhone,
-  onAdhocBooked, onBook, bookRun, onBookDone, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks, nocTeams = [] }) {
+  onAdhocBooked, onBook, bookRun, onBookDone, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks, nocTeams = [],
+  todo = [], bookings = [], approved = false, onApprove, onUnapprove }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -510,7 +512,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
           <div className="drawer-acts">
             {onBook && (
               <button className={'btn drawer-act' + (booking || bookRun ? ' red' : '')} onClick={() => setBooking((v) => !v)}>
-                Book
+                {approved ? 'Book · approved' : 'Book'}
               </button>
             )}
             {site.calls[0] && (
@@ -532,8 +534,10 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
           </div>
         </div>
         <div className="drawer-b">
+          <BookingStatus b={bookingOf(r, bookings)} onCommand={onCommand} />
           {(booking || bookRun) && (
             <BookForm record={r} hauliers={hauliers} recs={recs} run={bookRun} onBook={onBook}
+              asks={asks} todo={todo} bookings={bookings} approved={approved} onApprove={onApprove} onUnapprove={onUnapprove}
               onCancel={() => { setBooking(false); if (onBookDone) onBookDone(); }} />
           )}
           {phoning && (

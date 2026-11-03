@@ -128,21 +128,11 @@ def cmd_pending(_a):
 
 
 def cmd_send(a):
+    """A draft in his DHL mailbox for HIM to send from Outlook (his 03/11: the dashboard's Work mail card went - "for
+    the work email that Claude sends, just remove that"). Nothing here ever sends."""
     r = ask("send", _draft_args(a))
-    pid = r.get("approval")
-    print(f"Drafted in Outlook and waiting for Delali's OK on the dashboard (approval #{pid}):")
+    print("Drafted in Delali's Outlook - it's in his Drafts folder for him to check and send himself:")
     print(f"  to {r.get('to')}" + (f"  cc {r['cc']}" if r.get("cc") else "") + f"\n  subject: {r.get('subject')}")
-    if not pid or not a.wait:
-        return 3
-    end = time.time() + a.wait
-    while time.time() < end:
-        s = _check(*http("GET", "/api/mail/pending"))
-        p = next((x for x in s.get("pending") or [] if x["id"] == pid), None)
-        if p and p["state"] in ("sent", "refused", "failed", "expired"):
-            print(f"{p['state']}" + (f": {p['said']}" if p.get("said") else ""))
-            return 0 if p["state"] == "sent" else 2
-        time.sleep(5)
-    print("Still waiting for his OK.")
     return 3
 
 

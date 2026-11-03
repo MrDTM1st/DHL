@@ -290,7 +290,45 @@ function dotStyle(o) {
 // line so the map stays visible; `open` lives on the map page so the list is
 // still open when you come back from a brief. On a computer it is always open
 // (the toggle is hidden there).
-export default function OrdersPanel({ records, hauliers, onSelect, selectedId, status, onCall, open, onToggle }) {
+// Book approved, at the foot of the order list (his 03/11: off the Dashboard, into the map's own booking): the orders
+// approved from their briefs, booked one after another on the work PC through the booking journal.
+const STATE_WORDS = { waiting: 'waiting', running: 'booking now', booked: 'booked', 'not booked': 'not booked', skipped: 'skipped' };
+
+function ApprovedBar({ approved, batch, onBookApproved, onUnapprove }) {
+  const going = batch && batch.state === 'running';
+  if (!approved.length && !batch) return null;
+  return (
+    <div className="approvedbar">
+      {batch && (
+        <div className="ab-run">
+          <b>{going ? 'Booking on the work PC…' : (batch.ok ? 'Approved ones booked' : 'Stopped')}</b>
+          {(batch.jobs || []).map((j, i) => (
+            <div key={i} className="ab-line">
+              <span className={'bookq-state ' + String(j.state).replace(' ', '-')}>{STATE_WORDS[j.state] || j.state}</span>
+              {' '}{(j.orders || []).join(' / ')} · {j.carrier}{(j.manifests || []).length ? ' · ' + j.manifests.join(', ') : ''}
+              {j.said && j.state !== 'booked' ? <div className="ab-said">{j.said}</div> : null}
+            </div>
+          ))}
+          {!going && batch.said && <div className="ab-said">{batch.said}</div>}
+        </div>
+      )}
+      {!going && approved.length > 0 && (
+        <>
+          <div className="ab-list">
+            {approved.map((a) => (
+              <span key={a.id} className="ab-chip">{a.label} · {a.job.carrier}
+                <button aria-label={'Take ' + a.label + ' off'} onClick={() => onUnapprove(a.id)}>×</button></span>
+            ))}
+          </div>
+          <button className="btn red block" onClick={onBookApproved}>Book {approved.length} approved</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function OrdersPanel({ records, hauliers, onSelect, selectedId, status, onCall, open, onToggle,
+  approved = [], batch = null, onBookApproved, onUnapprove }) {
   const geo = geoCache();
   const list = byDeliveryDate(records);
   // where the orders already past their delivery date start - they keep a line
@@ -314,6 +352,7 @@ export default function OrdersPanel({ records, hauliers, onSelect, selectedId, s
           <BookedCheck status={status} />
           <CtmsCheck status={status} />
         </div>
+        <ApprovedBar approved={approved} batch={batch} onBookApproved={onBookApproved} onUnapprove={onUnapprove} />
         <OrderSearch status={status} />
         <div className="parsed">
           {!list.length && (

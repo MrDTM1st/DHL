@@ -1,10 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { I } from '../icons.jsx';
 import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.js';
-import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus, mailPending, mailApprove, mailControl } from '../api.js';
+import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
-import BookingsCard from '../components/BookingsCard.jsx';
-import BookQueue from '../components/BookQueue.jsx';
 
 // ---- Holiday cover / handover card ----
 function HolidayCard({ panel, onCommand }) {
@@ -66,78 +64,6 @@ function HolidayCard({ panel, onCommand }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ---- Work mail: Claude's drafts waiting for his OK ----
-// Claude (outlook_remote.py send) can only DRAFT in the DHL mailbox; a send
-// lands here and goes out from Outlook on the home PC only when he presses
-// Send. Polls itself; shows nothing unless something is waiting or was just
-// decided. The switch turns Claude's mail access off altogether.
-function MailApprovals({ hint }) {
-  const [st, setSt] = useState(null);
-  const [open, setOpen] = useState({});
-  const [busy, setBusy] = useState(0);
-  const load = () => mailPending().then(setSt).catch(() => {});
-  useEffect(() => {
-    load();
-    const t = setInterval(load, hint ? 4000 : 10000);
-    return () => clearInterval(t);
-  }, [hint]);
-  if (!st) return null;
-  const list = (st.pending || []).filter((p) => p.state === 'waiting' || p.state === 'sending'
-    || p.state === 'sent' || p.state === 'failed').slice(-6).reverse();
-  if (!list.length && st.on) return null;
-  const decide = async (p, ok) => {
-    if (ok && !window.confirm('Send this from your DHL mailbox now?\n\nTo: ' + p.to + '\nSubject: ' + p.subject)) return;
-    setBusy(p.id);
-    try { await mailApprove(p.id, ok); } catch { /* the next poll shows it */ }
-    setBusy(0); load();
-  };
-  const toggle = async () => {
-    if (st.on && !window.confirm('Switch off Claude\'s access to your work mail? Anything it has queued is dropped.')) return;
-    try { await mailControl(!st.on); } catch { /* */ }
-    load();
-  };
-  const col = { waiting: 'var(--red)', sending: 'var(--yellow-d)', sent: 'var(--go)', failed: 'var(--red)' };
-  return (
-    <div className="card statuscard" style={{ marginBottom: 14 }}>
-      <div className="statushd" style={{ justifyContent: 'space-between' }}>
-        <span className="lbl">Work mail · Claude&rsquo;s sends</span>
-        <button className="btn" style={{ padding: '3px 10px', fontSize: 12 }} onClick={toggle}>
-          {st.on ? 'Switch off' : 'Off · switch on'}
-        </button>
-      </div>
-      {!st.home_pc && <div className="statusdetail" style={{ fontSize: 12, color: 'var(--muted)' }}>The home PC is not answering for mail right now.</div>}
-      {list.map((p) => (
-        <div key={p.id} style={{ borderTop: '1px solid var(--line, #e6e6e6)', padding: '10px 0' }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <b style={{ color: col[p.state], fontSize: 12, textTransform: 'uppercase' }}>{p.state}</b>
-            <span style={{ fontSize: 13, fontWeight: 600, overflowWrap: 'anywhere' }}>{p.subject || '(no subject)'}</span>
-            <span style={{ fontSize: 12, color: 'var(--faint)' }}>{p.at}</span>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>
-            To {p.to}{p.cc ? ' · Cc ' + p.cc : ''}{p.bcc ? ' · Bcc ' + p.bcc : ''}
-            {p.attachments && p.attachments.length ? ' · ' + p.attachments.length + ' attachment(s)' : ''}
-          </div>
-          {p.why && <div style={{ fontSize: 12, marginTop: 3 }}>Claude: {p.why}</div>}
-          {p.said && <div style={{ fontSize: 12, marginTop: 3 }}>{p.said}</div>}
-          {p.state === 'waiting' && (
-            <>
-              <button className="btn" style={{ marginTop: 6, padding: '2px 8px', fontSize: 12 }}
-                onClick={() => setOpen((o) => ({ ...o, [p.id]: !o[p.id] }))}>{open[p.id] ? 'Hide email' : 'Read email'}</button>
-              {open[p.id] && (
-                <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 320, overflow: 'auto', background: 'var(--bg2, #f6f6f6)', padding: 10, borderRadius: 8, marginTop: 6 }}>{p.body}</pre>
-              )}
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button className="btn go" disabled={busy === p.id} onClick={() => decide(p, true)}>Send</button>
-                <button className="btn" disabled={busy === p.id} onClick={() => decide(p, false)}>Don&rsquo;t send</button>
-              </div>
-            </>
-          )}
-        </div>
-      ))}
     </div>
   );
 }
@@ -585,9 +511,6 @@ export default function Dashboard({
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
 
-      <MailApprovals hint={!!(status && status.mail_pending)} />
-      <BookingsCard rows={panel && panel.bookings} onCommand={onCommand} />
-      <BookQueue records={records.concat((panel && panel.adhocs) || [])} panel={panel} />
       <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
 
       <MyWeek week={panel && panel.planner_week} />

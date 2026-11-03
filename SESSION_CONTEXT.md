@@ -242,9 +242,8 @@ python outlook_remote.py draft --to a@x --subject S --body "..." [--reply-to ID 
 python outlook_remote.py send  (same) --why "one line for Delali" [--wait 300]
 ```
 
-`send` only drafts and puts it on the dashboard's "Work mail" card; it goes out
-when Delali presses Send there, and only if the draft is unchanged since (a
-fingerprint of to/cc/bcc/subject/body/attachments). Exit 3 = waiting for him.
+`send` only drafts: it lands in his Outlook Drafts and he sends it himself from there (03/11: the dashboard's
+"Work mail" approval card was removed at his ask). Exit 3 = drafted, his to send. Tell him the draft is there.
 
 ### Finding the dashboard from a cloud session (desk_client.py)
 

@@ -73,3 +73,44 @@ export default function BookingsCard({ rows, onCommand }) {
     </div>
   );
 }
+
+// One order's booking still being finished, in its brief on the map (his 03/11: off the Dashboard, into the map's own
+// booking): what's left, Retry (a press of Book - nothing is booked twice), Done by hand, Clear.
+export function bookingOf(r, rows) {
+  const mine = new Set((r.orders || []).map((o) => String(o).replace(/\s+/g, '').toUpperCase()));
+  return (rows || []).find((b) => b.record === r.id
+    || ((b.orders || []).some((o) => mine.has(String(o).replace(/\s+/g, '').toUpperCase())) && b.date === r.delivery_date));
+}
+
+export function BookingStatus({ b, onCommand }) {
+  const [said, setSaid] = useState('');
+  if (!b) return null;
+  const retry = async () => {
+    setSaid('Retrying on the work PC…');
+    try { await ctmsBook(b.job); setSaid('Sent: what is left is being done.'); } catch (e) { setSaid(e.message); }
+  };
+  const clear = (step) => {
+    const label = step ? ((b.todo.find((t) => t.step === step) || {}).label || step) : '';
+    if (!window.confirm(step ? `Mark the ${label} as done by hand?`
+      : `Have you looked in CTMS for ${b.orders.join(' / ')}? Clear means the next press of Book books it if CTMS has nothing.`)) return;
+    onCommand({ action: 'book_clear', data: { key: b.key, ...(step ? { step } : {}) } });
+    setSaid('Noted.');
+  };
+  return (
+    <div className="phoneform bookstatus">
+      <div className="pf-head">{STATE[b.state] || b.state}{b.manifests.length ? ` · ${b.manifests.join(', ')}` : ''}</div>
+      <div className="pf-note">{b.need}</div>
+      {b.todo.length > 0 && (
+        <div className="pf-note">Left: {b.todo.map((t) => t.label + (t.said ? ` (${t.said})` : '') + (t.auto ? ', trying again' : '')).join('; ')}</div>
+      )}
+      {said && <div className="pf-note">{said}</div>}
+      <div className="pf-foot">
+        {b.state === 'booked' && b.todo.length > 0 && <button className="btn go" onClick={retry}>Retry</button>}
+        {b.state === 'booked' && b.todo.filter((t) => !t.auto || t.tries > 0).map((t) => (
+          <button key={t.step} className="btn" onClick={() => clear(t.step)}>{t.label}: done by hand</button>
+        ))}
+        {b.state !== 'booked' && <button className="btn" onClick={() => clear()}>Clear</button>}
+      </div>
+    </div>
+  );
+}

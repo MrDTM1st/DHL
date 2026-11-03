@@ -860,3 +860,12 @@ a.callbtn:hover{ color:var(--red); }
 .settings-card{ min-width:0; overflow:hidden; }
 .settings-code{ display:flex; align-items:center; gap:8px; margin-top:4px; min-width:0; }
 .settings-code code{ flex:1 1 auto; min-width:0; overflow-x:auto; white-space:nowrap; font-size:12px; padding:6px 8px; border-radius:6px; background:rgba(0,0,0,.05); }
+
+/* Book approved at the foot of the map's order list, and a booking still being finished in its brief (03/11) */
+.approvedbar{ margin:8px 12px; padding:10px; border-radius:10px; background:#fff; border:1px solid var(--line); display:grid; gap:8px; }
+.approvedbar .ab-list{ display:flex; flex-wrap:wrap; gap:6px; }
+.approvedbar .ab-chip{ display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:3px 6px 3px 9px; border-radius:99px; background:rgba(0,0,0,.05); }
+.approvedbar .ab-chip button{ border:0; background:none; cursor:pointer; font-size:14px; line-height:1; color:var(--muted); }
+.approvedbar .ab-run{ display:grid; gap:4px; font-size:12.5px; }
+.approvedbar .ab-said{ font-size:12px; color:var(--faint); overflow-wrap:anywhere; }
+.bookstatus{ border-left:3px solid var(--red); }
