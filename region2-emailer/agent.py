@@ -25,6 +25,7 @@ HEARTBEAT_SECONDS = 5
 
 sys.path.insert(0, HERE)   # local modules importable no matter the cwd
 from modules import site_matching, profiles, handover   # pure-python, no COM
+STARTED = time.time()       # an update asked for the agents to start again after this: home_update.restart_due
 CONFIG_DIR = os.path.join(HERE, "config")
 HANDOVER_PATH = os.path.join(HERE, "_handover.json")
 
@@ -538,6 +539,7 @@ def push_panel():
             "noc_teams": _noc_teams(),
             "no_address": _no_address(),
             "bookings": _bookings(),
+            "home_code": _home_code(),
         })
     except Exception:
         pass
@@ -962,6 +964,30 @@ def mail_worker():
                 time.sleep(3)
 
 
+def _restart_now(bg):
+    """The dashboard's Update the home PC asked the agents to start again on the new code, and this one isn't in the
+    middle of a timer job: a job left running would be run again by the next agent while the old one still writes."""
+    try:
+        import home_update
+        return home_update.restart_due(STARTED) and (bg is None or bg.running is None)
+    except Exception:
+        return False
+
+
+_code = {"at": 0.0, "v": {}}
+
+
+def _home_code():
+    """What the home PC runs - Settings shows it. git looked at once a minute at most."""
+    if time.time() - _code["at"] > 60:
+        try:
+            import home_update
+            _code.update(at=time.time(), v=home_update.version())
+        except Exception:
+            _code.update(at=time.time(), v={})
+    return _code["v"]
+
+
 def main():
     _lock = single_instance()   # noqa: F841 - held for process lifetime
     print(f"Agent polling {BASE} every {POLL_SECONDS}s. Ctrl+C to stop.")
@@ -993,6 +1019,10 @@ def main():
         except Exception as e:
             print(f"background jobs disabled: {e}")
     while True:
+        if _restart_now(bg):
+            report("idle", "Starting again on the home PC's new code…")
+            print("restarting on the new code (home_update)")
+            sys.exit(0)             # the supervisor starts this agent again within 20 s
         try:
             cmd = _req("/api/next")
         except Exception:
@@ -1732,6 +1762,30 @@ def main():
                 push_panel()
                 push_tracker()
                 report("done" if res["ok"] else "error", "Book approved: " + res["said"], tail(out, 12))
+            elif action == "home_update":
+                # Settings > Update the home PC (his ask 03/11): main from GitHub by fast-forward only, refused over
+                # hand edits, put back if it won't compile; then both agents start again on it once idle
+                report("running", "Updating the home PC's code from GitHub (main)…")
+                try:
+                    out = run(["home_update.py", "update"], timeout=420)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    res = {"ok": False, "said": "The update didn't finish - nothing is known to have changed.",
+                           "changed": []}
+                _code["at"] = 0.0
+                push_panel()
+                report("done" if res["ok"] else "error",
+                       "Home PC: " + res["said"] + (" The agents start again on it in a moment." if res.get("changed")
+                                                     and res["ok"] else ""), tail(out, 6))
             elif action == "book_clear":
                 # the Bookings card's Done by hand / Clear: he has looked in CTMS or done the step himself
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}

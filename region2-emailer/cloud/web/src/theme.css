@@ -697,6 +697,7 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
    coloured dot with the words in its tooltip. */
 @media (max-width:520px){
   .bell{ display:none; }
+  .bell.gearbtn{ display:flex; margin-right:0; }   /* Settings has no nav link of its own: the gear stays */
   .statuspill{ padding:7px; }
   .statuspill .ptext{ display:none; }
 }
@@ -835,3 +836,27 @@ a.callbtn:hover{ color:var(--red); }
 .bookq-state { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
 .bookq-state.booked { color: var(--go); }
 .bookq-state.not-booked, .bookq-state.skipped { color: var(--red); }
+
+/* Settings (03/11): behind the gear - the two PCs' code, and the work PC's setup */
+.gearbtn{ margin-right:6px; }
+.settings .settings-card{ padding:16px 18px; margin-bottom:14px; }
+.settings-head{ display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
+.settings-head h3{ margin:0; }
+.settings-dot{ font-size:12px; color:var(--faint); display:inline-flex; align-items:center; gap:6px; }
+.settings-dot::before{ content:''; width:8px; height:8px; border-radius:50%; background:var(--faint); }
+.settings-dot.on{ color:var(--go); }
+.settings-dot.on::before{ background:var(--go); }
+.settings-row{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; padding:10px 0; border-top:1px solid var(--line); }
+.settings-what{ min-width:0; flex:1 1 260px; }
+.settings-label{ font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; margin-bottom:2px; }
+.settings-value{ font-size:14px; overflow-wrap:anywhere; }
+.settings-muted{ font-size:13px; color:var(--faint); overflow-wrap:anywhere; }
+.settings-said{ font-size:13px; padding:8px 10px; border-radius:8px; background:var(--bg, #f6f4ee); margin:4px 0 8px; overflow-wrap:anywhere; }
+.settings-said.bad{ color:var(--red); }
+.settings-manual{ margin-top:8px; font-size:13px; }
+.settings-manual summary{ cursor:pointer; font-weight:600; padding:6px 0; }
+.settings-steps{ margin:6px 0 0; padding-left:20px; display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+.settings-steps > li{ min-width:0; }
+.settings-card{ min-width:0; overflow:hidden; }
+.settings-code{ display:flex; align-items:center; gap:8px; margin-top:4px; min-width:0; }
+.settings-code code{ flex:1 1 auto; min-width:0; overflow-x:auto; white-space:nowrap; font-size:12px; padding:6px 8px; border-radius:6px; background:rgba(0,0,0,.05); }

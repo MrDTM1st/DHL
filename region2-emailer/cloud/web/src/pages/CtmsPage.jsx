@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { I } from '../icons.jsx';
 import * as api from '../api.js';
+import { SetupPanel } from '../components/WorkPcSetup.jsx';
 
 // The CTMS page: CTMS as the work PC's bridge (work_pc/ctms_bridge.py) sees
 // it, and "Look mum, no hands" - the switch that lets the haulage desk run it.
@@ -54,65 +55,6 @@ const agoText = (s) => (s == null ? '' : s < 2 ? 'just now' : s < 60 ? Math.roun
   : s < 3600 ? Math.floor(s / 60) + ' min ago' : Math.floor(s / 3600) + ' h ago');
 const hostOf = (u) => { try { return new URL(u).host; } catch { return ''; } };
 
-const CODE_ZIP = 'https://github.com/MrDTM1st/DHL/archive/refs/heads/main.zip';
-
-// One file sets the work PC up. A web page cannot start programs on the PC
-// by itself, so this is the one double-click; after it, the bridge starts at
-// log-in (if ticked) and the Update button keeps it current.
-function SetupPanel({ onDownload }) {
-  const [allow, setAllow] = useState(true);
-  const [auto, setAuto] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const go = async () => {
-    setBusy(true);
-    try { await onDownload(allow, auto); } finally { setBusy(false); }
-  };
-  return (
-    <div className="ctms-setup">
-      <div className="ctms-sub">
-        One file sets the work PC up: it gets the code, connects it to this dashboard and starts the bridge.
-        Nothing to type. Do this on the work PC.
-      </div>
-      <label className="ctms-check">
-        <input type="checkbox" checked={allow} onChange={(e) => setAllow(e.target.checked)} />
-        Let the haulage desk run CTMS when I turn on {MODE} mode
-      </label>
-      <label className="ctms-check">
-        <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-        Start the bridge by itself when I log in
-      </label>
-      <button className="btn primary ctms-setupbtn" disabled={busy} onClick={go}>
-        {busy ? <span className="spin" /> : 'Download the setup'}
-      </button>
-      <ol className="ctms-steps">
-        <li>Open <b>CTMS bridge setup.cmd</b> from your downloads. If Windows says it protected your PC,
-          choose <b>More info</b>, then <b>Run anyway</b>.</li>
-        <li>It does the rest. Then open CTMS in your normal Edge as always - this page lights up by itself.</li>
-      </ol>
-      <div className="ctms-muted">
-        If it says it can&rsquo;t get the code, <a href={CODE_ZIP} target="_blank" rel="noreferrer">download the
-        code here</a> (it saves to Downloads) and run the setup again.
-      </div>
-      <details className="ctms-manual">
-        <summary>Or set it up by hand</summary>
-        <SetupSteps />
-      </details>
-    </div>
-  );
-}
-
-function SetupSteps() {
-  return (
-    <ol className="ctms-steps">
-      <li>On the work PC, open Command Prompt in the <span className="mono">region2-emailer\work_pc</span> folder.</li>
-      <li>Run <span className="mono">python ctms_bridge.py</span> and leave that window open.</li>
-      <li>The first time, it asks for the key you log into this dashboard with. It keeps only a key made
-        from it, which opens the bridge&rsquo;s channel and nothing else. It also asks whether the haulage
-        desk may run CTMS when you turn on {MODE} mode here.</li>
-      <li>Log into CTMS in the browser window it opens. This page lights up on its own.</li>
-    </ol>
-  );
-}
 
 // What CTMS still owes, as the desk remembers it (ctms_todo on the home PC): the notes each email and chase leaves,
 // escalations, orders to update from a site's reply, bookings. The Run button (his ask 01/11: "turn execute CTMS into
@@ -158,7 +100,7 @@ function HeldCheck({ item, c, onAnswer, busy }) {
   );
 }
 
-export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }) {
+export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], onSettings }) {
   const visible = usePageVisible();
   const [st, setSt] = useState(null);
   const [shot, setShot] = useState(null);
@@ -167,7 +109,6 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
   const [actual, setActual] = useState(false);
   const [mins, setMins] = useState(60);
   const [ctlBusy, setCtlBusy] = useState(false);
-  const [showSetup, setShowSetup] = useState(false);
   const [answering, setAnswering] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const lastRun = st && st.todo_run;
@@ -289,12 +230,6 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
     }
   };
 
-  const update = () => {
-    if (!window.confirm('Update the bridge on the work PC from GitHub (main)?\n\nIt tries the new code first, '
-      + 'restarts on it, and puts the old code back by itself if it will not start.')) return;
-    send({ action: 'update', branch: 'main' });
-  };
-
   const s = (st && st.state) || {};
   const online = !!(st && st.online);
   const everSeen = !!(st && st.seen_ago != null);
@@ -321,7 +256,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
     body = 'Last checked in ' + agoText(st.seen_ago) + '. '
       + (s.autostart ? 'It starts by itself when the work PC is on and you are logged in. '
         : 'Is it still running on the work PC? ')
-      + 'To start it again, run the setup there (Setup file, below).';
+      + 'To start it again, run the setup there (Settings > Work PC > Setup file).';
   } else if (st && !attached) {
     tone = 'warn';
     head = 'Bridge online - CTMS not open';
@@ -473,18 +408,13 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [] }
                   {s.code_at ? ' · since ' + s.code_at.replace('T', ' ').slice(0, 16) : ''}
                 </span>
                 <span className="ctms-codebtns">
-                  <button className="btn mini" disabled={!online || updating} onClick={update}
-                    title="The work PC fetches the bridge's code from GitHub (main), tries it, and restarts on it">
-                    {updating ? <span className="spin" /> : 'Update'}
-                  </button>
-                  <button className="btn mini" onClick={() => setShowSetup((v) => !v)}
-                    title="The one-file setup for the work PC - to set it up again, start it, or change your choices">
-                    Setup file
+                  {/* updating it, its setup file and the by-hand way live in Settings now (his ask 03/11) */}
+                  <button className="btn mini" onClick={onSettings} title="Update the work PC, its setup file, the code to download">
+                    {updating ? <span className="spin" /> : 'Update / setup in Settings'}
                   </button>
                 </span>
               </div>
             )}
-            {everSeen && showSetup && <SetupPanel onDownload={getSetup} />}
             {s.rolled_back && <div className="ctms-warnbox">Rolled back: {deskWords(s.rolled_back)}</div>}
           </div>
 

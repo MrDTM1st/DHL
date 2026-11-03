@@ -376,7 +376,13 @@ rail_plan{mode,week}  tracker_refresh  learn_detail{id,field,value}
 run_chasers  set_auto_chase{on}  booked_call{order}  adhoc_booked{order}
 haulier_email{email}  waitlist_release  waitlist_scan
 site_decision{data}  handover_start{data}  handover_stop
+ctms_book{...}  ctms_book_batch{jobs}  book_clear{data}  home_update
 ```
+
+**Settings (the gear, top right):** Update the home PC (`home_update`: `home_update.py` pulls main by fast-forward
+only, refuses over hand edits, puts the code back if it won't compile, then both agents restart themselves when idle
+via `_restart_agents.flag`), Update the work PC (the bridge's own `update`), the work PC's setup file, and both PCs'
+by-hand steps.
 
 ---
 
