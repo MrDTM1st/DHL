@@ -45,6 +45,12 @@ def test_a_row_with_no_manifest_above_it_is_not_where_the_list_ends():
     assert B.row_state(_sheet(above=False))["above"] is False
 
 
+def test_a_sheet_left_scrolled_sideways_means_no_telling():
+    im = _sheet()
+    ImageDraw.Draw(im).rectangle((70, B.HEAD_Y - 8, 297, B.HEAD_Y + 8), fill=B.PICKED)     # column C's heading where B's belongs
+    assert B.row_state(im) is None
+
+
 def test_the_cursor_not_plainly_on_column_b_means_no_telling():
     assert B.row_state(_sheet(picked_head=False)) is None
     assert B.row_state(_sheet(wide=False)) is None
@@ -122,6 +128,43 @@ def test_a_reply_has_to_reach_the_contact():
     assert B.reaches(["sam.smith3@example.net"], "sam.smith@example.net")                 # the order's is a letter out
     assert not B.reaches(["materials.team@example.net"], "sam.smith@example.net")
     assert B.reaches(["anyone@example.net"], "")
+
+
+def test_ourselves_and_the_dhl_road_mailbox_never_stay_on_a_site_email():
+    assert B.left_off_site("me@example.net", "me@example.net")
+    assert B.left_off_site("dhlroad@example.net", "me@example.net")
+    assert B.left_off_site("zx-dhlroad", "me@example.net")
+    assert not B.left_off_site("site@example.net", "me@example.net")
+
+
+def test_a_forwarded_request_finds_its_contact_in_the_chain_it_quotes():
+    chain = ("From: Sam Jones <Sam.Jones@example.net>\r\nTo: Pat Lee ((She,Her)) <Pat.Lee@example.net <mailto:Pat.Lee@example.net> >; "
+             "Team <team@example.net>\r\nCc: Christopher Doe <Christopher.Doe@example.net>\r\n")
+    assert B.address_in_text(chain, ["chris", "doe"]) == "christopher.doe@example.net"     # he's known by the short name
+    assert B.address_in_text(chain, ["pat", "lee"]) == "pat.lee@example.net"
+    assert B.address_in_text(chain, ["alex", "doe"]) == ""
+
+
+def test_parcel_pass_gets_the_manifest_and_the_job_and_is_never_asked_for_an_eta():
+    rec = {"site": "Example Depot", "postcode": "EN1 1AA", "collection_site": "Example Store", "collection_pc": "EN2 2BB",
+           "details": {"time": {"latest": "14:00"}, "collection_time": {"latest": "08:30"},
+                       "contact": {"name": "Sam Jones", "phone": "07700 900000"}}}
+    trip = dict(TRIP, collect="06/11/26 07:30", deliver="07/11/26 13:00")
+    text = B.pass_words("Pat", [trip], rec)
+    assert "Hi Pat," in text and "Here's the manifest number: MAN-01000001" in text
+    assert "Collection: Friday 06/11/2026 between 07:30 and 08:30, Example Store EN2 2BB" in text
+    assert "Delivery: Saturday 07/11/2026 between 13:00 and 14:00, Example Depot EN1 1AA" in text
+    assert "Site contact: Sam Jones 07700 900000" in text
+    assert "ETA" not in text
+
+
+def test_the_checks_on_parcel_pass_s_email_before_it_goes():
+    good = ["nr@passlogistics.co.uk"]
+    assert B.pass_checks("Here's the manifest number: MAN-01000001", [TRIP], good) == []
+    assert B.pass_checks("MAN-01000001", [TRIP], ["site@example.net"])
+    assert B.pass_checks("nothing", [TRIP], good)
+    assert B.pass_checks("MAN-01000001 send me the ETA", [TRIP], good)
+    assert B.pass_greeting("Pat Smith") == "Pat" and B.pass_greeting("NR") == ""
 
 
 def test_who_is_greeted():

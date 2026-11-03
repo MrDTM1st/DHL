@@ -10,8 +10,9 @@ follows from here:
      DH, the manifest number and stuff has to go on that Excel sheet"), each row looked at first - a colleague's can be
      half typed, with the manifest still empty
   4. the site's email: the manifest and the delivery's start and end times (his rule, every booking) - Reply All on the
-     order's site thread, an ad hoc's request forwarded so its sheet stays attached, never a price. Nothing to the haulier
-     or NOC: "We just let the delivery site know. The hauliers already know."
+     order's site thread, an ad hoc's request forwarded so its sheet stays attached, never a price. Nothing to the other
+     hauliers or NOC: "We just let the delivery site know. The hauliers already know." Parcel Pass is the one that hears:
+     the manifest and the job on its own quote's thread, and no asking for an ETA (his 03/11)
   5. the order off the map, its chain filed
 
 A stop at any point says what was done so far. Past the booking nothing undoes it: what couldn't be done is said, for him
@@ -42,10 +43,12 @@ BLOCKS = ("update", "booking")     # what has to go on before a booking; a note 
 GUTTER_X = 8
 ROW_TOP, ROW_END = 358, 832
 PICKED = (202, 234, 216)           # a highlighted heading
-HEAD_Y, HEAD_B, HEAD_C = 295, 150, 360
+HEAD_Y, HEAD_A, HEAD_B, HEAD_C = 295, 100, 150, 360
 CELL_B = (140, 320)
 CELLS = {"C": (332, 544), "D": (556, 669), "E": (682, 835), "F": (848, 1595), "G": (1608, 1890)}
-INTO_GRID = [230, 390]             # a cell of column B, whichever row it is
+INTO_GRID = [230, 390]             # a cell of the sheet, whichever row it is: the sheet can be left scrolled sideways
+PASS_CARRIER = "PASS_DH"
+PASS_DOMAIN = "passlogistics"
 
 
 class Stop(RuntimeError):
@@ -128,6 +131,8 @@ def row_state(im):
     row = picked_row(im)
     if not row or not _near(im.getpixel((HEAD_B, HEAD_Y)), PICKED) or _near(im.getpixel((HEAD_C, HEAD_Y)), PICKED):
         return None
+    if _near(im.getpixel((HEAD_A, HEAD_Y)), PICKED):
+        return None                    # scrolled sideways: another column's wide heading is sitting where B's belongs
     top, bottom = row
     if bottom - top < 8 or im.size[0] < CELLS["G"][1]:
         return None
@@ -164,6 +169,8 @@ def tracker_rows(R, trips, carrier, now=None, look_only=False):
     try:
         for trip in trips:
             steps = [{"action": "click", "px": INTO_GRID}, {"action": "wait", "seconds": 0.5},
+                     {"action": "key", "key": "home"}, {"action": "wait", "seconds": 0.5},     # column A, the sheet back in place
+                     {"action": "key", "key": "right"}, {"action": "wait", "seconds": 0.5},    # column B
                      {"action": "key", "key": "ctrl+down"}, {"action": "wait", "seconds": 0.9},
                      {"action": "key", "key": "down"}, {"action": "wait", "seconds": 0.9}]
             for _ in range(4):
@@ -346,9 +353,18 @@ def reaches(addresses, contact):
     return any(str(a).lower().split("@")[0].startswith(who) for a in addresses) if who else True
 
 
+def address_in_text(text, words_):
+    """The address of whoever goes by these words in a mail's text: "Name <address>", the way a quoted chain has its people."""
+    for who, a in re.findall(r"([^<>;:\r\n]*)<([\w.'+-]+@[\w-]+(?:\.[\w-]+)+)", str(text or "")):
+        if all(w in f"{who} {a}".lower() for w in words_):
+            return a.lower()
+    return ""
+
+
 def adhoc_address(src, name):
     """The delivery contact's address on an ad hoc's request - the form gives a name and a phone number, so only someone
-    on the mail itself can be emailed. "" when nobody on it goes by that name."""
+    on the mail itself can be emailed: one of its recipients, or on a colleague's forward, someone in the chain it quotes.
+    "" when nobody on it goes by that name."""
     words_ = [w.lower() for w in re.findall(r"[A-Za-z'-]{2,}", str(name or ""))]
     if not words_:
         return ""
@@ -363,7 +379,12 @@ def adhoc_address(src, name):
         said = f"{r.Name} {a}".lower()
         if "@" in a and all(w in said for w in words_):
             return a.lower()
-    return ""
+    return address_in_text(src.Body, words_)
+
+
+def left_off_site(address, ours):
+    """Who never stays on a site email: ourselves, and the DHL Road mailbox (his 03/11), whatever the chain had on it."""
+    return address == ours or "dhlroad" in address
 
 
 def checks(top, trips, got, mine):
@@ -440,11 +461,140 @@ def site_email(rec, job, trips, send=True):
     if not send_order.bind_account(m, acct):
         return False, "couldn't set the DHL account on it"
     for i, a in reversed(_addresses(m)):
-        if a == bd.DHL_SMTP.lower():
-            m.Recipients.Remove(i)       # his own reply-all: never ourselves
+        if left_off_site(a, bd.DHL_SMTP.lower()):
+            m.Recipients.Remove(i)       # his own reply-all
     got = [a for _, a in _addresses(m)]
     top = re.split(r"\n\s*(?:From:|-#-#-|________________)", str(m.Body or ""))[0]
     bad = checks(top, trips, got, haulier_addresses())
+    if bad and send:
+        return False, "; ".join(bad)
+    if not send:
+        said = f"to {got} subject {m.Subject!r} problems {bad}: {re.sub(r'(\r?\n)+', ' / ', top).strip()[:500]}"
+        m.Close(1)                       # thrown away
+        return False, said
+    m.Display(False)                     # a reply open in the reading pane refuses a plain Send
+    m.Send()
+    try:
+        ns.SendAndReceive(False)
+    except Exception:
+        pass
+    return True, "emailed " + and_list(got)
+
+
+def _between(stamp, latest):
+    """"Tuesday 03/11/2026 between 12:00 and 13:00" from the well's dd/mm/yy HH:MM and the window's end; "" with no stamp."""
+    try:
+        when = datetime.strptime(str(stamp or "").strip()[:14], "%d/%m/%y %H:%M")
+    except ValueError:
+        return ""
+    start, day = when.strftime("%H:%M"), when.strftime("%A %d/%m/%Y")
+    return f"{day} between {start} and {latest}" if str(latest or "") > start else f"{day} from {start}"
+
+
+def collection_contact(rec):
+    """The name and number on the collection end of the order's upload, which the record doesn't keep; "" without one."""
+    try:
+        import csv
+        import outbox
+        with open(outbox.path(rec["csv"]), encoding="utf-8", newline="") as f:
+            row = next(r for r in csv.reader(f) if r and r[0] == "ORDER")
+        return re.sub(r"\s+", " ", f"{row[4]} {row[5]} {row[12]}").strip()
+    except Exception:
+        return ""
+
+
+def pass_words(greet, trips, rec):
+    """What Parcel Pass is told when the job comes to them: the manifest and the job. Never asked for an ETA (his 03/11)."""
+    d = rec.get("details") or {}
+    mans = [x["manifest"] for x in trips]
+    number = f"Here's the manifest number: {mans[0]}" if len(mans) == 1 else f"Here are the manifest numbers: {and_list(mans)}"
+    lines = [f"Hi {greet or 'there'},", "", f"Thanks for covering this, sending it over now. {number}", ""]
+    collect = _between(trips[0].get("collect"), (d.get("collection_time") or {}).get("latest"))
+    deliver = _between(trips[0].get("deliver"), (d.get("time") or {}).get("latest"))
+    frm = " ".join(str(rec.get(k) or "") for k in ("collection_site", "collection_pc")).strip()
+    to = " ".join(str(rec.get(k) or "") for k in ("site", "postcode")).strip()
+    if collect:
+        lines.append(f"Collection: {collect}" + (f", {frm}" if frm else ""))
+    if deliver:
+        lines.append(f"Delivery: {deliver}" + (f", {to}" if to else ""))
+    who = collection_contact(rec)
+    if who:
+        lines.append(f"Collection contact: {who}")
+    contact = d.get("contact") or {}
+    site = " ".join(str(contact.get(k) or "") for k in ("name", "phone")).strip()
+    if site:
+        lines.append(f"Site contact: {site}")
+    return "<br>".join(lines) + "<br><br>"
+
+
+def pass_greeting(sender):
+    who = first_name(sender)
+    return "" if who.isupper() else who          # the shared mailbox's name, NR, isn't anyone's
+
+
+def pass_thread(ns, orders):
+    """The newest mail from Parcel Pass on this order (their quote), in the Inbox or filed: None when there isn't one."""
+    import build_drafts as bd
+    import file_chain
+    root = bd.dhl_store(ns)
+    best = None
+    for box in (bd.sub(root, "Inbox"), file_chain.folder(root, file_chain.DEST)):
+        if box is None:
+            continue
+        for o in orders:
+            for it in box.Items.Restrict('@SQL=("urn:schemas:httpmail:subject" LIKE \'%' + str(o).replace("'", "''") + '%\')'):
+                if PASS_DOMAIN in str(getattr(it, "SenderEmailAddress", "") or "").lower() and (best is None or _when(it) > _when(best)):
+                    best = it
+    return best
+
+
+def pass_checks(top, trips, got):
+    bad = []
+    if not got or not all(PASS_DOMAIN in a for a in got):
+        bad.append("it isn't going to Parcel Pass alone")
+    for x in trips:
+        if x["manifest"] not in top:
+            bad.append(f"{x['manifest']} missing")
+    if re.search(r"\bETA\b", top):
+        bad.append("it asks for an ETA")
+    if "—" in top:
+        bad.append("an em dash crept in")
+    return bad
+
+
+def pass_email(rec, trips, orders, send=True):
+    """Parcel Pass told it's coming to them, on their own quote's thread: (sent, what was done, in words)."""
+    import build_drafts as bd
+    import hauliers
+    import send_order
+    ns = bd.get_ns()
+    acct = next((ns.Accounts.Item(i) for i in range(1, ns.Accounts.Count + 1)
+                 if str(getattr(ns.Accounts.Item(i), "SmtpAddress", "")).lower() == bd.DHL_SMTP.lower()), None)
+    if acct is None:
+        return False, "the DHL account wasn't found"
+    src = pass_thread(ns, orders)
+    if src is not None:
+        m = src.Reply()
+        body = pass_words(pass_greeting(getattr(src, "SenderName", "")), trips, rec)
+        new, n = re.subn(r"(<body[^>]*>)", lambda mm: mm.group(1) + f'<div style="{FONT}">{body}</div>', m.HTMLBody,
+                         count=1, flags=re.I)
+        if n != 1:
+            return False, "couldn't find where its text starts"
+        m.HTMLBody = new
+    else:
+        service = next((s for s in hauliers.load().get("services", []) if PASS_DOMAIN in " ".join(s.get("emails") or []).lower()), None)
+        if service is None:
+            return False, "no Parcel Pass address on the list"
+        m = ns.Application.CreateItem(0)
+        m.To = service["emails"][0]
+        m.Subject = f"{' / '.join(orders)} Delivery"
+        m.HTMLBody = bd.html_from_message(pass_words("", trips, rec).replace("<br>", "\n").strip())
+        bd._attach_qr(m)
+    if not send_order.bind_account(m, acct):
+        return False, "couldn't set the DHL account on it"
+    got = [a for _, a in _addresses(m)]
+    top = re.split(r"\n\s*(?:From:|-#-#-|________________)", str(m.Body or ""))[0]
+    bad = pass_checks(top, trips, got)
     if bad and send:
         return False, "; ".join(bad)
     if not send:
@@ -525,6 +675,14 @@ def book(job, R=None, now=None):
         said.append(f"DigiHaul: {rows} row(s) written." if not why else
                     f"DigiHaul: {rows} of {len(made)} row(s) written, {why}. By hand: "
                     + " | ".join(row_text(t, job["carrier"], now).replace("\t", ", ") for t in made[rows:]) + ".")
+    if str(job["carrier"]).upper() == PASS_CARRIER:
+        try:
+            told, how = pass_email(rec, made, orders)
+        except Exception as e:
+            told, how = False, str(e)[:160]
+        said.append(f"Parcel Pass: {how}." if told else
+                    f"Parcel Pass email NOT sent ({how}): tell them {and_list([t['manifest'] for t in made])} by hand.")
+        out["pass_email"] = told
     try:
         sent, how = site_email(rec, job, made)
     except Exception as e:
