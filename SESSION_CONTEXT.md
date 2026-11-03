@@ -210,6 +210,12 @@ agent-produced files), `_dropped` (expired commands, max 8).
 | `POST /api/ctms/stop` | dash | cancel the CTMS queue, recording off, "Claude can act" off |
 | `POST /api/ctms/poll` | bridge | check-in, held open up to `wait` (<=20s) until there is work: state up, `{cmd, watch, stop, resync, control, long}` down |
 | `POST /api/ctms/shot`, `/result`, `/capture` | bridge | picture (or `same`), command result (+ `payload`), capture zip |
+| `POST /api/mail/command` | dash or agent | work mail: `search`/`read`/`folders`/`draft`/`send` (send = draft + approval list; never sends). 409 while the channel is off |
+| `GET /api/mail/result?id=&wait=` | dash or agent | held open (<=20s) until the home PC answers |
+| `GET /api/mail/status`, `/api/mail/pending` | dash or agent | channel on/off, home PC answering, sends waiting / decided |
+| `POST /api/mail/approve` | **dash only** | `{id, ok}`: ok queues `send_draft` with the fingerprint of what he saw; the ONLY way a send is queued |
+| `POST /api/mail/control` | **dash only** | `{on}` switches Claude's mail access (env `MAIL_CHANNEL=off` starts it off) |
+| `GET /api/mail/next?wait=`, `POST /api/mail/result` | agent | the cloud agent's mail thread pulls work and answers |
 
 ### The CTMS channel
 
@@ -222,6 +228,33 @@ capture the wrong screen), and `ctms_online` rides on `GET /api/status` for the
 nav dot. Claude can always LOOK; it can only ACT while the dashboard's "Claude
 can act" switch is on (dash key only, times out) AND the work PC allows it -
 see `region2-emailer/CTMS_BOOKING_SPEC.md` for the rails and the update path.
+
+### Work mail from a session (outlook_remote.py)
+
+The DHL mailbox through Outlook on the home PC (`mail_ops.py`, run by the cloud
+agent's own mail thread, so it never waits behind a long dashboard job):
+
+```
+python outlook_remote.py status | folders | pending
+python outlook_remote.py search "MAN-1234" [--folder Inbox] [--days 14] [--from x] [--unread]
+python outlook_remote.py read ID [--thread]
+python outlook_remote.py draft --to a@x --subject S --body "..." [--reply-to ID [--reply-all]] [--forward ID]
+python outlook_remote.py send  (same) --why "one line for Delali" [--wait 300]
+```
+
+`send` only drafts and puts it on the dashboard's "Work mail" card; it goes out
+when Delali presses Send there, and only if the draft is unchanged since (a
+fingerprint of to/cc/bcc/subject/body/attachments). Exit 3 = waiting for him.
+
+### Finding the dashboard from a cloud session (desk_client.py)
+
+`ctms_remote.py` and `outlook_remote.py` look for the address and key in this
+order: `CTMS_DESK_URL` + `CTMS_DESK_KEY`, then `cloud.json`, then the **Railway
+CLI** with `RAILWAY_TOKEN` (a project token for the dashboard's environment;
+`RAILWAY_SERVICE` if the project has several services). From Railway it takes
+`AGENT_KEY` and `RAILWAY_PUBLIC_DOMAIN`. The cloud environment must allow
+`backboard.railway.com` and the dashboard's domain; the CLI is npm-installed on
+first use. The key is never written to disk.
 
 ### Driving CTMS from a session (the learner phase)
 

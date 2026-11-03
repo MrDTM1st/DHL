@@ -84,7 +84,8 @@ screen, what was asked and what happened. That is the record the booking
 automation gets written from.
 
 Reads the dashboard's address and the home PC's key from cloud.json, like the
-cloud agent (CTMS_DESK_URL / CTMS_DESK_KEY override both).
+cloud agent (CTMS_DESK_URL / CTMS_DESK_KEY override both). In a Claude cloud
+session, with neither, it asks the Railway CLI (RAILWAY_TOKEN) - desk_client.py.
 
 Exit codes: 0 done, 3 not done (refused, or needs his go-ahead), 4 the work
 PC did not answer, 5 acting is switched off, 1 anything else.
@@ -117,18 +118,12 @@ class Stop(Exception):
 
 
 def _desk():
-    url, key = os.environ.get("CTMS_DESK_URL"), os.environ.get("CTMS_DESK_KEY")
-    if not (url and key):
-        try:
-            with open(os.path.join(HERE, "cloud.json"), encoding="utf-8") as f:
-                cfg = json.load(f)
-        except (OSError, ValueError):
-            raise Stop("No cloud.json next to this script, and no CTMS_DESK_URL / CTMS_DESK_KEY set - "
-                       "run it from the home PC's region2-emailer folder.")
-        url, key = url or cfg.get("url"), key or cfg.get("agent_key")
-    if not (url and key):
-        raise Stop("cloud.json has no url / agent_key.")
-    return url.rstrip("/"), key
+    # env, then cloud.json, then the Railway CLI (a cloud session) - desk_client.py
+    import desk_client
+    try:
+        return desk_client.desk()
+    except desk_client.NoDesk as e:
+        raise Stop(str(e))
 
 
 BASE, KEY = "", ""
@@ -175,7 +170,7 @@ def ask(action, wait_total=90, **args):
         body["snap"] = load_state().get("snap") or ""
     code, r = http("POST", "/api/ctms/command", body)
     if code == 401:
-        raise Stop("The dashboard did not accept the home PC's key from cloud.json.")
+        raise Stop("The dashboard did not accept the home PC's key (cloud.json / CTMS_DESK_KEY / Railway's AGENT_KEY).")
     if code == 404:
         raise Stop("This dashboard has no CTMS channel yet - it needs redeploying.")
     if code == 409:
@@ -444,7 +439,7 @@ def cmd_uploads(text=""):
     work PC's browser saves a download under that same name in its Downloads folder."""
     code, body = http("GET", "/api/files")
     if code == 401:
-        raise Stop("The dashboard did not accept the home PC's key from cloud.json.")
+        raise Stop("The dashboard did not accept the home PC's key (cloud.json / CTMS_DESK_KEY / Railway's AGENT_KEY).")
     if code != 200:
         raise Stop(f"The dashboard would not list its files ({code}: {body.get('error', '')}).")
     want = str(text or "").lower()
@@ -459,7 +454,7 @@ def cmd_uploads(text=""):
 def cmd_status(_a):
     code, st = http("GET", "/api/ctms/status")
     if code == 401:
-        raise Stop("The dashboard did not accept the home PC's key from cloud.json.")
+        raise Stop("The dashboard did not accept the home PC's key (cloud.json / CTMS_DESK_KEY / Railway's AGENT_KEY).")
     if code == 404:
         raise Stop("This dashboard has no CTMS channel yet - it needs redeploying.")
     s, c = st.get("state") or {}, st.get("control") or {}

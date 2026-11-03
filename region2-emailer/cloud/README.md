@@ -79,3 +79,10 @@ browser only). All five cards work exactly like the home dashboard.
   decisions, holiday-handover status, team list — returned to the dashboard
   inside `GET /api/status` as `panel`. Dashboard commands from those cards
   carry a `data` dict through the queue (see `../INTEGRATE_ON_HOMEPC.md`).
+- **Work mail (`/api/mail/*`).** A Claude session can search, read and draft
+  in the DHL mailbox through the home PC's Outlook (`outlook_remote.py`). Sends
+  appear on the Dashboard's "Work mail" card and go only when you press Send.
+  The same card switches Claude's mail access off. Set `MAIL_CHANNEL=off` on
+  Railway to start with it off after every deploy. Mail text passes through in
+  memory only.
+
