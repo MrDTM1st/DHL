@@ -330,6 +330,51 @@ export default function App() {
     setBookRun({ record: r.id, state: 'done', ok: false, said: 'No answer from the home PC yet: look at CTMS before pressing it again.' });
   }, [pushToast, refreshTracker]);
 
+  // Book approved, in the map's own booking (his 03/11): approved from a brief's Book form, booked from the order list's
+  // bar, one after another through the booking journal. Kept in this browser only - a list he is building, nothing more
+  const [approved, setApproved] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('r2approved') || '[]'); } catch { return []; }
+  });
+  useEffect(() => { try { localStorage.setItem('r2approved', JSON.stringify(approved)); } catch { /* none */ } }, [approved]);
+  const [batch, setBatch] = useState(null);
+  const onApprove = useCallback((r, job) => {
+    setApproved((a) => a.filter((x) => x.id !== r.id).concat([{ id: r.id, label: ordLabel(r), date: r.delivery_date, job }]));
+    pushToast('Approved', ordLabel(r) + ' with ' + job.carrier + ' - book it with the others from the order list.', 'go');
+  }, [pushToast]);
+  const onUnapprove = useCallback((id) => setApproved((a) => a.filter((x) => x.id !== id)), []);
+  const onBookApproved = useCallback(async () => {
+    const list = approved;
+    if (!list.length) return;
+    if (!window.confirm(`Book ${list.length === 1 ? 'this one' : `these ${list.length}, one after another,`} in CTMS?\n\n`
+      + list.map((a) => `${a.label} ${a.date}: ${a.job.haulier || ''} (${a.job.carrier}), ${a.job.trailer}`
+        + (a.job.vehicles > 1 ? `, ${a.job.vehicles} vehicles` : '') + (a.job.haulage ? `, £${a.job.haulage}` : '')).join('\n')
+      + '\n\nEach one is emailed to the site after. It stops at the first one CTMS needs you to look at.')) return;
+    let run;
+    try {
+      ({ run } = await api.ctmsBookBatch(list.map((a) => a.job)));
+    } catch (e) {
+      pushToast('Not booked', e.message, 'warn');
+      return;
+    }
+    setBatch({ id: run, state: 'running', jobs: list.map((a) => ({ orders: a.job.orders, carrier: a.job.carrier, state: 'waiting' })) });
+    setApproved([]);
+    const until = Date.now() + 90 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((ok) => setTimeout(ok, 2500));
+      let st;
+      try { st = await api.ctmsStatus(false); } catch { continue; }
+      const b = st.book_run;
+      if (b && b.id === run) {
+        setBatch(b);
+        if (b.state !== 'running') {
+          pushToast(b.ok ? 'Approved ones booked' : 'Book approved stopped', b.said || '', b.ok ? 'go' : 'warn');
+          setTimeout(refreshTracker, 1500);
+          return;
+        }
+      }
+    }
+  }, [approved, pushToast, refreshTracker]);
+
   // booked ad hocs leave the map (they were never in the tracker)
   const onAdhocBooked = useCallback((r) => {
     if (!window.confirm('Mark ' + ordLabel(r) + ' as booked and remove it from the map?')) return;
@@ -404,7 +449,8 @@ export default function App() {
         )}
         {page === 'map' && (
           <MapPage records={mapRecords} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
-            pickedHaulier={pickedHaulier} status={status} onCall={onCall} />
+            pickedHaulier={pickedHaulier} status={status} onCall={onCall}
+            approved={approved} batch={batch} onBookApproved={onBookApproved} onUnapprove={onUnapprove} />
         )}
         {page === 'tracker' && (
           <TrackerPage records={records} onSelect={selectOrder} onCommand={onCommand} onLearn={onLearn}
@@ -425,7 +471,9 @@ export default function App() {
             bookRun={bookRun && bookRun.record === selectedId ? bookRun : null} onBookDone={() => setBookRun(null)}
             onCommand={onCommand} matTeams={panel.mat_teams || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
-            asks={panel.asks || {}} nocTeams={panel.noc_teams || []} />
+            asks={panel.asks || {}} nocTeams={panel.noc_teams || []}
+            todo={panel.ctms_todo || []} bookings={panel.bookings || []}
+            approved={approved.some((a) => a.id === selectedId)} onApprove={onApprove} onUnapprove={onUnapprove} />
         )}
       </div>
       <Toasts toasts={toasts} dismiss={dismissToast} />

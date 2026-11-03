@@ -130,7 +130,8 @@ const NETWORK_KEY = (
   </>
 );
 
-export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier, status, onCall }) {
+export default function MapPage({ records, hauliers, onSelect, selectedId, pickedHaulier, status, onCall,
+  approved, batch, onBookApproved, onUnapprove }) {
   const [tick, setTick] = useState(0);
   const [layers, setLayers] = useState({ orders: true, depots: true, hauliers: true, routes: true });
   const [toolsOpen, setToolsOpen] = useState(false);   // the phone's folded Layers panel
@@ -400,7 +401,8 @@ export default function MapPage({ records, hauliers, onSelect, selectedId, picke
 
       {!focused && (
         <OrdersPanel records={records} hauliers={hauliers} onSelect={onSelect} selectedId={selectedId}
-          status={status} onCall={onCall} open={sheetOpen} onToggle={() => setSheetOpen((o) => !o)} />
+          status={status} onCall={onCall} open={sheetOpen} onToggle={() => setSheetOpen((o) => !o)} 
+          approved={approved} batch={batch} onBookApproved={onBookApproved} onUnapprove={onUnapprove} />
       )}
     </div>
   );
