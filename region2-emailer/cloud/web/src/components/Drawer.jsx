@@ -262,7 +262,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
     setTeams({ ...t, sending: true, said: 'Sending on the work PC…' });
     let id;
     try {
-      ({ id } = await ctmsTeams(t.to, t.message));
+      ({ id } = await ctmsTeams(t.to, t.message, false, r.orders || [], (recs.find((h) => h.fleet) || {}).name || 'DHL NOC'));
     } catch (e) {
       setTeams((x) => x && { ...x, sending: false, said: e.message });
       return;
@@ -303,9 +303,12 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
   // which is most of them. An order can carry several numbers; any of them
   // having asked a haulier counts as asked.
   const askedBy = {};
+  const askedList = [];     // everyone contacted, once each - Parcel Pass has no row of its own below to show it on
   (r.orders || []).forEach((o) => {
     ((asks || {})[String(o)] || []).forEach((a) => {
       if (!askedBy[a.name]) askedBy[a.name] = a;
+      const key = String(a.email || a.name).toLowerCase();
+      if (!askedList.some((x) => String(x.email || x.name).toLowerCase() === key)) askedList.push(a);
     });
   });
   // The FULL list of hauliers that fit this job - fleet -> tier 1 -> tier 2,
@@ -617,6 +620,13 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
             <div className="ppcard warn" style={{ marginTop: 10 }}>
               <b>NOT CERTAIN — CHECK BEFORE BOOKING</b>
               {checks.map((c) => <div key={c}>{c}</div>)}
+            </div>
+          )}
+
+          {askedList.length > 0 && (
+            <div className="statusdetail" style={{ fontSize: 12.5 }}>
+              <b>Already contacted:</b>{' '}
+              {askedList.map((a) => `${a.name} ${a.how === 'teams' ? 'on Teams' : 'by email'} ${String(a.when || '').slice(0, 5)} ${String(a.when || '').slice(11)}`.trim()).join(' · ')}
             </div>
           )}
 

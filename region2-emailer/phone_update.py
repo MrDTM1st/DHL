@@ -26,7 +26,8 @@ RAW = "told on the phone"
 LABELS = {"date": "the delivery date", "from": "the delivery time", "to": "the time it runs to",
           "offloading": "offloading", "artic_access": "artic access", "rear_steer": "rear steer", "pts": "PTS",
           "vehicle": "the vehicle", "contact_name": "the contact's name", "contact_phone": "the contact's number",
-          "what3words": "the What3Words", "notes": "the notes"}
+          "what3words": "the What3Words", "notes": "the notes", "collect": "the collection day",
+          "already": "whether to type over CTMS"}
 
 
 def _hm(v):
@@ -107,6 +108,27 @@ def details_from(form, rails):
     return got, []
 
 
+def run_answers(form, rec, start):
+    """What the to-do's Run would otherwise stop and ask him (his 03/11: "shouldn't you be asking me that on the ... form?")
+    -> (answers kept on the item, problems). The same rule as the plan's: an afternoon delivery has no rule for its
+    collection day."""
+    import ctms_run_plan as plan
+    got, problems = {}, []
+    collect = str(form.get("collect") or "").strip()
+    if collect in plan.COLLECT_DAYS:
+        got["collect"] = collect
+    elif collect or (start >= "12:00" and len(rec.get("collections") or []) == 1):
+        problems.append("collect")
+    already = str(form.get("already") or "").strip()
+    if already in (plan.TICK_OFF, plan.TYPE_ANYWAY):
+        got["already"] = already
+    elif already:
+        problems.append("already")
+    if str(form.get("vehicle") or "").strip() in plan.VEHICLES:    # his pick on the call: nothing left to work out or ask
+        got["veh"] = str(form["vehicle"]).strip()
+    return got, problems
+
+
 def apply(record_id, form, now=None):
     """The call's answers onto the order and the CTMS to-do -> {"ok", "said"}. The caller holds the tracker's lock."""
     import ctms_run_plan
@@ -118,19 +140,24 @@ def apply(record_id, form, now=None):
         return {"ok": False, "said": "That order is no longer on the tracker - nothing saved."}
     rails = ctms_run_plan.is_rails(rec)
     got, problems = details_from(form or {}, rails)
+    answers = {}
+    if got:
+        answers, problems = run_answers(form, rec, got["time"]["earliest"])
     if problems:
         return {"ok": False, "said": "Not saved - check " + ", ".join(LABELS.get(p, p) for p in problems) + "."}
     stamp = now or tracker._now()
     merged = dict(rec.get("details") or {})
     merged.update(got)
     rec["details"] = merged
-    rec["missing"] = dd.missing(merged, "rails" if rails else None)
+    # What3Words is optional on the call's form, so going without one doesn't leave the order "still needing" it (his 03/11:
+    # a phoned order stayed red on the map for this alone)
+    rec["missing"] = [m for m in dd.missing(merged, "rails" if rails else None) if m != "What3Words"]
     rec["phoned_at"] = stamp
     rec["reply_at"] = rec.get("reply_at") or stamp              # answered: never chased again
     rec["sendoff_ready"] = True
     moved = tracker.move_date(d, rec, got["date"]["value"], "your phone call")
     tracker.save(d)
-    ctms_todo.phoned(rec, when=stamp)
+    ctms_todo.phoned(rec, when=stamp, answers=answers)
     orders = " / ".join(rec.get("orders") or [])
     return {"ok": True, "said": f"{orders}: the call's details are on the order"
                                 + (f", its delivery moved to {got['date']['value']}" if moved else "")

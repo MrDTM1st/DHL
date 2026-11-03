@@ -1993,6 +1993,8 @@ class Handler(BaseHTTPRequestHandler):
                                           f"{who.get('name') or email} - that only.")
                     _ctms["queue"].append({"id": cid, "action": "teams_send", "email": who["email"],
                                            "name": str(who.get("name") or "")[:60], "text": text,
+                                           "orders": [str(o)[:40] for o in (data.get("orders") or [])][:12],
+                                           "haulier": str(data.get("haulier") or "")[:60],
                                            "dry": bool(data.get("dry")), "by": "dashboard", "queued_at": time.time()})
                     _ctms["asked"][cid] = "dashboard"
                     _ctms_cv.notify_all()
@@ -2313,6 +2315,10 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms["seen"] = time.time()
                 cid = data.get("id")
                 if _ctms["running"] and _ctms["running"]["id"] == cid:
+                    ran = _ctms["running"]
+                    if (ran.get("action") == "teams_send" and data.get("ok") and ran.get("orders") and not ran.get("dry")):
+                        _queue.append({"action": "ask_note", "orders": ran["orders"], "name": ran.get("haulier") or "DHL NOC",
+                                       "email": ran.get("email") or "", "queued_at": time.time()})
                     _ctms["running"] = None
                 _ctms_result_locked({"id": cid, "action": str(data.get("action") or "")[:20],
                                      "name": str(data.get("name") or "")[:60], "ok": bool(data.get("ok")),

@@ -68,20 +68,28 @@ export default function PhoneUpdate({ record: r, onSave, onCancel }) {
     contact_phone: '',
     what3words: fieldOf(r, 'what3words').value || '',
     notes: '',
+    collect: '',
+    already: '',
   }));
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
   const who = f.who === 'other' ? { name: f.contact_name.trim(), phone: f.contact_phone.replace(/[^\d+]/g, '') }
     : contacts[+f.who] || { name: '', phone: '' };
+  // what the to-do's Run would otherwise stop and ask (his 03/11): asked here, by the plan's own rules. A morning delivery
+  // collects the day before; an afternoon one has no rule. A Veh Type in CTMS means the order may be typed in already.
+  const asksCollect = f.from >= '12:00' && (r.collections || []).length === 1;
+  const asksAlready = !!r.ctms_veh;
   const missing = [
     !f.date && 'the date', !f.from && 'the time', !f.offloading && 'offloading', !f.artic_access && 'artic access',
     !f.rear_steer && 'rear steer', rails && !f.pts && 'PTS', !who.name && "the contact's name",
     !/^\+?\d{10,13}$/.test(who.phone) && "the contact's number",
+    asksCollect && !f.collect && 'the collection day', asksAlready && !f.already && 'what to do with CTMS',
   ].filter(Boolean);
 
   const save = () => onSave({
     date: f.date, from: f.from, to: f.to, offloading: f.offloading, artic_access: f.artic_access,
     rear_steer: f.rear_steer, pts: rails ? f.pts : '', vehicle: f.vehicle,
     contact_name: who.name, contact_phone: who.phone, what3words: f.what3words.trim(), notes: f.notes.trim(),
+    collect: asksCollect ? f.collect : '', already: asksAlready ? f.already : '',
   });
 
   const sel = (k, label, opts, blank = 'Pick…') => (
@@ -100,6 +108,8 @@ export default function PhoneUpdate({ record: r, onSave, onCancel }) {
       {sel('date', 'Delivery date', dayOptions(f.date))}
       {sel('from', 'Delivery time', TIMES.map((x) => [x, x]))}
       {sel('to', 'Until', toOptions(f.from).map((x) => [x, x]), '+2 hours (your rule)')}
+      {asksCollect && sel('collect', 'Collect it', [['the day before', 'The day before'], ['the same day', 'The same day']])}
+      {asksAlready && sel('already', 'CTMS has a Veh Type', [['Type it in anyway', 'Type this call over it'], ['Tick it off - CTMS has it', 'CTMS has it, leave it']])}
       {sel('offloading', 'Offloading', [['HIAB', 'Our HIAB'], ['MOFFETT', 'Moffett'], ['SITE/NONE', 'Site offloads it']])}
       {sel('artic_access', 'Can artics get in?', [['yes', 'Yes'], ['no', 'No']])}
       {sel('rear_steer', 'Rear steer?', [['yes', 'Yes'], ['no', 'No']])}

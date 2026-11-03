@@ -53,6 +53,7 @@ export function isReady(r) {
   if (r.kind === 'adhoc' || r.kind === 'dts') return true;
   if (r.kind === 'pinned' || r.kind === 'collection') return false;
   if (r.ctms_veh) return true;      // a Veh Type filled in CTMS - the details are in, by phone or otherwise (30/10)
+  if (r.phoned_at) return true;     // updated over the phone: its form asks everything the job needs (03/11)
   return !!r.reply_at && Array.isArray(r.missing) && r.missing.length === 0;
 }
 

@@ -35,6 +35,28 @@ def test_the_answers_become_certain_details_and_pts_is_only_asked_on_rails():
     assert got["pts"]["value"] == "yes" and got["vehicle"]["value"] == "artic" and got["time"]["latest"] == "22:00"
 
 
+def test_what_the_run_would_ask_is_settled_on_the_form():
+    import ctms_run_plan as plan
+    rec = {"collections": [{"site": "Yard"}]}
+    assert P.run_answers(FORM, rec, "08:00") == ({}, [])                              # a morning delivery: the day before
+    assert P.run_answers(FORM, rec, "14:00") == ({}, ["collect"])                     # an afternoon one has no rule
+    assert P.run_answers(FORM, {"collections": []}, "14:00") == ({}, [])              # no single pick-up: by hand as ever
+    got, _ = P.run_answers(dict(FORM, collect="the same day", already=plan.TYPE_ANYWAY, vehicle="artic"), rec, "14:00")
+    assert got == {"collect": "the same day", "already": plan.TYPE_ANYWAY, "veh": "artic"}
+    assert P.run_answers(dict(FORM, collect="whenever"), rec, "08:00")[1] == ["collect"]
+
+
+def test_the_forms_answers_are_kept_on_the_to_do_item():
+    folder = tempfile.mkdtemp()
+    try:
+        rec = {"orders": ["9100001"], "details": {}, "site": "Yard", "to": "sam@example.net"}
+        it = ctms_todo.phoned(rec, path=os.path.join(folder, "todo.json"), when="2026-11-03 10:00",
+                              answers={"collect": "the same day", "veh": "artic"})
+        assert it["answers"] == {"collect": "the same day", "veh": "artic"}
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def test_anything_not_picked_or_not_right_is_named_and_nothing_saved():
     _, problems = P.details_from(dict(FORM, date="31/11/2026", offloading="CRANE", contact_phone="123",
                                       what3words="not w3w"), rails=False)

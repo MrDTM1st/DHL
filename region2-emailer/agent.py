@@ -1660,6 +1660,12 @@ def main():
                 except Exception:
                     pass
                 report("done" if res["ok"] else "error", "Rail plan CTMS export: " + res["said"], tail(out, 8))
+            elif action == "ask_note":
+                # a Teams message to DHL NOC has gone (his 03/11: "you don't note down that I've sent ... a message"):
+                # on the brief with the emails Sent Items shows, which it can never see
+                import haulier_asks
+                haulier_asks.record(cmd.get("orders") or [], cmd.get("name") or "DHL NOC", cmd.get("email") or "", how="teams")
+                push_panel()
             elif action == "phone_update" and order:
                 # the brief's "Updated over the phone" (his ask 01/11): what the site said on a call, picked from
                 # drop-downs - onto the order like a reply, and the order owes CTMS an update from it. phone_update.py

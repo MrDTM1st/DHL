@@ -126,10 +126,11 @@ def replied(rec, path=None, when=None, who=None):
     return it
 
 
-def phoned(rec, path=None, when=None):
+def phoned(rec, path=None, when=None, answers=None):
     """He rang the site - his "updated over the phone" (01/11): the order is to be updated from what they said, as
     from a reply. It takes the place of any update still open for the order (an earlier email's): the record holds
-    everything now, the call's answers over the email's, and the run works from the record."""
+    everything now, the call's answers over the email's, and the run works from the record. answers: what the form
+    settled that the run would otherwise ask, kept on the item as his drop-down picks are."""
     if rec.get("kind", "delivery") != "delivery" or not rec.get("orders"):
         return None
     when = when or _now()
@@ -147,6 +148,9 @@ def phoned(rec, path=None, when=None):
              details={"details": rec.get("details"), "missing": rec.get("missing"),
                       "site": rec.get("site"), "to": rec.get("to")},
              source="phone", path=path, when=when)
+    for field, value in (answers or {}).items():
+        if it:
+            it = answer(it["id"], field, value, path=path) or it
     services_due(rec["orders"], _reply_legs(rec.get("details")), path=path, when=when)
     return it
 

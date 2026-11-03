@@ -169,11 +169,11 @@ export async function ctmsBook(job) {
 
 // The brief's Send in Teams for DHL NOC (his ask 01/11): the message sent in the work PC's Teams, to someone on the
 // home PC's NOC list only. Look mum, no hands is switched on for this one message when it is off.
-export async function ctmsTeams(email, text, dry = false) {
+export async function ctmsTeams(email, text, dry = false, orders = [], haulier = '') {
   const r = await req('/api/ctms/teams', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, text, dry }),
+    body: JSON.stringify({ email, text, dry, orders, haulier }),
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
