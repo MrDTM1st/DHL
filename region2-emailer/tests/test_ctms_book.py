@@ -60,6 +60,9 @@ class FakeCtms:
         self.selection = []
         self.honours_selecting = True   # False: CTMS's Create New Trip takes the current row alone
         self.rows_a_page = 15
+        self.panel_stuck = False
+        self.carrier_behind = False
+        self.carrier_comes = True
 
     # -- what the Access Bridge hands over
     def upto(self):
@@ -97,6 +100,10 @@ class FakeCtms:
         if self.up == "confirm":
             els.insert(0, {"r": "internal frame", "nm": f"Confirm Create Trip Carrier  {self.carrier_picked}\nRevenue         562.62\n"
                                                         f"Cost                {self.cost}\nDo you want to continue?", "lv": 0})
+        if self.carrier_behind:
+            els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
+        if self.up == "carrier" and getattr(self, "brought", False):
+            els.insert(0, {"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
         if self.up in ("carrier", "payment", "confirm"):
             els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
             for i, c in enumerate(self.carriers):
@@ -148,6 +155,9 @@ class FakeCtms:
         elif name == "wm-apply-trip":
             self.trip_lines[self.selected].append(self.current)
             self.well = [r for r in self.well if r["cust_ref"] != self.current]
+        elif name == "wn-carrier":
+            if self.carrier_comes:
+                self.carrier_behind, self.up, self.brought = False, "carrier", True
         elif name == "wm-refresh":
             self.page = 0
         elif name == "mt-set-status":
@@ -156,8 +166,13 @@ class FakeCtms:
     def click(self, s):
         px = tuple(s.get("px") or ())
         sc = s.get("screen")
+        if px == NEW_ORDER:                     # what used to be pressed for Planned Orders' close, it sitting elsewhere
+            self.card = "NEW"
         if sc:
             if s.get("right"):
+                return
+            if self.panel and not self.panel_stuck and list(sc) == [503 + 1006 - B.PLANNED_X, 513 + B.PLANNED_Y]:
+                self.panel = None
                 return
             if list(sc) == [TO_BOX[0] + TO_BOX[2] - 10, TO_BOX[1] + TO_BOX[3] // 2]:
                 self.to_list = None if self.to_list else self.to
@@ -199,7 +214,7 @@ class FakeCtms:
             assert self.up == "payment", "a click on a box that's gone lands on Planning behind it"
             self.up = "carrier"
         elif px == B.CARRIER_EXIT:
-            self.up = None
+            self.up, self.brought = None, False
         elif px == B.CONFIRM_YES:
             self.up = None
             man = f"MAN-0{self.next_man}"
@@ -212,8 +227,6 @@ class FakeCtms:
             self.status_line = f"Order 11351960 scheduled on trip: {self.sched} / {man}"
         elif px == B.ORDERS_BUTTON:
             self.panel = list(self.trip_lines.get(self.selected) or [""])
-        elif px == B.PLANNED_CLOSE:
-            self.panel = None
         elif px == B.PLANNING_SAVE:
             self.saved += 1
             self.status_line = ""
@@ -283,6 +296,45 @@ def _book(ctms, orders=("9100001",), date="06/11/2026", carrier="DHL_NOC", trail
     job = _job(ctms, dry=dry)
     job.book(list(orders), date, carrier, trailer, haulage, vehicles)
     return job
+
+
+NEW_ORDER = (1493, 447)
+
+
+def test_closing_planned_orders_uses_where_it_really_sits_never_the_new_order_button():
+    ctms = FakeCtms([_row("9100001-1-1"), _row("9100001-2-1")])
+    job = _book(ctms)
+    assert job.trips[0]["status"] == "ACCEPTED" and ctms.card is None and ctms.panel is None
+    assert not [s for s in ctms.steps if tuple(s.get("px") or ()) == NEW_ORDER]
+
+
+def test_a_panel_that_wont_close_stops_before_accepted():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.panel_stuck = True
+    try:
+        _book(ctms)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert "wouldn't close" in str(e)
+    assert ctms.tree["MAN-01000100"] == "PLANNED"
+
+
+def test_a_carrier_window_left_behind_is_brought_forward_and_exited():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.carrier_behind = True
+    job = _book(ctms)
+    assert job.trips[0]["status"] == "ACCEPTED" and any(s.get("name") == "wn-carrier" for s in ctms.steps)
+
+
+def test_a_carrier_window_that_wont_come_forward_says_so():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.carrier_behind = True
+    ctms.carrier_comes = False
+    try:
+        _book(ctms)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert "carrier window" in str(e)
 
 
 def test_a_plain_booking_goes_from_the_date_to_accepted():

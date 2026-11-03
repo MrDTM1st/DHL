@@ -62,7 +62,8 @@ CREATE_TRIP, PAYMENT_CANCEL = (1015, 449), (1015, 479)
 CONFIRM_YES, CONFIRM_NO = (984, 529), (1039, 529)
 PLANNING_SAVE = (1337, 98)
 FORMS_OK = (1035, 505)
-ORDERS_BUTTON, PLANNED_CLOSE = (1360, 166), (1493, 447)
+ORDERS_BUTTON = (1360, 166)
+PLANNED_X, PLANNED_Y = 13, 10      # Planned Orders' own X, from its top right corner: the panel doesn't open in one place
 ORDER_SAVE, ORDER_CLOSE = (337, 733), (424, 733)
 CURRENT_ROW = "#FFCC00"            # the well's current row, from its From Loc across
 
@@ -292,8 +293,9 @@ class Booking:
             return
         if not self.seen("sc-title", CARRIER_TITLE):
             self.run([{"action": "anchor"}, _click(WINDOW_MENU, after=0.4),
-                      _find(self.t, "wn-carrier", WINDOW_LIST, 2, click=True, after=0.4), ANCHOR,
-                      _find(self.t, "sc-title", CARRIER_TITLE, 5)])
+                      _find(self.t, "wn-carrier", WINDOW_LIST, 2, click=True, after=0.4), ANCHOR])
+            if not frames(self.look())[0].startswith(CARRIER_FRAME):
+                raise Stop("A carrier window is left open behind Planning and wouldn't come forward: close it with its Exit.")
         self.run([_click(CARRIER_EXIT, after=0.8)])
         self.look()
 
@@ -662,8 +664,17 @@ class Booking:
         """The lines Planned Orders shows on the manifest just made."""
         self.run([_click(ORDERS_BUTTON, after=0.9)])
         self.look()
-        self.run([_click(PLANNED_CLOSE, after=0.4)])
-        return planned_refs(self.els)
+        there = planned_refs(self.els)
+        panel = next((e for e in self.els if e.get("r") == "internal frame" and str(e.get("nm") or "").startswith("Planned Orders")
+                      and placed(e)), None)
+        if panel is None:
+            raise Stop("Planned Orders didn't open on the manifest, so it's still PLANNED: look at it before anything else.")
+        x, y, w, _ = panel["at"]
+        self.run([{"action": "click", "screen": [x + w - PLANNED_X, y + PLANNED_Y], "after": 0.4}])
+        self.look()
+        if any(f.startswith(("Planned Orders", "Order details for")) for f in frames(self.els)):
+            raise Stop("Planned Orders wouldn't close, so the manifest is still PLANNED: look at it before anything else.")
+        return there
 
     def check_order(self, manifest, refs):
         """Planned Orders: the manifest's lines are the ones meant."""
@@ -721,6 +732,11 @@ class Booking:
         self.accept(got["manifest"])
         done["status"] = "ACCEPTED"
         self.stage("accepted")
+        try:                               # the booking's carrier window goes too, or it's in the way of the next job
+            self.look()
+            self.carrier_window_away()
+        except (Stop, RuntimeError) as e:
+            self.said.append(str(e))
 
     def book(self, orders, date, carrier, trailer, haulage, vehicles):
         """The whole booking. self.trips says what was made, however it ended."""
