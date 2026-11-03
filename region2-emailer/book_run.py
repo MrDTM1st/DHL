@@ -20,6 +20,11 @@ to do by hand.
 
     python book_run.py run '{"record": "...", "orders": ["..."], "date": "dd/mm/yyyy", "carrier": "...", "trailer": "...",
                              "haulier": "...", "haulage": 450, "vehicles": 1, "dry": false}'
+    python book_run.py retry             the timer: lost answers looked for, Outlook's failed steps tried again
+    python book_run.py clear KEY [STEP]  his Done by hand / Clear
+
+Every press goes through the booking journal (book_journal.py) first: an order it has booked is never booked again - a
+press finishes what is left instead - and an answer the home PC gave up waiting for is asked for again by its id.
 
 Prints what it does and, last, one line of JSON for the agent: {"ok", "said", "trips", "seconds", ...}.
 """
@@ -634,81 +639,331 @@ def take_off(ident):
     return agent._book_off(ident)
 
 
+# -- a step done once only
+SENT_LOOK = 300                  # Sent Items looked through for an email already gone, newest first
+SENT_DAYS = 3
+
+
+def sent_already(manifests, to_has="", to_not=""):
+    """Whether an email naming every one of these manifests has gone from the DHL account in the last few days - to an
+    address with to_has in it, or with no to_not in any. A retry looks first: the Send can go through and the run still
+    die before the journal hears of it, and a second "it's booked" email to a site is the one mistake here that reads as
+    a muddle to the customer."""
+    import build_drafts as bd
+    want = [m for m in manifests if m]
+    if not want:
+        return False
+    folder = bd.sub(bd.dhl_store(bd.get_ns()), "Sent Items")
+    if folder is None:
+        return False
+    items = folder.Items
+    items.Sort("[SentOn]", True)
+    since = datetime.now() - timedelta(days=SENT_DAYS)
+    for n, it in enumerate(items):
+        if n >= SENT_LOOK:
+            break
+        try:
+            if datetime(*it.SentOn.timetuple()[:6]) < since:
+                break
+            body = str(getattr(it, "Body", "") or "")[:4000]
+            if not all(m in body for m in want):
+                continue
+            to = " ".join(a for _, a in _addresses(it)).lower()       # only for a mail that names them: it's slow
+        except Exception:
+            continue
+        if (not to_has or to_has in to) and not (to_not and to_not in to):
+            return True
+    return False
+
+
+def _step(k, name, fn, auto=False):
+    """One step run and written down: (ok, words). An exception is a step not done, never a run ended."""
+    import book_journal as J
+    try:
+        ok, said = fn()
+    except Exception as e:
+        ok, said = False, str(e)[:160]
+    J.step(k, name, ok, said, auto=auto)
+    return ok, said
+
+
+def follow(k, R=None, now=None, auto=False, only=None):
+    """What follows a booking, each step the journal hasn't got as done - the steps, then, a press of Book, a Retry and the
+    timer all share. auto: the timer, which leaves the DigiHaul row to his Retry (it needs Look mum, no hands on). only:
+    these steps alone. Returns the words, step by step."""
+    import book_journal as J
+    now = now or datetime.now()
+    e = J.get(k) or {}
+    made = J.accepted(e)
+    mans = [t["manifest"] for t in made]
+    if not mans:
+        return []                            # nothing ACCEPTED: nothing follows
+    carrier = str(e.get("carrier") or "")
+    job = {x: e.get(x) for x in J.JOB_KEYS if e.get(x) not in (None, "")}
+    orders = [str(o) for o in e.get("orders") or []]
+    rec = record_of(e.get("record")) or {"orders": orders}
+    said = []
+    for name in J.left(e):
+        if only and name not in only:
+            continue
+        if auto and name not in J.AUTO:
+            continue
+        steps = (J.get(k) or {}).get("steps") or {}
+        tried = int((steps.get(name) or {}).get("tries") or 0)
+        if name == "digihaul":
+            have = set((steps.get("digihaul") or {}).get("written") or [])
+            todo = [t for t in made if t["manifest"] not in have]
+            nocost = [t["manifest"] for t in todo if t.get("cost") in (None, "")]
+            if nocost:
+                J.step(k, name, False, f"the cost of {and_list(nocost)} isn't known here: type the row by hand")
+                said.append(f"DigiHaul NOT written: the cost of {and_list(nocost)} isn't known here. By hand: "
+                            + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in todo) + ".")
+                continue
+            R = R or _client()
+            rows, why = 0, ""
+            for t in todo:                       # one at a time, each kept as it goes on: a retry never pastes it twice
+                try:
+                    n, why = tracker_rows(R, [t], carrier, now)
+                except Exception as x:
+                    n, why = 0, str(x)[:160]
+                if n:
+                    J.written(k, t["manifest"])
+                    rows += 1
+                if why or not n:
+                    why = why or "the row didn't go on"
+                    break
+            left_ = [t for t in todo if t["manifest"] not in set(((J.get(k) or {}).get("steps") or {})
+                                                                  .get("digihaul", {}).get("written") or [])]
+            J.step(k, name, not left_, why)
+            said.append(f"DigiHaul: {rows} row(s) written." if not left_ else
+                        f"DigiHaul: {rows} of {len(todo)} row(s) written, {why}. Retry, or by hand: "
+                        + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in left_) + ".")
+        elif name == "pass_email":
+            def go():
+                if tried and sent_already(mans, to_has=PASS_DOMAIN):
+                    return True, "it had gone already"
+                return pass_email(rec, made, orders)
+            ok, how = _step(k, name, go, auto)
+            said.append(f"Parcel Pass: {how}." if ok else f"Parcel Pass email NOT sent ({how}): "
+                        + ("I'll try again in a few minutes." if _auto_left(k, name) else f"tell them {and_list(mans)} by hand, or Retry."))
+        elif name == "site_email":
+            def go():
+                if tried and sent_already(mans, to_not=PASS_DOMAIN):
+                    return True, "it had gone already"
+                return site_email(rec, job, made)
+            ok, how = _step(k, name, go, auto)
+            said.append(f"Site: {how}." if ok else f"Site email NOT sent ({how}): "
+                        + ("I'll try again in a few minutes." if _auto_left(k, name) else f"tell them {and_list(mans)} by hand, or Retry."))
+        elif name == "filed":
+            if "site_email" in J.left(J.get(k) or {}):
+                continue                         # the chain stays where the site email's retry can find its thread
+            ok, how = _step(k, name, lambda: (True, f"{file_away(rec)} filed"), auto)
+            if ok:
+                said.append("Chain filed.")
+        elif name == "off_map":
+            def go():
+                removed, _ = take_off(e.get("record"))
+                return True, "off the map" if removed else "it had gone under another id"
+            ok, how = _step(k, name, go, auto)
+            said.append("Off the map." if ok and how == "off the map" else
+                        f"Still on the map: {how}." if ok else f"Still on the map ({how}).")
+    return said
+
+
+def _auto_left(k, name):
+    import book_journal as J
+    s = ((J.get(k) or {}).get("steps") or {}).get(name) or {}
+    return name in J.AUTO and s.get("next_at") is not None and not s.get("ok")
+
+
+# -- what came of an ask nobody heard the answer to
+def _parsed_trips(text):
+    """Manifests and their status out of the bridge's words ("Booked 1 in 52s: MAN-01000001 ACCEPTED, ..."), when the
+    picture-laden payload has gone: no cost, so the DigiHaul row waits for him."""
+    return [{"manifest": m, "status": st} for m, st in re.findall(r"(MAN-\d+)\s+([A-Z]+)", str(text or ""))]
+
+
+def recall(k, R=None):
+    """An ask whose answer the home PC never had, looked for again: the dashboard by its command id, then the work PC's
+    own record of what its Book made. Either answer goes into the journal as if it had come at the time. Nothing in CTMS
+    is touched. Returns the journal's entry."""
+    import book_journal as J
+    e = J.get(k) or {}
+    cid = e.get("ask_id")
+    if not cid:
+        # the dashboard never numbered it: the command didn't reach the work PC, so nothing was made
+        return J.answered(k, False, "the work PC was never asked", [], e.get("carrier"))
+    R = R or _client()
+    try:
+        result, payload = R.result_of(cid)
+    except Exception:
+        result, payload = None, None
+    if result is not None and (payload or {}).get("trips") is not None:
+        return J.answered(k, result.get("ok"), result.get("detail"), payload["trips"], e.get("carrier"))
+    try:
+        got, back = _quiet(R.ask, "book_recall", wait_total=45, orders=e.get("orders"), date=e.get("date"), ask=cid)
+    except Exception:
+        got, back = {}, None
+    found = ((back or {}).get("found") or []) if got.get("ok") else None
+    if found:
+        f = found[0]
+        return J.answered(k, f.get("ok"), f.get("said"), f.get("trips"), e.get("carrier"))
+    if result is not None:
+        trips = _parsed_trips(result.get("detail"))
+        return J.answered(k, result.get("ok"), result.get("detail"), trips, e.get("carrier"))
+    if found is not None and time.time() - float(e.get("asked_at") or 0) > J.LOST_AFTER:
+        # the work PC answered and has nothing for that command: it never ran it, or died before it was done
+        return J.lost(k, "the work PC has no record of booking it - it may have stopped part way")
+    return J.get(k)
+
+
 # -- the whole of it
+LOCK_WAIT = 20
+
+
+def _lock():
+    """One booking run on the home PC at a time - a press of Book, a Retry, the timer: the journal is read and written by
+    each, and two at once could each think a step undone."""
+    try:
+        import outlook_gate
+        return outlook_gate.named_lock("book_run", wait=LOCK_WAIT)
+    except Exception:
+        return True
+
+
 def book(job, R=None, now=None):
-    """One press of Book: the answer the agent passes on."""
+    """One press of Book: the answer the agent passes on. The journal decides first whether CTMS is asked at all."""
+    import book_journal as J
     t0 = time.time()
     now = now or datetime.now()
     orders = [str(o) for o in job.get("orders") or []]
-    named = " / ".join(orders)
     out = {"ok": False, "said": "", "trips": [], "seconds": None}
+    dry = bool(job.get("dry"))
+    k = J.key(orders, job.get("date"))
+    if not dry:
+        if _lock() is None:
+            out["said"] = "Another booking is still finishing on the home PC: press it again in a minute. Nothing was booked."
+            return out
+        e = J.get(k)
+        if J.verdict(e) == "recall":
+            e = recall(k, R)
+        v = J.verdict(e)
+        mans = and_list([t["manifest"] for t in J.accepted(e)]) if J.accepted(e) else ""
+        if v == "recall":
+            out["said"] = ("The last press of Book for this order is still waiting for the work PC's answer, so it isn't "
+                           "booked again. Give it a few minutes: what it made is picked up by itself. If CTMS shows "
+                           "nothing for it, Clear it on the Bookings card and press Book again.")
+            out["pending"] = True
+            return out
+        if v == "hold":
+            out["said"] = ("Not booked again: " + (f"{', '.join(e.get('short') or [])} was left short of ACCEPTED in CTMS"
+                                                  if e.get("state") == "half" else
+                                                  "the last press never said what it made")
+                           + ". Look in CTMS, then Clear it on the Bookings card (or finish it there) and press Book again.")
+            out["held"] = True
+            return out
+        if v == "finished":
+            out.update(ok=True, said=f"Already booked: {mans}, and everything after it is done. Nothing booked again.",
+                       trips=J.accepted(e))
+            return out
+        if v == "resume":
+            said = [f"Already booked in CTMS: {mans}. Nothing booked again; finishing what was left."]
+            said += follow(k, R, now)
+            e = J.get(k)
+            out.update(ok=True, said=" ".join(said), trips=J.accepted(e), resumed=True, total=round(time.time() - t0, 1))
+            return out
     first = owed_first(orders)
-    if first and not job.get("dry"):
+    if first and not dry:
         out["said"] = (f"{first[0]['what']}: that's still on the CTMS to-do, and it has to go on before the booking. "
                        "Run it first, or tick it off if it's done. Nothing was booked.")
         return out
     R = R or _client()
-    args = {k: job[k] for k in ("orders", "date", "carrier", "trailer", "vehicles", "dry") if job.get(k) not in (None, "")}
+    args = {k_: job[k_] for k_ in ("orders", "date", "carrier", "trailer", "vehicles", "dry") if job.get(k_) not in (None, "")}
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
     wait = min(600, 150 + 90 * int(job.get("vehicles") or 1))
-    result, payload = _quiet(R.ask_waiting, "ctms_book", wait_total=wait, **args)
+    if not dry:
+        J.asking(job)
+        args["on_id"] = lambda cid: J.asked(k, cid)
+    try:
+        result, payload = _quiet(R.ask_waiting, "ctms_book", wait_total=wait, **args)
+    except Exception as x:
+        if dry:
+            raise
+        if getattr(x, "code", None) == 4:
+            out["said"] = ("The work PC didn't answer in time: it may still be booking. Don't book it by hand: press Book "
+                           "again in a few minutes and I'll pick up what it made rather than book it twice.")
+            out["pending"] = True
+            return out
+        J.answered(k, False, str(x), [], job.get("carrier"))        # refused before the work PC had it: nothing made
+        out["said"] = f"{x} Nothing was booked."
+        return out
     payload = payload or {}
     trips = payload.get("trips") or []
-    out.update(trips=[{k: t.get(k) for k in ("manifest", "status", "revenue", "cost")} for t in trips],
+    out.update(trips=[{k_: t.get(k_) for k_ in ("manifest", "status", "revenue", "cost")} for t in trips],
                seconds=payload.get("seconds"), stages=payload.get("stages"), ctms=result.get("detail"))
-    if not result.get("ok"):
+    if dry:
+        out.update(ok=bool(result.get("ok")), said=str(result.get("detail") or "The work PC didn't answer."))
+        return out
+    e = J.answered(k, result.get("ok"), result.get("detail"), trips, job.get("carrier"))
+    made = J.accepted(e)
+    if not made:
         out["said"] = str(result.get("detail") or "The work PC didn't answer.")
         return out
-    if job.get("dry"):
-        out.update(ok=True, said=str(result.get("detail")))
-        return out
-    made = [t for t in trips if t.get("status") == "ACCEPTED"]
     said = [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in {payload.get('seconds')} seconds"
-            + (f" (cost {made[0]['cost']}, revenue {made[0]['revenue']})" if len(made) == 1 else "") + "."]
+            + (f" (cost {made[0].get('cost')}, revenue {made[0].get('revenue')})" if len(made) == 1 else "") + "."]
+    if not result.get("ok"):
+        said.append(f"Then CTMS stopped: {result.get('detail')} What was ACCEPTED is followed up below.")
     for t in made:
         if len(t.get("lines") or []) > 1:
             said.append(f"{t['manifest']} has {len(t['lines'])} lines: {t.get('took', 1)} went on from selecting them in one go"
                         + (f", the other {len(t['lines']) - t.get('took', 1)} by Apply to Trip." if t.get("took", 1) < len(t["lines"]) else "."))
-    rec = record_of(job.get("record")) or {"orders": orders}
-    if str(job["carrier"]).upper().endswith("_DH"):
-        try:
-            rows, why = tracker_rows(R, made, job["carrier"], now)
-        except Exception as e:
-            rows, why = 0, str(e)
-        said.append(f"DigiHaul: {rows} row(s) written." if not why else
-                    f"DigiHaul: {rows} of {len(made)} row(s) written, {why}. By hand: "
-                    + " | ".join(row_text(t, job["carrier"], now).replace("\t", ", ") for t in made[rows:]) + ".")
-    if str(job["carrier"]).upper() == PASS_CARRIER:
-        try:
-            told, how = pass_email(rec, made, orders)
-        except Exception as e:
-            told, how = False, str(e)[:160]
-        said.append(f"Parcel Pass: {how}." if told else
-                    f"Parcel Pass email NOT sent ({how}): tell them {and_list([t['manifest'] for t in made])} by hand.")
-        out["pass_email"] = told
-    try:
-        sent, how = site_email(rec, job, made)
-    except Exception as e:
-        sent, how = False, str(e)[:160]
-    said.append(f"Site: {how}." if sent else f"Site email NOT sent ({how}): tell them {and_list([t['manifest'] for t in made])} by hand.")
-    out["email"] = sent
-    try:
-        if file_away(rec) and sent:
-            said.append("Chain filed.")
-    except Exception:
-        pass
-    try:
-        removed, _ = take_off(job.get("record"))
-        said.append("Off the map." if removed else "Still on the map: it went under another id.")
-    except Exception as e:
-        said.append(f"Still on the map ({str(e)[:80]}).")
-    out.update(ok=True, said=" ".join(said), total=round(time.time() - t0, 1))
+    said += follow(k, R, now)
+    e = J.get(k) or {}
+    out.update(ok=True, said=" ".join(said), email=bool(((e.get("steps") or {}).get("site_email") or {}).get("ok")),
+               total=round(time.time() - t0, 1))
+    if "pass_email" in (e.get("steps") or {}):
+        out["pass_email"] = bool(e["steps"]["pass_email"].get("ok"))
     return out
+
+
+def retry(now=None):
+    """The home PC's timer (agent.py, every few minutes): answers never heard looked for again, and Outlook's steps that
+    failed tried again on their own clock. Nothing is asked of CTMS but the work PC's own record."""
+    import book_journal as J
+    if _lock() is None:
+        return {"ok": True, "said": "a booking is running: next time", "did": []}
+    did = []
+    for k in J.unanswered():
+        e = recall(k)
+        did.append(f"{k}: {(e or {}).get('state')}")
+    for k, steps in J.due():
+        words = follow(k, now=now, auto=True, only=steps)
+        did.append(f"{k}: " + " ".join(words))
+    return {"ok": True, "said": f"{len(did)} booking(s) looked at", "did": did}
+
+
+def clear(k, step=None):
+    """His Done by hand / Clear on the Bookings card."""
+    import book_journal as J
+    e = J.by_hand(k, step)
+    return {"ok": e is not None, "said": "cleared" if e is not None else "that booking is no longer on file",
+            "state": (e or {}).get("state")}
 
 
 def main(argv):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if argv[:1] == ["retry"]:
+        res = retry()
+        print(res["said"])
+        for d in res["did"]:
+            print("  " + d)
+        print(json.dumps(res, default=str))
+        return 0
+    if argv[:1] == ["clear"] and len(argv) >= 2:
+        res = clear(argv[1], argv[2] if len(argv) > 2 else None)
+        print(json.dumps(res, default=str))
+        return 0 if res["ok"] else 1
     if len(argv) < 2 or argv[0] != "run":
         print(__doc__)
         return 2

@@ -87,6 +87,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import cdp
 import ctms_act
+import book_record
 import ctms_book
 import ctms_drive
 import ctms_export
@@ -120,7 +121,8 @@ LOCK_PORT = 8792
 # Everything this bridge will do, by who may ask and what it takes.
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking: no switch needed
-        "prompt")            # ... at the "open or save?" box CTMS's browser puts up (ctms_window.prompts)
+        "prompt",            # ... at the "open or save?" box CTMS's browser puts up (ctms_window.prompts)
+        "book_recall")       # ... and what this PC's Book made, from its own record (book_record): CTMS untouched
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab", "drag",
          "steps", "paste",
@@ -989,6 +991,8 @@ class Bridge:
                 + (f" Already made: {', '.join(x['manifest'] + ' ' + x['status'] for x in made)}." if made else ""))
         if job.veh_kept and (stopped or cmd.get("dry")) and not made:
             said += f" CTMS keeps {job.veh_kept} as the line's Veh Type from the carrier screen."
+        # written down before the answer goes, so the home PC can ask for it again if the answer never reaches it
+        book_record.keep(cmd.get("id"), orders, date, carrier, cmd.get("dry"), not stopped, said, job.trips, stopped)
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
                                             stages=job.stages, notes=job.said, stopped=stopped, seconds=took))
 
@@ -1458,6 +1462,10 @@ class Bridge:
             return self.shared_folder(cmd, done)
         if action == "dts_add":
             return self.dts_add(cmd, done)
+        if action == "book_recall":
+            found = book_record.recall(cmd.get("orders") or [], cmd.get("date") or "", cmd.get("ask"))
+            return done(True, f"{len(found)} booking(s) on record for {' / '.join(cmd.get('orders') or [])} on "
+                              f"{cmd.get('date')}.", {"kind": "book_recall", "found": found})
         if action == "folder_read":
             try:
                 said, got = shared_folder.look(cmd.get("folder"))

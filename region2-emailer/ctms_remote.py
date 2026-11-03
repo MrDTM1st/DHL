@@ -162,8 +162,10 @@ def save_state(p):
                    "at": datetime.now().isoformat(timespec="seconds")}, f)
 
 
-def ask(action, wait_total=90, **args):
-    """Send one command to the work PC and wait for its answer: (result, payload)."""
+def ask(action, wait_total=90, on_id=None, **args):
+    """Send one command to the work PC and wait for its answer: (result, payload). on_id(id) is told the dashboard's
+    number for the command as soon as it has one - the booking journal keeps it, so an answer that comes after this
+    gives up waiting can still be found (result_of)."""
     body = {k: v for k, v in args.items() if v is not None}
     body["action"] = action
     if action in NEEDS_SNAP and ("ref" in body or "at" in body):
@@ -178,6 +180,11 @@ def ask(action, wait_total=90, **args):
     if code != 200:
         raise Stop(r.get("error") or f"The dashboard answered HTTP {code}.")
     cid = r["id"]
+    if on_id is not None:
+        try:
+            on_id(cid)
+        except Exception:
+            pass                        # the journal failing to note it must not lose the command
     if not r.get("online"):
         print("(the work PC bridge is offline right now - it gets 60s to check in and pick this up)")
     deadline = time.time() + wait_total
@@ -191,6 +198,14 @@ def ask(action, wait_total=90, **args):
             raise Stop(w.get("error") or f"The dashboard answered HTTP {code}.")
         if w.get("done"):
             return w["result"], w.get("payload")
+
+
+def result_of(cid):
+    """A command's answer if the dashboard still holds it: (result, payload), or (None, None). Asks nothing of the work PC."""
+    code, w = http("GET", f"/api/ctms/result?id={int(cid)}&wait=0", timeout=45)
+    if code != 200 or not w.get("done"):
+        return None, None
+    return w["result"], w.get("payload")
 
 
 def ask_waiting(action, wait_total=90, patience=420, **args):

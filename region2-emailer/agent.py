@@ -537,9 +537,19 @@ def push_panel():
             "planner_week": _planner_week(),
             "noc_teams": _noc_teams(),
             "no_address": _no_address(),
+            "bookings": _bookings(),
         })
     except Exception:
         pass
+
+
+def _bookings():
+    """Bookings still being finished or waiting on him (book_journal) - the dashboard's Bookings card."""
+    try:
+        import book_journal
+        return book_journal.open_items()
+    except Exception:
+        return []
 
 
 def _no_address():
@@ -709,6 +719,10 @@ def _bg_jobs():
         # auto-chasers: OPT-IN via auto_chase.enabled (re-checked inside
         # phase2 right before sending, in case it is switched off meanwhile)
         ("chase", ["phase2.py", "chase", "send"], 10800, 1800, auto_chase_on),
+        # bookings: an answer the home PC gave up waiting for looked for again, and a site / Parcel Pass email, the
+        # filing or off-the-map that failed tried again a few minutes on (book_run.py retry, the booking journal).
+        # Nothing is booked from here - CTMS is only asked for its own record of what it made
+        ("book_retry", ["book_run.py", "retry"], 180, 600, lambda: True),
         # ad hocs whose manifest has come back leave the map
         ("adhoc_sweep", ["adhoc_booked_sweep.py", "apply"], 300, 600, lambda: True),
         # Phase 2: replies + OOO flags. Also run when monitor_tick
@@ -741,7 +755,7 @@ class BackgroundJobs:
     # First start with no saved timers: the jobs that used to run "soon after
     # start" are spread a minute apart instead of all firing at once; the rest
     # wait a full interval, as before.
-    SOON = ("adhoc_sweep", "phase2_check", "haulier_asks", "waitlist_release",
+    SOON = ("book_retry", "adhoc_sweep", "phase2_check", "haulier_asks", "waitlist_release",
             "waitscan", "recover", "planner_week")
     LOG_MAX = 256 * 1024
 
@@ -1688,6 +1702,16 @@ def main():
                 push_panel()
                 push_tracker()
                 report("done" if res["ok"] else "error", "Book: " + res["said"], tail(out, 12))
+            elif action == "book_clear":
+                # the Bookings card's Done by hand / Clear: he has looked in CTMS or done the step himself
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                key = str(d.get("key") or "")[:200]
+                step = str(d.get("step") or "")[:20]
+                out = run(["book_run.py", "clear", key] + ([step] if step else []), timeout=60) if key else ""
+                push_panel()
+                report("done" if '"ok": true' in out else "error",
+                       ("Booking: noted - " + (step.replace("_", " ") if step else "cleared") + ".") if '"ok": true' in out
+                       else "That booking is no longer on file.", tail(out, 4))
             elif action == "ctms_rail":
                 # the Rail plan card's Export from CTMS: the week's Short Rail Report exported by driving CTMS on the
                 # work PC (ctms_rail_export.py). The bridge sends the file on, and the rail_plan preview that queues

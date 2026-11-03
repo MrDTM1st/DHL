@@ -3,6 +3,7 @@ import { I } from '../icons.jsx';
 import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.js';
 import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus, mailPending, mailApprove, mailControl } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
+import BookingsCard from '../components/BookingsCard.jsx';
 
 // ---- Holiday cover / handover card ----
 function HolidayCard({ panel, onCommand }) {
@@ -584,6 +585,7 @@ export default function Dashboard({
       </div>
 
       <MailApprovals hint={!!(status && status.mail_pending)} />
+      <BookingsCard rows={panel && panel.bookings} onCommand={onCommand} />
       <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
 
       <MyWeek week={panel && panel.planner_week} />

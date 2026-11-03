@@ -76,7 +76,8 @@ CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdi
             if DASH_KEY else "")
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking
-             "prompt")                   # ... at the "open or save?" box CTMS's browser puts up after an export
+             "prompt",                   # ... at the "open or save?" box CTMS's browser puts up after an export
+             "book_recall")              # ... and what the work PC's own record says a Book made (book_record)
 CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / Claude's own text pasted
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag",   # Claude acting - only while the switch is on
@@ -419,6 +420,11 @@ def _ctms_args(action, data):
         out["dry"] = bool(data.get("dry"))
         num("haulage", 0, 100000)
         num("vehicles", 1, 20, int)
+    if action == "book_recall":
+        # what a Book made, asked again from the work PC's own record: which orders, which day, which command
+        out["orders"] = [str(o) for o in (data.get("orders") or [])[:8] if _CHECK_REF.fullmatch(str(o))]
+        out["date"] = str(data.get("date") or "") if _DDMMYYYY.fullmatch(str(data.get("date") or "")) else ""
+        num("ask", 1, 10 ** 9, int)
     if action == "ctms_item" and isinstance(data.get("item"), dict):
         # a note or an update, each field checked: refs that read as refs, windows and words cut to size
         it, s = data["item"], data["item"].get("set") if isinstance(data["item"].get("set"), dict) else {}
