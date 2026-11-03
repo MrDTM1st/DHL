@@ -87,7 +87,7 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "ctms_book",                         # one order's trips made in CTMS (/api/ctms/book)
               "ctms_item",                         # one item of the CTMS to-do, as the home PC's Run hands it over
               "teams_send")                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
-CTMS_ADMIN = ("update", "fields_setup", "shared_folder")
+CTMS_ADMIN = ("update", "fields_setup", "shared_folder", "folder_read")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
                      "find")                                           # (find clicks only what it finds)

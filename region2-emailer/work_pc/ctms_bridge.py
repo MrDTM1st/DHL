@@ -140,7 +140,7 @@ SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
 CHECK_ORDERS = 40       # orders one CTMS look-up takes (the map holds a few dozen at most)
 CHECK_SECONDS = 360     # ... and the longest it runs: what is looked up by then still goes to the map
-ADMIN = ("update", "fields_setup", "shared_folder")
+ADMIN = ("update", "fields_setup", "shared_folder", "folder_read")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
@@ -1455,6 +1455,12 @@ class Bridge:
             return self.update(cmd, done)
         if action == "shared_folder":
             return self.shared_folder(cmd, done)
+        if action == "folder_read":
+            try:
+                said, got = shared_folder.look(cmd.get("folder"))
+            except (ValueError, OSError) as e:
+                return done(False, str(e))
+            return done(True, said, got)
         self.refresh(force=True)
         self.scan_window(force=True)
         try:

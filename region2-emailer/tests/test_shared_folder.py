@@ -447,3 +447,24 @@ if __name__ == "__main__":
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     _httpd.shutdown()
     sys.exit(1 if failed else 0)
+
+
+def test_a_look_is_kept_to_the_teams_share_and_says_what_is_there():
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        os.mkdir(os.path.join(root, "Admin"))
+        with open(os.path.join(root, "Admin", "sheet.xlsx"), "wb") as f:
+            f.write(b"xlsx")
+        _, got = SF.look(os.path.join(root, "Admin"), root=root)
+        assert got["kind"] == "folder" and got["items"][0]["name"] == "sheet.xlsx" and not got["items"][0]["dir"]
+        _, got = SF.look(os.path.join(root, "Admin", "sheet.xlsx"), root=root)
+        assert got["kind"] == "file" and base64.b64decode(got["data"]) == b"xlsx"
+        for away in (os.path.dirname(root), os.path.join(root, "..", "x"), root + "2"):
+            try:
+                SF.look(away, root=root)
+                raise AssertionError("it looked outside")
+            except ValueError as e:
+                assert "isn't on the team" in str(e)
+    bs = chr(92)
+    assert SF.team_root({"folder": bs * 2 + bs.join(["srv", "a", "b", "c", "team", "Upload"])}) == bs * 2 + bs.join(["srv", "a", "b", "c", "team"])
+    assert SF.team_root({}) == ""

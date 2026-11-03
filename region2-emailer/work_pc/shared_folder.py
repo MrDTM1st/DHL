@@ -59,6 +59,8 @@ RAIL_DAYS = 28          # a plan in the folder older than this is the same week 
 EVERY = 60              # seconds between looks at the dashboard
 FIRST = 15              # ... and before the first, so the bridge has checked in by then
 KEEP_DAYS = 30          # how long a filed name is remembered (the dashboard holds one for two days)
+LOOK_ROWS = 500         # a look at a folder: at most this many, newest first
+LOOK_BYTES = 8_000_000  # ... and at a file: what the dashboard can carry back
 
 _lock = threading.Lock()        # the settings file
 _busy = threading.Lock()        # one pass at a time
@@ -104,6 +106,43 @@ def _save(cfg):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=1)
     os.replace(tmp, SETTINGS)
+
+
+def team_root(cfg=None):
+    """The team's share, taken from where the files are filed: \\\\server\\a\\b\\c\\team - so the path stays out of the code. "" with none set."""
+    cfg = load() if cfg is None else cfg
+    folder = str(cfg.get("folder") or cfg.get("rail") or "")
+    parts = [p for p in re.split(r"[\\/]+", folder) if p]
+    return "\\\\" + "\\".join(parts[:5]) if folder.startswith("\\\\") and len(parts) >= 5 else ""
+
+
+def look(path, root=None):
+    """A look at a folder or file on the team's share, nothing else and nothing changed: (what to say, the listing or the
+    file's bytes). His 03/11: the DTS sheet lives there, and only this PC reaches it."""
+    root = team_root() if root is None else root
+    if not root:
+        raise ValueError("No shared folder is set, so there's no telling what the team's share is.")
+    full = os.path.normpath(str(path or root))
+    want = os.path.normcase(root.rstrip("\\/"))
+    if os.path.normcase(full) != want and not os.path.normcase(full).startswith(want + os.sep):
+        raise ValueError("That isn't on the team's shared folder.")
+    if os.path.isdir(full):
+        rows = []
+        with os.scandir(full) as it:
+            for e in it:
+                st = e.stat()
+                rows.append({"name": e.name, "dir": e.is_dir(), "size": st.st_size,
+                             "at": datetime.fromtimestamp(st.st_mtime).strftime("%d/%m/%Y %H:%M")})
+        rows.sort(key=lambda r: datetime.strptime(r["at"], "%d/%m/%Y %H:%M"), reverse=True)
+        return f"{len(rows)} in that folder.", {"kind": "folder", "path": full, "items": rows[:LOOK_ROWS]}
+    if os.path.isfile(full):
+        size = os.path.getsize(full)
+        if size > LOOK_BYTES:
+            raise ValueError(f"That file is {size:,} bytes, over the {LOOK_BYTES:,} a look can bring back.")
+        with open(full, "rb") as f:
+            data = base64.b64encode(f.read()).decode()
+        return f"{os.path.basename(full)}, {size:,} bytes.", {"kind": "file", "path": full, "data": data}
+    raise ValueError("The work PC can't find that.")
 
 
 def _since(cfg):
