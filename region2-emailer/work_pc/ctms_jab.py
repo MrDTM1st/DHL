@@ -314,9 +314,11 @@ def walk(api, vm, ac, out, ctx, win, level=0, sign_in=False, depth=0):
         if "focused" in i["states"] and ctx["focus"] is None:
             ctx["focus"] = e["n"]
         below = level + 1
-    if role == "internal frame" and ctx.get("skip") and name.startswith(ctx["skip"]):
+    if role in ("internal frame", "page tab") and ctx.get("skip") and name.startswith(ctx["skip"]):
         return                                  # named, so it's known to be up, but what's in it isn't wanted this time
-    if role in ctx.get("skip_roles", ()):
+    if role == "menu" and "menu" in ctx.get("skip_roles", ()) and not ({"expanded", "selected"} & i["states"]):
+        return                                  # a closed menu: its items are off the screen (70 of a Planning read)
+    if role in ctx.get("skip_roles", ()) and role != "menu":
         return                                  # Planning's manifest tree: 112 rows on 03/11, wanted only after a trip
     if role == "list" and (i["w"] <= 0 or i["h"] <= 0):
         return                                  # a drop-down that isn't open: none of its rows are on the screen, and

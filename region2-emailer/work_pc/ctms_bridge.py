@@ -966,8 +966,9 @@ class Bridge:
                 finally:
                     times.append(round(time.time() - ts, 2))
 
-        job = ctms_book.Booking(run, lambda tree=True: ctms_jab.read_fields(
-                                    self.win, skip_roles=() if tree else ("tree",)).get("elements") or [],
+        job = ctms_book.Booking(run, lambda tree=True, skip=(): ctms_jab.read_fields(
+                                    self.win, skip=skip, skip_roles=("menu",) if tree else ("tree", "menu")
+                                ).get("elements") or [],
                                 lambda name, box: self._seen(t, name, box), t, dry=bool(cmd.get("dry")))
         stopped = ""
         try:

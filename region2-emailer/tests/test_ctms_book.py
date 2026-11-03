@@ -81,7 +81,7 @@ class FakeCtms:
         rows = list(reversed(self.upto())) if self.reversed else self.upto()
         return rows[self.page * self.rows_a_page:self.page * self.rows_a_page + self.rows_a_page]
 
-    def read(self, tree=True):
+    def read(self, tree=True, skip=()):
         """As the Access Bridge hands it over: without tree, the manifest tree's own box but none of its rows."""
         self.reads += 1
         els = [{"r": "internal frame", "nm": "Planning", "lv": 0, "at": [20, 130, 1648, 807]},
@@ -102,6 +102,8 @@ class FakeCtms:
         for i, r in enumerate(self.rows_shown()):
             for col in ("cust_ref", "booking_ref", "deliver", "del_type", "weight", "to_reg"):
                 els.append(dict(_cell(col, i, r.get(col, "")), lv=2))
+        if "Planning" in skip:                  # a card's read: Planning named, nothing inside it
+            els = els[:1]
         if self.panel:
             els.insert(0, {"r": "internal frame", "nm": "Planned Orders", "lv": 0, "at": [503, 513, 1006, 332]})
             for i, ref in enumerate(self.panel):
@@ -834,8 +836,8 @@ def test_a_question_nobody_asked_is_answered_ok_and_stops_the_booking():
     ctms = FakeCtms([_row("9100001-1-1")])
     real = ctms.read
 
-    def alert(tree=True):
-        els = real(tree)
+    def alert(tree=True, skip=()):
+        els = real(tree, skip)
         if not getattr(ctms, "alert_gone", False):
             els = [{"r": "internal frame", "nm": "A schedule must be selected.", "lv": 0, "at": [790, 470, 310, 160]},
                    {"r": "option pane", "nm": "", "lv": 1, "at": [790, 490, 310, 140]},

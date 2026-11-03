@@ -76,6 +76,10 @@ LIST_PAGES = 8                     # looks down a drop-down: a letter of the car
 MANIFEST = re.compile(r"(MAN-\d+)\s*\((\w+)\)")
 SCHEDULED_ON = re.compile(r"scheduled on trip:\s*(\d+)\s*/\s*(MAN-\d+)", re.I)
 ANCHOR = {"action": "anchor", "window": True}
+# What a read leaves out (03/11, measured live): Planning's Stops and Resources tab pages, never read by Book; with an
+# order's card up, Planning and the OPOKUD window behind it altogether - the card is all that's wanted then
+PLANNING_SKIP = ("Stops", "Resources")
+CARD_SKIP = ("Planning", "OPOKUD")
 
 
 class Stop(RuntimeError):
@@ -267,12 +271,13 @@ class Booking:
         self.stages.append([name, round(now - self._t, 1)])
         self._t = now
 
-    def look(self, tree=False, asking=False):
+    def look(self, tree=False, asking=False, card=False):
         """CTMS as it is now, through the Access Bridge. tree: Planning's manifest tree as well - only wanted around a
         trip being made (the manifests before, the new one after, Accepted): 112 rows on a weekday (03/11), read for
         nothing everywhere else. asking: a question of CTMS's is expected on this read (Confirm Create Trip, "discard
-        your changes?") - any other one stops the booking, answered the way that changes nothing."""
-        self.els = self.read(tree)
+        your changes?") - any other one stops the booking, answered the way that changes nothing. card: an order's card
+        is what's wanted - Planning behind it isn't read (850 things, 03/11)."""
+        self.els = self.read(tree, CARD_SKIP if card else PLANNING_SKIP)
         self.has_tree = tree
         self.reads += 1
         if not asking:
@@ -590,7 +595,7 @@ class Booking:
         self.run([{"action": "click", "screen": ctms_rows.point(row), "double": True, "react": True,
                    "box": [20, 121, 1250, 171], "timeout": 20},
                   ANCHOR, _find(self.t, "od-vehtype", (940, 250, 1100, 380), 5)])
-        got = card_ref(self.look())
+        got = card_ref(self.look(card=True))
         if got.upper() != ref.upper():
             self.run([_click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
             raise Stop(f"The well opened {got or 'no order'} for {ref}: closed it again, unchanged. Nothing was booked.")
@@ -603,7 +608,7 @@ class Booking:
             raise Stop(f"The order's {name} tab couldn't be found on its card. Nothing was booked.")
         self.run([{"action": "click", "screen": ctms_lines.point(t), "react": True, "box": [20, 200, 1250, 700],
                    "quiet": 0.2, "timeout": 8}])
-        return self.look()
+        return self.look(card=True)
 
     def type_into(self, box, text):
         """A box clicked where the Access Bridge places it, what it holds selected, the text typed over it."""
@@ -614,18 +619,18 @@ class Booking:
         """One Order Items row put right in its own window (Edit/Delete): the Identifier through Ctrl+L's list, its top
         choice taken (his rule 03/11); Ordered typed. Read back, Save, Exit."""
         self.run([{"action": "click", "screen": ctms_lines.point(it["cell"]), "after": 0.3}])
-        edit = ctms_lines.button(self.look(), ctms_lines.CARD, "Edit/Delete")
+        edit = ctms_lines.button(self.look(card=True), ctms_lines.CARD, "Edit/Delete")
         if edit is None:
             raise Stop(f"{ref}: Order Items' Edit/Delete couldn't be found. Nothing was booked.")
         self.run([{"action": "click", "screen": ctms_lines.point(edit), "react": True, "box": [20, 50, 850, 560],
                    "quiet": 0.2, "timeout": 10}])
-        win = ctms_lines.item_window(self.look())
+        win = ctms_lines.item_window(self.look(card=True))
         if win is None or win["identifier"].upper() != it["identifier"].upper():
             raise Stop(f"{ref}: the item window that opened isn't {it['identifier']}'s. Nothing was changed.")
         if identifier:
             self.type_into(ctms_lines.field(self.els, ctms_lines.ITEM_WINDOW, "Identifier"), identifier)
             self.run([_key("ctrl+l", 0.3), {"action": "settle", "quiet": 0.3, "timeout": 8}])
-            listed = ctms_lines.choices(self.look(asking=True))
+            listed = ctms_lines.choices(self.look(asking=True, card=True))
             if not listed:
                 cancel = ctms_lines.button(self.els, ctms_lines.LIST_WINDOW, "Cancel")
                 if cancel is not None:
@@ -637,9 +642,9 @@ class Booking:
             self.run([{"action": "click", "screen": ctms_lines.point(ok), "after": 0.4}])  # its top row is the one picked
             identifier = listed[0][0]
         if ordered is not None:
-            self.type_into(ctms_lines.field(self.look(), ctms_lines.ITEM_WINDOW, "Ordered"), f"{ordered:g}")
+            self.type_into(ctms_lines.field(self.look(card=True), ctms_lines.ITEM_WINDOW, "Ordered"), f"{ordered:g}")
             self.run([_key("tab", 0.2)])
-        win = ctms_lines.item_window(self.look())
+        win = ctms_lines.item_window(self.look(card=True))
         if (identifier and win["identifier"].upper() != identifier.upper()) or (
                 ordered is not None and not ctms_lines.same(win["ordered"], ordered)):
             raise Stop(f"{ref}: the item didn't read back as typed (Identifier {win['identifier']}, Ordered "
@@ -647,11 +652,11 @@ class Booking:
         save = ctms_lines.button(self.els, ctms_lines.ITEM_WINDOW, "Save")
         self.run([{"action": "click", "screen": ctms_lines.point(save), "after": 0.6},
                   {"action": "settle", "quiet": 0.4, "timeout": 10}])
-        self.answer_schedule(self.look(asking=True))
+        self.answer_schedule(self.look(asking=True, card=True))
         leave = ctms_lines.button(self.els, ctms_lines.ITEM_WINDOW, "Exit")
         if leave is not None:
             self.run([{"action": "click", "screen": ctms_lines.point(leave), "after": 0.5}])
-        if ctms_lines.item_window(self.look(asking=True)) is not None:
+        if ctms_lines.item_window(self.look(asking=True, card=True)) is not None:
             raise Stop(f"{ref}: the item window wouldn't close after its Save - look at it in CTMS.")
         self.unasked()
 
@@ -661,7 +666,7 @@ class Booking:
         q = ctms_rows.question(els)
         if q and "schedule" in q[0].lower() and "ok" in q[1]:
             self.run([{"action": "click", "screen": _at(q[1]["ok"]), "after": 0.6}])
-            self.look(asking=True)
+            self.look(asking=True, card=True)
         self.unasked()
 
     def check_line(self, ref, want=None):
@@ -680,14 +685,14 @@ class Booking:
             return False
         for i, identifier, ordered in todo["items"]:
             self.fix_item(ref, its[i], identifier, ordered)
-            its = ctms_lines.items(self.look())
+            its = ctms_lines.items(self.look(card=True))
         if todo["qty"] is not None:
             box = (ctms_lines.detail(self.card_tab("Detail")) or [{}])[0].get("qty_box")
             if box is None:
                 raise Stop(f"{ref}: the Detail tab's Qty couldn't be found. Nothing more was typed.")
             self.type_into(box, f"{todo['qty']:g}")
             self.run([_key("tab", 0.2)])
-            got = ctms_lines.detail(self.look())
+            got = ctms_lines.detail(self.look(card=True))
             if not got or not ctms_lines.same(got[0]["qty"], todo["qty"]):
                 raise Stop(f"{ref}: the Detail tab's Qty didn't read back as {todo['qty']:g}. Not saved.")
         self.said += todo["said"]
@@ -720,7 +725,7 @@ class Booking:
             self.said.append(f"{ref} would be put up to {typ}")
         if changed:
             self.run([_click(ORDER_SAVE, react=True, quiet=1, timeout=15), ANCHOR])
-            self.answer_schedule(self.look(asking=True))
+            self.answer_schedule(self.look(asking=True, card=True))
         self.close_card(saved=changed)
         return changed
 
