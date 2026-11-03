@@ -33,6 +33,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
+import ctms_filters
 import ctms_lines
 import ctms_orders
 import ctms_rows
@@ -259,6 +260,7 @@ class Booking:
         self.to_was = ""           # the well's To as he had it: put back at the end
         self.trips = []
         self.reads = 0             # Access Bridge reads this booking took: the seconds he waits are mostly these
+        self.filters_was = {}      # the well's filters as he had them, while Book has them cleared: {window: {name: value}}
         self.has_tree = False
         self.veh_kept = ""         # what CTMS now keeps as the Veh Type of the line taken to the carrier screen
         self.said = []
@@ -307,7 +309,17 @@ class Booking:
     def start(self):
         """CTMS with Planning up and nothing open over it - an order left open with changes stops the run, untouched."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4), ANCHOR])
-        self.look()
+        self.look(asking=True)
+        left = ctms_rows.question(self.els)
+        if left and set(left[1]) == {"ok"} and placed(left[1]["ok"]):
+            # a notice already up before this booking began (live 03/11: "FRM-92220: access to system clipboard
+            # denied"): not this booking's - OK'd, said, and on we go
+            self.run([{"action": "click", "screen": _at(left[1]["ok"]), "after": 0.5}, ANCHOR])
+            words = re.sub(r"\s+", " ", left[0]).strip()[:120]
+            self.said.append(f"CTMS had \"{words}\" up from before: OK'd it")
+            self.look()
+        else:
+            self.unasked()
         if not any(f.startswith("Planning") for f in frames(self.els)):
             self.run([{"action": "anchor"}, _click((121, 36), react=True, box=[60, 45, 300, 150], quiet=0.2, timeout=5),
                       _click((128, 87), react=True, box=[280, 60, 460, 300], quiet=0.2, timeout=5),
@@ -574,6 +586,7 @@ class Booking:
         self.run([ANCHOR])
         self.look()
         self.carrier_window_away()
+        self.restore_filters()
         if self.to_was and not self.unsaved():
             self.move_to(self.to_was)
             self.look()
@@ -744,6 +757,162 @@ class Booking:
                 raise Stop("The order's changes didn't save, so they were thrown away and nothing was booked: look at it "
                            "in CTMS.")
         self.unasked()
+
+    # -- why the well hasn't got it: Order Summary asked, the filters cleared when they're what hides it
+    def summary_lines(self, orders):
+        """Every line of these orders as Order Summary lists them (searches and reads only), then back to Planning."""
+        self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t) + ctms_orders.card(self.t))
+        far = ctms_orders.upto(self.look(card=True), self.now)
+        if far:
+            self.run(far)
+        got = []
+        for o in orders:
+            try:
+                self.run(ctms_orders.search(ctms_orders.search_ref(o)))
+            except RuntimeError:
+                pass                           # nothing found leaves the list empty
+            got += [r for r in ctms_orders.lines({"elements": self.look(card=True)}) or [] if ctms_orders.belongs(r["ref"], o)]
+        self.run([_click((509, 226), after=0.5)] + ctms_orders.close_summary(self.t) + [ANCHOR])
+        self.look()
+        return got
+
+    def why_missing(self, orders, date):
+        """What Order Summary says about orders the well hasn't shown for that day: "hidden" when they ARE there,
+        unscheduled, on that day - the well's filters must be keeping them out - else the words he is told."""
+        rows = self.summary_lines(orders)
+        named = " / ".join(orders)
+        mine = [r for r in rows if ctms_orders.day(r.get("deliver_by")) == date]
+        if any(r["status"] == ctms_orders.OPEN for r in mine):
+            return "hidden"
+        if mine:
+            return f"{named} is booked in already on {date} (CTMS: {', '.join(sorted({r['status'] for r in mine}))})."
+        other = sorted({f"{r['ref']} on {ctms_orders.day(r.get('deliver_by'))}" for r in rows if r["status"] == ctms_orders.OPEN})
+        if other:
+            return f"CTMS has {', '.join(other)}, not {date}: run its update first or check the date."
+        return f"{named} isn't in CTMS for {date} at all: its upload may not have gone in yet."
+
+    def filter_window(self, window):
+        """Order Filters (Planning's button) or Advanced Order Filters (the panel's button) up: their boxes read."""
+        if ctms_filters.boxes(self.els, window) is not None:
+            return self.els
+        if window == ctms_filters.PANEL:
+            btn = next((e for e in ctms_rows._frame(self.els) or [] if e.get("r") == "push button"
+                        and e.get("nm") == "Order Filters" and placed(e)), None)
+        else:
+            btn = ctms_lines.button(self.els, ctms_filters.PANEL, "Advanced Filters")
+        if btn is None:
+            raise Stop(f"Planning's {window} couldn't be found to look at.")
+        self.run([{"action": "click", "screen": _at(btn), "after": 0.8}, {"action": "settle", "quiet": 0.3, "timeout": 8}])
+        if ctms_filters.boxes(self.look(), window) is None:
+            raise Stop(f"{window} didn't open.")
+        return self.els
+
+    def set_box(self, window, name, want):
+        """One filter box to want - a tick clicked, words typed, a drop-down moved by its keys - and read back."""
+        box = (ctms_filters.boxes(self.els, window) or {}).get(name)
+        if box is None:
+            return False
+        have = ctms_filters.value(box)
+        if have == want:
+            return True
+        if box.get("r") == "check box":
+            self.run([{"action": "click", "screen": _at(box), "after": 0.3}])
+        elif box.get("r") == "text":
+            self.type_into(box, want or "")
+            self.run([_key("tab", 0.2)])
+        else:
+            rows = None
+            for _ in range(2):                         # a click without the focus may only give it the focus
+                self.run([{"action": "click", "screen": [box["at"][0] + box["at"][2] - 10, box["at"][1] + box["at"][3] // 2],
+                           "after": 0.5}])
+                box = (ctms_filters.boxes(self.look(), window) or {}).get(name) or box
+                rows = ctms_filters.list_rows(self.els, box)
+                if rows:
+                    break
+            keys = ctms_filters.moves(rows or [], want or "")
+            if keys is None:
+                if rows:
+                    self.run([_key("escape", 0.3)])
+                return False
+            self.run([_key(k, 0.04) for k in keys] + [_key("enter", 0.3), {"action": "settle", "quiet": 0.4, "timeout": 10}])
+        got = (ctms_filters.boxes(self.look(), window) or {}).get(name)
+        return got is not None and ctms_filters.value(got) == want
+
+    def apply_filters(self, window):
+        """The window's own button that puts its filters on the well: Advanced's Search, the panel's Refresh."""
+        btn = ctms_lines.button(self.els, window, "Search" if window == ctms_filters.ADVANCED else "Refresh")
+        if btn is not None:
+            self.run([{"action": "click", "screen": _at(btn), "after": 0.6}, {"action": "settle", "quiet": 0.6, "timeout": 20}])
+            self.look()
+
+    def close_filters(self):
+        """Advanced's Close, then the panel by its own X (where it sits: it doesn't open in one place)."""
+        btn = ctms_lines.button(self.els, ctms_filters.ADVANCED, "Close")
+        if btn is not None:
+            self.run([{"action": "click", "screen": _at(btn), "after": 0.5}])
+            self.look()
+        head, _ = ctms_filters._frame(self.els, ctms_filters.PANEL)
+        if head is not None and placed(head):
+            x, y, w, _h = head["at"]
+            self.run([{"action": "click", "screen": [x + w - 13, y + 11], "after": 0.5}])
+            self.look()
+
+    def clear_filters(self):
+        """The filters he has on, kept, then cleared the way a clean well has them, and the well re-queried. True when
+        any were on (and are off now); False when none were - a filter isn't what hides the order."""
+        self.filter_window(ctms_filters.PANEL)
+        self.filter_window(ctms_filters.ADVANCED)
+        was = {w: ctms_filters.set_ones(ctms_filters.values(self.els, w)) for w in (ctms_filters.ADVANCED, ctms_filters.PANEL)}
+        was = {w: v for w, v in was.items() if v}
+        if not was:
+            self.close_filters()
+            return False
+        if self.dry:
+            self.said.append("the well's filters would be cleared and put back: " + "; ".join(
+                ctms_filters.said(v) for v in was.values()))
+            self.close_filters()
+            return False
+        self.filters_was = was
+        stuck = []
+        for w in (ctms_filters.ADVANCED, ctms_filters.PANEL):
+            for name in was.get(w, {}):
+                if w == ctms_filters.PANEL and ctms_filters.boxes(self.els, w) is None:
+                    self.filter_window(w)
+                if not self.set_box(w, name, ctms_filters.CLEAN.get(name, False if isinstance(was[w][name], bool) else "")):
+                    stuck.append(name)
+            if w in was:
+                self.apply_filters(w)
+                if w == ctms_filters.ADVANCED and ctms_filters.boxes(self.els, ctms_filters.PANEL) is None:
+                    self.filter_window(ctms_filters.PANEL)
+        self.close_filters()
+        self.said.append("the well's filters cleared to find it: " + "; ".join(ctms_filters.said(v) for v in was.values()))
+        if stuck:
+            raise Stop(f"The well's filters wouldn't all clear ({', '.join(stuck)}). Nothing was booked.")
+        return True
+
+    def restore_filters(self):
+        """His filters put back as he had them, each read back. What won't go back is said, for him to put back."""
+        if not self.filters_was:
+            return
+        was, self.filters_was, missed = self.filters_was, {}, []
+        try:
+            self.look()
+            self.filter_window(ctms_filters.PANEL)
+            for w in (ctms_filters.ADVANCED, ctms_filters.PANEL):
+                if w not in was:
+                    continue
+                self.filter_window(w)
+                for name, v in was[w].items():
+                    if not self.set_box(w, name, v):
+                        missed.append(f"{name} {v!r}")
+                self.apply_filters(w)
+            self.close_filters()
+        except (Stop, RuntimeError) as e:
+            missed.append(f"(stopped: {e})")
+        if missed:
+            self.said.append("PUT BACK BY HAND on the well's filters: " + ", ".join(missed))
+        else:
+            self.said.append("the well's filters put back as they were")
 
     def split(self, ref, parts):
         """One line into equal parts, through Order Summary: its menu's Split Orders, the number, Process, OK, Exit, and
@@ -937,9 +1106,17 @@ class Booking:
                 self.move_to(self.to_was)
                 self.look()
             other = sorted({f"{r['cust_ref']} on {ctms_orders.day(r.get('deliver'))}" for r in self.scan(orders, "")})
-            raise Stop((f"CTMS has {', '.join(other)}, not {date}: run its update first or check the date." if other else
-                        f"{named} isn't in the order well for {date}. It may be booked already, not in CTMS yet, on another "
-                        "day in CTMS, or kept out by the well's filters (Business Type, To Plan Reg).") + " Nothing was booked.")
+            if other:
+                raise Stop(f"CTMS has {', '.join(other)}, not {date}: run its update first or check the date. "
+                           "Nothing was booked.")
+            why = self.why_missing(orders, date)          # Order Summary asked, not guessed (03/11)
+            if why == "hidden" and self.clear_filters():
+                self.set_day(sched_for_day(date))
+                lines = self.lines(orders, date)
+            if not lines:
+                raise Stop((f"{named} is in CTMS, unscheduled for {date}, but the order well won't show it even with its "
+                            "filters as a clean well has them - look at the well's layout." if why == "hidden" else why)
+                           + " Nothing was booked.")
         want = sched_for_delivery(lines[0].get("deliver"))
         if want and want != sched_of(self.els):
             self.set_day(want)

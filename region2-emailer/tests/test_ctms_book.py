@@ -537,7 +537,7 @@ def test_the_hunt_stops_at_a_page_already_before_the_day():
         _book(ctms)
         raise AssertionError("should have stopped")
     except B.Stop as e:
-        assert "isn't in the order well" in str(e)
+        assert "isn't in CTMS for 06/11/2026 at all" in str(e)        # Order Summary asked once the hunt gave up
     assert sum(1 for s in ctms.steps if s.get("key") == "pagedown") < 15
 
 
@@ -585,13 +585,59 @@ def test_ctms_on_another_day_stops_and_says_which():
     assert ctms.tree == {}
 
 
-def test_an_order_the_well_hasnt_got_says_what_it_might_be():
+def _missing(summary, filters=None, clears=True):
+    """An order the well won't show: Order Summary's lines for it, and the well's filters as he has them."""
     ctms = FakeCtms([_row("9000001-1-1")])
+    job = _job(ctms)
+    job.summary_lines = lambda orders: [dict(r) for r in summary]
+    asked = []
+
+    def clear():
+        asked.append("cleared")
+        if filters and clears:
+            ctms.well.append(_row("9100001-1-1"))                     # the filter off, the line shows
+            job.filters_was = {"Advanced Order Filters": dict(filters)}
+            return True
+        return False
+    job.clear_filters = clear
+    return ctms, job, asked
+
+
+def _summary(status, day="06/11/26 08:30"):
+    return [{"ref": "9100001-1-1", "status": status, "deliver_by": day, "schedule": "261106"}]
+
+
+def test_an_order_order_summary_hasnt_got_says_its_not_in_ctms_yet():
+    ctms, job, asked = _missing([])
     try:
-        _book(ctms)
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
         raise AssertionError("should have stopped")
     except B.Stop as e:
-        assert "isn't in the order well" in str(e) and "filters" in str(e)
+        assert "isn't in CTMS for 06/11/2026 at all" in str(e) and asked == []
+
+
+def test_an_order_already_scheduled_says_its_booked_and_touches_no_filter():
+    ctms, job, asked = _missing(_summary("SCHEDULED"))
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "booked in already on 06/11/2026 (CTMS: SCHEDULED)" in str(e) and asked == []
+
+
+def test_an_unscheduled_order_the_well_hides_has_its_filters_cleared_and_is_booked():
+    ctms, job, asked = _missing(_summary("UNSCHEDULED"), filters={"Business Type": "Strategy 2"})
+    job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+    assert asked == ["cleared"] and job.trips[0]["status"] == "ACCEPTED"
+
+
+def test_an_unscheduled_order_with_no_filter_on_says_so():
+    ctms, job, asked = _missing(_summary("UNSCHEDULED"))
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "won't show it even with its filters as a clean well has them" in str(e) and asked == ["cleared"]
 
 
 def _lines(n, order="9100001"):
@@ -838,7 +884,7 @@ def test_a_question_nobody_asked_is_answered_ok_and_stops_the_booking():
 
     def alert(tree=True, skip=()):
         els = real(tree, skip)
-        if not getattr(ctms, "alert_gone", False):
+        if ctms.reads > 2 and not getattr(ctms, "alert_gone", False):       # partway through: not one from before
             els = [{"r": "internal frame", "nm": "A schedule must be selected.", "lv": 0, "at": [790, 470, 310, 160]},
                    {"r": "option pane", "nm": "", "lv": 1, "at": [790, 490, 310, 140]},
                    {"r": "push button", "nm": "OK", "lv": 2, "at": [1025, 592, 62, 30]}] + els
@@ -871,3 +917,37 @@ def test_the_orders_quantity_goes_to_its_line_only_when_it_has_just_one():
     assert B.line_wants(["9100001-1-1"], ["9100001"], {"9100001": 16}) == {"9100001-1-1": 16.0}
     assert B.line_wants(["9100001-1-1", "9100001-2-1"], ["9100001"], {"9100001": 16}) == {}
     assert B.line_wants(["FS-1-TNNG"], ["FS-1-TNNG"], {"FS-1-TNNG": 16}) == {"FS-1-TNNG": 16.0}
+
+
+def _forms_notice(words):
+    """A Forms notice the way it really comes (live 03/11): a window called "Forms", its words in the pane and a label."""
+    return [{"r": "internal frame", "nm": "Forms", "lv": 0, "at": [20, 151, 428, 163]},
+            {"r": "option pane", "nm": words, "lv": 1, "at": [23, 172, 422, 139]},
+            {"r": "push button", "nm": "OK", "lv": 2, "at": [374, 272, 63, 31], "st": ["focused"]},
+            {"r": "label", "nm": words, "lv": 2, "at": [127, 204, 310, 40]}]
+
+
+def test_a_notice_already_up_before_the_booking_is_okd_said_and_gone_past():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    real, real_click = ctms.read, ctms.click
+
+    def read(tree=True, skip=()):
+        notice = [] if getattr(ctms, "okd", False) else _forms_notice("FRM-92220: access to system clipboard denied")
+        return notice + real(tree, skip)
+
+    def click(s):
+        if s.get("screen") == [374 + 31, 272 + 15]:
+            ctms.okd = True
+        real_click(s)
+    ctms.read, ctms.click = read, click
+    job = _book(ctms)
+    assert ctms.okd and job.trips[0]["status"] == "ACCEPTED"
+    assert job.said[0] == 'CTMS had "FRM-92220: access to system clipboard denied" up from before: OK\'d it'
+
+
+def test_a_forms_questions_words_come_from_its_pane_when_its_window_is_just_forms():
+    import ctms_rows
+    assert ctms_rows.question(_forms_notice("FRM-1: no"))[0] == "FRM-1: no"
+    framed = [{"r": "internal frame", "nm": "Change schedule to: 261106?", "lv": 0},
+              {"r": "option pane", "nm": "", "lv": 1}, {"r": "push button", "nm": "OK", "lv": 2, "at": [1, 1, 5, 5]}]
+    assert ctms_rows.question(framed)[0] == "Change schedule to: 261106?"
