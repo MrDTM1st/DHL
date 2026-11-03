@@ -219,9 +219,10 @@ def _when(text):
 
 def collection_fix(ref, s, line):
     """The collection has to come before the delivery, or CTMS doesn't keep the dates (his 03/11, 6055827: delivery pulled
-    forward a day past a collection nobody touched). {} when it does as it stands; else what the collection's dates move to,
-    by his rule: the day before, a Monday's on the Friday with STORAGE x2. A collection the plan itself has wrong, or one
-    that can't be told or can't be moved by the rule, stops the line with nothing typed."""
+    forward a day past a collection nobody touched), and a morning delivery isn't collected that same morning (his 03/11).
+    {} when it does as it stands; else what the collection's dates move to, by his rule: the day before, a Monday's on the
+    Friday with STORAGE x2. A collection the plan itself has wrong, or one that can't be told or can't be moved by the rule,
+    stops the line with nothing typed."""
     if not s.get("deliver"):
         return {}
     start = _when(ends(s["deliver"])[0])
@@ -232,7 +233,7 @@ def collection_fix(ref, s, line):
     ready = _when((line or {}).get("ready_at"))
     if ready is None:
         raise Stop(f"{ref}: its collection couldn't be read to check it against the new delivery, so nothing was typed.")
-    if ready < start:
+    if ready < start and (ready.date() != start.date() or start.hour >= 12):
         return {}
     day = start.replace(hour=0, minute=0) - timedelta(days=1)
     storage = 0
@@ -240,7 +241,7 @@ def collection_fix(ref, s, line):
         day -= timedelta(days=2)
         storage = 2
     elif day.weekday() == 5:
-        raise Stop(f"{ref}: its collection ({line['ready_at']}) is after the new delivery, and the day before is a Saturday - "
+        raise Stop(f"{ref}: its collection ({line['ready_at']}) has to move for the new delivery, and the day before is a Saturday - "
                    "no rule for that, so nothing was typed. Do this one by hand.")
     shown = day.strftime("%d/%m/%y")
     return {"day": shown, "storage": storage, "was": line["ready_at"], "ready_at": f"{shown} {ready:%H:%M}"}
@@ -533,7 +534,7 @@ class Items:
             raise Stop(f"{ref}: saved, but CTMS reads Ready At {got['ready_at']} / Deliver By {got['deliver_by']} - not {c0} / {d1}.")
         self.stage("checked")
         bits = [f"collect {s['collect']}" if s.get("collect") else "",
-                f"collection moved to {fix['day']} (it was {fix['was']}, not before the delivery)" if fix else "",
+                f"collection moved to {fix['day']} (it was {fix['was']})" if fix else "",
                 f"deliver {s['deliver']}" if s.get("deliver") else "",
                 VEH_SHOWS[veh][1] if veh else (f"{VEH_SHOWS[s['veh']][1]} already" if s.get("veh") else ""),
                 ("+" + "+".join(c.split(":")[0] for c in adds)) if adds else "", f"-{len(removes)} service(s)" if removes else ""]

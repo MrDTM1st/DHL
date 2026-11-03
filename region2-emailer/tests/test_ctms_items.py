@@ -372,6 +372,20 @@ def test_a_collection_that_cant_move_by_the_rule_stops_with_nothing_typed():
     assert o.typed == [o.ref]                                            # only its search
 
 
+def test_a_morning_delivery_isnt_collected_that_same_morning():
+    o = FakeOrder(ready="18/11/26 08:00", deliver_by="18/11/26 16:46", have=("HIAB",))
+    o.once_saved = ("17/11/26 08:00", "18/11/26 11:00")
+    said = _items(o).update(o.ref, DELIVER_ONLY)
+    assert "collection moved to 17/11/26 (it was 18/11/26 08:00)" in said
+
+
+def test_an_afternoon_delivery_can_be_collected_that_morning():
+    s = dict(DELIVER_ONLY, deliver="18/11/26 13:00-15:00", comments="18/11/26 13:00 - Sam")
+    o = FakeOrder(ready="18/11/26 08:00", deliver_by="18/11/26 16:46", have=("HIAB",))
+    o.once_saved = ("18/11/26 08:00", "18/11/26 15:00")
+    assert "collection moved" not in _items(o).update(o.ref, s)
+
+
 def test_a_collection_already_before_the_delivery_is_left_alone():
     o = FakeOrder(ready="17/11/26 08:00", deliver_by="19/11/26 16:46", have=("HIAB",))
     o.once_saved = ("17/11/26 08:00", "18/11/26 11:00")
