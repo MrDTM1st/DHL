@@ -107,6 +107,45 @@ def owed_first(orders, listing=None):
     return [i for i in items if i.get("kind") in BLOCKS and want & set(ctms_todo._bases(i.get("orders") or []))]
 
 
+def run_owed(items):
+    """The CTMS to-do's items that have to go on before this booking, run the way the to-do's Run runs them (ctms_run):
+    (all done, in words). Anything it can't type - a hand-written item, a doubt only he can settle - stays undone, and
+    the booking with it."""
+    import ctms_run
+    runnable = [i for i in items if i.get("kind") == "update"]
+    if len(runnable) < len(items):
+        other = next(i for i in items if i.get("kind") != "update")
+        return False, (f"{other['what']}: that's on the CTMS to-do and has to go on before the booking, and it isn't "
+                       "something Book can type. Do it, or tick it off.")
+    try:
+        res = _quiet(ctms_run.run, [i["id"] for i in runnable])
+    except Exception as e:
+        return False, f"The CTMS to-do's update for these orders couldn't be run first ({e})."
+    if not res.get("ok"):
+        return False, f"The CTMS to-do's update has to go on first, and it didn't all go: {res.get('said')}."
+    return True, f"The CTMS to-do's update went on first: {res.get('said')}."
+
+
+_QTY = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*x\b", re.I)
+
+
+def quantities(rec):
+    """{order: quantity} where the desk knows the order's quantity for certain, for Book's line check (his 03/11: the
+    quantity must be the order's). An ad hoc's form says it; a tracked order only when it is one order of one product
+    ("27x sleepers") - several products or orders on one record can't be shared out to CTMS's lines without guessing."""
+    orders = [str(o) for o in rec.get("orders") or []]
+    if len(orders) != 1:
+        return {}
+    if rec.get("kind") in ("adhoc", "dts"):
+        m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*", str(rec.get("qty") or ""))
+        return {orders[0]: float(m.group(1))} if m else {}
+    parts = [p for p in str(rec.get("materials") or "").split(",") if p.strip()]
+    if len(parts) != 1 or len(rec.get("product_codes") or []) > 1:
+        return {}
+    m = _QTY.match(parts[0])
+    return {orders[0]: float(m.group(1))} if m else {}
+
+
 def is_urgent(collect, now):
     """The tracker's Urgent: "If Collecting Today/Tomorrow Morning". collect as the well shows it, dd/mm/yy HH:MM."""
     try:
@@ -874,15 +913,23 @@ def book(job, R=None, now=None):
             out.update(ok=True, said=" ".join(said), trips=J.accepted(e), resumed=True, total=round(time.time() - t0, 1))
             return out
     first = owed_first(orders)
+    before = []
     if first and not dry:
-        out["said"] = (f"{first[0]['what']}: that's still on the CTMS to-do, and it has to go on before the booking. "
-                       "Run it first, or tick it off if it's done. Nothing was booked.")
-        return out
+        # his 03/11: what's missing on a line is dealt with, not gone past - the to-do's update (times, the delivery
+        # comment, services, the Veh Type) is typed in first, by the same run the to-do's Run button uses
+        went, how = run_owed(first)
+        if not went:
+            out["said"] = f"{how} Nothing was booked."
+            return out
+        before.append(how)
     R = R or _client()
     args = {k_: job[k_] for k_ in ("orders", "date", "carrier", "trailer", "vehicles", "dry") if job.get(k_) not in (None, "")}
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
-    wait = min(600, 150 + 90 * int(job.get("vehicles") or 1))
+    qty = quantities(record_of(job.get("record")) or {})
+    if qty:
+        args["qty"] = qty
+    wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
     if not dry:
         J.asking(job)
         args["on_id"] = lambda cid: J.asked(k, cid)
@@ -912,8 +959,12 @@ def book(job, R=None, now=None):
     if not made:
         out["said"] = str(result.get("detail") or "The work PC didn't answer.")
         return out
-    said = [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in {payload.get('seconds')} seconds"
-            + (f" (cost {made[0].get('cost')}, revenue {made[0].get('revenue')})" if len(made) == 1 else "") + "."]
+    said = before + [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in "
+                     f"{payload.get('seconds')} seconds"
+                     + (f" (cost {made[0].get('cost')}, revenue {made[0].get('revenue')})" if len(made) == 1 else "") + "."]
+    fixed = [n for n in payload.get("notes") or [] if "put right" in n or "put up to" in n]
+    if fixed:
+        said.append("On the lines first: " + "; ".join(fixed) + ".")
     if not result.get("ok"):
         said.append(f"Then CTMS stopped: {result.get('detail')} What was ACCEPTED is followed up below.")
     for t in made:

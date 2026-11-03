@@ -63,6 +63,14 @@ class FakeCtms:
         self.panel_stuck = False
         self.carrier_behind = False
         self.carrier_comes = True
+        # each line's card as the Access Bridge reads it live (03/11): the Detail grid and Order Items
+        self.line_info = {}             # ref: {"product", "qty", "items": [{"id", "ordered"}]}
+        self.catalog = [("S&C", "S&C"), ("WHEELSETS", "Wheelsets"), ("WHEELSET_AXLE", "Wheelset axle")]
+        self.card_tab, self.card_dirty, self.card_row = "Detail", False, 0
+        self.item_win = None            # {"row", "id", "ordered"} while the item window is up
+        self.lov = None                 # Ctrl+L's choices while its list is up
+        self.focus = None
+        self.saves = []                 # what each save put on: ("item", ref, id, ordered) / ("card", ref, qty)
 
     # -- what the Access Bridge hands over
     def upto(self):
@@ -73,7 +81,8 @@ class FakeCtms:
         rows = list(reversed(self.upto())) if self.reversed else self.upto()
         return rows[self.page * self.rows_a_page:self.page * self.rows_a_page + self.rows_a_page]
 
-    def read(self):
+    def read(self, tree=True):
+        """As the Access Bridge hands it over: without tree, the manifest tree's own box but none of its rows."""
         self.reads += 1
         els = [{"r": "internal frame", "nm": "Planning", "lv": 0, "at": [20, 130, 1648, 807]},
                {"r": "tree", "nm": "", "lv": 1, "at": [35, 228, 396, 696]},
@@ -87,7 +96,7 @@ class FakeCtms:
         els += [{"r": "push button", "nm": "Cust Ref", "lv": 1, "at": [X0, 560, 100, 25]},
                {"r": "push button", "nm": "Deliver From", "lv": 1, "at": [1127, 560, 66, 25]},
                {"r": "label", "nm": self.status_line or "<OSC>", "lv": 1, "at": [416, 949, 1162, 16]}]
-        for n, (man, status) in enumerate(self.tree.items()):
+        for n, (man, status) in enumerate(self.tree.items() if tree else ()):
             els.append({"r": "label", "nm": f"Level 0 05/11/26 08:00 {man}  ({status})", "lv": 2, "at": [53, 228 + 23 * n, 284, 23],
                         "st": ["selected"] if man == self.selected else None})
         for i, r in enumerate(self.rows_shown()):
@@ -114,9 +123,77 @@ class FakeCtms:
                 for i, name in enumerate(self.list):
                     els.append({"r": "label", "nm": name, "lv": 2, "at": [853, 309 + 22 * i, 239, 22]})
         if self.card:
-            els.append({"r": "internal frame", "nm": "Order details for 11000001", "lv": 0, "at": [20, 100, 1200, 600]})
-            els.append({"r": "text", "nm": "Customer Ref", "v": self.card, "lv": 2, "at": [594, 200, 150, 24]})
+            els += self.card_els()
         return els
+
+    def info(self, ref):
+        return self.line_info.setdefault(ref, {"product": "S&C", "qty": 1, "items": [{"id": "S&C", "ordered": 1}]})
+
+    def card_els(self):
+        """The open card, its names and places as read live on 03/11."""
+        li = self.info(self.card)
+        els = [{"r": "internal frame", "nm": "Order details for 11000001", "lv": 0, "at": [20, 151, 1239, 702]},
+               {"r": "text", "nm": "Customer Ref", "v": self.card, "lv": 2, "at": [596, 243, 159, 26]}]
+        for name, at in (("Detail", [25, 274, 76, 23]), ("Order Items", [98, 274, 86, 23]), ("Add Detail", [254, 274, 78, 23])):
+            els.append({"r": "page tab", "nm": name, "lv": 2, "at": at, "st": ["selected"] if self.card_tab == name else None})
+        if self.card_tab == "Detail":
+            els += [{"r": "text", "nm": "Product Type", "v": li["product"], "lv": 3, "at": [30, 567, 121, 23]},
+                    {"r": "text", "nm": "Qty", "v": f"   {(self.pending_qty if self.card_dirty else li['qty']):.3f}", "lv": 3,
+                     "at": [261, 567, 92, 23]},
+                    {"r": "text", "nm": "Product Type", "v": "", "lv": 3, "at": [30, 590, 121, 23], "st": ["read-only"]}]
+        if self.card_tab == "Order Items":
+            for i, it in enumerate(li["items"]):
+                els += [{"r": "text", "nm": "Order Items tab page Identifier Required" if i == 0 else "Identifier Required",
+                         "v": it["id"], "lv": 3, "at": [55, 343 + 24 * i, 80, 24], "st": ["read-only"]},
+                        {"r": "text", "nm": "Ordered", "v": f"      {it['ordered']:g}", "lv": 3, "at": [676, 343 + 24 * i, 70, 24]}]
+            els.append({"r": "push button", "nm": "Edit/Delete", "lv": 3, "at": [150, 612, 110, 26]})
+        front = []
+        if self.item_win:
+            front += [{"r": "internal frame", "nm": "Create,Edit or Delete Order Item", "lv": 0, "at": [18, 151, 826, 486]},
+                      {"r": "text", "nm": "Identifier Required", "v": self.item_win["id"], "lv": 1, "at": [133, 323, 357, 23]},
+                      {"r": "text", "nm": "Ordered", "v": f"      {self.item_win['ordered']:g}", "lv": 1, "at": [133, 459, 110, 24]},
+                      {"r": "push button", "nm": "Save", "lv": 1, "at": [138, 584, 100, 30]},
+                      {"r": "push button", "nm": "Exit", "lv": 1, "at": [618, 584, 100, 30]}]
+        if self.lov is not None:
+            front += [{"r": "internal frame", "nm": "Product Items", "lv": 0, "at": [133, 346, 456, 456]}]
+            front += [{"r": "label", "nm": f"Item_Id:{a}\tItem_Description:{b}", "lv": 2, "at": [-1, -1, -1, -1],
+                       "st": ["selected"] if k == 0 else None} for k, (a, b) in enumerate(self.lov)]
+            front += [{"r": "push button", "nm": "OK ALT O", "lv": 1, "at": [363, 763, 61, 31]},
+                      {"r": "push button", "nm": "Cancel ALT C", "lv": 1, "at": [429, 763, 61, 31]}]
+        return front + els
+
+    def card_click(self, sc):
+        """A click where the Access Bridge places something on the open card: True when it landed on one."""
+        under = [e for e in self.card_els() if e["r"] != "internal frame" and len(e.get("at") or []) == 4 and e["at"][2] > 0
+                 and e["at"][0] <= sc[0] <= e["at"][0] + e["at"][2] and e["at"][1] <= sc[1] <= e["at"][1] + e["at"][3]]
+        if not under:
+            return False
+        hit = min(under, key=lambda e: e["at"][2] * e["at"][3])
+        nm, li = hit["nm"], self.info(self.card)
+        if hit["r"] == "page tab":
+            self.card_tab = nm
+        elif nm.endswith("Identifier Required") and not self.item_win:
+            self.card_row = (hit["at"][1] - 343) // 24
+        elif nm == "Edit/Delete":
+            it = li["items"][self.card_row]
+            self.item_win = {"row": self.card_row, "id": it["id"], "ordered": it["ordered"]}
+        elif nm == "Identifier Required":
+            self.focus = "id"
+        elif nm == "Ordered" and self.item_win:
+            self.focus = "ordered"
+        elif nm == "Qty":
+            self.focus = "qty"
+        elif nm == "OK ALT O":
+            self.item_win["id"] = self.lov[0][0]
+            self.lov = None
+        elif nm == "Cancel ALT C":
+            self.lov = None
+        elif nm == "Save" and self.item_win:
+            li["items"][self.item_win["row"]] = {"id": self.item_win["id"], "ordered": self.item_win["ordered"]}
+            self.saves.append(("item", self.card, self.item_win["id"], self.item_win["ordered"]))
+        elif nm == "Exit":
+            self.item_win, self.focus = None, None
+        return True
 
     def seen(self, name, box):
         return {"sc-title": self.up == "carrier", "cp-title": self.up == "payment", "cc-title": self.up == "confirm"}.get(name, False)
@@ -133,6 +210,12 @@ class FakeCtms:
             self.key(s["key"])
         elif a == "type":
             self.typed.append(s["text"])
+            if self.card and self.focus == "id" and self.item_win:
+                self.item_win["id"] = s["text"]
+            elif self.card and self.focus == "ordered" and self.item_win:
+                self.item_win["ordered"] = float(s["text"])
+            elif self.card and self.focus == "qty":
+                self.pending_qty, self.card_dirty = float(s["text"]), True
             if self.list is not None and s["text"][:1] == "D":
                 self.list = [c for c in ALT_CARRIERS if c.startswith("D")][:8]
 
@@ -170,6 +253,8 @@ class FakeCtms:
             self.card = "NEW"
         if sc:
             if s.get("right"):
+                return
+            if self.card and self.card_click(sc):
                 return
             if self.panel and not self.panel_stuck and list(sc) == [503 + 1006 - B.PLANNED_X, 513 + B.PLANNED_Y]:
                 self.panel = None
@@ -235,8 +320,13 @@ class FakeCtms:
                 self.tree[self.selected] = "ACCEPTED"
         elif px == B.ORDER_SAVE:
             self.typed.append("<order saved>")
+            if self.card_dirty:
+                self.info(self.card)["qty"] = self.pending_qty
+                self.saves.append(("card", self.card, self.pending_qty))
+            self.card_dirty = False
         elif px == B.ORDER_CLOSE:
-            self.card = None
+            self.card, self.card_tab, self.item_win, self.lov, self.focus = None, "Detail", None, None, None
+            self.card_dirty = False
 
     def click_row(self, ref, hold):
         shown = [r["cust_ref"] for r in self.rows_shown()]
@@ -250,6 +340,9 @@ class FakeCtms:
         self.current = ref
 
     def key(self, k):
+        if k == "ctrl+l" and self.card and self.item_win and self.focus == "id":
+            self.lov = [c for c in self.catalog if c[0].upper().startswith(self.item_win["id"].upper())]
+            return
         if self.to_list and k in ("up", "down"):
             d = datetime.strptime(self.to_list, "%y%m%d") + timedelta(days=1 if k == "down" else -1)
             self.to_list = d.strftime("%y%m%d")
@@ -679,3 +772,100 @@ def test_a_night_delivery_sits_on_the_next_days_schedule():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# -- his line checks before the trip (03/11): Order Items' product the Detail tab's, the quantity the order's
+def test_an_item_on_the_wrong_product_is_put_right_through_ctrl_l_taking_the_top_choice():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.line_info["9100001-1-1"] = {"product": "WHEELSETS", "qty": 16, "items": [{"id": "S&C", "ordered": 16}]}
+    job = _book(ctms)
+    assert ctms.saves == [("item", "9100001-1-1", "WHEELSETS", 16)]        # the top of WHEELSETS / WHEELSET_AXLE
+    assert "<order saved>" in ctms.typed and job.trips[0]["status"] == "ACCEPTED"
+    assert "9100001-1-1: item S&C put right to WHEELSETS" in job.said
+
+
+def test_a_quantity_not_the_orders_is_put_right_in_both_places():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.line_info["9100001-1-1"] = {"product": "S&C", "qty": 15, "items": [{"id": "S&C", "ordered": 14}]}
+    job = _job(ctms)
+    job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1, qty={"9100001": 16})
+    assert ("item", "9100001-1-1", "S&C", 16.0) in ctms.saves and ("card", "9100001-1-1", 16.0) in ctms.saves
+    assert ctms.line_info["9100001-1-1"]["qty"] == 16 and job.trips[0]["status"] == "ACCEPTED"
+
+
+def test_a_line_already_right_is_closed_unsaved_and_booked():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    job = _job(ctms)
+    job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1, qty={"9100001": 1})
+    assert ctms.saves == [] and "<order saved>" not in ctms.typed and job.trips[0]["status"] == "ACCEPTED"
+
+
+def test_quantities_that_disagree_with_no_order_figure_stop_and_ask_before_anything_is_typed():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.line_info["9100001-1-1"] = {"product": "S&C", "qty": 16, "items": [{"id": "S&C", "ordered": 15}]}
+    try:
+        _book(ctms)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert "Detail tab says 16 and Order Items says 15" in str(e) and "Nothing was booked" in str(e)
+    assert ctms.saves == [] and ctms.tree == {} and ctms.card is None
+
+
+def test_a_product_ctrl_l_cant_find_stops_with_nothing_saved():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.line_info["9100001-1-1"] = {"product": "RAILS", "qty": 1, "items": [{"id": "S&C", "ordered": 1}]}
+    try:
+        _book(ctms)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert "no product item for RAILS" in str(e)
+    assert ctms.saves == [] and ctms.tree == {}
+
+
+def test_a_rehearsal_says_what_it_would_put_right_and_types_nothing_on_the_line():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.line_info["9100001-1-1"] = {"product": "WHEELSETS", "qty": 16, "items": [{"id": "S&C", "ordered": 16}]}
+    job = _book(ctms, dry=True)
+    assert ctms.saves == [] and "<order saved>" not in ctms.typed
+    assert "9100001-1-1: item S&C would be put right to WHEELSETS" in job.said
+
+
+def test_a_question_nobody_asked_is_answered_ok_and_stops_the_booking():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    real = ctms.read
+
+    def alert(tree=True):
+        els = real(tree)
+        if not getattr(ctms, "alert_gone", False):
+            els = [{"r": "internal frame", "nm": "A schedule must be selected.", "lv": 0, "at": [790, 470, 310, 160]},
+                   {"r": "option pane", "nm": "", "lv": 1, "at": [790, 490, 310, 140]},
+                   {"r": "push button", "nm": "OK", "lv": 2, "at": [1025, 592, 62, 30]}] + els
+        return els
+    ctms.read = alert
+    real_click = ctms.click
+
+    def click(s):
+        if s.get("screen") == [1056, 607]:
+            ctms.alert_gone = True
+        real_click(s)
+    ctms.click = click
+    try:
+        _book(ctms)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert '"A schedule must be selected."' in str(e) and "answered OK" in str(e)
+    assert ctms.alert_gone and ctms.tree == {}
+
+
+def test_each_line_of_a_several_line_order_is_checked_and_only_the_wrong_one_saved():
+    ctms = FakeCtms([_row("9100001-1-1"), _row("9100001-2-1")])
+    ctms.line_info["9100001-2-1"] = {"product": "WHEELSETS", "qty": 2, "items": [{"id": "WHEELSET_AXLE", "ordered": 2}]}
+    job = _book(ctms)
+    assert ctms.saves == [("item", "9100001-2-1", "WHEELSETS", 2)]
+    assert job.trips[0]["status"] == "ACCEPTED" and sorted(job.trips[0]["lines"]) == ["9100001-1-1", "9100001-2-1"]
+
+
+def test_the_orders_quantity_goes_to_its_line_only_when_it_has_just_one():
+    assert B.line_wants(["9100001-1-1"], ["9100001"], {"9100001": 16}) == {"9100001-1-1": 16.0}
+    assert B.line_wants(["9100001-1-1", "9100001-2-1"], ["9100001"], {"9100001": 16}) == {}
+    assert B.line_wants(["FS-1-TNNG"], ["FS-1-TNNG"], {"FS-1-TNNG": 16}) == {"FS-1-TNNG": 16.0}

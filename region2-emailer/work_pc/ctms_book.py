@@ -33,6 +33,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
+import ctms_lines
 import ctms_orders
 import ctms_rows
 
@@ -226,6 +227,20 @@ def confirm_box(els):
     return {"carrier": m.group(1), "revenue": m.group(2).replace(",", ""), "cost": m.group(3).replace(",", "")}
 
 
+def line_wants(refs, orders, qty):
+    """Each line's quantity as the desk knows the order's: an order of one line has the order's whole quantity; an order
+    over several lines has no figure a line (only the total could be checked, and which line is short can't be told), so
+    those lines are checked Detail against Order Items alone."""
+    out = {}
+    for o in orders:
+        if qty.get(str(o)) in (None, ""):
+            continue
+        mine = [r for r in refs if belongs(r, [o])]
+        if len(mine) == 1:
+            out[mine[0]] = float(qty[str(o)])
+    return out
+
+
 class Booking:
     """One Book press. run(steps): steps carried out in CTMS's window, raising when one fails; read(): the Access Bridge's
     elements; seen(name, box): whether a template shows there now; t: the templates."""
@@ -239,6 +254,8 @@ class Booking:
         self.flipped = False       # the Deliver column pressed: pressed again at the end, so it's as he left it
         self.to_was = ""           # the well's To as he had it: put back at the end
         self.trips = []
+        self.reads = 0             # Access Bridge reads this booking took: the seconds he waits are mostly these
+        self.has_tree = False
         self.veh_kept = ""         # what CTMS now keeps as the Veh Type of the line taken to the carrier screen
         self.said = []
         self.stages = []
@@ -250,9 +267,36 @@ class Booking:
         self.stages.append([name, round(now - self._t, 1)])
         self._t = now
 
-    def look(self):
-        self.els = self.read()
+    def look(self, tree=False, asking=False):
+        """CTMS as it is now, through the Access Bridge. tree: Planning's manifest tree as well - only wanted around a
+        trip being made (the manifests before, the new one after, Accepted): 112 rows on a weekday (03/11), read for
+        nothing everywhere else. asking: a question of CTMS's is expected on this read (Confirm Create Trip, "discard
+        your changes?") - any other one stops the booking, answered the way that changes nothing."""
+        self.els = self.read(tree)
+        self.has_tree = tree
+        self.reads += 1
+        if not asking:
+            self.unasked()
         return self.els
+
+    def unasked(self):
+        """A Forms question nobody asked for (03/11, live: "A schedule must be selected." when a list ran off its end):
+        read, answered OK when that's all it offers, else No / Cancel - never Yes - and the booking stopped with CTMS's
+        own words, so nothing goes on over it."""
+        q = ctms_rows.question(self.els)
+        if not q:
+            return
+        words, buttons = q
+        said = re.sub(r"\s+", " ", words).strip()
+        pick = next((buttons[k] for k in ("ok", "no", "cancel") if k in buttons), None)
+        if pick is not None and placed(pick):
+            try:
+                self.run([{"action": "click", "screen": _at(pick), "after": 0.5}])
+            except Exception:
+                pass
+        raise Stop(f"CTMS asked something unexpected: \"{said[:200]}\" - answered "
+                   f"{(str(pick.get('nm')).split() or ['nothing'])[0] if pick is not None else 'nothing'} and stopped "
+                   "there.")
 
     # -- getting about
     def start(self):
@@ -270,7 +314,7 @@ class Booking:
                 raise Stop("Planning would not open in CTMS.")
         if any(f.startswith("Order details for") for f in frames(self.els)):
             self.run([_click(ORDER_CLOSE, after=1.0)])
-            self.look()
+            self.look(asking=True)
             asked = next((f for f in frames(self.els) if "discard your changes" in f), None)
             if asked:
                 cancel = next((e for e in ctms_rows._frame(self.els, asked) or [] if e.get("r") == "push button"
@@ -538,14 +582,11 @@ class Booking:
         save = next((e for e in ctms_rows._frame(self.els) or [] if e.get("r") == "push button" and e.get("nm") == "Save"), None)
         return save is not None and "disabled" not in (save.get("st") or [])
 
-    # -- what goes on the order first
-    def raise_type(self, ref):
-        """The delivery type, when the date makes it more urgent: the line opened from the well - its own card proved by
-        name before anything goes in, the well being able to move under a stored place - set, saved, closed."""
+    # -- what goes on the order first: each line's card, once
+    def open_card(self, ref):
+        """A line's own card, opened from the well and proved by its Customer Ref before anything goes in - the well can
+        move under a stored place."""
         row = self.on_screen(ref)
-        typ = wanted_type(row.get("del_type"), row.get("deliver"), self.now)
-        if not typ:
-            return False
         self.run([{"action": "click", "screen": ctms_rows.point(row), "double": True, "react": True,
                    "box": [20, 121, 1250, 171], "timeout": 20},
                   ANCHOR, _find(self.t, "od-vehtype", (940, 250, 1100, 380), 5)])
@@ -553,22 +594,159 @@ class Booking:
         if got.upper() != ref.upper():
             self.run([_click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
             raise Stop(f"The well opened {got or 'no order'} for {ref}: closed it again, unchanged. Nothing was booked.")
+        return row
+
+    def card_tab(self, name):
+        """One of the card's tabs, clicked where the Access Bridge places it, and read."""
+        t = ctms_lines.tab(self.els, name)
+        if t is None:
+            raise Stop(f"The order's {name} tab couldn't be found on its card. Nothing was booked.")
+        self.run([{"action": "click", "screen": ctms_lines.point(t), "react": True, "box": [20, 200, 1250, 700],
+                   "quiet": 0.2, "timeout": 8}])
+        return self.look()
+
+    def type_into(self, box, text):
+        """A box clicked where the Access Bridge places it, what it holds selected, the text typed over it."""
+        self.run([{"action": "click", "screen": ctms_lines.point(box), "after": 0.15}, _key("home"), _key("shift+end"),
+                  {"action": "type", "text": str(text), "after": 0.15}])
+
+    def fix_item(self, ref, it, identifier, ordered):
+        """One Order Items row put right in its own window (Edit/Delete): the Identifier through Ctrl+L's list, its top
+        choice taken (his rule 03/11); Ordered typed. Read back, Save, Exit."""
+        self.run([{"action": "click", "screen": ctms_lines.point(it["cell"]), "after": 0.3}])
+        edit = ctms_lines.button(self.look(), ctms_lines.CARD, "Edit/Delete")
+        if edit is None:
+            raise Stop(f"{ref}: Order Items' Edit/Delete couldn't be found. Nothing was booked.")
+        self.run([{"action": "click", "screen": ctms_lines.point(edit), "react": True, "box": [20, 50, 850, 560],
+                   "quiet": 0.2, "timeout": 10}])
+        win = ctms_lines.item_window(self.look())
+        if win is None or win["identifier"].upper() != it["identifier"].upper():
+            raise Stop(f"{ref}: the item window that opened isn't {it['identifier']}'s. Nothing was changed.")
+        if identifier:
+            self.type_into(ctms_lines.field(self.els, ctms_lines.ITEM_WINDOW, "Identifier"), identifier)
+            self.run([_key("ctrl+l", 0.3), {"action": "settle", "quiet": 0.3, "timeout": 8}])
+            listed = ctms_lines.choices(self.look(asking=True))
+            if not listed:
+                cancel = ctms_lines.button(self.els, ctms_lines.LIST_WINDOW, "Cancel")
+                if cancel is not None:
+                    self.run([{"action": "click", "screen": ctms_lines.point(cancel), "after": 0.4}])
+                raise Stop(f"{ref}: CTMS has no product item for {identifier} (Ctrl+L listed none). Nothing was saved.")
+            ok = ctms_lines.button(self.els, ctms_lines.LIST_WINDOW, "OK")
+            if ok is None:
+                raise Stop(f"{ref}: Ctrl+L's list had no OK to press. Nothing was saved.")
+            self.run([{"action": "click", "screen": ctms_lines.point(ok), "after": 0.4}])  # its top row is the one picked
+            identifier = listed[0][0]
+        if ordered is not None:
+            self.type_into(ctms_lines.field(self.look(), ctms_lines.ITEM_WINDOW, "Ordered"), f"{ordered:g}")
+            self.run([_key("tab", 0.2)])
+        win = ctms_lines.item_window(self.look())
+        if (identifier and win["identifier"].upper() != identifier.upper()) or (
+                ordered is not None and not ctms_lines.same(win["ordered"], ordered)):
+            raise Stop(f"{ref}: the item didn't read back as typed (Identifier {win['identifier']}, Ordered "
+                       f"{win['ordered']}). Nothing was saved.")
+        save = ctms_lines.button(self.els, ctms_lines.ITEM_WINDOW, "Save")
+        self.run([{"action": "click", "screen": ctms_lines.point(save), "after": 0.6},
+                  {"action": "settle", "quiet": 0.4, "timeout": 10}])
+        self.answer_schedule(self.look(asking=True))
+        leave = ctms_lines.button(self.els, ctms_lines.ITEM_WINDOW, "Exit")
+        if leave is not None:
+            self.run([{"action": "click", "screen": ctms_lines.point(leave), "after": 0.5}])
+        if ctms_lines.item_window(self.look(asking=True)) is not None:
+            raise Stop(f"{ref}: the item window wouldn't close after its Save - look at it in CTMS.")
+        self.unasked()
+
+    def answer_schedule(self, els):
+        """CTMS's "Change schedule to ...?" after a save is answered OK, as the to-do update does; anything else asked
+        stops the booking (answered the safe way)."""
+        q = ctms_rows.question(els)
+        if q and "schedule" in q[0].lower() and "ok" in q[1]:
+            self.run([{"action": "click", "screen": _at(q[1]["ok"]), "after": 0.6}])
+            self.look(asking=True)
+        self.unasked()
+
+    def check_line(self, ref, want=None):
+        """His line checks on the card that is open (03/11): every item the Detail tab's product, the quantity the
+        order's. What can't be settled stops before anything is typed. Returns whether anything was changed."""
+        rows = ctms_lines.detail(self.els)
+        if rows is None:
+            rows = ctms_lines.detail(self.card_tab("Detail"))
+        its = ctms_lines.items(self.card_tab("Order Items"))
+        try:
+            todo = ctms_lines.plan(ref, rows, its, want)
+        except ctms_lines.Doubt as e:
+            raise Stop(f"{e} Nothing was booked.")
+        if self.dry:
+            self.said += [w.replace(" put right", " would be put right") for w in todo["said"]]
+            return False
+        for i, identifier, ordered in todo["items"]:
+            self.fix_item(ref, its[i], identifier, ordered)
+            its = ctms_lines.items(self.look())
+        if todo["qty"] is not None:
+            box = (ctms_lines.detail(self.card_tab("Detail")) or [{}])[0].get("qty_box")
+            if box is None:
+                raise Stop(f"{ref}: the Detail tab's Qty couldn't be found. Nothing more was typed.")
+            self.type_into(box, f"{todo['qty']:g}")
+            self.run([_key("tab", 0.2)])
+            got = ctms_lines.detail(self.look())
+            if not got or not ctms_lines.same(got[0]["qty"], todo["qty"]):
+                raise Stop(f"{ref}: the Detail tab's Qty didn't read back as {todo['qty']:g}. Not saved.")
+        self.said += todo["said"]
+        return bool(todo["items"] or todo["qty"] is not None)
+
+    def set_type(self, ref, typ):
+        """The delivery type up to his band on the card that is open (Add Detail), not saved yet."""
         self.run([_click((288, 187), react=True, box=[20, 200, 1250, 700], timeout=10),   # Add Detail
                   _click((273, 252), react=True, timeout=10),                              # Delivery Type's list
                   _click((960, 299), after=0.2), _key("home"), _key("shift+end"),
                   {"action": "type", "text": typ + "%", "after": 0.1},
                   _click((887, 721), react=True, timeout=10),                              # its Find
-                  _click((978, 721), react=True, timeout=10),                              # its OK
-                  _click(ORDER_SAVE, react=True, quiet=1, timeout=15),
-                  _click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
-        self.look()
+                  _click((978, 721), react=True, timeout=10), ANCHOR])                     # its OK
         self.said.append(f"{ref} put up to {typ}")
-        return True
+
+    def prepare_line(self, ref, want=None):
+        """One line made ready to book on its own card, opened once: the checks (Order Items' product, the quantity), the
+        delivery type when the date makes it more urgent, one Save, Close. Returns whether anything was changed."""
+        row = self.open_card(ref)
+        typ = wanted_type(row.get("del_type"), row.get("deliver"), self.now)
+        try:
+            changed = self.check_line(ref, want)
+        except Stop:
+            self.close_card(saved=False)
+            raise
+        if typ and not self.dry:
+            self.set_type(ref, typ)
+            changed = True
+        elif typ:
+            self.said.append(f"{ref} would be put up to {typ}")
+        if changed:
+            self.run([_click(ORDER_SAVE, react=True, quiet=1, timeout=15), ANCHOR])
+            self.answer_schedule(self.look(asking=True))
+        self.close_card(saved=changed)
+        return changed
+
+    def close_card(self, saved):
+        """The card's Close. A "discard your changes?" means what was typed didn't save: Yes, it goes - and if the card
+        was meant to be saved, the booking stops there."""
+        self.run([_click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
+        self.look(asking=True)
+        asked = ctms_rows.question(self.els)
+        if asked and "discard" in asked[0].lower():
+            yes = asked[1].get("yes") or asked[1].get("ok")
+            if yes is not None:
+                self.run([{"action": "click", "screen": _at(yes), "after": 0.6}, ANCHOR])
+                self.look(asking=True)
+            if saved:
+                raise Stop("The order's changes didn't save, so they were thrown away and nothing was booked: look at it "
+                           "in CTMS.")
+        self.unasked()
 
     def split(self, ref, parts):
         """One line into equal parts, through Order Summary: its menu's Split Orders, the number, Process, OK, Exit, and
         back to Planning with the well refreshed. CTMS names them _S1, _S2 ... and halves the weight itself."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t) + ctms_orders.card(self.t))
+        far = ctms_orders.upto(self.look(), self.now)
+        if far:
+            self.run(far)
         try:
             self.run(ctms_orders.search(ref))
         except RuntimeError:
@@ -627,7 +805,7 @@ class Booking:
     def create(self, row, carrier, trailer, haulage, keep=False):
         """Create New Trip for this row, up to the manifest. Returns {"manifest", "carrier", "revenue", "cost"} - on a
         dry run the box's figures, the last box answered No."""
-        before = manifests(self.els)
+        before = manifests(self.els if self.has_tree else self.look(tree=True))
         self.row_menu(row, "wm-create-trip", keep=keep)
         self.run([_find(self.t, "sc-title", CARRIER_TITLE, 10)])
         self.carrier(carrier, trailer)
@@ -636,7 +814,7 @@ class Booking:
         if haulage is not None:          # the cursor sits in Haulage Amount, its 0.00 selected
             steps = [{"action": "type", "text": f"{float(haulage):g}", "after": 0.1}, _key("tab", 0.3)]
         self.run(steps + [_click(CREATE_TRIP, after=0.1), _find(self.t, "cc-title", CONFIRM_TITLE, 8)])
-        self.look()
+        self.look(asking=True)
         box = confirm_box(self.els)
         if box is None:
             raise Stop("CTMS's Confirm Create Trip box could not be read, so nothing was booked. On the screen: "
@@ -654,7 +832,7 @@ class Booking:
             return box
         self.run([_click(CONFIRM_YES, react=True, timeout=20, quiet=0.4), _click(PLANNING_SAVE, after=0.8)])
         for _ in range(4):
-            man = new_manifest(self.look(), before)
+            man = new_manifest(self.look(tree=True), before)
             if man:
                 return dict(box, manifest=man)
         raise Stop("The trip was confirmed and saved, but no new manifest showed on the tree - look at Planning. "
@@ -671,7 +849,7 @@ class Booking:
             raise Stop("Planned Orders didn't open on the manifest, so it's still PLANNED: look at it before anything else.")
         x, y, w, _ = panel["at"]
         self.run([{"action": "click", "screen": [x + w - PLANNED_X, y + PLANNED_Y], "after": 0.4}])
-        self.look()
+        self.look(tree=True)                       # what Accepted works from next
         if any(f.startswith(("Planned Orders", "Order details for")) for f in frames(self.els)):
             raise Stop("Planned Orders wouldn't close, so the manifest is still PLANNED: look at it before anything else.")
         return there
@@ -685,7 +863,7 @@ class Booking:
 
     def accept(self, manifest):
         """Set Status > Accepted, its OK, Save, read back. The manifest has to be on the screen: it is the one just made."""
-        got = manifests(self.els).get(manifest)
+        got = manifests(self.els if self.has_tree else self.look(tree=True)).get(manifest)
         box = tree_box(self.els)
         if not got or not placed(got) or (box and not box[1] <= got["at"][1] <= box[1] + box[3] - got["at"][3]):
             raise Stop(f"{manifest} is made, but isn't on the screen in the tree to accept: it's still PLANNED.")
@@ -696,7 +874,7 @@ class Booking:
                   _find(self.t, "al-accepted", ALERT, 5), _click(FORMS_OK, react=True, timeout=10),
                   _click(PLANNING_SAVE, after=0.8)])
         for _ in range(4):
-            if (manifests(self.look()).get(manifest) or {}).get("status") == "ACCEPTED":
+            if (manifests(self.look(tree=True)).get(manifest) or {}).get("status") == "ACCEPTED":
                 return
         raise Stop(f"{manifest} did not read back as ACCEPTED: look at it in Planning.")
 
@@ -738,7 +916,7 @@ class Booking:
         except (Stop, RuntimeError) as e:
             self.said.append(str(e))
 
-    def book(self, orders, date, carrier, trailer, haulage, vehicles):
+    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None):
         """The whole booking. self.trips says what was made, however it ended."""
         self.start()
         self.set_day(sched_for_day(date))
@@ -765,8 +943,11 @@ class Booking:
                        "Nothing was booked.")
         self.stage("the order")
         refs = [r["cust_ref"] for r in lines]
-        if sum([self.raise_type(ref) for ref in refs]):
-            self.stage("the delivery type")
+        wants = line_wants(refs, orders, qty or {})
+        if sum([self.prepare_line(ref, wants.get(ref)) for ref in refs]):
+            self.stage("the lines put right")
+        else:
+            self.stage("the lines checked")
         if vehicles > 1 and len(lines) == 1:
             if self.dry:
                 self.said.append(f"{refs[0]} would be split into {vehicles}: rehearsing one of them")

@@ -420,6 +420,17 @@ def _ctms_args(action, data):
         out["dry"] = bool(data.get("dry"))
         num("haulage", 0, 100000)
         num("vehicles", 1, 20, int)
+        q = data.get("qty") if isinstance(data.get("qty"), dict) else {}
+        qty = {}
+        for k, v in list(q.items())[:8]:              # the order's quantity, where the desk knows it: Book checks the lines
+            try:
+                n = float(v)
+            except (TypeError, ValueError):
+                continue
+            if _CHECK_REF.fullmatch(str(k)) and 0 < n <= 100000:
+                qty[str(k)] = n
+        if qty:
+            out["qty"] = qty
     if action == "book_recall":
         # what a Book made, asked again from the work PC's own record: which orders, which day, which command
         out["orders"] = [str(o) for o in (data.get("orders") or [])[:8] if _CHECK_REF.fullmatch(str(o))]
@@ -457,7 +468,7 @@ _TODO_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")          # a CTMS to-do item's id
 _TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact", "already"}
 _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 _RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
-_BOOK_RUN_MINUTES = 15       # the longest a Book runs: a few vehicles, the tracker row and the site's email
+_BOOK_RUN_MINUTES = 25       # the longest a Book runs: the to-do's update first, a few vehicles, the row, the email
 _BOOK_BATCH_MAX = 12         # bookings one Book approved takes: a morning's ready orders
 
 

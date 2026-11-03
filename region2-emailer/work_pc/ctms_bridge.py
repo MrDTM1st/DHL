@@ -868,6 +868,7 @@ class Bridge:
             if not self._seen(t, "os-card", ctms_orders.CARD_BOX):
                 run(ctms_orders.to_orders(t))
             run(ctms_orders.card(t))
+            run(ctms_orders.upto(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)))   # later orders listed at all
         except Exception as e:
             return done(False, f"Could not get to CTMS's Order Search: {why(e)} Nothing was looked up - the "
                                "picture shows where it stopped.", dict(self._batch_look(times, t0), kind="ctms_check"))
@@ -965,12 +966,13 @@ class Bridge:
                 finally:
                     times.append(round(time.time() - ts, 2))
 
-        job = ctms_book.Booking(run, lambda: ctms_jab.read_fields(self.win).get("elements") or [],
+        job = ctms_book.Booking(run, lambda tree=True: ctms_jab.read_fields(
+                                    self.win, skip_roles=() if tree else ("tree",)).get("elements") or [],
                                 lambda name, box: self._seen(t, name, box), t, dry=bool(cmd.get("dry")))
         stopped = ""
         try:
             job.book(orders, date, carrier, str(cmd.get("trailer") or "").strip(), cmd.get("haulage"),
-                     int(cmd.get("vehicles") or 1))
+                     int(cmd.get("vehicles") or 1), qty=cmd.get("qty") if isinstance(cmd.get("qty"), dict) else None)
         except Exception as e:
             stopped = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
             try:
@@ -983,6 +985,7 @@ class Bridge:
             pass
         took = round(time.time() - t0, 1)
         made = [x for x in job.trips if x.get("manifest")]
+        fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n)
         said = (f"{'Rehearsed' if cmd.get('dry') else 'Booked'} {' / '.join(orders)} in {took:g}s: "
                 + ", ".join(f"{x['manifest']} {x['status']}" for x in made) if made and not stopped else
                 f"Rehearsed {' / '.join(orders)} in {took:g}s with {carrier}: revenue {job.trips[0]['revenue']}, cost "
@@ -991,10 +994,13 @@ class Bridge:
                 + (f" Already made: {', '.join(x['manifest'] + ' ' + x['status'] for x in made)}." if made else ""))
         if job.veh_kept and (stopped or cmd.get("dry")) and not made:
             said += f" CTMS keeps {job.veh_kept} as the line's Veh Type from the carrier screen."
+        if fixed:
+            said += f" On the lines first: {fixed}."
         # written down before the answer goes, so the home PC can ask for it again if the answer never reaches it
         book_record.keep(cmd.get("id"), orders, date, carrier, cmd.get("dry"), not stopped, said, job.trips, stopped)
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
-                                            stages=job.stages, notes=job.said, stopped=stopped, seconds=took))
+                                            stages=job.stages, notes=job.said, stopped=stopped, seconds=took,
+                                            reads=job.reads))
 
     # -- one item of the CTMS to-do, done in one go (02/11, ctms_items) --
     def todo_item(self, cmd, done):

@@ -115,3 +115,17 @@ def merge(seen, page):
     new = [r for r in page if r["cust_ref"] not in have]
     seen.extend(new)
     return len(new)
+
+
+def question(els):
+    """A Forms question up on the screen: (its window's name, {its buttons' first word, lower case: element}), or None. It
+    comes as a window inside the one that asked, its words in its name and an option pane straight under it."""
+    window = None
+    for e in els:
+        if e.get("r") == "internal frame":
+            window = str(e.get("nm") or "")
+        elif e.get("r") == "option pane" and window is not None:
+            inside = _frame(els, window) or []
+            return window, {str(b.get("nm") or "").split()[0].lower(): b for b in inside
+                            if b.get("r") == "push button" and str(b.get("nm") or "").strip()}
+    return None
