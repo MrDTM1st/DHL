@@ -320,3 +320,128 @@ def test_the_dashboard_passes_a_recall_as_a_look_with_only_its_orders_day_and_co
 def test_the_bridge_answers_a_recall_from_its_record_without_needing_the_switch():
     import ctms_bridge
     assert "book_recall" in ctms_bridge.READ and "book_recall" not in ctms_bridge.DRIVE
+
+
+# -- Book approved: his ticked list, one after another
+READY = {"orders": ["9000001"], "kind": "delivery", "reply_at": "x", "missing": [], "details": {"time": {"confidence": "high"}}}
+
+
+def test_strictly_ready_means_answered_nothing_missing_nothing_amber():
+    assert B.not_ready(READY) == ""
+    assert "missing: pts" in B.not_ready(dict(READY, missing=["pts"]))
+    assert "not confirmed yet: offloading" in B.not_ready(dict(READY, details={"offloading": {"confidence": "amber"}}))
+    assert "hasn't replied" in B.not_ready(dict(READY, reply_at=""))
+    assert B.not_ready(dict(READY, reply_at="", phoned_at="x", missing=["pts"])) == ""     # the phone form asked it all
+    assert B.not_ready({"orders": ["AH1"], "kind": "adhoc"}) == ""
+    assert "no longer" in B.not_ready({})
+
+
+def test_the_batch_goes_on_after_a_booking_or_a_clean_stop_and_nowhere_else():
+    assert B.go_on({"ok": True})
+    assert B.go_on({"ok": False, "said": "9000001 isn't in the order well for 06/11/2026. Nothing was booked."})
+    assert B.go_on({"ok": False, "skipped": True, "said": "Not booked: still missing"})
+    assert not B.go_on({"ok": False, "said": "Stopped after 80s: the carrier box"})
+    assert not B.go_on({"ok": False, "refused": True, "said": "Acting is switched off. Nothing was booked."})
+    assert not B.go_on({"ok": False, "pending": True})
+    assert not B.go_on({"ok": False, "held": True})
+
+
+class BatchR(FakeR):
+    """Each ctms_book answered in turn; progress posts kept."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = list(answers)
+        self.posts = []
+
+    def ask_waiting(self, action, wait_total=90, on_id=None, **args):
+        self.asked.append((action, args))
+        if on_id:
+            on_id(len(self.asked))
+        a = self.answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    def http(self, method, path, body=None, timeout=45):
+        self.posts.append((path, body))
+        return 200, {"ok": True}
+
+
+def _jobs(*orders):
+    return [dict(JOB, orders=[o], record=f"{o}|{DATE}") for o in orders]
+
+
+def test_a_batch_books_each_in_turn_and_tells_the_page_as_it_goes(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(READY, orders=[ident.split("|")[0]], to="s@example.com"))
+    t2 = dict(TRIP, manifest="MAN-01000002")
+    R = BatchR([_answer([TRIP]), _answer([t2], detail="Booked 9000002: MAN-01000002 ACCEPTED")])
+    res = B.batch(_jobs("9000001", "9000002"), run_id=5, R=R)
+    assert res["ok"] and res["said"].startswith("2 of 2 booked")
+    assert [r["manifests"] for r in res["results"]] == [["MAN-01000001"], ["MAN-01000002"]]
+    assert [(b["i"], b["state"]) for _, b in R.posts] == [(0, "running"), (0, "booked"), (1, "running"), (1, "booked")]
+
+
+def test_a_batch_skips_one_not_ready_any_more_and_books_the_rest(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(READY, orders=[ident.split("|")[0]],
+                                                          missing=["pts"] if ident.startswith("9000001") else []))
+    R = BatchR([_answer([dict(TRIP, manifest="MAN-01000002")])])
+    res = B.batch(_jobs("9000001", "9000002"), R=R)
+    assert [r["state"] for r in res["results"]] == ["skipped", "booked"]
+    assert [a for a, _ in R.asked].count("ctms_book") == 1          # the skipped one never reached CTMS
+
+
+def test_a_batch_stops_at_the_first_that_leaves_ctms_for_him_and_starts_no_more(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(READY, orders=[ident.split("|")[0]]))
+    R = BatchR([_answer([], ok=False, detail="Stopped after 70s: the carrier box wouldn't open")])
+    res = B.batch(_jobs("9000001", "9000002", "9000003"), R=R)
+    assert not res["ok"] and "stopped at 9000001" in res["said"] and "2 not started" in res["said"]
+    assert len(res["results"]) == 1
+
+
+def test_stop_pressed_during_a_batch_ends_it(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(READY, orders=[ident.split("|")[0]]))
+    R = BatchR([_answer([TRIP]), Stop("Acting is switched off.", 5)])
+    res = B.batch(_jobs("9000001", "9000002", "9000003"), R=R)
+    assert [r["state"] for r in res["results"]] == ["booked", "not booked"]
+    assert "stopped at 9000002" in res["said"]
+
+
+def test_a_batch_never_books_an_order_the_journal_has_booked(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(READY, orders=[ident.split("|")[0]]))
+    B.book(_jobs("9000001")[0], R=FakeR(_answer([TRIP])))
+    R = BatchR([_answer([dict(TRIP, manifest="MAN-01000002")])])
+    res = B.batch(_jobs("9000001", "9000002"), R=R)
+    assert [r["state"] for r in res["results"]] == ["booked", "booked"]
+    assert [a for a, _ in R.asked].count("ctms_book") == 1
+
+
+def test_the_dashboard_takes_only_good_jobs_for_a_batch_and_arms_for_its_length():
+    import importlib
+    import io
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "cloud"))
+    S = importlib.import_module("server")
+    S._ctms["book_run"] = None
+    S._ctms["state"] = {"control": True}
+    S._queue.clear()
+    body = {"jobs": [dict(JOB), dict(JOB, orders=["bad ref!"]), dict(JOB, dry=True), "x"]}
+    h = next(v for v in S.__dict__.values() if isinstance(v, type) and hasattr(v, "do_POST"))
+    got = {}
+
+    class Fake(h):
+        def __init__(self):
+            self.path = "/api/ctms/book_batch"
+            self.headers = {"X-Auth": os.environ["DASH_KEY"], "Content-Length": "0"}
+
+        def _json(self, code, data):
+            got.update(code=code, data=data)
+    f = Fake()
+    raw = json.dumps(body).encode()
+    f.headers["Content-Length"] = str(len(raw))
+    f.rfile = io.BytesIO(raw)
+    f.do_POST()
+    assert got["code"] == 200, got
+    cmd = S._queue[-1]
+    assert cmd["action"] == "ctms_book_batch" and len(cmd["jobs"]) == 1     # the bad ref, the rehearsal, junk dropped
+    assert S._ctms["book_run"]["batch"] and S._ctms["control_until"] > 0
+    S._ctms["book_run"]["state"] = "done"

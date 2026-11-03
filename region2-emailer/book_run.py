@@ -20,6 +20,7 @@ to do by hand.
 
     python book_run.py run '{"record": "...", "orders": ["..."], "date": "dd/mm/yyyy", "carrier": "...", "trailer": "...",
                              "haulier": "...", "haulage": 450, "vehicles": 1, "dry": false}'
+    python book_run.py batch '[{job}, ...]' [--run N]   Book approved: each in turn, stopping where CTMS needs a look
     python book_run.py retry             the timer: lost answers looked for, Outlook's failed steps tried again
     python book_run.py clear KEY [STEP]  his Done by hand / Clear
 
@@ -897,6 +898,7 @@ def book(job, R=None, now=None):
             return out
         J.answered(k, False, str(x), [], job.get("carrier"))        # refused before the work PC had it: nothing made
         out["said"] = f"{x} Nothing was booked."
+        out["refused"] = True
         return out
     payload = payload or {}
     trips = payload.get("trips") or []
@@ -925,6 +927,88 @@ def book(job, R=None, now=None):
     if "pass_email" in (e.get("steps") or {}):
         out["pass_email"] = bool(e["steps"]["pass_email"].get("ok"))
     return out
+
+
+# -- Book approved: his ticked list, one after another
+def not_ready(rec):
+    """Why an order isn't strictly ready to book, in words - "" when it is (his rule 03/11: nothing missing, nothing
+    amber, the site has answered). Checked here again whatever the dashboard showed: the tracker may have moved since."""
+    if not rec or not rec.get("orders"):
+        return "it's no longer on the map or the tracker"
+    kind = rec.get("kind")
+    if kind in ("adhoc", "dts"):
+        return ""                                    # its details came on the form
+    if kind in ("pinned", "collection"):
+        return "it isn't a delivery the desk books"
+    answered = rec.get("phoned_at") or rec.get("ctms_veh")
+    if not (answered or rec.get("reply_at")):
+        return "the site hasn't replied"
+    if not answered and rec.get("missing"):
+        return "still missing: " + ", ".join(str(m) for m in rec["missing"])
+    amber = [k for k, v in (rec.get("details") or {}).items() if isinstance(v, dict) and v.get("confidence") == "amber"]
+    if amber:
+        return "not confirmed yet: " + ", ".join(sorted(amber))
+    return ""
+
+
+def go_on(res):
+    """Whether the next booking of the batch may start: only after one that booked, or one that stopped before touching
+    anything ("Nothing was booked"). A refusal (Stop pressed, acting off), an answer still to come, a half-made trip or a
+    stop part way leaves CTMS for him to look at first."""
+    if res.get("refused") or res.get("pending") or res.get("held"):
+        return False
+    if res.get("ok"):
+        return True
+    return "Nothing was booked" in str(res.get("said") or "") or bool(res.get("skipped"))
+
+
+def _progress(R, run_id, i, state, said="", manifests=()):
+    if run_id in (None, ""):
+        return
+    try:
+        R.http("POST", "/api/ctms/book/progress", {"run": run_id, "i": i, "state": state, "said": str(said)[:500],
+                                                   "manifests": list(manifests)})
+    except Exception:
+        pass                             # the page told is never worth a booking
+
+
+def batch(jobs, run_id=None, R=None, now=None):
+    """Each approved job booked in turn, through book() and so the journal: one already booked is finished, not booked
+    again. Stops at the first that leaves CTMS needing a look. Returns {ok, said, results}."""
+    R = R or _client()
+    t0 = time.time()
+    results = []
+    stopped = ""
+    for i, job in enumerate(jobs):
+        named = " / ".join(str(o) for o in job.get("orders") or [])
+        _progress(R, run_id, i, "running")
+        why = not_ready(record_of(job.get("record")))
+        if why:
+            res = {"ok": False, "skipped": True, "said": f"Not booked: {why}. Nothing was booked.", "trips": []}
+        else:
+            try:
+                res = book(dict(job), R=R, now=now)
+            except Exception as e:
+                res = {"ok": False, "said": f"The booking failed before it finished: {e}. Look at CTMS.", "trips": []}
+        mans = [t.get("manifest") for t in res.get("trips") or [] if t.get("manifest") and t.get("status") == "ACCEPTED"]
+        state = "booked" if res.get("ok") else "skipped" if res.get("skipped") else "not booked"
+        _progress(R, run_id, i, state, res.get("said"), mans)
+        results.append({"orders": job.get("orders"), "ok": bool(res.get("ok")), "state": state, "said": res.get("said"),
+                        "manifests": mans})
+        if not go_on(res):
+            stopped = named
+            break
+    booked = sum(1 for r in results if r["ok"])
+    said = f"{booked} of {len(jobs)} booked"
+    if stopped:
+        said += (f"; stopped at {stopped} so CTMS can be looked at" + (f", {len(jobs) - len(results)} not started"
+                                                                      if len(jobs) > len(results) else ""))
+    skipped = [r for r in results if r["state"] != "booked"]
+    if skipped:
+        said += ". " + " ".join(f"{' / '.join(r['orders'] or [])}: {r['said']}" for r in skipped)
+    return {"ok": bool(booked) and not stopped, "said": said, "results": results,
+            "trips": [{"manifest": m, "status": "ACCEPTED"} for r in results for m in r["manifests"]],
+            "seconds": round(time.time() - t0, 1)}
 
 
 def retry(now=None):
@@ -960,6 +1044,21 @@ def main(argv):
             print("  " + d)
         print(json.dumps(res, default=str))
         return 0
+    if argv[:1] == ["batch"] and len(argv) >= 2:
+        run_id = None
+        if "--run" in argv:
+            try:
+                run_id = int(argv[argv.index("--run") + 1])
+            except (IndexError, ValueError):
+                run_id = None
+        try:
+            res = batch(json.loads(argv[1]), run_id)
+        except Exception as e:
+            res = {"ok": False, "said": f"The batch failed before it finished: {e}. Look at CTMS.", "results": [],
+                   "trips": []}
+        print(res["said"])
+        print(json.dumps(res, default=str))
+        return 0 if res["ok"] else 1
     if argv[:1] == ["clear"] and len(argv) >= 2:
         res = clear(argv[1], argv[2] if len(argv) > 2 else None)
         print(json.dumps(res, default=str))

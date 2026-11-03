@@ -167,6 +167,19 @@ export async function ctmsBook(job) {
   return d;
 }
 
+// Book approved (his 03/11: "it proposes, I approve"): the orders he ticked, each with the haulier, trailer and price he
+// saw, booked one after another on the work PC through the booking journal. Look mum, no hands on for the run.
+export async function ctmsBookBatch(jobs) {
+  const r = await req('/api/ctms/book_batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jobs }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 // The brief's Send in Teams for DHL NOC (his ask 01/11): the message sent in the work PC's Teams, to someone on the
 // home PC's NOC list only. Look mum, no hands is switched on for this one message when it is off.
 export async function ctmsTeams(email, text, dry = false, orders = [], haulier = '') {

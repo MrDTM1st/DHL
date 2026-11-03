@@ -1702,6 +1702,36 @@ def main():
                 push_panel()
                 push_tracker()
                 report("done" if res["ok"] else "error", "Book: " + res["said"], tail(out, 12))
+            elif action == "ctms_book_batch":
+                # Book approved: the orders he ticked, each booked in turn on the work PC through the booking journal,
+                # stopping at the first that leaves CTMS needing a look (book_run.py batch). The dashboard switched Look
+                # mum, no hands on for the run
+                keys = ("record", "orders", "date", "carrier", "haulier", "trailer", "haulage", "vehicles", "site_to")
+                jobs = [{k: j.get(k) for k in keys} for j in (cmd.get("jobs") or []) if isinstance(j, dict)][:12]
+                report("running", f"Booking {len(jobs)} approved order(s) on the work PC, one after another…")
+                try:
+                    out = run(["book_run.py", "batch", json.dumps(jobs), "--run", str(cmd.get("run") or "")],
+                              timeout=840 * max(1, len(jobs)))
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if res is None:
+                    res = {"ok": False, "said": "The batch did not finish - the Bookings card says what each got to.",
+                           "trips": []}
+                try:
+                    _req("/api/ctms/book/ran", dict(res, run=cmd.get("run")))
+                except Exception:
+                    pass
+                push_panel()
+                push_tracker()
+                report("done" if res["ok"] else "error", "Book approved: " + res["said"], tail(out, 12))
             elif action == "book_clear":
                 # the Bookings card's Done by hand / Clear: he has looked in CTMS or done the step himself
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}

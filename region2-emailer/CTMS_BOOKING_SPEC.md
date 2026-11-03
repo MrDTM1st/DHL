@@ -203,6 +203,29 @@ anything else restarts up to three times in ten minutes. Verified end to end on
 the home PC: good update, update that does not compile (refused), update that
 crashes on start (rolled back by itself).
 
+### The booking journal and Book approved (03/11)
+
+"Let's build the most robust booking automation": hardening first, then booking many at once.
+
+- **Never booked twice.** `book_journal.py` writes every press of Book down before the work PC is asked and after
+  every step. A press on an order it has booked finishes what is left (DigiHaul row, Parcel Pass, site email, filing,
+  off the map) and asks CTMS nothing. A manifest left short of ACCEPTED, or an ask nobody can say the outcome of, is
+  held for him (the Dashboard's "bookings not finished" card: Clear once he has looked in CTMS).
+- **A lost answer is found again.** The command's id is kept as soon as the dashboard numbers it; the work PC keeps its
+  own record of each Book's outcome (`work_pc/book_record.py`, `_book_journal.jsonl`) before it answers, and
+  `book_recall` (a look, no switch) hands it back. The dashboard's own copy is tried first.
+- **Failed steps come round again.** The local agent's `book_retry` (every 3 min) retries Outlook's steps up to three
+  times, 3 then 10 minutes apart, looking in Sent Items first so an email that went is never sent twice. The DigiHaul
+  row is typed on the work PC, so it waits for his Retry (a press of Book, which switches acting on). Filing waits
+  for the site email, so a retry still finds the thread.
+- **Book approved.** The Dashboard's "ready to book" card lists only strictly ready orders (replied or phoned, nothing
+  missing, nothing amber, nothing owed on the CTMS to-do, not being finished, someone who fits). It proposes the
+  haulier already asked, else the first who fits; the trailer and vehicles by his rules; the price only for our fleet
+  (0) and tier 1 (the matrix) - a tier 2 needs his quote. His tick is also his word that the haulier agreed: nothing on
+  file records a yes. `POST /api/ctms/book_batch` arms acting for the run; `book_run.py batch` re-checks readiness,
+  books each in turn through the journal, and stops at the first that leaves CTMS needing a look (anything but booked
+  or "Nothing was booked"), Stop pressed included.
+
 ## Safety model — human-in-the-loop, staged
 
 Consistent with the toolkit's existing "draft/preview, you approve" philosophy.

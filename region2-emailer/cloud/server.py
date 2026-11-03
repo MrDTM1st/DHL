@@ -458,6 +458,7 @@ _TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "colle
 _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 _RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
 _BOOK_RUN_MINUTES = 15       # the longest a Book runs: a few vehicles, the tracker row and the site's email
+_BOOK_BATCH_MAX = 12         # bookings one Book approved takes: a morning's ready orders
 
 
 def _check_list_locked():
@@ -2197,6 +2198,66 @@ class Handler(BaseHTTPRequestHandler):
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
             return self._json(*out)
+        if path == "/api/ctms/book_batch":
+            # Book approved (his 03/11: "it proposes, I approve"): the orders he ticked on the Ready to book card, each
+            # with the haulier, trailer and price he saw. His press is the go-ahead for these bookings and no others.
+            # One after another on the work PC through the booking journal; Look mum, no hands on for the run
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            jobs = []
+            for raw in (data.get("jobs") or [])[:_BOOK_BATCH_MAX]:
+                if not isinstance(raw, dict):
+                    continue
+                job = _ctms_args("ctms_book", raw)
+                to = str(raw.get("site_to") or "").strip()
+                job.update(record=str(raw.get("record") or "")[:120], haulier=str(raw.get("haulier") or "")[:60],
+                           site_to=to[:120] if re.fullmatch(r"[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+", to) else "")
+                if job.get("orders") and job.get("date") and job.get("carrier") and not job.get("dry"):
+                    jobs.append(job)
+            with _lock:
+                if not jobs:
+                    out = (400, {"error": "Nothing to book: each one needs its orders, date and carrier."})
+                elif _ctms_going_locked("book_run"):
+                    out = (409, {"error": "A booking is going already - wait for it to end."})
+                elif _ctms_going_locked("todo_run") or _ctms_going_locked("rail_run"):
+                    out = (409, {"error": "A CTMS run is going - book when it's done."})
+                elif _ctms["state"].get("control") is False:
+                    out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
+                                          "--allow-control on it to let it book."})
+                else:
+                    _ctms["next_id"] += 1
+                    rid = _ctms["next_id"]
+                    before = _ctms["control_until"]
+                    until = max(before, time.time() + min(480, _BOOK_RUN_MINUTES * len(jobs)) * 60)
+                    _ctms["control_until"], _ctms["armed_for"] = until, None
+                    _ctms["book_run"] = {"id": rid, "batch": True, "record": "", "dry": False,
+                                         "orders": [o for j in jobs for o in j["orders"]][:40],
+                                         "carrier": f"{len(jobs)} booking" + ("" if len(jobs) == 1 else "s"), "before": before, "until": until,
+                                         "state": "running", "at": datetime.now().strftime("%H:%M"), "said": "",
+                                         "jobs": [{"orders": j["orders"], "carrier": j["carrier"], "state": "waiting",
+                                                   "said": ""} for j in jobs]}
+                    _ctms_note_locked(f"Look mum, no hands mode switched on to book {len(jobs)} approved order(s) one "
+                                      "after another - back as it was when they end.")
+                    _queue.append({"action": "ctms_book_batch", "jobs": jobs, "run": rid, "queued_at": time.time()})
+                    _ctms_cv.notify_all()
+                    out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
+            return self._json(*out)
+        if path == "/api/ctms/book/progress":
+            # the home PC says how one booking of an approved batch went, as it goes
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["book_run"]
+                try:
+                    i = int(data.get("i"))
+                except (TypeError, ValueError):
+                    i = -1
+                if run and run["id"] == data.get("run") and run.get("jobs") and 0 <= i < len(run["jobs"]):
+                    st = str(data.get("state") or "")
+                    run["jobs"][i].update(state=st if st in ("running", "booked", "not booked", "skipped") else "done",
+                                          said=str(data.get("said") or "")[:500],
+                                          manifests=[str(m)[:20] for m in (data.get("manifests") or [])[:8]])
+            return self._json(200, {"ok": True})
         if path == "/api/ctms/book/ran":
             # the home PC says the booking ended: what it made - and the switch back as it was before it
             if not self._is_agent():
