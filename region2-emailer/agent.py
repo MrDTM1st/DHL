@@ -716,6 +716,8 @@ def _bg_jobs():
         ("phase2_check", ["phase2.py", "check"], 1200, 1800, lambda: True),
         # who has already been asked to cover each job (read-only, Sent Items)
         ("haulier_asks", ["haulier_asks.py"], 1800, 600, lambda: True),
+        # a booked DTS onto the team's DTS sheet, through the work PC (his 03/11)
+        ("dts_sheet", ["dts_sheet.py", "run"], 300, 180, lambda: True),
         # keep the order index fresh
         ("order_index", ["order_index.py"], 900, 900, lambda: True),
         # capture far-ahead orders onto the wait list (no drafts, no sends)

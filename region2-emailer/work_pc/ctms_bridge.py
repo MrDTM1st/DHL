@@ -100,6 +100,7 @@ import ctms_teams
 import ctms_update
 import ctms_window
 import pip_here
+import dts_book
 import shared_folder
 from ctms_capture import SCREENS
 from ctms_probe import DEBUG_PORT, find_browser, port_open
@@ -140,7 +141,7 @@ SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
 CHECK_ORDERS = 40       # orders one CTMS look-up takes (the map holds a few dozen at most)
 CHECK_SECONDS = 360     # ... and the longest it runs: what is looked up by then still goes to the map
-ADMIN = ("update", "fields_setup", "shared_folder", "folder_read")
+ADMIN = ("update", "fields_setup", "shared_folder", "folder_read", "dts_add")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
@@ -1455,6 +1456,8 @@ class Bridge:
             return self.update(cmd, done)
         if action == "shared_folder":
             return self.shared_folder(cmd, done)
+        if action == "dts_add":
+            return self.dts_add(cmd, done)
         if action == "folder_read":
             try:
                 said, got = shared_folder.look(cmd.get("folder"))
@@ -1688,6 +1691,20 @@ class Bridge:
         return done(True, f"Updated to {branch} {commit[:7]} - {len(changes)} file(s): "
                           + ", ".join(names[:8]) + (" ..." if len(names) > 8 else "")
                           + ". Restarting on the new code - back in a few seconds.")
+
+    def dts_add(self, cmd, done):
+        """Rows on the team's DTS sheet, which only this PC reaches (dts_book.py): that one workbook on the team's share."""
+        path = os.path.normpath(str(cmd.get("folder") or ""))
+        root = os.path.normcase(shared_folder.team_root().rstrip("\\/"))
+        if not root or not os.path.normcase(path).startswith(root + os.sep) or os.path.basename(path).lower() != "dts.xlsx":
+            return done(False, "That isn't the DTS sheet on the team's shared folder.")
+        try:
+            got = dts_book.add_rows(path, cmd.get("rows") or [])
+        except dts_book.Busy as e:
+            return done(False, f"Not yet: {e}.")
+        except (ValueError, KeyError, OSError, zipfile.BadZipFile) as e:
+            return done(False, f"Not added: {e}")
+        return done(True, f"{len(got['rows'])} row(s) on the {got['tab']} tab, {got['skipped']} already there.", got)
 
     def shared_folder(self, cmd, done):
         """Where the upload CSVs (kind "rail": the emailed rail plans, each into the folder its text names

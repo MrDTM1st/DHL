@@ -87,7 +87,7 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "ctms_book",                         # one order's trips made in CTMS (/api/ctms/book)
               "ctms_item",                         # one item of the CTMS to-do, as the home PC's Run hands it over
               "teams_send")                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
-CTMS_ADMIN = ("update", "fields_setup", "shared_folder", "folder_read")
+CTMS_ADMIN = ("update", "fields_setup", "shared_folder", "folder_read", "dts_add")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
                      "find")                                           # (find clicks only what it finds)
@@ -320,6 +320,10 @@ def _ctms_args(action, data):
         out["branch"] = branch
     if data.get("scope") in ("bridge", "all"):
         out["scope"] = data["scope"]
+    if action == "dts_add" and isinstance(data.get("rows"), list):     # rows for the team's DTS sheet, each cell cut to size
+        out["rows"] = [{k: (r[k] if isinstance(r[k], int) else str(r[k])[:80]) for k in
+                        ("nn", "sub", "cat", "qty", "post", "date", "req", "planner") if k in r}
+                       for r in data["rows"][:80] if isinstance(r, dict)]
     if data.get("kind") in ("csv", "rail"):        # which shared folder: the upload CSVs' or the rail plans'
         out["kind"] = data["kind"]
     if action == "paste" and data.get("text") is not None:

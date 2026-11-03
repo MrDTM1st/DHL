@@ -97,6 +97,11 @@ def main():
         print("MAP : job saved for the dashboard map (form kept for forwarding).")
     except Exception as ex:      # the map extra must never cost the CSV
         print(f"(map record not saved: {ex})")
+    try:                         # its lines, for the team's DTS sheet once it's booked
+        import dts_sheet
+        print(f"SHEET: {len(dts_sheet.remember(pdf, row)['lines'])} line(s) kept for the DTS sheet.")
+    except Exception as ex:
+        print(f"(lines for the DTS sheet not kept: {ex})")
     print(f"Reference : {data['ref']}  |  raised by {raiser}")
     print(f"Collection: {data['coll'].get('collection site')} {data['coll'].get('post code')}")
     print(f"Delivery  : {data['deliv'].get('delivery site')} {data['deliv'].get('post code')}")
