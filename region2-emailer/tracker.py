@@ -47,6 +47,7 @@ def _key(orders, date):
 # each check just for the sweep to remove them again - endless churn, and a
 # booked_removed metric that fired every tick.
 DROPS = os.path.join(HERE, "_booked_drops.json")
+DROPS_KEEP = 3000     # the oldest go first: kept sorted, a 50xxxxx booked today fell off under 400 higher numbers
 
 
 def booked_drops():
@@ -58,9 +59,20 @@ def booked_drops():
 
 
 def remember_drops(orders):
-    s = booked_drops() | {str(o) for o in orders}
-    with open(DROPS, "w", encoding="utf-8") as f:
-        json.dump(sorted(s)[-400:], f)
+    try:
+        with open(DROPS, encoding="utf-8") as f:
+            kept = [str(o) for o in json.load(f)]
+    except Exception:
+        kept = []
+    have = set(kept)
+    for o in orders:
+        if str(o) not in have:
+            have.add(str(o))
+            kept.append(str(o))           # in the order they were booked
+    tmp = DROPS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(kept[-DROPS_KEEP:], f)
+    os.replace(tmp, DROPS)                # never half written: a reader seeing none would let booked orders back on
 
 
 def log(orders, to, name, product_codes, materials, site, postcode, delivery_date, source,
