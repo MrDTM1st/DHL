@@ -394,6 +394,13 @@ def _build(state, new_extracts):
     a batch THIS build wrote. If the build fails, put the extracts back as
     unseen so the next tick tries again (up to BUILD_TRIES times) - they are
     already saved as seen, and a one-off error line is easily overwritten."""
+    if _review_open():
+        # he is reviewing a batch (or there's no telling): a rebuild now would change the file under the rows he
+        # ticked, and the send applies his ticks to whatever it holds. Left unseen, no try spent: built once it closes
+        held = {eid for eid, _fn in new_extracts}
+        state["ext_ids"] = [e for e in state.get("ext_ids", []) if e not in held]
+        _save(state)
+        return
     batch_path = os.path.join(HERE, "_pending_batch.json")
     names = ", ".join(fn for _eid, fn in new_extracts[:2])
 
