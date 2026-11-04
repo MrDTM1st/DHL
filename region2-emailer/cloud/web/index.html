@@ -14,6 +14,17 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Haulage Desk" />
   <script>
+    // Dark mode before the first paint, so a dark dashboard never flashes white (src/lib/theme.js keeps it after).
+    try {
+      var t = localStorage.getItem('r2theme');
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      if (t === 'dark') {
+        document.documentElement.dataset.theme = 'dark';
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', '#1d1c18');
+      }
+    } catch (e) { /* no storage: light, as always */ }
+  </script>
+  <script>
     // Register the service worker (offline shell + installability). Never on
     // the vite dev server - a SW pinning dev assets makes HMR hell.
     if ('serviceWorker' in navigator && location.port !== '5173') {
