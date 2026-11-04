@@ -49,3 +49,21 @@ def test_no_batch_is_built_while_he_is_reviewing_one_and_the_extract_waits_its_t
     monkeypatch.setattr(M, "_review_open", lambda: False)     # he has sent it
     M._build(M._load(), [("e1", "Haulier Extract.xlsx")])
     assert did == [["build_drafts.py", "batch"], "done"]
+
+
+def test_the_ids_seen_are_kept_in_the_order_they_came_and_the_oldest_let_go(M, monkeypatch):
+    old = [f"id{i:03d}" for i in range(500)]
+    M._save({"ext_ids": old, "adhoc_ids": old, "inbox_hwm": "", "sent_hwm": "", "last_tree": time.time()})
+    inbox = object()
+    mail = [("new-extract", "Haulier Extract", "2026-11-04T09:00", ["Haulier Extract.xlsx"]),
+            ("new-form", "Haulage request", "2026-11-04T09:01", ["Haulage Request.pdf"])]
+    monkeypatch.setattr(M, "_folders", lambda ns: (inbox, None, None))
+    monkeypatch.setattr(M, "_scan", lambda folder, limit: iter(mail if folder is inbox else []))
+    monkeypatch.setattr(M, "report", lambda *a, **k: None)
+    built = []
+    monkeypatch.setattr(M, "_build", lambda state, new: built.append(new))
+    M.main()
+    assert built == [[("new-extract", "Haulier Extract.xlsx")]]
+    seen = M._load()
+    assert seen["ext_ids"] == old[1:] + ["new-extract"]
+    assert seen["adhoc_ids"] == old[1:] + ["new-form"]
