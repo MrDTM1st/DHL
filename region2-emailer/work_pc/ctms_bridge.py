@@ -143,7 +143,7 @@ SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
 CHECK_ORDERS = 40       # orders one CTMS look-up takes (the map holds a few dozen at most)
 CHECK_SECONDS = 360     # ... and the longest it runs: what is looked up by then still goes to the map
-ADMIN = ("update", "fields_setup", "shared_folder", "folder_read", "dts_add")
+ADMIN = ("update", "fields_setup", "shared_folder", "folder_read", "dts_add", "dts_date")
 ACTIONS = OBSERVE + READ + DRIVE + ADMIN
 # What goes in the audit log from a command (the text typed is kept - it is an
 # order number or a time, never a password: the bridge will not type into one).
@@ -1469,6 +1469,8 @@ class Bridge:
             return self.shared_folder(cmd, done)
         if action == "dts_add":
             return self.dts_add(cmd, done)
+        if action == "dts_date":
+            return self.dts_date(cmd, done)
         if action == "book_recall":
             found = book_record.recall(cmd.get("orders") or [], cmd.get("date") or "", cmd.get("ask"))
             return done(True, f"{len(found)} booking(s) on record for {' / '.join(cmd.get('orders') or [])} on "
@@ -1707,11 +1709,36 @@ class Bridge:
                           + ", ".join(names[:8]) + (" ..." if len(names) > 8 else "")
                           + ". Restarting on the new code - back in a few seconds.")
 
-    def dts_add(self, cmd, done):
-        """Rows on the team's DTS sheet, which only this PC reaches (dts_book.py): that one workbook on the team's share."""
+    @staticmethod
+    def dts_path(cmd):
+        """The DTS sheet named in the command, when it is that one workbook on the team's share; None otherwise."""
         path = os.path.normpath(str(cmd.get("folder") or ""))
         root = os.path.normcase(shared_folder.team_root().rstrip("\\/"))
         if not root or not os.path.normcase(path).startswith(root + os.sep) or os.path.basename(path).lower() != "dts.xlsx":
+            return None
+        return path
+
+    def dts_date(self, cmd, done):
+        """One line's Collection date on the team's DTS sheet changed (dts_book.set_date), nothing else."""
+        path = self.dts_path(cmd)
+        if path is None:
+            return done(False, "That isn't the DTS sheet on the team's shared folder.")
+        nn, cat, day = str(cmd.get("nn") or ""), str(cmd.get("cat") or ""), str(cmd.get("date") or "")
+        try:
+            got = dts_book.set_date(path, nn, cat, day)
+        except dts_book.Busy as e:
+            return done(False, f"Not yet: {e}.")
+        except (ValueError, KeyError, OSError, zipfile.BadZipFile) as e:
+            return done(False, f"Not changed: {e}")
+        if got.get("was") == day:
+            return done(True, f"{nn} ({cat}) already has {day}, row {got['row']} of the {got['tab']} tab.", got)
+        return done(True, f"{nn} ({cat}): collection date {got['was'] or 'blank'} -> {day}, row {got['row']} of the "
+                          f"{got['tab']} tab.", got)
+
+    def dts_add(self, cmd, done):
+        """Rows on the team's DTS sheet, which only this PC reaches (dts_book.py): that one workbook on the team's share."""
+        path = self.dts_path(cmd)
+        if path is None:
             return done(False, "That isn't the DTS sheet on the team's shared folder.")
         try:
             got = dts_book.add_rows(path, cmd.get("rows") or [])
