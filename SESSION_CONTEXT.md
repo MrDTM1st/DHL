@@ -378,7 +378,7 @@ site_decision{data}  handover_start{data}  handover_stop
 ctms_book{...}  ctms_book_batch{jobs}  book_clear{data}  home_update
 ```
 
-**Settings (the gear, top right):** Update the home PC (`home_update`: `home_update.py` pulls main by fast-forward
+**Settings (the gear, top right):** Appearance (Light / Dark / Match this device, saved per browser in `r2theme`; `lib/theme.js`, and index.html sets it before the first paint; theme.css's dark set is `:root[data-theme="dark"]`, red and green TEXT use `--red-ink` / `--go-ink`), Update the home PC (`home_update`: `home_update.py` pulls main by fast-forward
 only, refuses over hand edits, puts the code back if it won't compile, then both agents restart themselves when idle
 via `_restart_agents.flag`), Update the work PC (the bridge's own `update`), the work PC's setup file, and both PCs'
 by-hand steps.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as api from '../api.js';
+import * as theme from '../lib/theme.js';
 import { SetupPanel, SetupSteps, CODE_ZIP, BRIDGE_FOLDER } from '../components/WorkPcSetup.jsx';
 
 // Settings (his ask 03/11): kept out of the way behind the gear - updating the two PCs' code, and the work PC's setup
@@ -171,6 +172,29 @@ function WorkPc({ onAuthFail, pushToast }) {
   );
 }
 
+// Light or dark (04/11), for this browser only
+function Appearance() {
+  const [picked, setPicked] = useState(theme.choice());
+  const pick = (k) => { theme.setChoice(k); setPicked(k); };
+  return (
+    <div className="card settings-card">
+      <div className="settings-head"><h3>Appearance</h3></div>
+      <div className="settings-row">
+        <div className="settings-what">
+          <div className="settings-label" id="theme-label">Theme</div>
+          <div className="settings-muted">Saved on this device only, so your phone and the work PC can each have their own.</div>
+        </div>
+        <div className="filters" role="radiogroup" aria-labelledby="theme-label">
+          {theme.CHOICES.map(([k, label]) => (
+            <button key={k} type="button" role="radio" aria-checked={picked === k}
+              className={'chip' + (picked === k ? ' active' : '')} onClick={() => pick(k)}>{label}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage({ panel, status, agentOnline, onCommand, onAuthFail, pushToast }) {
   return (
     <div className="scroll"><div className="container page-anim settings">
@@ -180,6 +204,7 @@ export default function SettingsPage({ panel, status, agentOnline, onCommand, on
           <h1 className="h1">Settings</h1>
         </div>
       </div>
+      <Appearance />
       <HomePc code={panel && panel.home_code} status={status} agentOnline={agentOnline} onCommand={onCommand} />
       <WorkPc onAuthFail={onAuthFail} pushToast={pushToast} />
     </div></div>

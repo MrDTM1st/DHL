@@ -566,7 +566,7 @@ export default function Dashboard({
           <div className="card statuscard">
             <div className="statushd">
               <span className="sdot" style={{ background: stateColor }} />
-              <span className="sstate" style={{ color: stateColor }}>{(st.state || 'idle').replace('_', ' ')}</span>
+              <span className="sstate" style={{ color: stateColor.replace(/var\(--(red|go)\)/, 'var(--$1-ink)') }}>{(st.state || 'idle').replace('_', ' ')}</span>
               <span className="stime mono">{st.at}</span>
             </div>
             <div className="statusdetail">
