@@ -617,7 +617,7 @@ export function recommendFor(r, hauliers, geo) {
   out.sort((a, b) => a.rank - b.rank
     || !!a.rarely - !!b.rarely
     || (a.miles === null) - (b.miles === null)
-    || (a.miles || 9e9) - (b.miles || 9e9)
+    || (a.miles == null ? 9e9 : a.miles) - (b.miles == null ? 9e9 : b.miles)   // 0 miles off is nearest, not last
     || a.name.localeCompare(b.name));
   // nearer than everyone who fits (or anyone at all when nobody fits); without
   // distances there's no "near" to speak of, so nothing until they geocode

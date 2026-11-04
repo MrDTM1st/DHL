@@ -5,9 +5,20 @@
 
 const KEY_STORE = 'r2key';
 
-export const getKey = () => localStorage.getItem(KEY_STORE) || '';
-export const setKey = (k) => localStorage.setItem(KEY_STORE, (k || '').trim());
-export const clearKey = () => localStorage.removeItem(KEY_STORE);
+// Storage the browser refuses (a SecurityError: blocked site data, some private
+// windows) must not blank the app - the key is then held for this tab only.
+let heldKey = '';
+export const getKey = () => {
+  try { return localStorage.getItem(KEY_STORE) || heldKey; } catch { return heldKey; }
+};
+export const setKey = (k) => {
+  heldKey = (k || '').trim();
+  try { localStorage.setItem(KEY_STORE, heldKey); } catch { /* held for this tab only */ }
+};
+export const clearKey = () => {
+  heldKey = '';
+  try { localStorage.removeItem(KEY_STORE); } catch { /* nothing stored */ }
+};
 
 // Thrown on 401 so callers can trigger the login screen.
 export class AuthError extends Error {
@@ -36,21 +47,33 @@ export const getFile     = (name) => getJSON('/api/file?name=' + encodeURICompon
 // ---- writes ----
 // Enqueue a command for the home PC agent. Body carries whichever of
 // {action, order, email, sel, mode, week, sites, data} the action needs.
+// A refusal (400/413/5xx) throws with the server's own words - it used to
+// resolve as if the command had gone.
 export async function command(body) {
-  await req('/api/command', {
+  const r = await req('/api/command', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || 'HTTP ' + r.status);
+  }
 }
 
 // Upload a file (rail-plan CSV / Synergy .xlsx) for the agent to pull and run.
+// Throws on a refusal too, so the caller never fires its command at an empty or
+// stale upload slot.
 export async function upload(name, dataB64) {
-  await req('/api/upload', {
+  const r = await req('/api/upload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, data: dataB64 }),
   });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || 'HTTP ' + r.status);
+  }
 }
 
 export async function clearDropped() {

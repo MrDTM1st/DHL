@@ -220,14 +220,18 @@ export default function App() {
   const unread = notes.filter((n) => !n.read).length;
 
   // ---- command / upload plumbing ----
+  // TRUE once the server has the command; a refusal is said, not swallowed
   const onCommand = useCallback(async (body) => {
     try {
       await api.command(body);
       setTimeout(refreshStatus, 250);
+      return true;
     } catch (e) {
       if (e instanceof api.AuthError) onAuthFail();
+      else pushToast('Not sent', String(e && e.message || e), 'warn');
+      return false;
     }
-  }, [refreshStatus, onAuthFail]);
+  }, [refreshStatus, onAuthFail, pushToast]);
 
   // Returns TRUE only if the file actually reached the control plane.
   //
@@ -364,6 +368,7 @@ export default function App() {
       let st;
       try { st = await api.ctmsStatus(false); } catch { continue; }
       const b = st.book_run;
+      if (!b || b.id !== run) break;            // the dashboard restarted, or another run since: this one is lost
       if (b && b.id === run) {
         setBatch(b);
         if (b.state !== 'running') {
@@ -373,6 +378,9 @@ export default function App() {
         }
       }
     }
+    // given up, or the server no longer knows the run: never left on "Booking on the work PC..." for good
+    setBatch((x) => ({ ...(x || {}), state: 'done', ok: false,
+      said: 'No answer from the home PC yet: check the bookings in CTMS before booking any of these again.' }));
   }, [approved, pushToast, refreshTracker]);
 
   // booked ad hocs leave the map (they were never in the tracker)
@@ -464,7 +472,7 @@ export default function App() {
         {page === 'settings' && <SettingsPage panel={panel} status={status} agentOnline={agentOnline}
           onCommand={onCommand} onAuthFail={onAuthFail} pushToast={pushToast} />}
         {selectedRecord && (
-          <Drawer record={selectedRecord} hauliers={hauliers}
+          <Drawer key={selectedId} record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); setPhoneFor(null); }}
             onCall={onCall} onPhoneUpdate={onPhoneUpdate} openPhone={phoneFor === selectedId}
             onAdhocBooked={onAdhocBooked} onBook={onBook}
