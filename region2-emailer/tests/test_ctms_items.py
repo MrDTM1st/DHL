@@ -35,6 +35,7 @@ class FakeOrder:
         self.saved = 0
         self.steps = []
         self.typed = []
+        self.takes = {"N": "NIGHT", "SAT": "SATURDAY", "SUN": "SUNDAY"}
         self.dirty = False
         self.opens_as = None
         self.missing = set()
@@ -94,6 +95,8 @@ class FakeOrder:
                 self.click(s)
             elif a == "type":
                 self.typed.append(s["text"])
+                if self.tab == "services" and s["text"] in self.takes:
+                    self.have = list(self.have) + [self.takes[s["text"]]]
                 if self.open_card and self.cursor == "si" and self.tab == "detail":
                     self.si += s["text"]
                     self.dirty = True
@@ -291,6 +294,33 @@ def test_an_update_types_what_it_should_and_reads_the_times_back_from_order_summ
     # bottom rows off first, rows moving up
     rows = [s["px"][1] for s in o.steps if s["action"] == "click" and s.get("px") and s["px"][0] == I.SERVICE_ROW_X]
     assert rows == [I.SERVICE_ROW_Y + 23, I.SERVICE_ROW_Y]
+
+
+ONLY_NIGHT = {"services": {"NIGHT": True, "SATURDAY": True}, "anyway": True}
+
+
+def test_night_and_saturday_alone_go_on_by_his_short_codes_and_nothing_else_is_typed():
+    o = _updated(have=[])
+    said = _items(o).update(o.ref, ONLY_NIGHT)
+    assert o.saved == 1 and not o.open_card and said.endswith("+NIGHT+SATURDAY")
+    assert [t for t in o.typed if t not in (1, "1", o.ref)] == ["N", "SAT"]
+
+
+def test_a_night_on_it_already_is_left_with_nothing_saved():
+    o = _updated(have=["NIGHT", "SATURDAY"])
+    said = _items(o).update(o.ref, ONLY_NIGHT)
+    assert o.saved == 0 and o.typed == [o.ref] and "already" in said
+
+
+def test_a_night_that_doesnt_read_back_is_not_saved():
+    o = _updated(have=[])
+    o.takes = {}
+    try:
+        _items(o).update(o.ref, ONLY_NIGHT)
+        raise AssertionError("it went on")
+    except I.Stop as e:
+        assert "did not read back" in str(e)
+    assert o.saved == 0
 
 
 def test_a_service_missing_goes_on_and_one_there_is_left():

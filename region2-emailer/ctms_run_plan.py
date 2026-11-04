@@ -456,6 +456,41 @@ def plan_update(it, rec, found):
                         **({"also": [str(o) for o in every[1:]]} if len(every) > 1 else {})} if look_up else None)}
 
 
+SERVICES_ASK = re.compile(r"^Add (.+?) before it's booked")
+
+
+def _services_day(it):
+    """The delivery day on a Night / Saturday / Sunday reminder, dd/mm/yyyy: its words carry no year, so the one it was
+    added in, or the next when that day would be months gone."""
+    m = re.search(r"deliver \w+ (\d\d)/(\d\d)", str(it.get("what") or ""))
+    if not m:
+        return ""
+    year = re.match(r"(\d{4})-(\d\d)", str(it.get("added") or ""))
+    if not year:
+        return ""
+    y = int(year.group(1)) + (1 if int(m.group(2)) < int(year.group(2)) - 6 else 0)
+    return f"{m.group(1)}/{m.group(2)}/{y}"
+
+
+def plan_services(it, found):
+    """Night / Saturday / Sunday on the order, by the Run ("that's your job", his 04/11) - on its own: nothing else on the
+    line is read or typed. Lines CTMS has none open for (booked, or not imported yet) stay his: taking a service onto a
+    booked one means unbooking it."""
+    orders = it.get("orders") or []
+    owed = SERVICES_ASK.match(str(it.get("what") or "")).group(1).split(" + ")
+    date = _services_day(it)
+    base = {"id": it["id"], "kind": "services", "orders": orders, "what": it.get("what") or "", "checks": [], "lookup": None}
+    lines = _lines_for(found, orders, date)
+    if lines is not None and not lines:
+        return dict(base, status="yours", lines=[], set={},
+                    explain=["CTMS has no open line for it: booked already, or not imported yet"])
+    return dict(base, status="ready", lines=[ln.get("ref") for ln in lines or []],
+                set={"services": {code: True for code in owed}, "anyway": True},
+                explain=[f"{' + '.join(owed)} for the hours it runs"],
+                lookup=None if lines else {"ref": str(orders[0]), "date": date, "cards": False,
+                                           **({"also": [str(o) for o in orders[1:]]} if len(orders) > 1 else {})})
+
+
 def plan(items, records, found):
     """The run plan for every open to-do item, oldest first."""
     by_order = {}
@@ -470,10 +505,17 @@ def plan(items, records, found):
         elif it.get("kind") == "update":
             order = str((it.get("orders") or [""])[0])
             out.append(plan_update(it, by_order.get(order), found))
+        elif it.get("source") == "services" and it.get("orders") and SERVICES_ASK.match(str(it.get("what") or "")):
+            out.append(plan_services(it, found))
         else:
             out.append({"id": it["id"], "kind": it.get("kind"), "orders": it.get("orders") or [],
                         "what": it.get("what") or "", "status": "yours", "lines": [], "set": {}, "explain": [],
                         "checks": []})
+    waiting = {o for p in out if p["kind"] == "update" and p["status"] == "held" for o in p["orders"]}
+    for p in out:                      # the update may yet change the hours: they go on once it's answered
+        if p["kind"] == "services" and p["status"] == "ready" and waiting & set(p["orders"]):
+            p.update(status="held", lookup=None, checks=[{"field": "update_first", "label": "Waits", "quote": "", "options": [],
+                                                          "text": False, "why": "Goes on once this order's update is answered"}])
     return out
 
 

@@ -188,6 +188,36 @@ def test_what_cannot_be_typed_safely_is_left_for_him():
     assert p["status"] == "yours"
 
 
+def _night(order, what="Add NIGHT + SATURDAY before it's booked (deliver Sat 07/11 23:00)", added="2026-11-03 12:25"):
+    return _item(order, kind="other", source="services", what=what, added=added)
+
+
+def test_night_and_saturday_are_the_runs_to_add_not_his():
+    p = P.plan([_night("9100090")], [], _found("9100090", "07/11/2026"))[0]
+    assert p["status"] == "ready" and p["lines"] == ["9100090-1-1"] and not p["lookup"]
+    assert p["set"] == {"services": {"NIGHT": True, "SATURDAY": True}, "anyway": True}
+
+
+def test_a_night_not_looked_up_yet_is_looked_up_for_its_delivery_day():
+    p = P.plan([_night("9100090")], [], {})[0]
+    assert p["status"] == "ready" and p["lookup"] == {"ref": "9100090", "date": "07/11/2026", "cards": False}
+    p = P.plan([_night("9100090", "Add NIGHT before it's booked (deliver Sat 02/01 23:00)", "2026-12-20 12:25")], [], {})[0]
+    assert p["lookup"]["date"] == "02/01/2027"
+
+
+def test_a_night_with_no_open_line_stays_his():
+    p = P.plan([_night("9100090")], [], _found("9100090", "07/11/2026", "SCHEDULED"))[0]
+    assert p["status"] == "yours" and "booked already" in p["explain"][0]
+
+
+def test_a_night_waits_for_an_update_that_needs_an_answer():
+    rec = _rec("9100091", "07/11/2026", contact={"confidence": "low"})
+    rec.pop("site_contact", None)
+    found = _found("9100091", "07/11/2026")
+    update, night = P.plan([_item("9100091"), dict(_night("9100091"), id="n1")], [rec], found)
+    assert update["status"] == "held" and night["status"] == "held" and "update" in night["checks"][0]["why"]
+
+
 def test_pts_is_only_ever_for_rails():
     for mats in ("10x 1t bags of ballast", "60x sleepers"):
         rec = dict(_rec("9100081", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials=mats)

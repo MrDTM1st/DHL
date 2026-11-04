@@ -32,6 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "ctms_item_templates.json")
 
 SERVICE_ROWS = 14                  # the Services grid's rows, as the Access Bridge reads them
+# What a job's hours owe: what's typed in the grid (his "N / SAT / SUN + Tab", 31/10) and how its Service Id starts once it's in
+OWED_SERVICES = {"NIGHT": ("N", "NIGHT"), "SATURDAY": ("SAT", "SAT"), "SUNDAY": ("SUN", "SUN")}
 # The open order's Veh Type box, what it shows - only these are ever picked ("the vehicle tab, we don't use that rigid
 # Moffett thing ... We just use the 40-foot rigid", 01/11: a HIAB or a Moffett goes in Services) - and each one's line in
 # its list: how many presses of the list's down arrow, its thumb dragged up, bring that line into view (29-30/10). The
@@ -234,6 +236,12 @@ def collection_fix(ref, s, line):
                    "no rule for that, so nothing was typed. Do this one by hand.")
     shown = day.strftime("%d/%m/%y")
     return {"day": shown, "storage": storage, "was": line["ready_at"], "ready_at": f"{shown} {ready:%H:%M}"}
+
+
+def has_service(have, code):
+    """That service on these Service Ids - a Night, Saturday or Sunday under either of its names."""
+    typed, shown = OWED_SERVICES.get(code, (code, code))
+    return any(sid == typed or sid.startswith(shown) for sid in have)
 
 
 def rails(s, adds):
@@ -464,7 +472,7 @@ class Items:
             raise Stop(f"{ref}: its Services tab did not read, so nothing was typed.")
         want = s.get("services") or {}
         removes = sorted((i + 1 for i, sid in enumerate(have) if sid in want and not want[sid]), reverse=True)
-        adds = [code for code, on in want.items() if on and code not in have]
+        adds = [code for code, on in want.items() if on and not has_service(have, code)]
         storage = s.get("storage") or fix.get("storage")
         if storage and "STORAGE" not in have:
             adds.append(f"STORAGE:{storage}")
@@ -472,14 +480,35 @@ class Items:
         if wrong:
             raise Stop(f"{ref}: {wrong} Nothing was typed.")
         self.stage("read")
+        only = not (fix or removes or any(s.get(k) for k in ("collect", "deliver", "comments", "veh")))
+        if only and not adds:              # services alone, and they're on it
+            self.close_quietly()
+            return f"{ref}: has {' + '.join(want)} already"
         # services first, the tab being up: bottom rows first, as rows move up
         steps = [ANCHOR]
         for row in removes:
             steps += [_click((SERVICE_ROW_X, SERVICE_ROW_Y + 23 * (row - 1)), after=0.2), _click(SERVICE_DELETE, react=True, timeout=8)]
         for code in adds:
             code, _, qty = code.partition(":")     # "STORAGE:2" - a quantity of its own
-            steps += [_click(SERVICE_NEW, react=True, box=[100, 270, 1100, 600], timeout=8), _type(code),
+            steps += [_click(SERVICE_NEW, react=True, box=[100, 270, 1100, 600], timeout=8), _type(OWED_SERVICES.get(code, (code,))[0]),
                       dict(_key("tab"), react=True, timeout=8), _type(qty or 1), _key("tab", 0.2)]
+        if only:                           # services alone: read back in the grid, or nothing is kept
+            try:
+                self.run(steps)
+            except RuntimeError as e:
+                raise Stop(f"{ref}: CTMS did not take {', '.join(adds)} ({e}), so nothing was saved.")
+            there = services(self.look()) or []
+            lost = [c for c in adds if not has_service(there, c)]
+            if lost:
+                raise Stop(f"{ref}: {', '.join(lost)} did not read back in its Services, so nothing was saved.")
+            self.stage("typed")
+            if dry:
+                if not self.clear_up():
+                    raise Stop(f"{ref}: rehearsed, but CTMS wouldn't let it go - look at it.")
+                return f"{ref}: rehearsed, nothing kept"
+            self.save_close(ref)
+            self.stage("saved")
+            return f"{ref}: +{'+'.join(adds)}"
         # the times
         steps += [_click(TAB_DETAIL, react=True, box=TAB_BODY, timeout=10)]
         if fix:                            # its dates only: the hours stay the yard's
