@@ -17,6 +17,11 @@ the postcode arrives spaced, unspaced or with stray spaces in the middle.
 """
 import re
 
+# An outward code on its own - 'DN16', 'M1', 'EC1A' - has no inward code to
+# take three characters off: cut anyway, 'DN16' became 'D N16' and district 'D'.
+# No full postcode fits this (the shortest, 'M11AA', is five characters).
+_OUTWARD_ONLY = re.compile(r"[A-Z]{1,2}\d[A-Z\d]?")
+
 
 def compact(pc):
     """Letters and digits only, uppercased: 'le12 9 bs' -> 'LE1299BS'-safe form."""
@@ -29,13 +34,18 @@ def norm(pc):
     Use this as the key for any postcode-keyed cache so the same place can't be
     stored twice under two spellings."""
     s = compact(pc)
+    if _OUTWARD_ONLY.fullmatch(s):
+        return s
     return f"{s[:-3]} {s[-3:]}" if len(s) > 3 else s
 
 
 def outward(pc):
     """The outward (district) code: 'DN3 1ED' -> 'DN3', 'DN16 1BP' -> 'DN16',
-    'EC1A 1BB' -> 'EC1A'. Empty when there isn't enough to be a postcode."""
+    'EC1A 1BB' -> 'EC1A', and an outward code alone is itself ('DN16' ->
+    'DN16'). Empty when there isn't enough to be a postcode."""
     s = compact(pc)
+    if _OUTWARD_ONLY.fullmatch(s):
+        return s
     return s[:-3] if len(s) > 3 else ""
 
 

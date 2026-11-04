@@ -68,6 +68,9 @@ def region_of(pc):
 
 def first_name(name):
     # IIf(null," TBA", IIf(Left(name,InStr(name," "))=" "," TBA", Left(name,InStr(name," "))))
+    # Trimmed first, as the real database holds it: " John Smith" found its
+    # space at the very start and went up as " TBA" / "hn Smith".
+    name = str(name or "").strip()
     if not name:
         return Keep(" TBA")
     i = str(name).find(" ")
@@ -83,7 +86,7 @@ def first_name(name):
 
 def last_name(name):
     # Mid(name, Len(First), 100) - 1-based start at the last char of First
-    name = "" if name is None else str(name)
+    name = "" if name is None else str(name).strip()     # trimmed, as first_name() is
     fl = len(first_name(name))
     return Keep(name[fl - 1: fl - 1 + 100] if fl >= 1 else name)
 

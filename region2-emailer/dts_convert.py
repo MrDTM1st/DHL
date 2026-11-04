@@ -37,14 +37,18 @@ def to_time(s, is_end=False):
         return "12:00"
     if "MIDNIGHT" in s:
         return "00:00"
-    m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?", s)
+    # "9:30", "2.30PM", "0930", "930", "1530" - a ":" or "." or nothing between
+    # hour and minutes. Only ":" was read, so "2.30PM" came out 02:00 and "930"
+    # came out 93:00, which is no time at all.
+    m = re.match(r"(\d{1,2})(?:[:.]?(\d{2}))?\s*(AM|PM)?(?!\d)", s)
     if m:
         h = int(m.group(1)); mnt = m.group(2) or "00"; ap = m.group(3)
         if ap == "PM" and h < 12:
             h += 12
         if ap == "AM" and h == 12:
             h = 0
-        return f"{h:02d}:{mnt}"
+        if h <= 23 and int(mnt) <= 59:
+            return f"{h:02d}:{mnt}"
     return default
 
 

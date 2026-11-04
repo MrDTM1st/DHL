@@ -175,11 +175,30 @@ def to_orders(rows, week):
         cte = _stamp(cd, _as_time(cend))
         dt = _stamp(dd, _as_time(dstart))
         dte = _stamp(dd, _as_time(dend))
+        # A blank or unreadable time stamps as 00:00, so a leg with no times
+        # came out as a zero-length 00:00-00:00 window - a delivery at midnight,
+        # before its own collection. Default it the way every other route does,
+        # the delivery off this row's own collection window; and close a start
+        # with no end the way process_form does, not on a 00:00 before it.
+        if cd and nr_csv.unstated_window(_as_time(cstart), _as_time(cend)):
+            ct, cte = nr_csv.unconfirmed_window(f"{cd:%d/%m/%Y}")
+        elif cd and _as_time(cend) is None:
+            cte = nr_csv.close_window(ct)
+        if dd and nr_csv.unstated_window(_as_time(dstart), _as_time(dend)):
+            dt, dte = nr_csv.unconfirmed_window(f"{dd:%d/%m/%Y}", (ct, cte))
+        elif dd and _as_time(dend) is None:
+            dte = nr_csv.slot_window_end(dt)
 
         # The form's own audit check: collection must not be after delivery.
-        if isinstance(ct, datetime) and isinstance(dt, datetime) and ct > dt:
+        # ct and dt are 'dd/mm/yyyy HH:MM' strings, never datetimes, so the
+        # isinstance test this used to make could not fire - compare the times.
+        try:
+            c_at, d_at = (datetime.strptime(x, "%d/%m/%Y %H:%M") for x in (ct, dt))
+        except ValueError:
+            c_at = d_at = None
+        if c_at and d_at and c_at > d_at:
             problems.append(f"row {i} ({csite} -> {dsite}): collection "
-                            f"{ct:%d/%m %H:%M} is AFTER delivery {dt:%d/%m %H:%M}")
+                            f"{c_at:%d/%m %H:%M} is AFTER delivery {d_at:%d/%m %H:%M}")
 
         # "MS"&week&"/"&n&"/"&DAY&"/"&MONTH&"/"&YEAR&"/"&LEFT(postcode,2)
         ref = ""
