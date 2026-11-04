@@ -9,16 +9,17 @@ export const TRAILERS = ['NR_ARTIC_FL', 'NR_60_ART_FL', 'NR_TROM_80FT', 'NR_FLAT
 const ARTIC_HIAB_KG = 20280;
 const ARTIC_KG = 25500;
 const RIGID_HIAB_KG = 10000;
+const TIPPER_KG = 21000;    // NR_R_TIP26_8 (his 04/11)
 
 export const rankOf = (h) => (h.rank !== undefined ? h.rank : (h.fleet ? 0 : (h.tier === 'tier1' ? 1 : 2)));
 
-// The trailer the job goes on: the one on the order, else his rules - rails by their length, stoneblowers on the rigid
-// tipper, the rest by weight. '' when none of that says.
+// The trailer the job goes on: the one on the order, else his rules - rails by their length, stoneblowers and loose ballast
+// on the rigid tipper, the rest by weight. '' when none of that says.
 export function defaultTrailer(r, job) {
   const said = String((((r.details || {}).vehicle) || {}).value || '').toUpperCase();
   if (TRAILERS.includes(said)) return said;
   const mats = `${r.materials || ''} ${(r.product_codes || []).join(' ')}`;
-  if (/stone\s*-?\s*blower/i.test(mats)) return 'NR_R_TIP26_8';
+  if (/stone\s*-?\s*blower|\bloose\b|100500\/001/i.test(mats)) return 'NR_R_TIP26_8';
   if (job.metres !== null && job.metres > 18.3) return 'NR_TROM_80FT';
   if (job.metres !== null && job.metres > 13.6) return 'NR_60_ART_FL';
   if (job.byWeight === 'rigid') return 'NR_FLAT_RIG';
@@ -31,7 +32,8 @@ export function defaultTrailer(r, job) {
 export function defaultVehicles(r, job, trailer) {
   const hiab = ((r.details || {}).offloading || {}).value === 'HIAB';
   const max = trailer === 'NR_FLAT_RIG' ? (hiab ? RIGID_HIAB_KG : null)
-    : trailer === 'NR_ARTIC_FL' ? (hiab ? ARTIC_HIAB_KG : ARTIC_KG) : null;
+    : trailer === 'NR_ARTIC_FL' ? (hiab ? ARTIC_HIAB_KG : ARTIC_KG)
+    : trailer === 'NR_R_TIP26_8' ? TIPPER_KG : null;
   if (!job.kg || !max) return { n: 1, why: '' };
   const n = Math.max(1, Math.ceil(job.kg / max));
   return { n, why: `${Math.round(job.kg).toLocaleString('en-GB')} kg at ${max.toLocaleString('en-GB')} kg a vehicle` };

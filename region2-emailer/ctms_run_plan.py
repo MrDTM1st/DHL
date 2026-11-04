@@ -307,9 +307,9 @@ def plan_update(it, rec, found):
     elif stoneblower(rec):
         veh = "tipper"
         explain.append("A stoneblower - the rigid tipper they all go on")
-    elif tipped(rec):
-        checks.append({"field": "veh_tipper", "label": "Vehicle", "quote": "", "options": [], "text": False,
-                       "why": "Loose ballast goes on a tipper, and which one isn't set - do the vehicle by hand"})
+    elif tipped(rec):                  # NR_R_TIP26_8, his 04/11
+        veh = "tipper"
+        explain.append("Loose ballast - the rigid tipper")
     elif rails and metres is None:
         veh = doubt("veh", "Vehicle", "", VEHICLES + ["60ft", "80ft"], "The order's wording doesn't say how long its "
                     "rails are, so which vehicle fits can't be worked out")

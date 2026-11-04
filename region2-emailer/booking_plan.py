@@ -37,6 +37,7 @@ MAX_KG = {
     ("artic", "hiab"): 20280,   # "an artic HIAB with NOC, for what I know, is 20,280 kilos" (31/10/2026)
     ("artic", ""): 25500,       # "the max load without a HIAB is 25,500" (31/10/2026)
     ("rigid", "hiab"): 10000,   # the NOC rigids took 10 x 1 t bags each (30/10/2026)
+    ("tipper", ""): 21000,      # NR_R_TIP26_8 "has a max load of 21" (04/11/2026)
 }
 KIT = {"hiab": "a HIAB", "moffett": "a Moffett"}
 

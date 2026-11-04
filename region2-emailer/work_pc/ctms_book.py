@@ -46,10 +46,8 @@ ROW_MENU = (430, 25, 810, 880)     # a well row's menu: beside the row, as far u
 TREE_MENU = (190, 25, 430, 880)    # a manifest's menu, likewise
 STATUS_MENU = (400, 25, 520, 880)  # its Set Status list
 SUMMARY_MENU = (150, 200, 345, 760)  # an Order Summary line's menu
-ALERT = (700, 380, 1200, 480)      # where a Forms question shows
 CARRIER_TITLE = (430, 40, 700, 90)
 PAYMENT_TITLE = (500, 370, 800, 420)
-CONFIRM_TITLE = (780, 330, 1000, 380)
 SPLIT_TITLE = (350, 370, 600, 420)
 
 MENU_BAR = (1000, 37)              # an empty bit of it: gives Java the focus, closes a menu left open
@@ -59,9 +57,7 @@ TRAILER_UP = (1347, 165)           # the open trailer list's up arrow - a row a 
 ALT_CARRIER_BOX = (971, 400)
 SELECT_CARRIER, CARRIER_EXIT = (912, 363), (1042, 363)
 CREATE_TRIP, PAYMENT_CANCEL = (1015, 449), (1015, 479)
-CONFIRM_YES, CONFIRM_NO = (984, 529), (1039, 529)
 PLANNING_SAVE = (1337, 98)
-FORMS_OK = (1035, 505)
 ORDERS_BUTTON = (1360, 166)
 PLANNED_X, PLANNED_Y = 13, 10      # Planned Orders' own X, from its top right corner: the panel doesn't open in one place
 ORDER_SAVE, ORDER_CLOSE = (337, 733), (424, 733)
@@ -302,6 +298,29 @@ class Booking:
         raise Stop(f"CTMS asked something unexpected: \"{said[:200]}\" - answered "
                    f"{(str(pick.get('nm')).split() or ['nothing'])[0] if pick is not None else 'nothing'} and stopped "
                    "there.")
+
+    def asked(self, words="", seconds=8):
+        """A Forms question with these words, once it's up, found through the Access Bridge: these sit in the middle of CTMS's
+        window, so they move with its size (his 04/11). None if none came; one with other words stops the booking."""
+        end = time.time() + seconds
+        while True:
+            self.look(asking=True)
+            q = ctms_rows.question(self.els)
+            if q and words.lower() in q[0].lower():
+                return q
+            if q:
+                self.unasked()
+            if time.time() >= end:
+                return None
+            time.sleep(0.2)
+
+    def ok_step(self, q, **extra):
+        """The step that presses a question's OK. One without an OK is not what was expected: it stops the booking."""
+        ok = q[1].get("ok")
+        if ok is None or not placed(ok):
+            self.unasked()
+            raise Stop(f"CTMS asked \"{q[0][:200]}\" and its OK couldn't be found - look at it.")
+        return dict({"action": "click", "screen": _at(ok)}, **extra)
 
     # -- getting about
     def start(self):
@@ -567,8 +586,9 @@ class Booking:
         on Planning behind it (the Confirm's No shuts the payment box too). A menu left open goes with the first click;
         on a box that wants an answer that click does nothing."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.3), ANCHOR])
-        if self.seen("cc-title", CONFIRM_TITLE):
-            self.run([_click(CONFIRM_NO, after=0.8)])
+        q = ctms_rows.question(self.look(asking=True))
+        if q and "confirm create trip" in q[0].lower() and placed(q[1].get("no") or {}):
+            self.run([{"action": "click", "screen": _at(q[1]["no"]), "after": 0.8}])
         if self.seen("cp-title", PAYMENT_TITLE):
             self.run([_click(PAYMENT_CANCEL, after=0.8)])
         if self.seen("sc-title", CARRIER_TITLE):
@@ -928,8 +948,11 @@ class Booking:
                   _find(self.t, "os-split", SUMMARY_MENU, 3, click=True, after=0.2),
                   _find(self.t, "split-title", SPLIT_TITLE, 8),
                   _click((580, 533), after=0.2), _key("home"), _key("shift+end"), {"action": "type", "text": str(parts), "after": 0.1},
-                  _click((417, 656), after=0.2), _find(self.t, "split-ok", ALERT, 20),
-                  _click(FORMS_OK, after=0.8), _click((648, 654), after=1.5), ANCHOR])
+                  _click((417, 656), after=0.2)])
+        q = self.asked(seconds=20)
+        if q is None:
+            raise Stop(f"Split gave no answer for {ref}: look at it in CTMS.")
+        self.run([self.ok_step(q, after=0.8), _click((648, 654), after=1.5), ANCHOR])
         self.look()
         if any(f.startswith("Order details for") for f in frames(self.els)):       # Exit opens a part's card: nothing done on it
             self.run([_click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
@@ -981,8 +1004,8 @@ class Booking:
         steps = []
         if haulage is not None:          # the cursor sits in Haulage Amount, its 0.00 selected
             steps = [{"action": "type", "text": f"{float(haulage):g}", "after": 0.1}, _key("tab", 0.3)]
-        self.run(steps + [_click(CREATE_TRIP, after=0.1), _find(self.t, "cc-title", CONFIRM_TITLE, 8)])
-        self.look(asking=True)
+        self.run(steps + [_click(CREATE_TRIP, after=0.1)])
+        asked = self.asked("Confirm Create Trip")
         box = confirm_box(self.els)
         if box is None:
             raise Stop("CTMS's Confirm Create Trip box could not be read, so nothing was booked. On the screen: "
@@ -998,7 +1021,12 @@ class Booking:
         if self.dry:
             self.back_out()
             return box
-        self.run([_click(CONFIRM_YES, react=True, timeout=20, quiet=0.4), _click(PLANNING_SAVE, after=0.8)])
+        yes = asked[1].get("yes")
+        if yes is None or not placed(yes):
+            self.back_out()
+            raise Stop("CTMS's Confirm Create Trip box had no Yes to press, so nothing was booked.")
+        self.run([{"action": "click", "screen": _at(yes), "react": True, "timeout": 20, "quiet": 0.4},
+                  _click(PLANNING_SAVE, after=0.8)])
         for _ in range(4):
             man = new_manifest(self.look(tree=True), before)
             if man:
@@ -1038,9 +1066,11 @@ class Booking:
         pt = _at(got)
         self.run([{"action": "click", "screen": pt, "after": 0.5}, {"action": "click", "screen": pt, "right": True, "after": 0.3},
                   _find(self.t, "mt-set-status", TREE_MENU, 3, click=True, after=0.3),
-                  _find(self.t, "st-accepted", STATUS_MENU, 3, click=True, after=0.2),
-                  _find(self.t, "al-accepted", ALERT, 5), _click(FORMS_OK, react=True, timeout=10),
-                  _click(PLANNING_SAVE, after=0.8)])
+                  _find(self.t, "st-accepted", STATUS_MENU, 3, click=True, after=0.2)])
+        q = self.asked(seconds=5)
+        if q is None:
+            raise Stop(f"{manifest}: Set Status asked nothing, so it's still PLANNED: look at it before anything else.")
+        self.run([self.ok_step(q, react=True, timeout=10), _click(PLANNING_SAVE, after=0.8)])
         for _ in range(4):
             if (manifests(self.look(tree=True)).get(manifest) or {}).get("status") == "ACCEPTED":
                 return

@@ -15,6 +15,7 @@ import ctms_rows  # noqa: E402
 
 NOW = datetime(2026, 11, 2, 12, 0)
 X0, Y0 = 443, 604
+YES_AT, NO_AT, OK_AT = [980, 560, 40, 20], [1040, 560, 40, 20], [1000, 480, 40, 20]     # nowhere the old fixed points were
 T = {k: {"rgb": "", "w": 1, "h": 1} for k in (
     "wm-refresh", "wm-apply-trip", "wm-create-trip", "sc-title", "cp-title", "cc-title", "mt-set-status", "st-accepted",
     "al-accepted", "os-split", "split-title", "split-ok", "close-ask", "od-vehtype", "os-card", "os-close",
@@ -62,6 +63,7 @@ class FakeCtms:
         self.rows_a_page = 15
         self.panel_stuck = False
         self.carrier_behind = False
+        self.alert = ""
         # each line's card as the Access Bridge reads it live (03/11): the Detail grid and Order Items
         self.line_info = {}             # ref: {"product", "qty", "items": [{"id", "ordered"}]}
         self.catalog = [("S&C", "S&C"), ("WHEELSETS", "Wheelsets"), ("WHEELSET_AXLE", "Wheelset axle")]
@@ -108,8 +110,15 @@ class FakeCtms:
             for i, ref in enumerate(self.panel):
                 els.insert(1, {"r": "text", "nm": "Cust Ref", "v": ref, "lv": 2, "at": [694, 558 + 23 * i, 160, 23]})
         if self.up == "confirm":
-            els.insert(0, {"r": "internal frame", "nm": f"Confirm Create Trip Carrier  {self.carrier_picked}\nRevenue         562.62\n"
-                                                        f"Cost                {self.cost}\nDo you want to continue?", "lv": 0})
+            els[0:0] = [{"r": "internal frame", "nm": f"Confirm Create Trip Carrier  {self.carrier_picked}\nRevenue         562.62\n"
+                                                      f"Cost                {self.cost}\nDo you want to continue?", "lv": 0},
+                        {"r": "option pane", "nm": "Do you want to continue?", "lv": 1, "at": [900, 500, 300, 120]},
+                        {"r": "push button", "nm": "Yes ALT Y", "lv": 2, "at": YES_AT},
+                        {"r": "push button", "nm": "No ALT N", "lv": 2, "at": NO_AT}]
+        if self.alert:
+            els[0:0] = [{"r": "internal frame", "nm": "Forms", "lv": 0},
+                        {"r": "option pane", "nm": self.alert, "lv": 1, "at": [900, 440, 300, 100]},
+                        {"r": "push button", "nm": "OK ALT O", "lv": 2, "at": OK_AT}]
         if self.up in ("carrier", "payment", "confirm"):
             els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
             for i, c in enumerate(self.carriers):
@@ -237,6 +246,8 @@ class FakeCtms:
         elif name == "wm-apply-trip":
             self.trip_lines[self.selected].append(self.current)
             self.well = [r for r in self.well if r["cust_ref"] != self.current]
+        elif name == "st-accepted":
+            self.alert = "Manifest accepted"
         elif name == "wm-refresh":
             self.page = 0
         elif name == "mt-set-status":
@@ -249,6 +260,17 @@ class FakeCtms:
             self.card = "NEW"
         if sc:
             if s.get("right"):
+                return
+            if self.up == "confirm" and list(sc) == [YES_AT[0] + 20, YES_AT[1] + 10]:
+                self.confirm_yes()
+                return
+            if self.up == "confirm" and list(sc) == [NO_AT[0] + 20, NO_AT[1] + 10]:
+                self.up = "carrier"             # the payment box shuts with it (02/11)
+                return
+            if self.alert and list(sc) == [OK_AT[0] + 20, OK_AT[1] + 10]:
+                if self.alert == "Manifest accepted" and self.selected and self.tree.get(self.selected) == "PLANNED":
+                    self.tree[self.selected] = "ACCEPTED"
+                self.alert = ""
                 return
             if self.card and self.card_click(sc):
                 return
@@ -289,31 +311,18 @@ class FakeCtms:
             self.up = "payment"
         elif px == B.CREATE_TRIP:
             self.up = "confirm"
-        elif px == B.CONFIRM_NO:
-            self.up = "carrier"                 # the payment box shuts with it (02/11)
         elif px == B.PAYMENT_CANCEL:
             assert self.up == "payment", "a click on a box that's gone lands on Planning behind it"
             self.up = "carrier"
         elif px == B.CARRIER_EXIT:
             self.up = None
-        elif px == B.CONFIRM_YES:
-            self.up = None
-            man = f"MAN-0{self.next_man}"
-            self.next_man += 1
-            self.tree[man] = "PLANNED"
-            self.selected = man
-            self.trip_lines[man] = list(self.creating)
-            self.well = [r for r in self.well if r["cust_ref"] not in self.creating]
-            self.selection = []
-            self.status_line = f"Order 11351960 scheduled on trip: {self.sched} / {man}"
         elif px == B.ORDERS_BUTTON:
             self.panel = list(self.trip_lines.get(self.selected) or [""])
         elif px == B.PLANNING_SAVE:
             self.saved += 1
             self.status_line = ""
-        elif px == B.FORMS_OK:
-            if self.selected and self.tree.get(self.selected) == "PLANNED":
-                self.tree[self.selected] = "ACCEPTED"
+        elif px == (417, 656):
+            self.alert = "Split done"
         elif px == B.ORDER_SAVE:
             self.typed.append("<order saved>")
             if self.card_dirty:
@@ -323,6 +332,17 @@ class FakeCtms:
         elif px == B.ORDER_CLOSE:
             self.card, self.card_tab, self.item_win, self.lov, self.focus = None, "Detail", None, None, None
             self.card_dirty = False
+
+    def confirm_yes(self):
+        self.up = None
+        man = f"MAN-0{self.next_man}"
+        self.next_man += 1
+        self.tree[man] = "PLANNED"
+        self.selected = man
+        self.trip_lines[man] = list(self.creating)
+        self.well = [r for r in self.well if r["cust_ref"] not in self.creating]
+        self.selection = []
+        self.status_line = f"Order 11351960 scheduled on trip: {self.sched} / {man}"
 
     def click_row(self, ref, hold):
         shown = [r["cust_ref"] for r in self.rows_shown()]
@@ -674,7 +694,7 @@ def test_a_line_that_isnt_ours_on_the_manifest_stops_it_before_accepted():
 
     def stray(s):
         real(s)
-        if tuple(s.get("px") or ()) == B.CONFIRM_YES:
+        if s.get("screen") == [YES_AT[0] + 20, YES_AT[1] + 10]:
             ctms.trip_lines[ctms.selected].append("9100002-1-1")
 
     ctms.click = stray

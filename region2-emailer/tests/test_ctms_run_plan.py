@@ -371,11 +371,11 @@ def test_a_rigid_is_never_asked_about_rear_steer():
     assert p["status"] == "held" and any(c["field"] == "rear_steer" for c in p["checks"])
 
 
-def test_loose_ballast_goes_on_a_tipper_which_the_run_leaves_to_him():
+def test_loose_ballast_goes_on_the_rigid_tipper():
     rec = dict(_rec("9100094", "05/11/2026"), materials="80x loose ballast")
     p = P.plan([_item("9100094")], [rec], _found("9100094", "05/11/2026"))[0]
-    c = next(c for c in p["checks"] if c["field"] == "veh_tipper")
-    assert p["status"] == "held" and "tipper" in c["why"] and not c["options"] and "veh" not in p["set"]
+    assert p["status"] == "ready" and p["set"]["veh"] == "tipper" and not p["set"]["services"]["HIAB"]
+    assert not [c for c in p["checks"] if c["field"] == "veh_tipper"]
 
 
 def test_a_stoneblower_goes_on_the_rigid_tipper_and_is_asked_nothing_about_lifting():
