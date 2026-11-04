@@ -47,14 +47,12 @@ TREE_MENU = (190, 25, 430, 880)    # a manifest's menu, likewise
 STATUS_MENU = (400, 25, 520, 880)  # its Set Status list
 SUMMARY_MENU = (150, 200, 345, 760)  # an Order Summary line's menu
 ALERT = (700, 380, 1200, 480)      # where a Forms question shows
-WINDOW_LIST = (355, 130, 560, 260)  # the Window menu's list of windows
 CARRIER_TITLE = (430, 40, 700, 90)
 PAYMENT_TITLE = (500, 370, 800, 420)
 CONFIRM_TITLE = (780, 330, 1000, 380)
 SPLIT_TITLE = (350, 370, 600, 420)
 
 MENU_BAR = (1000, 37)              # an empty bit of it: gives Java the focus, closes a menu left open
-WINDOW_MENU = (386, 37)
 SCHED_ARROW = (162, 133)
 TRAILER_BOX = (1228, 319)
 TRAILER_UP = (1347, 165)           # the open trailer list's up arrow - a row a click
@@ -348,17 +346,13 @@ class Booking:
         self.carrier_window_away()
 
     def carrier_window_away(self):
-        """A carrier window left behind Planning by the last Create Trip: brought forward by the Window menu and closed by
-        its own Exit, which changes nothing."""
+        """A carrier window up in front is closed by its own Exit, which changes nothing. One behind Planning stays there:
+        CTMS's Window menu is never opened for it (his call 04/11)."""
         if not any(f.startswith(CARRIER_FRAME) for f in frames(self.els)):
             return
-        if not self.seen("sc-title", CARRIER_TITLE):
-            self.run([{"action": "anchor"}, _click(WINDOW_MENU, after=0.4),
-                      _find(self.t, "wn-carrier", WINDOW_LIST, 2, click=True, after=0.4), ANCHOR])
-            if not frames(self.look())[0].startswith(CARRIER_FRAME):
-                raise Stop("A carrier window is left open behind Planning and wouldn't come forward: close it with its Exit.")
-        self.run([_click(CARRIER_EXIT, after=0.8)])
-        self.look()
+        if self.seen("sc-title", CARRIER_TITLE):
+            self.run([_click(CARRIER_EXIT, after=0.8)])
+            self.look()
 
     def set_sched(self, want):
         """The tree on that schedule: its list runs newest first, a day a row, so Up once per day ahead, Enter, read
@@ -581,7 +575,7 @@ class Booking:
             self.run([_click(CARRIER_EXIT, after=0.8)])
 
     def tidy(self):
-        """As he left it: the Deliver column back, the well's To back, no carrier window behind Planning. A trip not saved
+        """As he left it: the Deliver column back, the well's To back, no carrier window left in front. A trip not saved
         keeps the well as it is: a new To re-queries it."""
         self.run([ANCHOR])
         self.look()
@@ -1054,7 +1048,7 @@ class Booking:
 
     def trip(self, refs, carrier, trailer, haulage):
         """One vehicle: its first line's new trip, the others applied to it, the check, Accepted."""
-        self.carrier_window_away()         # the last vehicle's
+        self.carrier_window_away()         # the last vehicle's, if it's in front
         row, picked = self.select_lines(refs)
         when = {"collect": row.get("collect", ""), "deliver": row.get("deliver", "")}
         got = self.create(row, carrier, trailer, haulage, keep=len(picked) > 1)
@@ -1084,7 +1078,7 @@ class Booking:
         self.accept(got["manifest"])
         done["status"] = "ACCEPTED"
         self.stage("accepted")
-        try:                               # the booking's carrier window goes too, or it's in the way of the next job
+        try:                               # the booking's carrier window goes too, if it's in front
             self.look()
             self.carrier_window_away()
         except (Stop, RuntimeError) as e:

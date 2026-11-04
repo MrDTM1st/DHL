@@ -279,7 +279,7 @@ class Items:
     # -- getting about
     def begin(self):
         """A run's start: nothing of someone's left open over Order Summary. An order with changes not saved stops the run,
-        untouched; a carrier window a booking left behind Planning is closed by its own Exit, which changes nothing."""
+        untouched; a carrier window up in front is closed by its own Exit, which changes nothing."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4), ANCHOR])
         self.look()
         if card_of(self.els) is not None:

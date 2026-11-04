@@ -17,7 +17,7 @@ NOW = datetime(2026, 11, 2, 12, 0)
 X0, Y0 = 443, 604
 T = {k: {"rgb": "", "w": 1, "h": 1} for k in (
     "wm-refresh", "wm-apply-trip", "wm-create-trip", "sc-title", "cp-title", "cc-title", "mt-set-status", "st-accepted",
-    "al-accepted", "os-split", "split-title", "split-ok", "wn-carrier", "close-ask", "od-vehtype", "os-card", "os-close",
+    "al-accepted", "os-split", "split-title", "split-ok", "close-ask", "od-vehtype", "os-card", "os-close",
     "os-search")}
 
 
@@ -62,7 +62,6 @@ class FakeCtms:
         self.rows_a_page = 15
         self.panel_stuck = False
         self.carrier_behind = False
-        self.carrier_comes = True
         # each line's card as the Access Bridge reads it live (03/11): the Detail grid and Order Items
         self.line_info = {}             # ref: {"product", "qty", "items": [{"id", "ordered"}]}
         self.catalog = [("S&C", "S&C"), ("WHEELSETS", "Wheelsets"), ("WHEELSET_AXLE", "Wheelset axle")]
@@ -111,10 +110,6 @@ class FakeCtms:
         if self.up == "confirm":
             els.insert(0, {"r": "internal frame", "nm": f"Confirm Create Trip Carrier  {self.carrier_picked}\nRevenue         562.62\n"
                                                         f"Cost                {self.cost}\nDo you want to continue?", "lv": 0})
-        if self.carrier_behind:
-            els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
-        if self.up == "carrier" and getattr(self, "brought", False):
-            els.insert(0, {"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
         if self.up in ("carrier", "payment", "confirm"):
             els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
             for i, c in enumerate(self.carriers):
@@ -126,6 +121,8 @@ class FakeCtms:
                     els.append({"r": "label", "nm": name, "lv": 2, "at": [853, 309 + 22 * i, 239, 22]})
         if self.card:
             els += self.card_els()
+        if self.carrier_behind:     # last: CTMS reads its windows front first, so a new carrier window comes before this one
+            els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
         return els
 
     def info(self, ref):
@@ -240,9 +237,6 @@ class FakeCtms:
         elif name == "wm-apply-trip":
             self.trip_lines[self.selected].append(self.current)
             self.well = [r for r in self.well if r["cust_ref"] != self.current]
-        elif name == "wn-carrier":
-            if self.carrier_comes:
-                self.carrier_behind, self.up, self.brought = False, "carrier", True
         elif name == "wm-refresh":
             self.page = 0
         elif name == "mt-set-status":
@@ -301,7 +295,7 @@ class FakeCtms:
             assert self.up == "payment", "a click on a box that's gone lands on Planning behind it"
             self.up = "carrier"
         elif px == B.CARRIER_EXIT:
-            self.up, self.brought = None, False
+            self.up = None
         elif px == B.CONFIRM_YES:
             self.up = None
             man = f"MAN-0{self.next_man}"
@@ -414,22 +408,13 @@ def test_a_panel_that_wont_close_stops_before_accepted():
     assert ctms.tree["MAN-01000100"] == "PLANNED"
 
 
-def test_a_carrier_window_left_behind_is_brought_forward_and_exited():
+def test_a_carrier_window_left_behind_is_left_there_and_the_window_menu_never_opened():
     ctms = FakeCtms([_row("9100001-1-1")])
     ctms.carrier_behind = True
     job = _book(ctms)
-    assert job.trips[0]["status"] == "ACCEPTED" and any(s.get("name") == "wn-carrier" for s in ctms.steps)
-
-
-def test_a_carrier_window_that_wont_come_forward_says_so():
-    ctms = FakeCtms([_row("9100001-1-1")])
-    ctms.carrier_behind = True
-    ctms.carrier_comes = False
-    try:
-        _book(ctms)
-        raise AssertionError("it went on")
-    except B.Stop as e:
-        assert "carrier window" in str(e)
+    assert job.trips[0]["status"] == "ACCEPTED"
+    assert not [s for s in ctms.steps if s.get("name") == "wn-carrier" or s.get("px") == [386, 37]]
+    assert ctms.carrier_behind
 
 
 def test_a_plain_booking_goes_from_the_date_to_accepted():
