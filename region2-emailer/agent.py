@@ -594,8 +594,11 @@ def _ctms_plan():
 
 
 def run(args, timeout=600):
+    # UTF-8 both ways, as run_live does: a child printing a subject the console codepage lacks raised after its Send,
+    # so no SEND_RESULT came back and the agent said NOTHING SENT and kept the batch for a resend
     proc = subprocess.run([sys.executable] + args, cwd=HERE,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=dict(os.environ, PYTHONIOENCODING="utf-8"), timeout=timeout)
     return (proc.stdout or "") + (proc.stderr or "")
 
 

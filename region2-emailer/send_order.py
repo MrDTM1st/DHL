@@ -67,6 +67,18 @@ def progress(msg):
             pass
 
 
+def say(msg):
+    """print, for a line after a Send: a subject the console's codepage can't show must never stop SEND_RESULT going
+    out, or the agent reads NOTHING SENT, keeps the email, and a resend sends it twice."""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        try:
+            print(str(msg).encode("ascii", "replace").decode(), flush=True)
+        except Exception:
+            pass
+
+
 def extract_contains(path, order):
     """Fast check: is this order number's text inside the xlsx?"""
     try:
@@ -422,9 +434,9 @@ def send_haulier(ns):
             pass
         os.remove(PENDING_HAULIER)   # done - never resendable by accident
     except Exception as ex:
-        print(f"(post-send bookkeeping hiccup, email IS sent: {ex})")
-    print(f"Haulier request sent to {to}: {subject}")
-    print("SEND_RESULT sent=1")
+        say(f"(post-send bookkeeping hiccup, email IS sent: {ex})")
+    say(f"Haulier request sent to {to}: {subject}")
+    say("SEND_RESULT sent=1")
     return 1
 
 
@@ -618,15 +630,19 @@ def send_emails(ns, emails):
         # cover request here would chase the haulier as if they were the
         # customer - the same reason send_haulier is not tracker-logged.
         if not e.get("no_track"):
-            tracker.log(orders=e.get("orders", []), to=to, name=e.get("name", ""),
-                        product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
-                        site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
-                        source=e.get("source", ""), status="sent",
-                        worksite=e.get("worksite", ""),
-                        collection_site=e.get("collection_site", ""),
-                        collection_pc=e.get("collection_pc", ""),
-                        collections=e.get("collections"),
-                        po=e.get("po"))
+            try:
+                tracker.log(orders=e.get("orders", []), to=to, name=e.get("name", ""),
+                            product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                            site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
+                            source=e.get("source", ""), status="sent",
+                            worksite=e.get("worksite", ""),
+                            collection_site=e.get("collection_site", ""),
+                            collection_pc=e.get("collection_pc", ""),
+                            collections=e.get("collections"),
+                            po=e.get("po"))
+            except Exception as ex:
+                # the email is GONE: still counted, or SEND_RESULT says none went and a resend sends it twice
+                say(f"   !! SENT, but the tracker's record of it failed ({ex}): {e.get('subject')}")
         else:
             try:    # but DO remember we asked, so the brief shows it
                 import haulier_asks
@@ -650,6 +666,10 @@ def main():
         return
     order = sys.argv[1].strip()
     mode = sys.argv[2] if len(sys.argv) > 2 else "preview"
+    try:
+        sys.stdout.reconfigure(errors="replace")   # a name the codepage lacks must never stop a batch half sent
+    except Exception:
+        pass
     ns = bd.get_ns()
     if order == "sendjson":
         only = sys.argv[2] if len(sys.argv) > 2 else None   # send just that one
