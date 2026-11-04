@@ -411,6 +411,15 @@ def test_going_later_types_the_delivery_first():
     assert [t for t in o.typed if "/" in t][0] == "05/11/26"
 
 
+def test_the_deliver_comment_reads_on_a_monitor_left_of_and_above_the_main_one():
+    els = [{"r": "internal frame", "nm": "Order details for 11000001", "lv": 0, "at": [-768, -1289, 1200, 600]},
+           {"r": "page tab", "nm": "Comments", "lv": 2, "st": ["selected"], "at": [-650, -700, 91, 26]},
+           {"r": "text", "nm": "Comments tab page null", "v": "Please contact supplier", "lv": 3, "at": [-720, -660, 416, 23]},
+           {"r": "text", "nm": "", "v": "05/11/26 08:00 - Sam", "lv": 3, "at": [-180, -660, 417, 23]},
+           {"r": "text", "nm": "", "v": "hidden", "lv": 3, "at": [-1, -1, -1, -1]}]
+    assert I.deliver_comment(els) == "05/11/26 08:00 - Sam"
+
+
 def test_the_same_comment_with_the_dates_not_kept_is_typed_again_not_ticked():
     o = FakeOrder(ready="17/11/26 08:00", deliver_by="19/11/26 16:46", have=("HIAB",), comment="18/11/26 09:00 - Sam", veh="rigid")
     o.once_saved = ("17/11/26 08:00", "18/11/26 11:00")

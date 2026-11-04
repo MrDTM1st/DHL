@@ -144,7 +144,7 @@ def deliver_comment(els):
     for e in card[i + 1:]:
         if e.get("r") == "page tab":
             break
-        if e.get("r") == "text" and (e.get("at") or [-1])[0] >= 0:
+        if e.get("r") == "text" and ctms_book.placed(e):   # by its size: a monitor left of or above the main one is all minus
             boxes.append(e)
     if len(boxes) < 2:
         return None

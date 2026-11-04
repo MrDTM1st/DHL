@@ -68,7 +68,7 @@ def rows(els):
         return []
     cols = _columns(_cells(frame))
     head = next((e for e in frame if e.get("r") == "push button" and e.get("nm") == "Cust Ref"
-                 and (e.get("at") or [0])[0] > 0), None)
+                 and len(e.get("at") or []) == 4 and e["at"][2] > 0), None)   # by its size: a place can be minus on a second monitor
     refs = sorted(x for x, cs in cols.items()
                   if any(ORDER_REF.fullmatch(str(c.get("v") or "").strip()) for c in cs))
     if head:                                         # a page of ad hocs alone has nothing that reads like an order number
