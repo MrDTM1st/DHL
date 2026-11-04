@@ -294,6 +294,45 @@ def test_the_timer_finds_a_lost_answer_and_sends_what_follows_but_leaves_the_row
     assert any("Retry" in i["need"] for i in J.open_items() if i["key"] == k)
 
 
+def test_a_dashboard_error_after_the_command_was_numbered_is_never_taken_for_nothing_booked(steps):
+    class Lost(FakeR):
+        def ask_waiting(self, action, wait_total=90, on_id=None, **args):
+            if self.timeout:                 # the first press: queued, numbered, then the dashboard falls over
+                self.asked.append((action, args))
+                on_id(77)
+                raise Stop("The dashboard answered HTTP 502.")
+            return super().ask_waiting(action, wait_total, on_id, **args)
+    R = Lost(timeout=True)
+    res = B.book(dict(JOB), R=R)
+    k = J.key(JOB["orders"], DATE)
+    assert not res["ok"] and res.get("pending") and "Nothing was booked" not in res["said"]
+    assert J.get(k)["state"] == "asking" and J.get(k)["ask_id"] == 77
+    R.timeout = False
+    R.record = [{"id": 77, "ok": True, "said": "Booked", "trips": [TRIP]}]       # the work PC booked it after all
+    res = B.book(dict(JOB), R=R)
+    assert res["ok"] and "Already booked in CTMS: MAN-01000001" in res["said"]
+    assert [a for a, _ in R.asked].count("ctms_book") == 1
+
+
+def test_an_ask_whose_number_never_came_back_is_held_for_him_never_booked_again(steps, monkeypatch):
+    class Unreached(FakeR):
+        def ask_waiting(self, action, wait_total=90, on_id=None, **args):
+            self.asked.append((action, args))
+            raise Stop("Could not reach the dashboard at https://x: timed out", 4)     # the POST's answer lost
+    R = Unreached()
+    assert B.book(dict(JOB), R=R).get("pending")
+    k = J.key(JOB["orders"], DATE)
+    assert J.get(k)["state"] == "asking" and J.get(k)["ask_id"] is None
+    again = B.book(dict(JOB), R=R)                            # pressed again: not "never asked", not booked again
+    assert again.get("pending") and J.get(k)["state"] == "asking"
+    monkeypatch.setattr(J, "LOST_AFTER", -1)
+    B.retry()                                                 # the timer, once its answer is long overdue
+    assert J.get(k)["state"] == "unknown"
+    held = B.book(dict(JOB), R=R)
+    assert held.get("held") and not held["ok"]
+    assert [a for a, _ in R.asked].count("ctms_book") == 1
+
+
 def test_a_refused_ask_made_nothing_and_the_next_press_books(steps):
     class Off(FakeR):
         def ask_waiting(self, action, wait_total=90, on_id=None, **args):

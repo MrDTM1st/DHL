@@ -841,8 +841,11 @@ def recall(k, R=None):
     e = J.get(k) or {}
     cid = e.get("ask_id")
     if not cid:
-        # the dashboard never numbered it: the command didn't reach the work PC, so nothing was made
-        return J.answered(k, False, "the work PC was never asked", [], e.get("carrier"))
+        # no number came back: the dashboard may still have queued it (the POST's answer lost on the way) and the work PC
+        # booked it, so it is never taken for nothing made - after a while it is his to look at in CTMS
+        if time.time() - float(e.get("asked_at") or 0) > J.LOST_AFTER:
+            return J.lost(k, "the dashboard never said it had the command - it may have reached the work PC")
+        return J.get(k)
     R = R or _client()
     try:
         result, payload = R.result_of(cid)
@@ -940,17 +943,24 @@ def book(job, R=None, now=None):
     if qty:
         args["qty"] = qty
     wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
+    numbered = []
     if not dry:
         J.asking(job)
-        args["on_id"] = lambda cid: J.asked(k, cid)
+
+        def on_id(cid):
+            numbered.append(cid)             # the work PC has it from here: only its answer says what was made
+            J.asked(k, cid)
+        args["on_id"] = on_id
     try:
         result, payload = _quiet(R.ask_waiting, "ctms_book", wait_total=wait, **args)
     except Exception as x:
         if dry:
             raise
-        if getattr(x, "code", None) == 4:
-            out["said"] = ("The work PC didn't answer in time: it may still be booking. Don't book it by hand: press Book "
-                           "again in a few minutes and I'll pick up what it made rather than book it twice.")
+        if getattr(x, "code", None) == 4 or numbered:
+            # a dashboard error once the command was numbered is not CTMS's answer: what it made is looked for again
+            out["said"] = (("The work PC didn't answer in time" if getattr(x, "code", None) == 4 else
+                            f"{x} The work PC's answer couldn't be had") + ": it may still be booking. Don't book it by "
+                           "hand: press Book again in a few minutes and I'll pick up what it made rather than book it twice.")
             out["pending"] = True
             return out
         J.answered(k, False, str(x), [], job.get("carrier"))        # refused before the work PC had it: nothing made
