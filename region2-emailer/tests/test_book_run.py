@@ -18,9 +18,9 @@ NOW = datetime(2026, 11, 2, 15, 0)
 TRIP = {"manifest": "MAN-01000001", "cost": "450.00", "revenue": "600", "collect": "06/11/26 07:30", "deliver": "06/11/26 08:30"}
 
 
-def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked_head=True, wide=True):
+def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked_head=True, wide=True, size=None):
     """The tracker as the work PC pictures it: the cursor's row number highlighted, and whichever yellow cells hold something."""
-    im = Image.new("RGB", (1910 if wide else 900, 915), (255, 255, 255))
+    im = Image.new("RGB", size or (1910 if wide else 900, 915), (255, 255, 255))
     d = ImageDraw.Draw(im)
     d.rectangle((0, 358, 64, 831), fill=(245, 245, 245))
     d.rectangle((0, row_top, 64, row_bottom), fill=B.PICKED)
@@ -31,6 +31,16 @@ def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked_head=True,
         xs = B.CELL_B if c == "B" else B.CELLS[c]
         d.rectangle((xs[0] + 20, row_top + 6, xs[0] + 60, row_bottom - 6), fill=(0, 0, 0))
     return im
+
+
+def test_the_sheet_reads_the_same_in_the_narrower_taller_window():
+    big = (1709, 1275)
+    assert B.row_state(_sheet(size=big)) == {"blank": True, "above": True}
+    assert B.row_state(_sheet(row_top=1100, row_bottom=1124, size=big)) == {"blank": True, "above": True}    # lower down
+    assert B.row_state(_sheet(filled="CDE", size=big))["blank"] is False
+    assert B.row_filled(_sheet(filled="BCDE", size=big)) is True                                             # G is off it
+    assert B.row_filled(_sheet(filled="BCD", size=big)) is False
+    assert B.row_state(_sheet(size=(1200, 915))) is None                                                     # too narrow to tell
 
 
 def test_the_first_empty_row_under_the_last_manifest_reads_as_blank():

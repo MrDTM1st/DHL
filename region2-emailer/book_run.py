@@ -52,6 +52,7 @@ PICKED = (202, 234, 216)           # a highlighted heading
 HEAD_Y, HEAD_A, HEAD_B, HEAD_C = 295, 100, 150, 360
 CELL_B = (140, 320)
 CELLS = {"C": (332, 544), "D": (556, 669), "E": (682, 835), "F": (848, 1595), "G": (1608, 1890)}
+SCROLLBAR, SHEET_FOOT = 20, 83     # what the page keeps on its right and under the rows, whatever the window's size (03-04/11)
 INTO_GRID = [230, 390]             # a cell of the sheet, whichever row it is: the sheet can be left scrolled sideways
 PASS_CARRIER = "PASS_DH"
 PASS_DOMAIN = "passlogistics"
@@ -160,9 +161,14 @@ def _near(c, want, tol=12):
     return all(abs(int(a) - int(b)) <= tol for a, b in zip(c, want))
 
 
+def _on_picture(im, xs):
+    """Those columns of pixels as far as the picture goes, short of the page's own scrollbar: the window can be any size."""
+    return xs[0], min(xs[1], im.size[0] - SCROLLBAR)
+
+
 def picked_row(im):
     """(top, bottom) of the row whose number is highlighted, or None."""
-    ys = [y for y in range(ROW_TOP, min(ROW_END, im.size[1])) if _near(im.getpixel((GUTTER_X, y)), PICKED)]
+    ys = [y for y in range(ROW_TOP, max(ROW_END, im.size[1] - SHEET_FOOT)) if _near(im.getpixel((GUTTER_X, y)), PICKED)]
     return (ys[0], ys[-1]) if ys else None
 
 
@@ -179,10 +185,10 @@ def row_state(im):
     if _near(im.getpixel((HEAD_A, HEAD_Y)), PICKED):
         return None                    # scrolled sideways: another column's wide heading is sitting where B's belongs
     top, bottom = row
-    if bottom - top < 8 or im.size[0] < CELLS["G"][1]:
+    if bottom - top < 8 or im.size[0] - SCROLLBAR < CELLS["F"][1]:     # the yellow cells, up to G's edge, have to show
         return None
     band = (top + 4, bottom - 3)
-    return {"blank": not any(_dark(im, xs, band) for xs in CELLS.values()) and not _dark(im, CELL_B, band),
+    return {"blank": not any(_dark(im, _on_picture(im, xs), band) for xs in CELLS.values()) and not _dark(im, CELL_B, band),
             "above": bool(_dark(im, CELL_B, (top - 20, top - 4)))}
 
 
@@ -192,7 +198,8 @@ def row_filled(im):
     if not row:
         return False
     band = (row[0] + 4, row[1] - 3)
-    return bool(_dark(im, CELL_B, band)) and all(_dark(im, CELLS[c], band) for c in "CDEG")
+    shown = "CDEG" if im.size[0] - SCROLLBAR >= CELLS["G"][1] else "CDE"     # G's middle is off a narrower window
+    return bool(_dark(im, CELL_B, band)) and all(_dark(im, CELLS[c], band) for c in shown)
 
 
 def row_text(trip, carrier, now):
