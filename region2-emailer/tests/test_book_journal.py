@@ -376,6 +376,18 @@ def test_a_row_whose_look_after_the_paste_failed_is_kept_as_written_and_never_pa
     assert [a for a, _ in R.asked].count("paste") == 1
 
 
+def test_a_split_line_and_filters_left_changed_are_passed_on_to_him(steps):
+    notes = ["9000001-1-1 split into 2", "PUT BACK BY HAND on the well's filters: Date '06/11/2026'",
+             "the well's filters put back as they were", "9000001-1-1_S1 put up to NR_ARTIC_FL"]
+    answer = ({"ok": False, "detail": "Stopped after 90s: the carrier box"},
+              {"trips": [TRIP, {"manifest": "MAN-01000002", "status": "PLANNED"}], "seconds": 90, "notes": notes})
+    res = B.book(dict(JOB, vehicles=2), R=FakeR(answer))
+    assert "Then CTMS stopped" in res["said"]
+    for n in (notes[0], notes[1], notes[3]):
+        assert n in res["said"]
+    assert "put back as they were" not in res["said"]
+
+
 def test_a_rehearsal_never_touches_the_journal(steps, jpath):
     B.book(dict(JOB, dry=True), R=FakeR(_answer([TRIP], detail="Rehearsed")))
     assert not os.path.exists(jpath)

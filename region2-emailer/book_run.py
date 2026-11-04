@@ -990,7 +990,8 @@ def book(job, R=None, now=None):
     said = before + [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in "
                      f"{payload.get('seconds')} seconds"
                      + (f" (cost {made[0].get('cost')}, revenue {made[0].get('revenue')})" if len(made) == 1 else "") + "."]
-    fixed = [n for n in payload.get("notes") or [] if "put right" in n or "put up to" in n]
+    fixed = [n for n in payload.get("notes") or []
+             if "put right" in n or "put up to" in n or "PUT BACK BY HAND" in n or "split into" in n]
     if fixed:
         said.append("On the lines first: " + "; ".join(fixed) + ".")
     if not result.get("ok"):
