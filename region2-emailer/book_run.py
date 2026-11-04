@@ -757,6 +757,7 @@ def follow(k, R=None, now=None, auto=False, only=None):
             continue
         steps = (J.get(k) or {}).get("steps") or {}
         tried = int((steps.get(name) or {}).get("tries") or 0)
+        started = bool((steps.get(name) or {}).get("started"))     # begun by a run that may have died after the Send
         if name == "digihaul":
             have = set((steps.get("digihaul") or {}).get("written") or [])
             todo = [t for t in made if t["manifest"] not in have]
@@ -787,16 +788,18 @@ def follow(k, R=None, now=None, auto=False, only=None):
                         + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in left_) + ".")
         elif name == "pass_email":
             def go():
-                if tried and sent_already(mans, to_has=PASS_DOMAIN):
+                if (tried or started) and sent_already(mans, to_has=PASS_DOMAIN):
                     return True, "it had gone already"
+                J.begin(k, name)
                 return pass_email(rec, made, orders)
             ok, how = _step(k, name, go, auto)
             said.append(f"Parcel Pass: {how}." if ok else f"Parcel Pass email NOT sent ({how}): "
                         + ("I'll try again in a few minutes." if _auto_left(k, name) else f"tell them {and_list(mans)} by hand, or Retry."))
         elif name == "site_email":
             def go():
-                if tried and sent_already(mans, to_not=PASS_DOMAIN):
+                if (tried or started) and sent_already(mans, to_not=PASS_DOMAIN):
                     return True, "it had gone already"
+                J.begin(k, name)
                 return site_email(rec, job, made)
             ok, how = _step(k, name, go, auto)
             said.append(f"Site: {how}." if ok else f"Site email NOT sent ({how}): "

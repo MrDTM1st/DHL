@@ -236,6 +236,26 @@ def test_a_retried_email_that_had_gone_already_is_not_sent_twice(steps, monkeypa
     assert J.get(J.key(JOB["orders"], DATE))["steps"]["site_email"]["ok"]
 
 
+@pytest.mark.parametrize("carrier, step, fake", [("ABCHAULAGE_DH", "site_email", "site_email"),
+                                                 ("PASS_DH", "pass_email", "pass_email")])
+def test_an_email_whose_run_died_straight_after_the_send_is_looked_for_and_not_sent_again(steps, monkeypatch,
+                                                                                          carrier, step, fake):
+    def died(*a):
+        steps.append(("sent", step))
+        raise KeyboardInterrupt              # the agent's kill, after the Send and before the journal heard of it
+    monkeypatch.setattr(B, fake, died)
+    with pytest.raises(KeyboardInterrupt):
+        B.book(dict(JOB, carrier=carrier), R=FakeR(_answer([TRIP])))
+    k = J.key(JOB["orders"], DATE)
+    assert J.get(k)["steps"][step]["tries"] == 0 and J.get(k)["steps"][step]["started"]
+    looked = []
+    monkeypatch.setattr(B, "sent_already", lambda *a, **kw: looked.append(a) or True)
+    monkeypatch.setattr(B, fake, lambda *a: pytest.fail("sent twice"))
+    res = B.book(dict(JOB, carrier=carrier), R=FakeR(_answer([TRIP])))
+    assert looked and "Nothing booked again" in res["said"]
+    assert J.get(k)["steps"][step]["ok"] and steps.count(("sent", step)) == 1
+
+
 def test_the_home_pc_giving_up_waiting_books_nothing_twice_and_picks_up_what_was_made(steps):
     R = FakeR(timeout=True)
     res = B.book(dict(JOB), R=R)
