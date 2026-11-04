@@ -242,13 +242,21 @@ def tracker_rows(R, trips, carrier, now=None, look_only=False):
             if not result.get("ok"):
                 return done, f"the paste was refused ({result.get('detail')})"
             done += 1
-            if _quiet(R.send_batch, "tracker-check", [{"action": "wait", "seconds": 1.0}]):
-                return done, "couldn't look at the row after the paste"
-            if not row_filled(Image.open(latest).convert("RGB")):
+            try:
+                if _quiet(R.send_batch, "tracker-check", [{"action": "wait", "seconds": 1.0}]):
+                    return done, "couldn't look at the row after the paste"
+                filled = row_filled(Image.open(latest).convert("RGB"))
+            except Exception as x:
+                # the paste went: it stays counted, so a retry never pastes it again - only the look after it failed
+                return done, f"couldn't look at {trip['manifest']}'s row after the paste ({str(x)[:80]}): check it by eye"
+            if not filled:
                 why = f"{trip['manifest']}'s row didn't read back as filled: look at it"
                 break
     finally:
-        (_, payload) = _quiet(R.ask, "use", target="ctms")
+        try:
+            (_, payload) = _quiet(R.ask, "use", target="ctms")
+        except Exception:
+            payload = None                 # what was pasted stays counted; the bridge books nothing on the tracker's tab
         if payload and payload.get("kind") == "window":
             R.save_state(payload)          # the page's picture was the last on file: what's next aims at CTMS
     return done, why
@@ -757,6 +765,7 @@ def follow(k, R=None, now=None, auto=False, only=None):
             continue
         steps = (J.get(k) or {}).get("steps") or {}
         tried = int((steps.get(name) or {}).get("tries") or 0)
+        started = bool((steps.get(name) or {}).get("started"))     # begun by a run that may have died after the Send
         if name == "digihaul":
             have = set((steps.get("digihaul") or {}).get("written") or [])
             todo = [t for t in made if t["manifest"] not in have]
@@ -782,21 +791,23 @@ def follow(k, R=None, now=None, auto=False, only=None):
             left_ = [t for t in todo if t["manifest"] not in set(((J.get(k) or {}).get("steps") or {})
                                                                   .get("digihaul", {}).get("written") or [])]
             J.step(k, name, not left_, why)
-            said.append(f"DigiHaul: {rows} row(s) written." if not left_ else
+            said.append(f"DigiHaul: {rows} row(s) written" + (f", but {why}." if why else ".") if not left_ else
                         f"DigiHaul: {rows} of {len(todo)} row(s) written, {why}. Retry, or by hand: "
                         + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in left_) + ".")
         elif name == "pass_email":
             def go():
-                if tried and sent_already(mans, to_has=PASS_DOMAIN):
+                if (tried or started) and sent_already(mans, to_has=PASS_DOMAIN):
                     return True, "it had gone already"
+                J.begin(k, name)
                 return pass_email(rec, made, orders)
             ok, how = _step(k, name, go, auto)
             said.append(f"Parcel Pass: {how}." if ok else f"Parcel Pass email NOT sent ({how}): "
                         + ("I'll try again in a few minutes." if _auto_left(k, name) else f"tell them {and_list(mans)} by hand, or Retry."))
         elif name == "site_email":
             def go():
-                if tried and sent_already(mans, to_not=PASS_DOMAIN):
+                if (tried or started) and sent_already(mans, to_not=PASS_DOMAIN):
                     return True, "it had gone already"
+                J.begin(k, name)
                 return site_email(rec, job, made)
             ok, how = _step(k, name, go, auto)
             said.append(f"Site: {how}." if ok else f"Site email NOT sent ({how}): "
@@ -838,8 +849,11 @@ def recall(k, R=None):
     e = J.get(k) or {}
     cid = e.get("ask_id")
     if not cid:
-        # the dashboard never numbered it: the command didn't reach the work PC, so nothing was made
-        return J.answered(k, False, "the work PC was never asked", [], e.get("carrier"))
+        # no number came back: the dashboard may still have queued it (the POST's answer lost on the way) and the work PC
+        # booked it, so it is never taken for nothing made - after a while it is his to look at in CTMS
+        if time.time() - float(e.get("asked_at") or 0) > J.LOST_AFTER:
+            return J.lost(k, "the dashboard never said it had the command - it may have reached the work PC")
+        return J.get(k)
     R = R or _client()
     try:
         result, payload = R.result_of(cid)
@@ -937,17 +951,24 @@ def book(job, R=None, now=None):
     if qty:
         args["qty"] = qty
     wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
+    numbered = []
     if not dry:
         J.asking(job)
-        args["on_id"] = lambda cid: J.asked(k, cid)
+
+        def on_id(cid):
+            numbered.append(cid)             # the work PC has it from here: only its answer says what was made
+            J.asked(k, cid)
+        args["on_id"] = on_id
     try:
         result, payload = _quiet(R.ask_waiting, "ctms_book", wait_total=wait, **args)
     except Exception as x:
         if dry:
             raise
-        if getattr(x, "code", None) == 4:
-            out["said"] = ("The work PC didn't answer in time: it may still be booking. Don't book it by hand: press Book "
-                           "again in a few minutes and I'll pick up what it made rather than book it twice.")
+        if getattr(x, "code", None) == 4 or numbered:
+            # a dashboard error once the command was numbered is not CTMS's answer: what it made is looked for again
+            out["said"] = (("The work PC didn't answer in time" if getattr(x, "code", None) == 4 else
+                            f"{x} The work PC's answer couldn't be had") + ": it may still be booking. Don't book it by "
+                           "hand: press Book again in a few minutes and I'll pick up what it made rather than book it twice.")
             out["pending"] = True
             return out
         J.answered(k, False, str(x), [], job.get("carrier"))        # refused before the work PC had it: nothing made
@@ -969,7 +990,8 @@ def book(job, R=None, now=None):
     said = before + [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in "
                      f"{payload.get('seconds')} seconds"
                      + (f" (cost {made[0].get('cost')}, revenue {made[0].get('revenue')})" if len(made) == 1 else "") + "."]
-    fixed = [n for n in payload.get("notes") or [] if "put right" in n or "put up to" in n]
+    fixed = [n for n in payload.get("notes") or []
+             if "put right" in n or "put up to" in n or "PUT BACK BY HAND" in n or "split into" in n]
     if fixed:
         said.append("On the lines first: " + "; ".join(fixed) + ".")
     if not result.get("ok"):

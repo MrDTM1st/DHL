@@ -226,6 +226,15 @@ def lost(k, why, path=None, now=None):
     return _change(k, fn, path, now)
 
 
+def begin(k, name, path=None, now=None):
+    """A step about to be tried, kept before it is: a run that dies after an email's Send but before step() hears of it
+    leaves the next try knowing it may have gone, so Sent Items is looked in first."""
+    def fn(e, now):
+        s = e.setdefault("steps", {}).setdefault(name, {"ok": False, "tries": 0, "said": "", "next_at": now})
+        s["started"] = now
+    return _change(k, fn, path, now)
+
+
 def step(k, name, ok, said="", path=None, now=None, auto=False, **extra):
     """One step tried. A failure is given a time to be tried again by the timer, while it has tries left (AUTO steps only)."""
     def fn(e, now):

@@ -4,8 +4,10 @@ Made-up order numbers only.
 
     python tests/test_tracker_dates.py
 """
+import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +76,26 @@ def test_a_real_reply_with_a_new_day_settles_on_it():
     assert D.firm_date(D.parse_reply(body)) == _day(10)
     # a day already gone never moves the order: a footer's date took one to 2003, and the stale sweep took it off (02/11)
     assert D.firm_date(D.parse_reply(f"Hi,\nDelivery date: {_day(-10)}\nDelivery time: 08:00\n")) is None
+
+
+def test_a_booked_order_stays_remembered_however_many_higher_numbers_are_on_file():
+    keep = T.DROPS
+    with tempfile.TemporaryDirectory() as tmp:
+        T.DROPS = os.path.join(tmp, "_booked_drops.json")
+        try:
+            T.remember_drops([str(7000000 + i) for i in range(450)])
+            T.remember_drops(["5012345"])                       # booked today: sorts first, but it is the newest
+            assert "5012345" in T.booked_drops() and len(T.booked_drops()) == 451
+            T.remember_drops(["7000001", "5012345"])            # already there: no second copy, no move
+            with open(T.DROPS, encoding="utf-8") as f:
+                assert json.load(f)[-1] == "5012345"
+            T.remember_drops([str(8000000 + i) for i in range(T.DROPS_KEEP - 1)])
+            with open(T.DROPS, encoding="utf-8") as f:
+                got = json.load(f)
+            assert len(got) == T.DROPS_KEEP and got[0] == "5012345"    # the oldest trimmed, not the lowest
+            assert "7000449" not in got and not os.path.exists(T.DROPS + ".tmp")
+        finally:
+            T.DROPS = keep
 
 
 if __name__ == "__main__":
