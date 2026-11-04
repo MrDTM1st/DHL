@@ -405,8 +405,9 @@ def plan_update(it, rec, found):
             if when == "the day before":
                 explain.append(f"Collected the day before, in the yard's {yard0}-{yard1}")
         elif when in COLLECT_DAYS:
-            checks.append({"field": "yard", "label": "Yard hours", "quote": "", "options": [], "text": False,
-                           "why": "The supplier's yard hours aren't on the record - do the collection by hand"})
+            # never a hold: "yard collection is always pre filled on CTMS" (his 04/11). The delivery goes in, and the bridge
+            # still moves the collection's date if it has to come before the delivery (collection_fix), keeping the hours
+            explain.append("No yard hours on the record - the collection stays as CTMS has it")
     # -- the deliver-side comment
     cv = _field(d, "contact")
     import site_contacts

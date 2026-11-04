@@ -218,6 +218,13 @@ def test_a_night_waits_for_an_update_that_needs_an_answer():
     assert update["status"] == "held" and night["status"] == "held" and "update" in night["checks"][0]["why"]
 
 
+def test_no_yard_hours_on_the_record_doesnt_hold_the_update():
+    rec = dict(_rec("9100095", "05/11/2026"), collections=[{"site": "Example Supplier", "date": "04/11/2026", "from": "", "to": ""}])
+    p = P.plan([_item("9100095")], [rec], _found("9100095", "05/11/2026"))[0]
+    assert p["status"] == "ready" and "collect" not in p["set"] and p["set"]["deliver"].startswith("05/11/26 08:00")
+    assert any("yard hours" in x for x in p["explain"])
+
+
 def test_pts_is_only_ever_for_rails():
     for mats in ("10x 1t bags of ballast", "60x sleepers"):
         rec = dict(_rec("9100081", "05/11/2026", pts={"value": "yes", "confidence": "high"}), materials=mats)
