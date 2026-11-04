@@ -78,6 +78,37 @@ def test_the_tracker_row_is_the_yellow_cells_in_their_order_with_notes_blank():
     assert B.row_text(soon, "ACME_DH", NOW).endswith("\tY")
 
 
+class _Tracker:
+    """The work PC as tracker_rows works it: the sheet's picture after each move, the paste, the look after it."""
+
+    def __init__(self, out, fail=""):
+        self.OUT, self.fail, self.pasted = out, fail, []
+
+    def ask(self, action, **args):
+        if action == "paste":
+            self.pasted.append(args["text"])
+        if action == "use" and args.get("target") == "ctms" and self.fail == "use":
+            raise RuntimeError("Could not reach the dashboard")
+        return {"ok": True}, {}
+
+    def send_batch(self, name, steps):
+        if name == "tracker-check" and self.fail == "check":
+            raise RuntimeError("Could not reach the dashboard")
+        _sheet(filled="BCDEG" if self.pasted else ()).save(os.path.join(self.OUT, "latest.png"))
+        return 0
+
+    def save_state(self, payload):
+        pass
+
+
+def test_a_row_pasted_is_counted_even_when_the_look_after_it_fails(tmp_path):
+    R = _Tracker(str(tmp_path), fail="check")
+    n, why = B.tracker_rows(R, [TRIP], "ACME_DH", NOW)
+    assert n == 1 and len(R.pasted) == 1 and "check it by eye" in why
+    R = _Tracker(str(tmp_path), fail="use")                  # CTMS's window not brought back after it
+    assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (1, "") and len(R.pasted) == 1
+
+
 def test_urgent_is_collecting_today_or_tomorrow_morning():
     assert B.is_urgent("02/11/26 16:00", NOW) is True
     assert B.is_urgent("03/11/26 11:59", NOW) is True

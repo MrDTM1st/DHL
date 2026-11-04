@@ -16,6 +16,8 @@ import book_journal as J  # noqa: E402
 import book_run as B  # noqa: E402
 import book_record  # noqa: E402
 
+ROWS = B.tracker_rows
+
 DATE = "06/11/2026"
 JOB = {"record": "9000001|06/11/2026", "orders": ["9000001"], "date": DATE, "carrier": "ABCHAULAGE_DH",
        "trailer": "NR_ARTIC_FL", "haulier": "ABC Haulage", "vehicles": 1}
@@ -347,6 +349,31 @@ def test_a_stop_after_the_first_vehicle_still_tells_the_site_about_it(steps):
                                                         ok=False, detail="Stopped after 90s: the carrier box")))
     assert res["ok"] and "Then CTMS stopped" in res["said"]
     assert ("site", "MAN-01000001") in steps
+
+
+def test_a_row_whose_look_after_the_paste_failed_is_kept_as_written_and_never_pasted_again(steps, monkeypatch, tmp_path):
+    from PIL import Image
+    monkeypatch.setattr(B, "tracker_rows", ROWS)
+    monkeypatch.setattr(B, "row_state", lambda im: {"blank": True, "above": True})
+
+    class Sheet(FakeR):
+        OUT = str(tmp_path)
+
+        def send_batch(self, name, steps_):
+            if name == "tracker-check":
+                raise Stop("Could not reach the dashboard: timed out", 4)
+            Image.new("RGB", (8, 8)).save(os.path.join(self.OUT, "latest.png"))
+            return 0
+
+        def save_state(self, payload):
+            pass
+    R = Sheet(_answer([TRIP]))
+    res = B.book(dict(JOB), R=R)
+    k = J.key(JOB["orders"], DATE)
+    assert res["ok"] and "1 row(s) written, but" in res["said"] and "check it by eye" in res["said"]
+    assert J.get(k)["steps"]["digihaul"]["written"] == ["MAN-01000001"] and "digihaul" not in J.left(J.get(k))
+    B.follow(k, R=R, only=["digihaul"])                      # his Retry
+    assert [a for a, _ in R.asked].count("paste") == 1
 
 
 def test_a_rehearsal_never_touches_the_journal(steps, jpath):

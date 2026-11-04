@@ -242,13 +242,21 @@ def tracker_rows(R, trips, carrier, now=None, look_only=False):
             if not result.get("ok"):
                 return done, f"the paste was refused ({result.get('detail')})"
             done += 1
-            if _quiet(R.send_batch, "tracker-check", [{"action": "wait", "seconds": 1.0}]):
-                return done, "couldn't look at the row after the paste"
-            if not row_filled(Image.open(latest).convert("RGB")):
+            try:
+                if _quiet(R.send_batch, "tracker-check", [{"action": "wait", "seconds": 1.0}]):
+                    return done, "couldn't look at the row after the paste"
+                filled = row_filled(Image.open(latest).convert("RGB"))
+            except Exception as x:
+                # the paste went: it stays counted, so a retry never pastes it again - only the look after it failed
+                return done, f"couldn't look at {trip['manifest']}'s row after the paste ({str(x)[:80]}): check it by eye"
+            if not filled:
                 why = f"{trip['manifest']}'s row didn't read back as filled: look at it"
                 break
     finally:
-        (_, payload) = _quiet(R.ask, "use", target="ctms")
+        try:
+            (_, payload) = _quiet(R.ask, "use", target="ctms")
+        except Exception:
+            payload = None                 # what was pasted stays counted; the bridge books nothing on the tracker's tab
         if payload and payload.get("kind") == "window":
             R.save_state(payload)          # the page's picture was the last on file: what's next aims at CTMS
     return done, why
@@ -783,7 +791,7 @@ def follow(k, R=None, now=None, auto=False, only=None):
             left_ = [t for t in todo if t["manifest"] not in set(((J.get(k) or {}).get("steps") or {})
                                                                   .get("digihaul", {}).get("written") or [])]
             J.step(k, name, not left_, why)
-            said.append(f"DigiHaul: {rows} row(s) written." if not left_ else
+            said.append(f"DigiHaul: {rows} row(s) written" + (f", but {why}." if why else ".") if not left_ else
                         f"DigiHaul: {rows} of {len(todo)} row(s) written, {why}. Retry, or by hand: "
                         + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in left_) + ".")
         elif name == "pass_email":
