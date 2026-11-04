@@ -32,6 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "ctms_item_templates.json")
 
 SERVICE_ROWS = 14                  # the Services grid's rows, as the Access Bridge reads them
+SCHEDULE_READS = 3                 # after a Save, how many reads the schedule question gets to come up
 # What a job's hours owe: what's typed in the grid (his "N / SAT / SUN + Tab", 31/10) and how its Service Id starts once it's in
 OWED_SERVICES = {"NIGHT": ("N", "NIGHT"), "SATURDAY": ("SAT", "SAT"), "SUNDAY": ("SUN", "SUN")}
 # The open order's Veh Type box, what it shows - only these are ever picked ("the vehicle tab, we don't use that rigid
@@ -56,9 +57,6 @@ TIMES_X = (185, 250, 333, 398)     # from date, from time, to date, to time
 COLLECT_Y, DELIVER_Y = 357, 380
 SERVICE_NEW, SERVICE_DELETE = (378, 648), (734, 648)
 SERVICE_ROW_X, SERVICE_ROW_Y = 174, 295    # the grid's first row; each next one 23 px lower
-SCHEDULE_ASK = (790, 370, 1100, 530)       # "Change schedule to: <yymmdd>?"
-SCHEDULE_OK = (952, 505)
-DISCARD_ASK = (840, 420, 1130, 450)        # "Do you want to discard your changes?"
 DISCARD_WORDS = "discard your changes"
 ANCHOR = {"action": "anchor", "window": True}
 NOT_READ = ("Planning", "OPOKUD")  # the windows behind: nothing here is read off them, and they're most of a read's time
@@ -349,11 +347,28 @@ class Items:
         """Save (the schedule question OK'd: a delivery moved to another day asks "Change schedule to"), Close. A plain save
         CTMS answers by moving the cursor, no message, so a Close that asks nothing is what says it saved."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.3), ANCHOR, _click(ORDER_SAVE, react=True, quiet=1, timeout=15)])
-        if self.shows("schedule-ask", SCHEDULE_ASK, 0.6):
-            self.run([_click(SCHEDULE_OK, react=True, timeout=15)])
-        self.close_quietly()
-        if self.shows("od-discard", DISCARD_ASK, 0.3):
+        for _ in range(SCHEDULE_READS):
+            if self.answer_schedule():
+                break
+            time.sleep(0.4)
+        try:
+            self.close_quietly()
+        except RuntimeError:               # asked late, and the Close got nothing while it was up
+            if not self.answer_schedule():
+                raise
+            self.close_quietly()
+        asked = question(self.look())
+        if asked and DISCARD_WORDS in asked[0]:
             raise Stop(f"{ref}: the save did not go through, so nothing of this line was kept.")
+
+    def answer_schedule(self):
+        """CTMS's "Change schedule to ...?" pressed OK, where the Access Bridge places it: it sits in the middle of CTMS's
+        window, so it moves with the window's size (his 04/11, the fixed point missed it). True if it was up."""
+        asked = question(self.look())
+        if asked and "schedule" in asked[0].lower():
+            self.press(asked[1].get("ok"))
+            return True
+        return False
 
     def clear_up(self):
         """After a stop: whatever is open backed out of, NOTHING saved. True when CTMS is clean; False, left as it is for a

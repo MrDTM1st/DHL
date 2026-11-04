@@ -35,6 +35,7 @@ class FakeOrder:
         self.saved = 0
         self.steps = []
         self.typed = []
+        self.asks_on_save = self.asks_on_close = ""
         self.takes = {"N": "NIGHT", "SAT": "SATURDAY", "SUN": "SUNDAY"}
         self.dirty = False
         self.opens_as = None
@@ -146,9 +147,14 @@ class FakeOrder:
             if self.save_works:
                 self.saved += 1
                 self.dirty = False
+                self.asked = self.asks_on_save
                 if self.once_saved:
                     self.ready, self.deliver_by = self.once_saved
         elif px == I.ORDER_CLOSE:
+            if self.asks_on_close:
+                self.asked, self.asks_on_close = self.asks_on_close, ""
+            if "schedule" in self.asked:
+                raise RuntimeError("CTMS did not answer")
             if self.dirty:
                 self.asked = "Do you want to discard your changes?"
             else:
@@ -321,6 +327,23 @@ def test_a_night_that_doesnt_read_back_is_not_saved():
     except I.Stop as e:
         assert "did not read back" in str(e)
     assert o.saved == 0
+
+
+SCHEDULE = "Change schedule to: 261110?"
+
+
+def test_the_schedule_question_is_pressed_ok_wherever_it_shows():
+    o = _updated()
+    o.asks_on_save = SCHEDULE
+    _items(o).update(o.ref, SET)
+    assert o.saved == 1 and not o.asked and not o.open_card
+
+
+def test_a_schedule_question_that_comes_up_late_is_pressed_ok_too():
+    o = _updated()
+    o.asks_on_close = SCHEDULE
+    _items(o).update(o.ref, SET)
+    assert o.saved == 1 and not o.asked and not o.open_card
 
 
 def test_a_service_missing_goes_on_and_one_there_is_left():
