@@ -94,13 +94,28 @@ def test_no_later_than_is_the_latest_and_the_two_hours_go_in_front():
 
 def test_ordinary_answers_read_as_they_always_have():
     for t, want in (("08:00-16:00", ("08:00", "16:00")), ("8am", ("08:00", "10:00")),
-                    ("between 9 and 11am", ("11:00", "13:00")), ("22:00hrs", ("22:00", "00:00")),
+                    ("between 9 and 11am", ("09:00", "11:00")), ("22:00hrs", ("22:00", "00:00")),
                     ("9:30am - 2:30pm", ("09:30", "14:30")), ("19th feb 2300", ("23:00", "01:00")),
                     ("Monday 10/11/2026 0900", ("09:00", "11:00")), ("0800 - 1600", ("08:00", "16:00")),
                     ("7:00 AM - 3:00 PM", ("07:00", "15:00")), ("23:00 - 01:00", ("23:00", "01:00"))):
         assert D.parse_time_window(t) == want + (D.HIGH,), t
     assert D.parse_time_window("0800-1600") == (None, None, D.AMBER)
     assert D.parse_time_window("18.288m rail") == (None, None, D.AMBER)
+
+
+def test_a_bare_starting_hour_is_the_start_of_the_window_not_lost():
+    for said, want in (("between 9 and 11am", ("09:00", "11:00")), ("9-11am", ("09:00", "11:00")),
+                       ("Delivery time: 9 - 11am", ("09:00", "11:00")), ("8 to 4pm", ("08:00", "16:00")),
+                       ("1 to 4pm", ("13:00", "16:00")), ("10 to 12pm", ("10:00", "12:00")),
+                       ("11-1pm", ("11:00", "13:00")), ("from 7 till 3pm", ("07:00", "15:00"))):
+        lo, hi, conf = D.parse_time_window(said)
+        assert (lo, hi, conf) == (want[0], want[1], D.HIGH), (said, lo, hi, conf)
+    # what it was before stays: a time with its own am/pm, and a lone "until" time is still the latest
+    assert D.parse_time_window("9am-11am") == ("09:00", "11:00", D.HIGH)
+    assert D.parse_time_window("until 3pm") == ("13:00", "15:00", D.HIGH)
+    assert D.parse_time_window("between 8 and 10") == (None, None, D.AMBER)      # no clock time in it at all
+    assert D.parse_time_window("Gate 3 - 9am") == ("09:00", "11:00", D.HIGH)    # a place's number is no start
+    assert D.parse_time_window("Unit 4 to 8am") == ("08:00", "10:00", D.HIGH)
 
 
 if __name__ == "__main__":

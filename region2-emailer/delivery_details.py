@@ -184,6 +184,26 @@ def plus_hours(t, hours=2):
 # "from" are not here: those are the earliest, which is how a lone time reads.
 _LATEST_BEFORE = re.compile(r"(?:\b(?:no|not)\s+later\s+than|\b(?:before|by|until|till|latest))\s*:?\s*$")
 _LATEST_AFTER = re.compile(r"\s*(?:at\s+the\s+)?latest\b")
+# A bare starting hour before a time that has one: "9-11am", "8 to 4pm", "from 7 till 3pm", "between 9 and 11am".
+# The bare 9 is no time on its own, so only the 11am was found and it became the START (11:00-13:00), or with the
+# "till" above the latest of a 2-hour window (13:00-15:00), when the site said 07:00-15:00.
+_BARE_START = re.compile(r"(?:(?<![\w/.:])(\d{1,2})\s*(?:-|\bto|\btill|\buntil)|\bbetween\s+(\d{1,2})\s+and)\s*$")
+
+_NOT_AN_HOUR = re.compile(r"\b(?:unit|gate|bay|dock|door|platform|plot|no|number|block|building|phase|zone|area|road|"
+                          r"lane|line|bridge|siding|road\s*no)\.?\s*$")
+
+
+def _bare_hour(h, end, ap):
+    """The start hour a bare number means against the end it runs to: "8 to 4pm" is 08:00, "1 to 4pm" 13:00, "10 to
+    12pm" 10:00, "9-11am" 09:00. None when it is no hour on a clock."""
+    h = int(h)
+    if not 1 <= h <= 12:
+        return None
+    if ap and ap.lower() == "pm" and h != 12 and h + 12 < int(end[:2]):
+        h += 12
+    elif ap and ap.lower() == "am" and h == 12:
+        h = 0
+    return f"{h:02d}:00"
 
 
 def parse_time_window(text):
@@ -203,7 +223,13 @@ def parse_time_window(text):
         # Still ending at or before it starts, and not a night shift (22:00-04:00):
         # it is not a window we can read - "Thursday 12.11 8am" is 12:11-08:00.
         return lo, hi, (AMBER if hi <= lo and lo < "18:00" else HIGH)
-    start, end, t, _ = hits[0]
+    start, end, t, ap = hits[0]
+    bare = _BARE_START.search(s[:start])
+    if bare and _NOT_AN_HOUR.search(s[:bare.start(1) if bare.group(1) else bare.start(2)]):
+        bare = None                        # "Gate 3 - 9am", "Unit 4 to 8am": a place's number, not a start
+    lo = bare and _bare_hour(bare.group(1) or bare.group(2), t, ap)
+    if lo:
+        return lo, t, (AMBER if t <= lo else HIGH)
     if _LATEST_BEFORE.search(s[:start]) or _LATEST_AFTER.match(s[end:]):
         # the latest, not the earliest - Delali's 2 hours go in front of it
         return plus_hours(t, -2), t, HIGH
