@@ -169,9 +169,10 @@ def say(msg):
 def log(kind, **kw):
     """The audit trail. Never raises - a full disk must not stop the bridge."""
     try:
+        rec = dict(at=datetime.now().isoformat(timespec="seconds"), kind=kind)
+        rec.update(("point" if k == "at" else k, v) for k, v in kw.items())    # a command's own at is where it clicked
         with open(LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(dict(at=datetime.now().isoformat(timespec="seconds"),
-                                    kind=kind, **kw)) + "\n")
+            f.write(json.dumps(rec) + "\n")
     except Exception:
         pass
 
@@ -298,6 +299,10 @@ def _idle_now():
     except Exception:
         q = None
     return -1 if q is None else int(q)
+
+
+class Unchanged(RuntimeError):
+    """A step's wait ran out with nothing changed where CTMS's answer shows: a search that found nothing, say."""
 
 
 # ---- the dashboard -----------------------------------------------------------
@@ -879,8 +884,11 @@ class Bridge:
                 break
             try:
                 run(ctms_orders.search(ctms_orders.search_ref(o["ref"])))
-            except Exception:
+            except Unchanged:
                 pass                    # nothing found leaves the list empty - CTMS's answer changed nothing
+            except Exception as e:
+                stopped = f"searching for {o['ref']}: the search couldn't be done ({why(e)})"
+                break
             try:
                 rows = ctms_orders.lines(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ))
             except Exception as e:
@@ -986,7 +994,8 @@ class Bridge:
             pass
         took = round(time.time() - t0, 1)
         made = [x for x in job.trips if x.get("manifest")]
-        fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n)
+        fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n)
+        by_hand = "; ".join(n for n in job.said if n.startswith("PUT BACK BY HAND"))
         said = (f"{'Rehearsed' if cmd.get('dry') else 'Booked'} {' / '.join(orders)} in {took:g}s: "
                 + ", ".join(f"{x['manifest']} {x['status']}" for x in made) if made and not stopped else
                 f"Rehearsed {' / '.join(orders)} in {took:g}s with {carrier}: revenue {job.trips[0]['revenue']}, cost "
@@ -997,6 +1006,8 @@ class Bridge:
             said += f" CTMS keeps {job.veh_kept} as the line's Veh Type from the carrier screen."
         if fixed:
             said += f" On the lines first: {fixed}."
+        if by_hand:
+            said += f" {by_hand}."
         # written down before the answer goes, so the home PC can ask for it again if the answer never reaches it
         book_record.keep(cmd.get("id"), orders, date, carrier, cmd.get("dry"), not stopped, said, job.trips, stopped)
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
@@ -1181,8 +1192,9 @@ class Bridge:
                 return round(time.time() - t0, 2)
             last = cur
             time.sleep(0.03)
-        raise RuntimeError(f"CTMS did not answer within {timeout:g}s - "
-                           + ("nothing changed where it should have" if not moved else "the screen never settled"))
+        raise (RuntimeError if moved else Unchanged)(f"CTMS did not answer within {timeout:g}s - "
+                                                     + ("nothing changed where it should have" if not moved else
+                                                        "the screen never settled"))
 
     def batch_step(self, action, args):
         """A step only a batch has: anchor, waitfor, check, snap, settle or find. They look - only find touches
@@ -1376,8 +1388,12 @@ class Bridge:
                     self._batch_look(times, t0))
 
     def _batch_look(self, times, t0):
-        """The picture at the end of a batch, with the step times and the snaps it kept."""
-        p = self.window_look()
+        """The picture at the end of a batch, with the step times and the snaps it kept. Never raises: a picture
+        that cannot be taken (CTMS not the selected tab, say) must not change what the batch did, or lose its answer."""
+        try:
+            p = self.window_look()
+        except Exception as e:
+            p = {"picture_error": f"No picture at the end: {friendly(e)}"}
         p.update(times=times, took=round(time.time() - t0, 1), snaps=self.batch.get("snaps") or [])
         return p
 
