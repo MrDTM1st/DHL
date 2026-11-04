@@ -67,7 +67,10 @@ def site_options():
 
 def _hours(s):
     try:
-        h, m, sec = str(s).split(":")
+        parts = str(s).split(":")
+        if len(parts) == 2:          # a site saved as "07:00" - no seconds - blanked ORDER 13/14 on every order
+            parts.append("0")
+        h, m, sec = parts
         return timedelta(hours=int(h), minutes=int(m), seconds=int(float(sec)))
     except Exception:
         return None
