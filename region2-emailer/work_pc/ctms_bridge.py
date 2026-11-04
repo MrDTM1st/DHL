@@ -814,23 +814,40 @@ class Bridge:
             return done(True, said + f"Dry run: the Import card opened, NRHEAVY_Order_Import chosen and {path} "
                                      "typed - Import not pressed (no go-ahead), and the card closed.",
                         dict(self._batch_look(times, t0), imported=False))
+
+        def answer(wanted, button, seconds):
+            """CTMS's question with these words, once it's up: its button pressed where the Access Bridge places it, and
+            its words returned. Any other question, or none in time, presses nothing."""
+            end = time.time() + seconds
+            while True:
+                q = ctms_items.question(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ).get("elements") or [])
+                if q and wanted in q[0].lower():
+                    b = q[1].get(button)
+                    if b is None or not ctms_book.placed(b):
+                        raise RuntimeError(f"CTMS asked \"{q[0][:160]}\" with no {button} to press.")
+                    run([{"action": "click", "screen": ctms_book._at(b), "after": 0.5}])
+                    return q[0]
+                if q:
+                    raise RuntimeError(f"CTMS asked \"{q[0][:160]}\" instead.")
+                if time.time() >= end:
+                    raise RuntimeError(f"CTMS did not say \"{wanted}\" in {seconds:g}s.")
+                time.sleep(0.3)
         try:
-            run(ctms_import.import_and_answer(t))
+            run(ctms_import.press_import())
+            answer(ctms_import.ASK_SERVER, "yes", ctms_import.ASK_SECONDS)
+            answer(ctms_import.ASK_NOW, "yes", ctms_import.ASK_SECONDS)
+            words = answer(ctms_import.DONE, "ok", ctms_import.DONE_SECONDS)
         except Exception as e:
             # past Import, CTMS may have taken the file: never press anything more, and never call it not done
             return stopped("importing (CTMS may have taken it - check before uploading again)", e, True)
+        clean = ctms_import.clean(words)
         try:
-            run(ctms_import.clean_checks(t))
-            clean = True
-        except Exception:
-            clean = False
-        try:
-            run(ctms_import.finish(t))
+            run(ctms_import.close_card(t))
         except Exception as e:
-            return stopped("closing CTMS's answer and the Import card - the import itself ran", e, True)
+            return stopped("closing the Import card - the import itself ran", e, True)
         return done(clean, said + f"Uploaded {name} into CTMS: " + (
             "no lines failed and none were invalid." if clean else
-            "SOME LINES FAILED OR WERE INVALID - CTMS's own answer is in the picture.")
+            f"SOME LINES FAILED OR WERE INVALID, or the answer couldn't be read - CTMS said: {' '.join(words.split())[:300]}")
             + " OK pressed and the Import card closed.", dict(self._batch_look(times, t0), imported=True))
 
     # -- the map's orders looked up in CTMS: booked or not, their dates, the Veh Type (01/11, ctms_orders) --

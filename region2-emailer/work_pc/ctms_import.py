@@ -34,6 +34,7 @@ and Order Filters' from those of 31/10.
 import base64
 import json
 import os
+import re
 
 import ctms_fast
 
@@ -124,26 +125,21 @@ def open_and_type(path, t):
     ]
 
 
-def import_and_answer(t):
-    """Import, CTMS's two questions, and its answer - kept as the "result" snap."""
-    return [
-        _click(405, 438, after=0.3),                                # Import
-        _find(t, "imp-ask-server", (790, 395, 1180, 450), 30),      # "File must be on Server for import ..."
-        _click(1069, 519, after=0.5),                               # Yes
-        _find(t, "imp-ask-now", (880, 400, 1100, 470), 30),         # "Import file now?"
-        _click(953, 505, after=0.5),                                # Yes
-        _find(t, "imp-done", (850, 395, 1150, 445), 180),           # "N Lines processed successfully."
-        {"action": "snap", "name": "result", "box": [815, 370, 1125, 545]},
-    ]
+def press_import():
+    return [_click(405, 438, after=0.3)]
 
 
-def clean_checks(t):
-    """The result's two noughts: each step fails when its line says anything else."""
-    return [_find(t, "imp-failed-0", (850, 420, 1080, 465), 0), _find(t, "imp-invalid-0", (850, 440, 1140, 485), 0)]
+# What follows Import is asked in the middle of CTMS's window, so it moves with the window's size (04/11): each is found
+# through the Access Bridge by these words, in the bridge, and its button pressed where that places it.
+ASK_SERVER, ASK_NOW, DONE = "file must be on server", "import file now", "processed successfully"
+ASK_SECONDS, DONE_SECONDS = 30, 180
 
 
-def finish(t):
-    return [_click(1074, 519, after=0.8)] + close_card(t)          # OK on CTMS's answer, then the card closed
+def clean(words):
+    """CTMS's answer says, in so many words, that no line failed and none was invalid. Unread is not clean."""
+    failed = re.search(r"(\d+)\s+lines?\s+failed", words, re.I)
+    invalid = re.search(r"(\d+)\s+lines?\s+of\s+invalid", words, re.I)
+    return bool(failed and invalid) and int(failed.group(1)) == 0 and int(invalid.group(1)) == 0
 
 
 def close_card(t):

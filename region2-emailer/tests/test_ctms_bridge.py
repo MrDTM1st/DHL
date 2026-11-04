@@ -2742,6 +2742,41 @@ def test_the_upload_switches_acting_on_for_that_import_only_and_never_uploads_a_
     S._to_file.clear()
 
 
+IMPORT_ANSWER = "1 Lines processed successfully. 0 Lines failed processing. 0 Lines of invalid data encountered."
+
+
+class _ImportAsks:
+    """CTMS's popups after Import as the Access Bridge hands them over, each gone once its button is pressed."""
+
+    def __init__(self, answer=IMPORT_ANSWER, leave_out=()):
+        self.all = [(w, b) for w, b in (("File must be on Server for import.", "Yes ALT Y"), ("Import file now?", "Yes ALT Y"),
+                                        (answer, "OK ALT O")) if w not in leave_out]
+        self.up = []
+        self.keep = J.read_fields
+        CI.ASK_SECONDS, CI.DONE_SECONDS = 0.01, 0.01
+        J.read_fields = self.read
+
+    def read(self, win, skip=()):
+        if not self.up:
+            return {"elements": []}
+        words, button = self.up[0]
+        return {"elements": [{"r": "internal frame", "nm": "Forms", "lv": 0},
+                             {"r": "option pane", "nm": words, "lv": 1, "at": [-300, -600, 300, 120]},
+                             {"r": "push button", "nm": button, "lv": 2, "at": [-200, -520, 60, 30]}]}
+
+    def step(self, args):
+        """Import pressed brings them up; a press where the Access Bridge placed its button takes one off."""
+        if tuple(args.get("px") or ()) == (405, 438):
+            self.up = list(self.all)
+        elif "screen" in args:
+            assert args["screen"] == [-170, -505]
+            return self.up.pop(0)[1].split()[0]
+
+    def done(self):
+        J.read_fields = self.keep
+        CI.ASK_SECONDS, CI.DONE_SECONDS = 30, 180
+
+
 def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_dry_runs_without_go():
     tmp = tempfile.mkdtemp(prefix="imp-test-")
     keep = (W.find_windows, W.picture, B.LOG, X.DOWNLOADS)
@@ -2759,10 +2794,12 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
         desk = Desk()
         b = B.Bridge(desk, 1, "", allow_control=True)
         ran, fail_at = [], [None]
+        asks = _ImportAsks()
 
         def step(action, args):
             what = args.get("name") or (tuple(args["px"]) if "px" in args else args.get("key") or args.get("text"))
-            ran.append((action, what))
+            pressed = asks.step(args)
+            ran.append(("press", pressed) if pressed else (action, what))
             if fail_at[0] == (action, what):
                 raise RuntimeError("it is not on the screen where it should be.")
             return "ok"
@@ -2785,24 +2822,29 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
         assert r["ok"] and "no lines failed" in r["detail"] and r["payload"]["imported"] is True, r
         i = ran.index(("click", (405, 438)))
         assert ran[i - 1] == ("find", "imp-button")                  # the button seen before it is pressed
-        assert ran[i + 1:i + 5] == [("find", "imp-ask-server"), ("click", (1069, 519)),
-                                    ("find", "imp-ask-now"), ("click", (953, 505))]
+        assert ran[i + 1:i + 4] == [("press", "Yes"), ("press", "Yes"), ("press", "OK")]
         assert ran[ran.index(("find", "imp-card")) + 1] == ("click", (575, 226))
-        assert ran[-3:] == [("click", (1074, 519)), ("find", "imp-close"), ("click", (1030, 139))]
+        assert ran[-3:] == [("press", "OK"), ("find", "imp-close"), ("click", (1030, 139))]
         fail_at[0] = ("find", "imp-button")                          # Order Filters over the Import button (31/10)
         r = go(31, commit=True)
         assert r["ok"] is False and r["payload"]["imported"] is False and ("click", (405, 438)) not in ran
         assert "Something is over the Import card's Import button" in r["detail"], r["detail"]
         assert "Nothing went into CTMS, and the Import card is closed again" in r["detail"]
         assert ran[-2:] == [("find", "imp-close"), ("click", (1030, 139))]
-        fail_at[0] = ("find", "imp-failed-0")                        # a line failed: said, and still closed
+        fail_at[0] = None
+        bad = "1 Lines processed successfully. 2 Lines failed processing. 0 Lines of invalid data encountered."
+        asks.all[2] = (bad, "OK ALT O")                              # a line failed: said in CTMS's words, and still closed
         r = go(4, commit=True)
         assert r["ok"] is False and "SOME LINES FAILED" in r["detail"] and r["payload"]["imported"] is True
-        assert ran[-1] == ("click", (1030, 139))
-        fail_at[0] = ("find", "imp-ask-now")                         # CTMS did not ask: nothing more pressed
+        assert "2 Lines failed" in r["detail"] and ran[-1] == ("click", (1030, 139))
+        asks.all[1:] = []                                            # CTMS did not ask: nothing more pressed
         r = go(5, commit=True)
         assert r["ok"] is False and "Stopped while importing" in r["detail"] and r["payload"]["imported"] is True
-        assert ran[-1] == ("find", "imp-ask-now")
+        assert ran[-1] == ("press", "Yes")
+        asks.up, asks.all = [], [("Some other question?", "OK ALT O")]    # another question: its OK never pressed
+        r = go(51, commit=True)
+        assert r["ok"] is False and "Some other question" in r["detail"] and ran[-1] == ("click", (405, 438))
+        asks.up = []
         fail_at[0] = ("find", "imp-card")                            # the card never came: Import never pressed
         r = go(6, commit=True)
         assert r["ok"] is False and r["payload"]["imported"] is False and ("click", (405, 438)) not in ran
@@ -2812,8 +2854,15 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
             r = go(7, option=bad, commit=True)
             assert r["ok"] is False and ran == [], bad
     finally:
+        asks.done()
         W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_what_ctms_says_of_an_import_is_only_clean_when_it_says_so():
+    assert CI.clean(IMPORT_ANSWER) is True
+    assert CI.clean(IMPORT_ANSWER.replace("0 Lines of invalid", "3 Lines of invalid")) is False
+    assert CI.clean("1 Lines processed successfully.") is False
 
 
 def test_a_picture_that_cant_be_taken_at_the_end_never_loses_what_the_import_did():
@@ -2833,7 +2882,12 @@ def test_a_picture_that_cant_be_taken_at_the_end_never_loses_what_the_import_did
         desk = Desk()
         b = B.Bridge(desk, 1, "", allow_control=True)
         b.armed = True
-        b.window_step = lambda action, args: "ok"
+        asks = _ImportAsks()
+
+        def all_asked(action, args):
+            asks.step(args)
+            return "ok"
+        b.window_step = all_asked
 
         def no_picture():
             raise RuntimeError("CTMS is not open in your Edge, or another tab is selected in its window.")
@@ -2842,36 +2896,27 @@ def test_a_picture_that_cant_be_taken_at_the_end_never_loses_what_the_import_did
         r = desk.sent[-1][1]
         assert r["ok"] and "Uploaded" in r["detail"] and r["payload"]["imported"] is True, r
         assert "another tab is selected" in r["payload"]["picture_error"] and "times" in r["payload"]
-        def no_ask(action, args):
-            if args.get("name") == "imp-ask-now":
-                raise RuntimeError("it is not on the screen where it should be.")
-            return "ok"
-        b.window_step = no_ask
+        asks.all[1:] = []
         b.handle({"id": 2, "action": "import_csv", "option": UP, "commit": True})
         r = desk.sent[-1][1]                                     # a stop past Import: still said to have gone in
         assert r["ok"] is False and r["payload"]["imported"] is True and "Stopped while importing" in r["detail"], r
     finally:
+        asks.done()
         W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_the_import_templates_are_ctmss_own_words_and_every_step_has_one_it_needs():
     t = CI.templates()
-    for name in ("imp-card", "imp-nrheavy", "imp-button", "imp-close", "imp-ask-server", "imp-ask-now",
-                 "imp-done", "imp-failed-0", "imp-invalid-0", "of-title", "of-title-on") + CI.OF_XS:
+    for name in ("imp-card", "imp-nrheavy", "imp-button", "imp-close", "of-title", "of-title-on") + CI.OF_XS:
         tp = t[name]
         assert len(base64.b64decode(tp["rgb"])) == tp["w"] * tp["h"] * 3 and tp["w"] <= 400 and tp["h"] <= 200
     # Order Filters' X in every look is the same size, its middle the X's own
     assert {(t[x]["w"], t[x]["h"]) for x in CI.OF_XS} == {(14, 14)}
-    for s in CI.open_and_type("C:\\x.csv", t) + CI.import_and_answer(t) + CI.clean_checks(t) + CI.finish(t):
+    for s in CI.open_and_type("C:\\x.csv", t) + CI.press_import() + CI.close_card(t):
         assert s["action"] in B.WINDOW_STEPS + B.BATCH_STEPS, s
     # the Close is pressed only straight after its own label is seen
     assert [s.get("name") or s.get("px") for s in CI.close_card(t)] == ["imp-close", [1030, 139]]
-    # every Yes comes straight after the find that sees its own question
-    steps = CI.import_and_answer(t)
-    for q, yes in (("imp-ask-server", [1069, 519]), ("imp-ask-now", [953, 505])):
-        i = next(n for n, s in enumerate(steps) if s.get("name") == q)
-        assert steps[i + 1] == {"action": "click", "px": yes, "after": 0.5}
 
 
 def _of_frame(spots, w=1910, h=915):
@@ -2925,10 +2970,12 @@ def test_the_upload_closes_order_filters_first_when_it_is_in_the_way_and_stops_i
         b = B.Bridge(desk, 1, "", allow_control=True)
         b.armed = True
         ran, frames, xs = [], [], []
+        asks = _ImportAsks()
 
         def step(action, args):
             what = args.get("name") or (tuple(args["px"]) if "px" in args else args.get("key") or args.get("text"))
             ran.append((action, what))
+            asks.step(args)
             if what == "Order Filters' X":
                 xs.append((round(args["at"][0] * 1910), round(args["at"][1] * 915)))
                 if len(frames) > 1:
@@ -2966,6 +3013,7 @@ def test_the_upload_closes_order_filters_first_when_it_is_in_the_way_and_stops_i
         assert r["ok"] and r["payload"]["imported"] is True and "closed first. Uploaded" in r["detail"]
         assert ran.index(x) < ran.index(("click", (405, 438)))
     finally:
+        asks.done()
         W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
         shutil.rmtree(tmp, ignore_errors=True)
 
