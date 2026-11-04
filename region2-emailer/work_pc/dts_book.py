@@ -1,5 +1,6 @@
 """
-The team's DTS sheet: rows added to its year's tab, nothing else in the workbook touched.
+The team's DTS sheet: rows added to its year's tab, or one line's Collection date changed (his 04/11: "change the
+collection to 10/11/26"), nothing else in the workbook touched.
 
 The workbook is on the team's share, and people have it open. So:
   - only that tab's own part of the file changes: each new row's cells, in the sheet's next empty row, in the formatting
@@ -17,7 +18,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from xml.sax.saxutils import escape
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -161,15 +162,58 @@ def _dim_end(xml):
     return int(m.group(1)) if m else 0
 
 
-def add_rows(path, rows):
-    """Add these to the year's tab of the workbook at `path` -> {"rows": row numbers, "skipped", "tab"}. Each row: nn, sub, cat,
-    qty, post, date (dd/mm/yyyy), req, planner. Raises Busy when it couldn't be done now."""
-    if not rows:
-        return {"rows": [], "skipped": 0, "tab": ""}
-    years = {datetime.strptime(r["date"], "%d/%m/%Y").year for r in rows}
-    if len(years) != 1:
-        raise ValueError("Those rows run across two years' tabs.")
-    year = years.pop()
+def _day(serial):
+    """'06/11/2026' from the 46332 a date cell holds; what it holds when that isn't a date."""
+    try:
+        return (datetime(1899, 12, 30) + timedelta(days=int(float(serial)))).strftime("%d/%m/%Y")
+    except (TypeError, ValueError, OverflowError):
+        return str(serial or "")
+
+
+def date_in_xml(xml, shared, nn, cat, day):
+    """The tab's XML with that line's Collection date (column F) put to `day` -> (new XML, row number, the date it had). The
+    row's other cells and the date's own formatting stay as they are. ValueError when the line isn't on the tab, or is on it
+    more than once."""
+    want = _key(nn, cat)
+    hits = [n for n, v in read_rows(xml, shared) if _key(v.get("A", ""), v.get("C", "")) == want]
+    if not hits:
+        raise ValueError(f"{nn} ({cat}) isn't on that tab.")
+    if len(hits) > 1:
+        raise ValueError(f"{nn} ({cat}) is on that tab {len(hits)} times (rows {', '.join(map(str, hits))}) - which one?")
+    n = hits[0]
+    m = next(m for m in ROW.finditer(xml) if int(_attr(m.group(1), "r")) == n)
+    old = _cells(m.group(2))
+    was = _day(_value(old["F"], shared)) if "F" in old else ""
+    built = {c: (f"<c{a}>{inside}</c>" if inside else f"<c{a}/>") for c, (a, inside) in old.items()}
+    built["F"] = _new_cell("F", n, _attr(old["F"][0], "s") if "F" in old else "", day)
+    cells = "".join(built[c] for c in sorted(built, key=_col_no))
+    return xml[:m.start()] + f"<row{m.group(1)}>{cells}</row>" + xml[m.end():], n, was
+
+
+def set_date(path, nn, cat, day):
+    """That line's Collection date on the DTS sheet put to `day` (dd/mm/yyyy), on the tab of that year -> {"row", "tab",
+    "was", "date"}. Nothing else changes, the same way as add_rows. Raises Busy when it couldn't be done now."""
+    year = datetime.strptime(day, "%d/%m/%Y").year
+    done = {}
+
+    def edit(xml, shared):
+        new, n, was = date_in_xml(xml, shared, nn, cat, day)
+        done.update(row=n, tab=str(year), was=was, date=day)
+        return None if was == day else new
+
+    def check(got):
+        row = got.get(done["row"]) or {}
+        if _key(row.get("A", ""), row.get("C", "")) != _key(nn, cat) or row.get("F") != str(_serial(day)):
+            raise ValueError(f"Row {done['row']} didn't read back as {nn} on {day} - nothing was changed.")
+
+    _swap(path, year, edit, check)
+    return done
+
+
+def _swap(path, year, edit, check):
+    """The workbook at `path` with its year's tab put through edit(xml, shared) -> new XML (None: nothing to do), every other
+    part copied byte for byte and checked to be, check({row number: {column: value}}) run on what came out, then put in by
+    one rename. Raises Busy when someone has it open or it changed meanwhile. True when the file was changed."""
     before = os.stat(path).st_mtime_ns
     try:
         with open(path, "rb") as f:
@@ -181,22 +225,19 @@ def add_rows(path, rows):
         with zipfile.ZipFile(path) as z:
             part = tab_part(z, year)
             shared = _shared(z)
-            xml = z.read(part).decode("utf-8")
-            new, used, skipped = add_to_xml(xml, rows, shared)
-            if not used:
-                return {"rows": [], "skipped": skipped, "tab": str(year)}
+            new = edit(z.read(part).decode("utf-8"), shared)
+            if new is None:
+                return False
             with zipfile.ZipFile(temp, "w", zipfile.ZIP_DEFLATED) as out:
                 for info in z.infolist():
                     data = new.encode("utf-8") if info.filename == part else z.read(info.filename)
                     out.writestr(copy.copy(info), data, compress_type=zipfile.ZIP_DEFLATED)   # a copy: writing moves its offset
-            with zipfile.ZipFile(temp) as check:
+            with zipfile.ZipFile(temp) as made:
                 for info in z.infolist():
-                    if info.filename != part and check.read(info.filename) != z.read(info.filename):
+                    if info.filename != part and made.read(info.filename) != z.read(info.filename):
                         raise ValueError(f"{info.filename} came out different - nothing was changed.")
-                got = dict(read_rows(check.read(part).decode("utf-8"), shared))
-        for n, row in used:
-            if _key(got[n].get("A", ""), got[n].get("C", "")) != _key(row["nn"], row["cat"]):
-                raise ValueError(f"Row {n} didn't read back as {row['nn']} - nothing was changed.")
+                got = dict(read_rows(made.read(part).decode("utf-8"), shared))
+        check(got)
         if os.stat(path).st_mtime_ns != before:
             raise Busy("the DTS sheet changed while this was working on it")
         _backup(raw)
@@ -204,10 +245,34 @@ def add_rows(path, rows):
             os.replace(temp, path)
         except PermissionError as e:
             raise Busy("someone has the DTS sheet open") from e
-        return {"rows": [n for n, _ in used], "skipped": skipped, "tab": str(year)}
+        return True
     finally:
         if os.path.exists(temp):
             os.remove(temp)
+
+
+def add_rows(path, rows):
+    """Add these to the year's tab of the workbook at `path` -> {"rows": row numbers, "skipped", "tab"}. Each row: nn, sub, cat,
+    qty, post, date (dd/mm/yyyy), req, planner. Raises Busy when it couldn't be done now."""
+    if not rows:
+        return {"rows": [], "skipped": 0, "tab": ""}
+    years = {datetime.strptime(r["date"], "%d/%m/%Y").year for r in rows}
+    if len(years) != 1:
+        raise ValueError("Those rows run across two years' tabs.")
+    year = years.pop()
+    done = {"used": [], "skipped": 0}
+
+    def edit(xml, shared):
+        new, done["used"], done["skipped"] = add_to_xml(xml, rows, shared)
+        return new if done["used"] else None
+
+    def check(got):
+        for n, row in done["used"]:
+            if _key(got[n].get("A", ""), got[n].get("C", "")) != _key(row["nn"], row["cat"]):
+                raise ValueError(f"Row {n} didn't read back as {row['nn']} - nothing was changed.")
+
+    _swap(path, year, edit, check)
+    return {"rows": [n for n, _ in done["used"]], "skipped": done["skipped"], "tab": str(year)}
 
 
 def _backup(raw):

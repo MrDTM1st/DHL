@@ -155,6 +155,76 @@ def test_a_job_with_something_unread_is_held_not_guessed():
     assert S.rows_for({"lines": [{"nn": "NN1", "sub": "N/A", "cat": "0086/1", "qty": 1}], "date": "01/11/2026", "post": "EN1", "req": "X"})[0]["planner"] == S.PLANNER
 
 
+def test_a_lines_collection_date_changes_and_nothing_else_does():
+    with tempfile.TemporaryDirectory() as d:
+        p = _book(d)
+        D.add_rows(p, [ROW, dict(ROW, nn="NN9000001-5/2", cat="0086/000002", qty=4)])
+        before = _read(p)
+        with zipfile.ZipFile(p) as z:
+            parts = {n: z.read(n) for n in z.namelist()}
+            part = D.tab_part(z, 2026)
+        got = D.set_date(p, "NN9000001-5/1", "0086/000001", "24/11/2026")
+        assert got == {"row": 3, "tab": "2026", "was": "20/11/2026", "date": "24/11/2026"}
+        after = _read(p)
+        assert after[2][5] == datetime(2026, 11, 24)
+        after[2][5] = before[2][5]
+        assert after == before
+        assert openpyxl.load_workbook(p)["2026"]["F3"].number_format == "dd/mm/yyyy"
+        with zipfile.ZipFile(p) as z:
+            assert [n for n in parts if z.read(n) != parts[n]] == [part]
+
+
+def test_a_date_already_right_or_a_line_not_there_changes_nothing():
+    with tempfile.TemporaryDirectory() as d:
+        p = _book(d)
+        D.add_rows(p, [ROW])
+        stamp = os.stat(p).st_mtime_ns
+        assert D.set_date(p, " nn9000001-5/1", "0086/000001", "20/11/2026")["was"] == "20/11/2026"
+        for nn, cat in (("NN9000001-5/9", "0086/000001"), ("NN9000001-5/1", "0086/000009")):
+            try:
+                D.set_date(p, nn, cat, "24/11/2026")
+                raise AssertionError("it changed")
+            except ValueError as e:
+                assert "isn't on" in str(e)
+        assert os.stat(p).st_mtime_ns == stamp
+
+
+def test_a_line_on_the_tab_twice_is_asked_about_not_guessed():
+    with tempfile.TemporaryDirectory() as d:
+        p = _book(d)
+        D.add_rows(p, [ROW])
+        wb = openpyxl.load_workbook(p)
+        wb["2026"].append(["NN9000001-5/1", "N/A", "0086/000001", 1, "EN1 1AA", datetime(2026, 11, 21), "X", "Sam"])
+        wb.save(p)
+        try:
+            D.set_date(p, "NN9000001-5/1", "0086/000001", "24/11/2026")
+            raise AssertionError("it changed")
+        except ValueError as e:
+            assert "2 times" in str(e)
+
+
+def test_a_date_change_on_a_sheet_someone_has_open_waits():
+    with tempfile.TemporaryDirectory() as d:
+        p = _book(d)
+        D.add_rows(p, [ROW])
+        real = os.replace
+        D.BACKUPS, keep = os.path.join(d, "b"), D.BACKUPS
+
+        def refuse(a, b):
+            raise PermissionError(13, "in use")
+
+        D.os.replace = refuse
+        try:
+            D.set_date(p, "NN9000001-5/1", "0086/000001", "24/11/2026")
+            raise AssertionError("it changed")
+        except D.Busy as e:
+            assert "open" in str(e)
+        finally:
+            D.os.replace = real
+            D.BACKUPS = keep
+        assert _read(p)[2][5] == datetime(2026, 11, 20) and sorted(os.listdir(d)) == ["DTS.xlsx", "b"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
