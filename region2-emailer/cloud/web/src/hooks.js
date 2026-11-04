@@ -1,24 +1,30 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getStatus, getTracker, getWaitlist, AuthError } from './api.js';
+import { getStatus, getTracker, getWaitlist, getKey, AuthError } from './api.js';
 
 // Poll a fetcher on an interval, surfacing 401s to onAuthFail so the app can
 // show the login screen. Returns { data, refresh }.
 function usePoll(fetcher, ms, onAuthFail, deps = []) {
   const [data, setData] = useState(null);
   const alive = useRef(true);
+  const inFlight = useRef(0);
   const run = useCallback(async () => {
+    if (!getKey()) return;              // signed out: nothing to ask for, every ask would be a 401
+    inFlight.current += 1;
     try {
       const d = await fetcher();
       if (alive.current) setData(d);
     } catch (e) {
       if (e instanceof AuthError) onAuthFail && onAuthFail();
+    } finally {
+      inFlight.current -= 1;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   useEffect(() => {
     alive.current = true;
     run();
-    const iv = setInterval(run, ms);
+    // a tick while the last ask is still out is skipped - on a slow link they used to pile up behind each other
+    const iv = setInterval(() => { if (!inFlight.current) run(); }, ms);
     return () => { alive.current = false; clearInterval(iv); };
   }, [run, ms]);
   return { data, refresh: run };

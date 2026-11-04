@@ -32,6 +32,23 @@ def test_no_is_the_sites_own_and_both_is_asked():
     assert dd.parse_offloading("(HIAB or Moffet)") == (None, dd.AMBER)          # only our own menu - no answer
 
 
+def test_a_hiab_they_do_not_need_is_never_a_confident_hiab():
+    for answer in ("HIAB not required", "hiab not needed thanks", "We don't need a hiab", "we don’t require a hiab",
+                   "hiab not necessary", "doesn't need hiab", "Hiab isn't required"):
+        assert dd.parse_offloading(answer) == ("SITE/NONE", dd.AMBER), answer
+    for answer in ("Moffett not needed - forklift on site", "do not need moffett", "won't need a moffett"):
+        assert dd.parse_offloading(answer) == ("SITE/NONE", dd.AMBER), answer
+    # one wanted and one ruled out, or a "not needed" that names nothing: asked, not picked
+    assert dd.parse_offloading("hiab, no moffett needed") == (None, dd.AMBER)
+    assert dd.parse_offloading("HIAB, not needed") == (None, dd.AMBER)
+    assert dd.parse_offloading("yes, not needed") == (None, dd.AMBER)
+    assert dd.parse_offloading("no hiab needed") == ("SITE/NONE", dd.HIGH)      # a leading no is still sure
+    # a "no" about PTS or the artic is not about offloading
+    assert dd.parse_offloading("hiab will be required / arctics can access site / no pts required") == \
+        ("HIAB", dd.HIGH)
+    assert dd.parse_offloading("moffett, no pts needed") == ("MOFFETT", dd.HIGH)
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

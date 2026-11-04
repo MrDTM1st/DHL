@@ -253,8 +253,10 @@ def main():
     seed = state is None
     if seed:
         state = {"ext_ids": [], "adhoc_ids": [], "inbox_hwm": "", "sent_hwm": ""}
-    ext_ids = set(state.get("ext_ids", []))
-    adhoc_ids = set(state.get("adhoc_ids", []))
+    # in the order they arrived (a dict keeps it), so the trim below drops the oldest - a set's was any, and a
+    # recent id dropped came back as new: rebuilt, announced again
+    ext_ids = dict.fromkeys(state.get("ext_ids", []))
+    adhoc_ids = dict.fromkeys(state.get("adhoc_ids", []))
     inbox_hwm = state.get("inbox_hwm", "")
     sent_hwm = state.get("sent_hwm", "")
 
@@ -273,18 +275,18 @@ def main():
                 low = fn.lower()
                 if bd.is_wanted_extract(fn, subj):
                     if eid not in ext_ids:
-                        ext_ids.add(eid)
+                        ext_ids[eid] = None
                         new_extracts.append((eid, fn))
                 elif (low.endswith((".xlsx", ".xlsm", ".pdf"))
                       and any(h in low or h in subj.lower() for h in FORM_HINTS)
                       and eid not in adhoc_ids):
-                    adhoc_ids.add(eid)
+                    adhoc_ids[eid] = None
                     new_adhocs.append((eid, fn, subj))
     # slow full-tree sweep for BS files filed outside the watched folders
     if time.time() - state.get("last_tree", 0) > TREE_EVERY:
         try:
             for eid, fn in _tree_bs(ns, ext_ids):
-                ext_ids.add(eid)
+                ext_ids[eid] = None
                 new_extracts.append((eid, fn))
         except Exception:
             pass
@@ -394,6 +396,13 @@ def _build(state, new_extracts):
     a batch THIS build wrote. If the build fails, put the extracts back as
     unseen so the next tick tries again (up to BUILD_TRIES times) - they are
     already saved as seen, and a one-off error line is easily overwritten."""
+    if _review_open():
+        # he is reviewing a batch (or there's no telling): a rebuild now would change the file under the rows he
+        # ticked, and the send applies his ticks to whatever it holds. Left unseen, no try spent: built once it closes
+        held = {eid for eid, _fn in new_extracts}
+        state["ext_ids"] = [e for e in state.get("ext_ids", []) if e not in held]
+        _save(state)
+        return
     batch_path = os.path.join(HERE, "_pending_batch.json")
     names = ", ".join(fn for _eid, fn in new_extracts[:2])
 

@@ -150,7 +150,13 @@ def add_to_xml(xml, rows, shared):
         if m:
             xml = xml[:m.start()] + f"<row{m.group(1)}>{cells}</row>" + xml[m.end():]
         else:
-            xml = xml.replace("</sheetData>", f'<row r="{n}">{cells}</row></sheetData>', 1)
+            # before the first row below it that's there already (a formatted empty row far down, say): rows out of order
+            # make Excel offer to repair the file
+            below = next((m for m in ROW.finditer(xml) if int(_attr(m.group(1), "r")) > n), None)
+            if below:
+                xml = xml[:below.start()] + f'<row r="{n}">{cells}</row>' + xml[below.start():]
+            else:
+                xml = xml.replace("</sheetData>", f'<row r="{n}">{cells}</row></sheetData>', 1)
             if _dim_end(xml) < n:
                 xml = re.sub(r'(<dimension ref="[A-Z]+\d+:[A-Z]+)\d+("/>)', lambda d: f"{d.group(1)}{n}{d.group(2)}", xml, count=1)
         used.append((n, row))
@@ -277,6 +283,16 @@ def add_rows(path, rows):
 
 def _backup(raw):
     os.makedirs(BACKUPS, exist_ok=True)
+    kept = sorted(n for n in os.listdir(BACKUPS) if n.startswith("DTS-"))
+    if kept:
+        # a try again while someone has the sheet open backs up the same file: it's kept already, and another copy of it
+        # would prune a real earlier version
+        try:
+            with open(os.path.join(BACKUPS, kept[-1]), "rb") as f:
+                if f.read() == raw:
+                    return
+        except OSError:
+            pass
     with open(os.path.join(BACKUPS, f"DTS-{datetime.now():%Y%m%d%H%M%S}.xlsx"), "wb") as f:
         f.write(raw)
     for old in sorted(os.listdir(BACKUPS))[:-KEEP]:

@@ -286,13 +286,19 @@ def urgency(order, today=None):
     "Tonight" is a real category rather than a flourish: a collection that
     starts at 20:00 today and one that starts at 08:00 today need different
     reactions, and "today" flattens the two.
+
+    Overdue is the most urgent of all, not outside the window: it used to come
+    back None, so a collection already past was left out and the notice said
+    nothing was urgent.
     """
     when = _when(order)
     if not when:
         return None
     today = (today or datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
     days = (when.replace(hour=0, minute=0, second=0, microsecond=0) - today).days
-    if days < 0 or days > URGENT_DAYS:
+    if days < 0:
+        return (days, f"overdue by {-days} day{'s' if days < -1 else ''}")
+    if days > URGENT_DAYS:
         return None
     if days == 0:
         return (0, "tonight" if when.hour >= 18 else "today")

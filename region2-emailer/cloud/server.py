@@ -107,6 +107,8 @@ _CTMS_MAX_CAPTURE_B64 = 80_000_000   # all held captures together, in memory
 _CTMS_MAX_PAYLOADS = 8               # screens sent back for Claude, newest kept
 _CTMS_MAX_PAYLOAD_BYTES = 40_000_000
 _CTMS_MAX_WAIT = 20                  # longest a check-in or a wait for a result is held open
+_CTMS_IMPORT_STALE = 45 * 60         # an Upload handed out and never answered stops counting as "being uploaded"
+_CTMS_MAX_IMPORTED = 200             # CSV names kept as gone into CTMS
 _ctms = {
     "seen": 0.0,           # last bridge check-in
     "state": {},           # what the bridge last said about itself
@@ -131,7 +133,7 @@ _ctms = {
     # The map's Upload (an ad hoc's CSV into CTMS): the import its switching on was for - switched off again when
     # that one is answered or runs out - and the CSVs uploaded since this start, so a second click is no duplicate
     "armed_for": None,
-    "importing": {},       # command id -> the CSV's name
+    "importing": {},       # command id -> (the CSV's name, when it was queued)
     "imported": {},        # CSV name -> when CTMS took it (HH:MM)
     "looked_up": None,     # the last look-up of the map's orders in CTMS: {at, checked, of, stopped}
     "todo_run": None,      # the CTMS page's Run: {id, ids, state, at, said, results, ...}
@@ -308,6 +310,11 @@ def _ctms_sweep_locked():
         else:
             keep.append(c)
     _ctms["queue"] = keep
+    # an Upload the bridge took and never answered (it restarted mid-import, its answer lost) blocks that CSV
+    # for so long only - not until the next redeploy
+    for cid, (_, at) in list(_ctms["importing"].items()):
+        if now - at > _CTMS_IMPORT_STALE:
+            _ctms["importing"].pop(cid, None)
     if not _ctms_armed() and any(c["action"] in CTMS_DRIVE for c in keep):
         _ctms_cancel_locked("Cancelled - Look mum, no hands mode ran out before the work PC got to it.",
                             only=CTMS_DRIVE)
@@ -316,9 +323,11 @@ def _ctms_sweep_locked():
 def _ctms_upload_answered_locked(cid, imported):
     """An Upload's command answered (or gone unanswered): its CSV counted as taken if CTMS ran the import, and
     Look mum, no hands switched off again if it was switched on for this one."""
-    name = _ctms["importing"].pop(cid, None)
+    name, _ = _ctms["importing"].pop(cid, (None, 0))
     if name and imported:
         _ctms["imported"][name] = datetime.now().strftime("%H:%M")
+        for old in list(_ctms["imported"])[:-_CTMS_MAX_IMPORTED]:
+            _ctms["imported"].pop(old, None)
     if _ctms["armed_for"] is not None and _ctms["armed_for"] == cid:
         _ctms["armed_for"] = None
         _ctms["control_until"] = 0.0
@@ -332,7 +341,7 @@ def _ctms_args(action, data):
     def num(k, lo, hi, kind=float):
         try:
             v = kind(data[k])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):     # OverflowError: int() of an Infinity
             return
         if lo <= v <= hi:
             out[k] = v
@@ -358,13 +367,13 @@ def _ctms_args(action, data):
             lo = -20000.0 if k == "screen" else 0.0    # screen: where the Access Bridge places a field - a second
             try:                                      # monitor can sit left of the first
                 out[k] = [max(lo, min(float(pt[0]), 20000.0)), max(lo, min(float(pt[1]), 20000.0))]
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
     box = data.get("box")                  # a part of the screen: watched by react, kept by snap
     if isinstance(box, (list, tuple)) and len(box) == 4:
         try:
             out["box"] = [max(0.0, min(float(v), 20000.0)) for v in box]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
     if re.fullmatch(r"#?[0-9A-Fa-f]{6}", str(data.get("color") or "")):
         out["color"] = "#" + str(data["color"]).lstrip("#").upper()
@@ -419,7 +428,8 @@ def _ctms_args(action, data):
                         if isinstance(s, dict) and s.get("action") in CTMS_STEP_ACTIONS]
     if action == "ctms_book":
         # the order panel's Book: what /api/ctms/book checked, gone through the same gate as every command
-        out["orders"] = [str(o) for o in (data.get("orders") or [])[:8] if _CHECK_REF.fullmatch(str(o))]
+        out["orders"] = [str(o) for o in (data.get("orders") if isinstance(data.get("orders"), list) else [])[:8]
+                         if _CHECK_REF.fullmatch(str(o))]
         out["date"] = str(data.get("date") or "") if _DDMMYYYY.fullmatch(str(data.get("date") or "")) else ""
         out["carrier"] = str(data.get("carrier") or "") if _CARRIER.fullmatch(str(data.get("carrier") or "")) else ""
         out["trailer"] = str(data.get("trailer") or "") if _CARRIER.fullmatch(str(data.get("trailer") or "")) else ""
@@ -431,7 +441,7 @@ def _ctms_args(action, data):
         for k, v in list(q.items())[:8]:              # the order's quantity, where the desk knows it: Book checks the lines
             try:
                 n = float(v)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if _CHECK_REF.fullmatch(str(k)) and 0 < n <= 100000:
                 qty[str(k)] = n
@@ -439,19 +449,21 @@ def _ctms_args(action, data):
             out["qty"] = qty
     if action == "book_recall":
         # what a Book made, asked again from the work PC's own record: which orders, which day, which command
-        out["orders"] = [str(o) for o in (data.get("orders") or [])[:8] if _CHECK_REF.fullmatch(str(o))]
+        out["orders"] = [str(o) for o in (data.get("orders") if isinstance(data.get("orders"), list) else [])[:8]
+                         if _CHECK_REF.fullmatch(str(o))]
         out["date"] = str(data.get("date") or "") if _DDMMYYYY.fullmatch(str(data.get("date") or "")) else ""
         num("ask", 1, 10 ** 9, int)
     if action == "ctms_item" and isinstance(data.get("item"), dict):
         # a note or an update, each field checked: refs that read as refs, windows and words cut to size
         it, s = data["item"], data["item"].get("set") if isinstance(data["item"].get("set"), dict) else {}
         out["item"] = {"kind": "note" if it.get("kind") == "note" else "update",
-                       "lines": [str(x) for x in (it.get("lines") or [])[:40] if _CHECK_REF.fullmatch(str(x))],
+                       "lines": [str(x) for x in (it.get("lines") if isinstance(it.get("lines"), list) else [])[:40]
+                                 if _CHECK_REF.fullmatch(str(x))],
                        "set": {k: str(s[k])[:400] for k in ("note", "collect", "deliver", "comments", "veh") if s.get(k)}}
         if isinstance(s.get("services"), dict):
             out["item"]["set"]["services"] = {str(k)[:20]: bool(v) for k, v in list(s["services"].items())[:20]}
         if s.get("storage"):
-            out["item"]["set"]["storage"] = int(s["storage"]) if str(s["storage"]).isdigit() else 0
+            out["item"]["set"]["storage"] = int(s["storage"]) if re.fullmatch(r"[0-9]{1,6}", str(s["storage"])) else 0
         if s.get("anyway"):
             out["item"]["set"]["anyway"] = True
         out["first"], out["last"], out["dry"] = bool(data.get("first")), bool(data.get("last")), bool(data.get("dry"))
@@ -759,9 +771,9 @@ def _sweep_queue_locked(agent_seen=None):
 
     A command expires only when BOTH it is older than the TTL and the agent has
     been away for at least the TTL — an online-but-busy home PC keeps its
-    backlog. /api/next passes the pre-request agent_seen, because merely
-    authenticating that request already refreshed _agent_seen and would
-    otherwise let a reconnecting agent revive arbitrarily stale commands.
+    backlog. _is_agent and /api/next pass the pre-request agent_seen, because
+    merely authenticating a request refreshes _agent_seen and would otherwise
+    let a reconnecting agent revive arbitrarily stale commands.
     """
     now = time.time()
     seen = _agent_seen if agent_seen is None else agent_seen
@@ -1787,12 +1799,17 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("X-Auth", "")
 
     def _is_dash(self):
-        return DASH_KEY and self._key() == DASH_KEY
+        return bool(DASH_KEY) and hmac.compare_digest(
+            self._key().encode("utf-8", "replace"), DASH_KEY.encode())
 
     def _is_agent(self):
         global _agent_seen
-        if AGENT_KEY and self._key() == AGENT_KEY:
-            _agent_seen = time.time()
+        if AGENT_KEY and hmac.compare_digest(self._key().encode("utf-8", "replace"), AGENT_KEY.encode()):
+            with _lock:
+                # A reconnecting agent's first requests (heartbeat, status, tracker push) come before its first
+                # /api/next - so what ran out while it was away is swept against the old last-seen, before it moves
+                _sweep_queue_locked(agent_seen=_agent_seen)
+                _agent_seen = time.time()
             return True
         return False
 
@@ -1950,6 +1967,10 @@ class Handler(BaseHTTPRequestHandler):
             action = str(data.get("action") or "")
             if action not in CTMS_ACTIONS:
                 return self._json(400, {"error": f"the CTMS bridge does not do '{action[:40]}'"})
+            if action == "teams_send":
+                # only /api/ctms/teams checks who it goes to against the NOC list - never around it
+                return self._json(400, {"error": "Teams messages go from the dashboard's own Send in Teams on the "
+                                                 "brief, to someone on the DHL NOC list - not as a CTMS command."})
             refused = None
             with _lock:
                 _ctms_sweep_locked()
@@ -2009,7 +2030,7 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _ctms_sweep_locked()
                 busy = [c for c in _ctms["queue"] if c["action"] == "import_csv" and c.get("option") == name] or (
-                    name in _ctms["importing"].values())
+                    any(n == name for n, _ in _ctms["importing"].values()))
                 if not (_UPLOAD_CSV.fullmatch(name) and name in _to_file):
                     out = (404, {"error": f"{name or 'That CSV'} is not on the dashboard right now - press Re-send "
                                           "on the Files card, then Upload again."})
@@ -2030,7 +2051,7 @@ class Handler(BaseHTTPRequestHandler):
                         _ctms_note_locked(f"Look mum, no hands mode switched on for the upload of {name} only.")
                     _ctms["queue"].append({"id": cid, "action": "import_csv", "option": name, "commit": True,
                                            "by": "dashboard", "queued_at": time.time()})
-                    _ctms["importing"][cid] = name
+                    _ctms["importing"][cid] = (name, time.time())
                     _ctms["asked"][cid] = "dashboard"
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "id": cid, "online": _ctms_online()})
@@ -2133,6 +2154,8 @@ class Handler(BaseHTTPRequestHandler):
                     out = (409, {"error": "A CTMS to-do run is going already."})
                 elif _ctms_going_locked("rail_run"):
                     out = (409, {"error": "The rail plan's CTMS export is going - run the to-do when it's done."})
+                elif _ctms_going_locked("book_run"):
+                    out = (409, {"error": "A booking is going - run the to-do when it's done."})
                 elif _ctms["state"].get("control") is False:
                     out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
                                           "--allow-control on it to let it type into CTMS."})
@@ -2304,6 +2327,8 @@ class Handler(BaseHTTPRequestHandler):
                     out = (409, {"error": "The rail plan is being exported from CTMS already."})
                 elif _ctms_going_locked("todo_run"):
                     out = (409, {"error": "A CTMS to-do run is going - export when it's done."})
+                elif _ctms_going_locked("book_run"):
+                    out = (409, {"error": "A booking is going - export when it's done."})
                 elif _ctms["state"].get("control") is False:
                     out = (409, {"error": "The work PC is set to look only - run python ctms_bridge.py "
                                           "--allow-control on it to let it export."})
@@ -2435,6 +2460,8 @@ class Handler(BaseHTTPRequestHandler):
                 # last thing it was handed is over, answered or not.
                 _ctms["running"] = ({"id": cmd["id"], "action": cmd["action"], "name": cmd.get("name", ""),
                                      "by": cmd.get("by", ""), "since": time.time()} if cmd else None)
+                if cmd and cmd["action"] == "teams_send":     # what the "asked NOC" note needs once it has gone
+                    _ctms["running"].update({k: cmd.get(k) for k in ("orders", "dry", "haulier", "email")})
                 stop, _ctms["stop"] = _ctms["stop"], False
                 watch = time.time() < _ctms["watch_until"]
                 control = _ctms_armed()
@@ -2786,7 +2813,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global _tracker, _waitlist, _upload
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = -1
+        if length < 0:
+            # read(-1) would read until the client hangs up - nothing is read for a length that is not one
+            return self._json(400, {"error": "bad Content-Length"})
         # Everything legitimate is far below this (the biggest are an outbox
         # file and a CTMS capture, a few MB each). Without a ceiling any
         # client, signed in or not, could make this read a body of any size

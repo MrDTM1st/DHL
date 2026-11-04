@@ -353,6 +353,21 @@ def test_bridge_refuses_anything_outside_its_list_on_its_own_side_too():
     assert all(p == "/api/ctms/result" and b["ok"] is False and "Refused" in b["detail"] for p, b in sent)
 
 
+def test_a_point_click_is_in_the_audit_log_with_its_time_and_its_point():
+    tmp = tempfile.mkdtemp(prefix="log-test-")
+    keep, B.LOG = B.LOG, os.path.join(tmp, "log.jsonl")
+    try:
+        B.Bridge(_Rec(), 1, "", allow_control=True).handle({"id": 9, "action": "click", "at": [0.25, 0.5]})
+        with open(B.LOG, encoding="utf-8") as f:
+            got = [json.loads(line) for line in f]
+        cmd = [g for g in got if g["kind"] == "command"]
+        assert len(cmd) == 1 and cmd[0]["point"] == [0.25, 0.5] and cmd[0]["action"] == "click", got
+        assert datetime.fromisoformat(cmd[0]["at"])                 # the time is still the record's own
+    finally:
+        B.LOG = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_capture_names_are_cleaned_before_they_queue():
     fresh()
     call("/api/ctms/command", {"action": "capture", "name": "../../evil<script>"})
@@ -1265,6 +1280,35 @@ def test_ctms_act_guards_every_key_before_any_is_sent():
         assert len(sent) == n
     finally:
         A.to_front, A._send = keep
+
+
+def test_only_a_letter_or_digit_goes_as_a_one_character_key():
+    sent = []
+    keep = (A.to_front, A._send, A._vk)
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: sent.append(inputs))
+    A._vk = lambda vk, ext, up=False: (vk, up)
+    try:
+        # each of these is another key's code: - Insert (shift+- a clipboard paste), % Left, ' Right, ! PageUp,
+        # " PageDown, . Delete, $ Home, { F12
+        for ch in "-%'!\".${/;=[]`\\,":
+            for spec in (ch, "shift+" + ch, "ctrl+" + ch):
+                try:
+                    A.press(1, spec)
+                    assert False, spec
+                except A.Refused as e:
+                    assert "only letters, digits and named keys" in str(e), e
+        assert sent == []
+        A.press(1, "ctrl+a")
+        A.press(1, "7")
+        assert [vk for vk, _ in sent[0] if vk not in A.MOD_VK.values()] == [0x41, 0x41]
+        assert [vk for vk, _ in sent[1]] == [0x37, 0x37]
+        try:
+            A.press(1, "shift+insert")                               # the named key is still refused by its name
+            assert False
+        except A.Refused:
+            pass
+    finally:
+        A.to_front, A._send, A._vk = keep
 
 
 def test_the_input_record_is_the_size_windows_checks_for():
@@ -2772,6 +2816,45 @@ def test_the_import_answers_ctms_only_once_it_asks_stops_where_it_does_not_and_d
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_a_picture_that_cant_be_taken_at_the_end_never_loses_what_the_import_did():
+    tmp = tempfile.mkdtemp(prefix="imp-test-")
+    keep = (W.find_windows, W.picture, B.LOG, X.DOWNLOADS)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    X.DOWNLOADS = tmp
+
+    class Desk(_Rec):
+        def post(self, path, body, timeout=20):
+            if path == "/api/ctms/upload":
+                return {"name": body["name"], "data": base64.b64encode(b"ORD,1\r\n").decode()}
+            return super().post(path, body, timeout)
+    try:
+        desk = Desk()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        b.window_step = lambda action, args: "ok"
+
+        def no_picture():
+            raise RuntimeError("CTMS is not open in your Edge, or another tab is selected in its window.")
+        b.window_look = no_picture
+        b.handle({"id": 1, "action": "import_csv", "option": UP, "commit": True})
+        r = desk.sent[-1][1]
+        assert r["ok"] and "Uploaded" in r["detail"] and r["payload"]["imported"] is True, r
+        assert "another tab is selected" in r["payload"]["picture_error"] and "times" in r["payload"]
+        def no_ask(action, args):
+            if args.get("name") == "imp-ask-now":
+                raise RuntimeError("it is not on the screen where it should be.")
+            return "ok"
+        b.window_step = no_ask
+        b.handle({"id": 2, "action": "import_csv", "option": UP, "commit": True})
+        r = desk.sent[-1][1]                                     # a stop past Import: still said to have gone in
+        assert r["ok"] is False and r["payload"]["imported"] is True and "Stopped while importing" in r["detail"], r
+    finally:
+        W.find_windows, W.picture, B.LOG, X.DOWNLOADS = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_the_import_templates_are_ctmss_own_words_and_every_step_has_one_it_needs():
     t = CI.templates()
     for name in ("imp-card", "imp-nrheavy", "imp-button", "imp-close", "imp-ask-server", "imp-ask-now",
@@ -3034,6 +3117,102 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
         assert r["ok"] is False and "waits for 3 quiet minutes" in r["detail"] and ran == []
     finally:
         W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG = keep
+
+
+def test_only_a_search_ctms_gave_no_answer_to_reads_as_not_found():
+    keep = (W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    W.idle_seconds = lambda: None
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        fail = {}
+
+        def step(action, args):
+            what = tuple(args["px"]) if "px" in args else args.get("name") or args.get("key") or args.get("text")
+            if what in fail:
+                raise fail[what]
+            return "ok"
+        b.window_step = step
+        b._batch_look = lambda times, t0: {"kind": "window", "times": times}
+        b._seen = lambda t, name, box: name == "os-card"
+        reads = []
+        J.read_fields = lambda win, skip=(): reads.pop(0)
+        orders = [{"key": "9100030|10/11/2026", "ref": "9100030", "date": "10/11/2026"},
+                  {"key": "9100031|10/11/2026", "ref": "9100031", "date": "10/11/2026"}]
+
+        def go(n):
+            b.handle({"id": n, "action": "ctms_check", "orders": orders})
+            return desk.sent[-1][1], [s for p, s in desk.sent if p == "/api/ctms/orders"][-1]
+        # the Refresh's wait runs out with nothing changed in the list: CTMS found nothing for it
+        fail[(742, 226)] = B.Unchanged("CTMS did not answer within 15s - nothing changed where it should have")
+        reads[:] = [{"elements": []}, _summary_read([]), _summary_read([])]
+        r, sent = go(1)
+        assert r["ok"] and "2 not found" in r["detail"] and sent["checked"] == 2 and not sent["stopped"], r
+        # anything else that stops the search is not "not found": the look-up says it couldn't be done
+        for why in (D.Refused("CTMS could not be brought to the front, so no keys were sent"),
+                    RuntimeError("CTMS did not answer within 15s - the screen never settled")):
+            fail.clear()
+            fail[(728, 122) if isinstance(why, D.Refused) else (742, 226)] = why
+            reads[:] = [{"elements": []}]
+            r, sent = go(2)
+            assert r["ok"] is False and "searching for 9100030: the search couldn't be done" in r["detail"], r
+            assert str(why) in r["detail"] and sent["orders"] == {} and sent["stopped"]
+    finally:
+        W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG = keep
+
+
+def test_book_says_what_it_left_changed_in_ctms_and_a_missing_picture_loses_no_trip():
+    keep = (W.find_windows, W.picture, B.LOG, B.ctms_book.Booking, B.book_record.keep)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    B.book_record.keep = lambda *a, **k: None
+    trip = {"manifest": "M100001", "status": "ACCEPTED", "revenue": 500, "cost": 400}
+    goes = {}
+
+    class Job:
+        def __init__(self, run, read, seen, t, dry=False):
+            self.trips, self.stages, self.reads, self.veh_kept, self.said = [], [], [], "", []
+
+        def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None):
+            self.said += ["9100001-1-1 split into 2", "the well's filters cleared to find it: Business Type 'Bulk'"]
+            if goes.get("stop"):
+                raise RuntimeError("The carrier screen didn't open.")
+            self.trips.append(dict(trip))
+
+        def back_out(self):
+            pass
+
+        def tidy(self):
+            self.said.append("PUT BACK BY HAND on the well's filters: Business Type 'Bulk'")
+    B.ctms_book.Booking = Job
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+
+        def no_picture():
+            raise RuntimeError("CTMS is not open in your Edge, or another tab is selected in its window.")
+        b.window_look = no_picture
+        cmd = {"action": "ctms_book", "orders": ["9100001"], "date": "10/11/2026", "carrier": "ACME_DH"}
+        goes["stop"] = True                       # stopped: the split line and the filters left are still said
+        b.handle(dict(cmd, id=1))
+        r = desk.sent[-1][1]
+        assert r["ok"] is False and "Stopped after" in r["detail"], r
+        assert "On the lines first: 9100001-1-1 split into 2." in r["detail"], r["detail"]
+        assert "PUT BACK BY HAND on the well's filters: Business Type 'Bulk'." in r["detail"], r["detail"]
+        assert r["payload"]["notes"][0] == "9100001-1-1 split into 2" and "picture_error" in r["payload"]
+        goes["stop"] = False                      # booked, the picture after it not taken: the trip still comes back
+        b.handle(dict(cmd, id=2))
+        r = desk.sent[-1][1]
+        assert r["ok"] and "M100001 ACCEPTED" in r["detail"] and r["payload"]["trips"] == [trip], r
+        assert r["payload"]["kind"] == "ctms_book" and "another tab is selected" in r["payload"]["picture_error"]
+    finally:
+        W.find_windows, W.picture, B.LOG, B.ctms_book.Booking, B.book_record.keep = keep
 
 
 def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():

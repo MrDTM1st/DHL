@@ -242,10 +242,14 @@ function SitesPanel({ status, panel, onCommand }) {
 
 // ---- site-match decisions (from panel.decisions) ----
 function MatchPanel({ decisions, sites, onCommand }) {
+  // picks are kept by the decision itself (its raw text), not its place in the list: once one is saved the list
+  // comes back shorter, and the next one must not inherit the site picked for the one before it
   const [picks, setPicks] = useState({});
-  const save = (i) => {
-    const d = decisions[i];
-    const site = picks[i] || (d.options && d.options[0]) || (sites && sites[0]);
+  const optsOf = (d) => (d.options || []).concat((sites || []).filter((s) => !(d.options || []).includes(s)));
+  // a kept pick that is not among this row's options is no pick: the select shows the first, so Save sends that
+  const pickOf = (d) => { const opts = optsOf(d); return opts.includes(picks[d.raw]) ? picks[d.raw] : opts[0]; };
+  const save = (d) => {
+    const site = pickOf(d);
     if (!site) return;
     onCommand({ action: 'site_decision', data: { raw: d.raw, site } });
   };
@@ -253,17 +257,17 @@ function MatchPanel({ decisions, sites, onCommand }) {
     <div className="card panelcard">
       <div className="ph">Delivery site decisions <span className="hint">· no exact Synergy match — pick where each goes</span></div>
       <div className="formcol">
-        {decisions.map((d, i) => {
-          const opts = (d.options || []).concat((sites || []).filter((s) => !(d.options || []).includes(s)));
+        {decisions.map((d) => {
+          const opts = optsOf(d);
           return (
-            <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div key={d.raw} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ minWidth: 210 }}>
                 <b>{d.raw}</b>{d.context && <span className="hint"> {d.context}</span>}
               </span>
-              <select style={{ flex: 1, minWidth: 210 }} value={picks[i] ?? opts[0] ?? ''} onChange={(e) => setPicks((p) => ({ ...p, [i]: e.target.value }))}>
+              <select style={{ flex: 1, minWidth: 210 }} value={pickOf(d) ?? ''} onChange={(e) => setPicks((p) => ({ ...p, [d.raw]: e.target.value }))}>
                 {opts.map((o) => <option key={o}>{o}</option>)}
               </select>
-              <button className="btn go mini" onClick={() => save(i)}>Save</button>
+              <button className="btn go mini" onClick={() => save(d)}>Save</button>
             </div>
           );
         })}

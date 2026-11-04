@@ -412,7 +412,19 @@ class Items:
             return self.note(item["lines"][0], s.get("note") or "")
         if dry:
             return self.update(item["lines"][0], s, dry=True)
-        return "; ".join(self.update(ref, s) for ref in item.get("lines") or [])
+        lines, saved = list(item.get("lines") or []), []
+        for i, ref in enumerate(lines):
+            try:
+                saved.append(self.update(ref, s))
+            except Exception as e:
+                if not saved:
+                    raise
+                # a later line stopped: the lines before it ARE saved in CTMS, and the answer must say so
+                rest = lines[i + 1:]
+                said = (f"Saved first: {'; '.join(saved)}. Then {ref} was not: {e}"
+                        + (f" Not tried: {', '.join(rest)}." if rest else ""))
+                raise (type(e) if isinstance(e, (Stop, Held)) else Stop)(said) from e
+        return "; ".join(saved)
 
     def note(self, ref, note):
         self.open(ref)

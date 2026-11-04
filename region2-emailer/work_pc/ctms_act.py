@@ -240,8 +240,12 @@ def press(hwnd, spec, commit=False, page=False):
                           f"with commit if he says go.")
     if name in VK:
         vk, ext = VK[name]
-    elif len(name) == 1 and name.isascii() and name.isprintable():
-        vk, ext = ord(name.upper()), False
+    elif len(name) == 1 and name in "abcdefghijklmnopqrstuvwxyz0123456789":
+        vk, ext = ord(name.upper()), False     # a letter's or digit's virtual-key code is its capital's character code
+    elif len(name) == 1:
+        # any other character's code is another key's (- is Insert, . Delete, ' Right ...), past the guards above
+        raise Refused(f"'{spec}' can't be pressed as a key: only letters, digits and named keys (enter, tab, f5 ...) "
+                      f"can. A '{name}' goes in with type.")
     else:
         raise Refused(f"'{spec}' is not a key the bridge knows.")
     _require_front(hwnd)

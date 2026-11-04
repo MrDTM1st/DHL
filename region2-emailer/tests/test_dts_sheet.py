@@ -8,7 +8,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -117,6 +117,68 @@ def test_a_sheet_someone_has_open_waits_and_leaves_nothing_behind():
             D.os.replace = real
             D.BACKUPS = keep
         assert sorted(os.listdir(d)) == ["DTS.xlsx", "b"] and len(_read(p)) >= 2 and _read(p)[2][0] is None
+
+
+def test_trying_again_while_the_sheet_is_open_keeps_one_copy_and_no_earlier_version_goes():
+    with tempfile.TemporaryDirectory() as d:
+        p = _book(d)
+        real, keep = os.replace, (D.BACKUPS, D.KEEP, D.datetime)
+        D.BACKUPS, D.KEEP = os.path.join(d, "b"), 3
+        os.makedirs(D.BACKUPS)
+        for name in ("DTS-20261101090000.xlsx", "DTS-20261102090000.xlsx"):     # real earlier versions
+            with open(os.path.join(D.BACKUPS, name), "wb") as f:
+                f.write(name.encode())
+
+        class Clock(datetime):                  # each try five minutes on, as the home PC tries again
+            at = datetime(2026, 11, 4, 9, 0, 0)
+
+            @classmethod
+            def now(cls, tz=None):
+                cls.at += timedelta(minutes=5)
+                return cls.at
+
+        def refuse(a, b):
+            raise PermissionError(13, "in use")
+
+        D.os.replace, D.datetime = refuse, Clock
+        try:
+            for _ in range(5):
+                try:
+                    D.add_rows(p, [ROW])
+                    raise AssertionError("it went on")
+                except D.Busy:
+                    pass
+            kept = sorted(os.listdir(D.BACKUPS))
+            assert kept[:2] == ["DTS-20261101090000.xlsx", "DTS-20261102090000.xlsx"] and len(kept) == 3, kept
+            with open(p, "rb") as f, open(os.path.join(D.BACKUPS, kept[-1]), "rb") as g:
+                assert f.read() == g.read()
+        finally:
+            D.os.replace = real
+            D.BACKUPS, D.KEEP, D.datetime = keep
+
+
+def test_a_row_goes_in_before_a_formatted_row_far_below_so_the_rows_stay_in_order():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "DTS.xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "2026"
+        ws.append(["NN No.", "Subline", "Catalogue No.", "Quantity", "Delivery Address", "Collection date", "Requestor", "Planner"])
+        ws.append(["NN9000000-1", 3, "0057/000001", 10, "EN2 2BB", datetime(2026, 11, 2), "OLD SUPPLIER", "Sam"])
+        ws.cell(row=60, column=6).number_format = "dd/mm/yyyy"          # a formatted empty row far down
+        wb.save(p)
+        D.BACKUPS, keep = os.path.join(d, "b"), D.BACKUPS
+        try:
+            got = D.add_rows(p, [ROW, dict(ROW, nn="NN9000001-5/2", cat="0086/000002")])
+        finally:
+            D.BACKUPS = keep
+        assert got["rows"] == [3, 4]
+        with zipfile.ZipFile(p) as z:
+            xml = z.read(D.tab_part(z, 2026)).decode("utf-8")
+        order = [int(D._attr(a, "r")) for a, _ in D.ROW.findall(xml)]
+        assert order == sorted(order) and 60 in order and order.index(4) < order.index(60), order
+        ws = openpyxl.load_workbook(p)["2026"]
+        assert ws["A3"].value == "NN9000001-5/1" and ws["A4"].value == "NN9000001-5/2"
 
 
 def test_awkward_text_is_kept_as_written():

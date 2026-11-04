@@ -45,8 +45,12 @@ def _save(d):
 
 
 def add(haulier, from_pc, to_pc, price, order="", vehicle="", notes=""):
-    """Log one quote. Price accepts '£450', '450.00', '450'."""
-    p = float(re.sub(r"[^\d.]", "", str(price)))
+    """Log one quote. Price accepts '£450', '450.00', '450', '£1,250'; a range
+    ('£450-£500') is logged as its lower figure."""
+    # the FIRST figure only - stripping every non-digit glued a range's two
+    # ends into one number, so '£450-£500' was logged as £450,500
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", str(price))
+    p = float(m.group(0).replace(",", "") if m else "")
     d = _load()
     d["quotes"].append({
         "at": datetime.now().strftime("%Y-%m-%d"),

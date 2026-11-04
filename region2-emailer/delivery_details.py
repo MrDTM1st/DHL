@@ -95,10 +95,23 @@ _ORDINAL_DATE = re.compile(
 
 def _strip_dates(s):
     """Remove date tokens before hunting for times, so 01/03/2026 can't be read
-    as 20:26 and '19th feb 2300' keeps only the 2300."""
-    s = _DATE_TOKEN.sub(" ", s)
-    s = _ORDINAL_DATE.sub(" ", s)
+    as 20:26 and '19th feb 2300' keeps only the 2300. What is cut leaves a ';'
+    rather than a bare space, so the 'by' of 'by 20/11/2026 8am' is not later
+    read as 'by 8am'."""
+    s = _DATE_TOKEN.sub(" ; ", s)
+    s = _ORDINAL_DATE.sub(" ; ", s)
     return s
+
+
+# A UK phone number - 0 or +44 (and a "(0)") then 9-10 more digits, single
+# spaces or hyphens between them - is cut before hunting for times, the way
+# dates are: "Contact Dave on 0114 234 5678" read the 0114 as 01:14. It must
+# take a whole run of digit groups, so a 4-digit time that runs into a number
+# ("0800 07700 900123") stays a time; a group that IS a time ("8am", "10:00",
+# "0800hrs") is never part of one; and 0800-1600 is far too short to be one.
+_NOT_A_TIME = r"(?!\d+\s*(?:am|pm|hrs?)\b|\d+[:.]\d)\d"
+_PHONE_NUM = re.compile(r"(?<!\d)(?<!\d[:.])(?:\+44\s?(?:\(0\)\s?)?|0)(?:\d|[\s-]" + _NOT_A_TIME + r"){9,10}"
+                        r"(?!\d|[:.]\d|[\s-]" + _NOT_A_TIME + ")")
 
 
 # ---------------------------------------------------------------- times
@@ -130,27 +143,35 @@ def _to_hm(h, m, ap):
     return f"{h:02d}:{m:02d}"
 
 
-def find_times(text):
-    """Every time in the text, in order. Dates are stripped first, and matches
-    may not OVERLAP - otherwise "10:00am" reads as both 10:00 and 00am(=12:00)
-    and a single time looks like a range."""
-    s = _strip_dates(_clean(text).lower())
+def _time_hits(text):
+    """(text searched, [(start, end, "HH:MM", am/pm as typed or None)]) - the
+    times find_times returns, with where each sat and whether it said am/pm."""
+    s = _PHONE_NUM.sub(" ; ", _strip_dates(_clean(text).lower()))
     spans, hits = [], []
     for i, pat in enumerate(_TIME_PATS):          # colon form first - it wins ties
         for m in pat.finditer(s):
             if any(m.start() < b and m.end() > a for a, b in spans):
                 continue
             if i == 0:
-                t = _to_hm(m.group(1), m.group(2), m.group(3))
+                ap = m.group(3)
+                t = _to_hm(m.group(1), m.group(2), ap)
             elif i == 1:
-                t = _to_hm(m.group(1), 0, m.group(2))
+                ap = m.group(2)
+                t = _to_hm(m.group(1), 0, ap)
             else:
-                v = m.group(1)
+                v, ap = m.group(1), None
                 t = _to_hm(v[:2], v[2:], None)
             if t:
                 spans.append((m.start(), m.end()))
-                hits.append((m.start(), t))
-    return [t for _, t in sorted(hits)]
+                hits.append((m.start(), m.end(), t, ap))
+    return s, sorted(hits, key=lambda h: h[0])
+
+
+def find_times(text):
+    """Every time in the text, in order. Dates and phone numbers are stripped
+    first, and matches may not OVERLAP - otherwise "10:00am" reads as both
+    10:00 and 00am(=12:00) and a single time looks like a range."""
+    return [t for _, _, t, _ in _time_hits(text)[1]]
 
 
 def plus_hours(t, hours=2):
@@ -158,15 +179,61 @@ def plus_hours(t, hours=2):
     return f"{(h + hours) % 24:02d}:{m:02d}"     # wraps past midnight (23:00 -> 01:00)
 
 
+# A lone time that is the LATEST they can take it - "no later than 10am",
+# "before 10am", "by 10:00", "10am latest", "10:00 at the latest". "after" and
+# "from" are not here: those are the earliest, which is how a lone time reads.
+_LATEST_BEFORE = re.compile(r"(?:\b(?:no|not)\s+later\s+than|\b(?:before|by|until|till|latest))\s*:?\s*$")
+_LATEST_AFTER = re.compile(r"\s*(?:at\s+the\s+)?latest\b")
+# A bare starting hour before a time that has one: "9-11am", "8 to 4pm", "from 7 till 3pm", "between 9 and 11am".
+# The bare 9 is no time on its own, so only the 11am was found and it became the START (11:00-13:00), or with the
+# "till" above the latest of a 2-hour window (13:00-15:00), when the site said 07:00-15:00.
+_BARE_START = re.compile(r"(?:(?<![\w/.:])(\d{1,2})\s*(?:-|\bto|\btill|\buntil)|\bbetween\s+(\d{1,2})\s+and)\s*$")
+
+_NOT_AN_HOUR = re.compile(r"\b(?:unit|gate|bay|dock|door|platform|plot|no|number|block|building|phase|zone|area|road|"
+                          r"lane|line|bridge|siding|road\s*no)\.?\s*$")
+
+
+def _bare_hour(h, end, ap):
+    """The start hour a bare number means against the end it runs to: "8 to 4pm" is 08:00, "1 to 4pm" 13:00, "10 to
+    12pm" 10:00, "9-11am" 09:00. None when it is no hour on a clock."""
+    h = int(h)
+    if not 1 <= h <= 12:
+        return None
+    if ap and ap.lower() == "pm" and h != 12 and h + 12 < int(end[:2]):
+        h += 12
+    elif ap and ap.lower() == "am" and h == 12:
+        h = 0
+    return f"{h:02d}:00"
+
+
 def parse_time_window(text):
     """-> (earliest, latest, confidence). CTMS needs both; a single time is the
     common case (73%) and is expanded by +2 hours per Delali's rule."""
-    ts = find_times(text)
-    if not ts:
+    s, hits = _time_hits(text)
+    if not hits:
         return None, None, AMBER
-    if len(ts) >= 2:
-        return ts[0], ts[1], HIGH
-    return ts[0], plus_hours(ts[0], 2), HIGH
+    if len(hits) >= 2:
+        lo, hi, hi_ap = hits[0][2], hits[1][2], hits[1][3]
+        # "7:30 - 3:30", "8:00 till 4:00": a 12-hour end with no pm on it. Taken
+        # as written that is a 20-hour window into the next day. A morning start
+        # and an end before it with no am/pm: the end is pm. 00:xx is a 24-hour
+        # time, never a 12-hour one, so it is not moved.
+        if not hi_ap and "01:00" <= hi < lo < "12:00":
+            hi = plus_hours(hi, 12)
+        # Still ending at or before it starts, and not a night shift (22:00-04:00):
+        # it is not a window we can read - "Thursday 12.11 8am" is 12:11-08:00.
+        return lo, hi, (AMBER if hi <= lo and lo < "18:00" else HIGH)
+    start, end, t, ap = hits[0]
+    bare = _BARE_START.search(s[:start])
+    if bare and _NOT_AN_HOUR.search(s[:bare.start(1) if bare.group(1) else bare.start(2)]):
+        bare = None                        # "Gate 3 - 9am", "Unit 4 to 8am": a place's number, not a start
+    lo = bare and _bare_hour(bare.group(1) or bare.group(2), t, ap)
+    if lo:
+        return lo, t, (AMBER if t <= lo else HIGH)
+    if _LATEST_BEFORE.search(s[:start]) or _LATEST_AFTER.match(s[end:]):
+        # the latest, not the earliest - Delali's 2 hours go in front of it
+        return plus_hours(t, -2), t, HIGH
+    return t, plus_hours(t, 2), HIGH
 
 
 # ---------------------------------------------------------------- dates
@@ -189,7 +256,9 @@ def find_dates(text, default_year=None):
             out.append(datetime(y, mo, d).date())
         except Exception:
             continue
-    for m in re.finditer(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?\s*(\d{4})?\b", s):
+    # the year is 19xx/20xx only, as in _ORDINAL_DATE - any 4 digits made "20th nov 2200" the year 2200 and
+    # "10th November 0900" the year 900, when those digits are the delivery TIME
+    for m in re.finditer(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?\s*((?:19|20)\d{2})?\b", s):
         mo = MONTHS.get(m.group(2)[:3])
         if not mo:
             continue
@@ -230,6 +299,17 @@ def parse_date(text, consolidatable=None):
 
 
 # ---------------------------------------------------------------- offloading
+_NEGATED = re.compile(r"\b(?:not|no|don[’']?t|doesn[’']?t|won[’']?t|isn[’']?t|aren[’']?t)\s+(?:[a-z]+\s+){0,2}?"
+                      r"(?:need|needed|require|required|necessary)\b|\bno\s+need\b")
+_OTHER_FIELD = re.compile(r"\bpts\b|rear\s*steer|\bar(?:c)?tics?\b")
+
+
+def _named(s):
+    """(moffett named, hiab named) - haib/hiad/hi ab count as hiab."""
+    flat = re.sub(r"[^a-z]", "", s)
+    return "moff" in flat, "hiab" in flat or any(_lev1(t, "hiab") for t in re.findall(r"[a-z]{3,5}", flat))
+
+
 def parse_offloading(text, product_type=None):
     """-> (value, confidence). 'yes' means HIAB - Delali's policy, so it's HIGH
     confidence, not a guess. Handles haib/hiad/hi ab/moffet/moffatt spellings."""
@@ -254,12 +334,20 @@ def parse_offloading(text, product_type=None):
     s = re.sub(r"\s+", " ", s).strip()
     if not re.search(r"[a-z0-9]", s):
         return None, AMBER          # nothing but our own menu - they never answered
-    flat = re.sub(r"[^a-z]", "", s)
-    moff = "moff" in flat
-    hiab = "hiab" in flat or any(_lev1(t, "hiab") for t in re.findall(r"[a-z]{3,5}", flat))
+    moff, hiab = _named(s)
     # explicit "no" / site handles it - check before the keywords so "no hiab" reads right
     if re.match(r"^\s*(no\b|none\b|not required|nil\b)", s) or "telehandler" in s or "site offload" in s:
         return "SITE/NONE", HIGH
+    # A negation further in - "HIAB not required", "We don't need a hiab", "Moffett not needed - forklift on
+    # site" - names the kit they do NOT want, and the keyword tests below read it as the answer. Never confident:
+    # SITE/NONE to confirm when every keyword they named is ruled out, nothing when it is mixed ("hiab, no
+    # moffett needed"). A clause about PTS, rear steer or the artic is not about offloading and is skipped.
+    neg = [_named(c) for c in re.split(r"[,;.!?()/]|\s-+|-+\s|\b(?:and|but)\b", s)
+           if _NEGATED.search(c) and (any(_named(c)) or not _OTHER_FIELD.search(c))]
+    if neg:
+        if (moff or hiab) and (not moff or any(m for m, _ in neg)) and (not hiab or any(h for _, h in neg)):
+            return "SITE/NONE", AMBER
+        return None, AMBER
     if moff and hiab:
         return "BOTH", AMBER                       # they named both - ask which
     if moff:

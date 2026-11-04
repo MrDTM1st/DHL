@@ -194,6 +194,18 @@ test('a tier 1 we rarely use is listed after the other tier 1s however near - an
   assert.deepEqual(res.list.map((h) => h.name), ['Usual One Co', 'Rare One Co', 'Second Tier Co']);
 });
 
+test('a haulier on the doorstep (0 miles) is listed nearest in its band, not last', () => {
+  const pool = [
+    H('Far One Co', 'tier1', ['Artic Hiab'], { pc: 'AA1 1AA' }),
+    H('Doorstep Co', 'tier1', ['Artic Hiab'], { pc: 'DD1 1DD' }),                       // 0 miles off the drop
+    H('Near One Co', 'tier1', ['Artic Hiab'], { pc: 'EE1 1EE' }),
+  ];
+  const geo = { 'AA1 1AA': { la: 54.0, lo: -2.0 }, 'DD1 1DD': { la: 52.6, lo: -1.0 }, 'EE1 1EE': { la: 52.7, lo: -1.0 } };
+  const res = recommendFor(job('60x sleepers', { offloading: { value: 'HIAB' } }, { postcode: 'DD1 1DD' }), pool, geo);
+  assert.equal(res.list.find((h) => h.name === 'Doorstep Co').miles, 0);
+  assert.deepEqual(res.list.map((h) => h.name), ['Doorstep Co', 'Near One Co', 'Far One Co']);
+});
+
 test('a HIAB load of 10t or under goes on a rigid by its CTMS weight - rear steer drops, our fleet can take it', () => {
   const said = { offloading: { value: 'HIAB' }, rear_steer: { value: 'yes' }, artic_access: { value: 'yes' } };
   const r = job('60x sleepers', said, { ctms_weight: 5100, reply_at: '2026-11-01 10:24' });

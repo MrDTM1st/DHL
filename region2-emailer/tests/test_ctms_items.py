@@ -537,6 +537,35 @@ def test_an_item_does_each_of_its_lines():
     assert job.refs == ["9100001-1-1", "9100001-2-1"]
 
 
+def test_a_line_that_stops_after_one_was_saved_says_which_was_saved_and_which_wasnt():
+    job = _items(_updated())
+    lines = ["9100001-1-1", "9100001-2-1", "9100001-3-1"]
+    for stop in (I.Stop("9100001-2-1: the update stopped part way (x), so nothing of this line was saved."),
+                 I.Held("9100001-2-1: CTMS has it already (Veh Type set) - nothing typed"),
+                 RuntimeError("CTMS did not answer within 15s")):
+        def one(ref, s):
+            if ref == lines[1]:
+                raise stop
+            return f"{ref}: deliver 05/11/26 08:00-12:00"
+        job.update = one
+        try:
+            job.do({"kind": "update", "lines": lines, "set": SET})
+            raise AssertionError("should have stopped")
+        except (I.Stop, I.Held) as e:
+            assert type(e) is (type(stop) if isinstance(stop, (I.Stop, I.Held)) else I.Stop)
+            assert str(e).startswith("Saved first: 9100001-1-1: deliver 05/11/26 08:00-12:00. Then 9100001-2-1 was not: "), e
+            assert str(stop) in str(e) and str(e).endswith("Not tried: 9100001-3-1."), e
+    # the first line stopping: as it always was, nothing saved to tell of
+    def first(ref, s):
+        raise I.Stop(f"{ref}: its card wouldn't open.")
+    job.update = first
+    try:
+        job.do({"kind": "update", "lines": lines, "set": SET})
+        raise AssertionError("should have stopped")
+    except I.Stop as e:
+        assert str(e) == "9100001-1-1: its card wouldn't open."
+
+
 def test_the_parsers():
     assert I.window_parts("05/11/26 8:00-12:00") == ("05/11/26", "08:00", "05/11/26", "12:00")
     assert I.window_parts("05/11/26 22:00-06/11/26 06:00") == ("05/11/26", "22:00", "06/11/26", "06:00")

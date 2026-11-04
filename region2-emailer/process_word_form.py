@@ -128,6 +128,8 @@ def _at(day, hhmm):
     if not day or not hhmm:
         return None
     h, m = hhmm.split(":")
+    if (int(h), int(m)) == (24, 0):
+        h, m = 23, 59        # "Open Hours: 00:00 - 24:00" - the end of the day, and no clock hour
     return day.replace(hour=int(h), minute=int(m))
 
 
@@ -157,8 +159,10 @@ def _address(cell, label):
     else:
         tail = rest.pop() if rest else ""
     # "Retford NOTTINGHAMSHIRE" -> town Retford; the county is dropped, the
-    # region on the upload comes from the postcode district, never from text
-    town = re.sub(r"\s+[A-Z][A-Z\s&']{3,}$", "", tail).strip() or tail
+    # region on the upload comes from the postcode district, never from text.
+    # All in capitals there is no county to tell apart: "MILTON KEYNES" is the
+    # town, not MILTON and a county.
+    town = (re.sub(r"\s+[A-Z][A-Z\s&']{3,}$", "", tail).strip() or tail) if re.search(r"[a-z]", tail) else tail
     parts = [p.strip() for ln in rest for p in ln.split(",") if p.strip()]
     a1 = parts[0] if parts else ""
     a2 = " ".join(parts[1:]) if len(parts) > 1 else ""
@@ -412,6 +416,14 @@ def apply_overrides(row, opts):
     return used
 
 
+def _ref_unusable(row):
+    """True when the row's reference cannot go up. ah_ref() reads an unread
+    postcode as an empty half and still returns a whole-looking "AH4/11/26",
+    which _ref_incomplete accepts - so the postcodes themselves are checked."""
+    return (process_form._ref_incomplete(row["Customer Order No"])
+            or not postcodes.outward(row["Postcode"]) or not postcodes.outward(row["D Postcode"]))
+
+
 def main():
     path, opts = _cli(sys.argv[1:])
     if not path or not os.path.exists(path):
@@ -434,7 +446,7 @@ def main():
     print(f"Load      : {row['Product Qty'] or '?'} x {row['Product / Description'] or '?'}"
           f"  |  HIAB {row['HIAB']}  |  cost centre {row['Cost Centre'] or '(none)'}")
 
-    if process_form._ref_incomplete(row["Customer Order No"]):
+    if _ref_unusable(row):
         print("!! Could not build a usable reference - both postcodes must read. "
               "Nothing written.")
         return

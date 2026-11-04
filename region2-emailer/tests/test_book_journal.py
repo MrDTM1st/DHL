@@ -16,6 +16,8 @@ import book_journal as J  # noqa: E402
 import book_run as B  # noqa: E402
 import book_record  # noqa: E402
 
+ROWS = B.tracker_rows
+
 DATE = "06/11/2026"
 JOB = {"record": "9000001|06/11/2026", "orders": ["9000001"], "date": DATE, "carrier": "ABCHAULAGE_DH",
        "trailer": "NR_ARTIC_FL", "haulier": "ABC Haulage", "vehicles": 1}
@@ -236,6 +238,26 @@ def test_a_retried_email_that_had_gone_already_is_not_sent_twice(steps, monkeypa
     assert J.get(J.key(JOB["orders"], DATE))["steps"]["site_email"]["ok"]
 
 
+@pytest.mark.parametrize("carrier, step, fake", [("ABCHAULAGE_DH", "site_email", "site_email"),
+                                                 ("PASS_DH", "pass_email", "pass_email")])
+def test_an_email_whose_run_died_straight_after_the_send_is_looked_for_and_not_sent_again(steps, monkeypatch,
+                                                                                          carrier, step, fake):
+    def died(*a):
+        steps.append(("sent", step))
+        raise KeyboardInterrupt              # the agent's kill, after the Send and before the journal heard of it
+    monkeypatch.setattr(B, fake, died)
+    with pytest.raises(KeyboardInterrupt):
+        B.book(dict(JOB, carrier=carrier), R=FakeR(_answer([TRIP])))
+    k = J.key(JOB["orders"], DATE)
+    assert J.get(k)["steps"][step]["tries"] == 0 and J.get(k)["steps"][step]["started"]
+    looked = []
+    monkeypatch.setattr(B, "sent_already", lambda *a, **kw: looked.append(a) or True)
+    monkeypatch.setattr(B, fake, lambda *a: pytest.fail("sent twice"))
+    res = B.book(dict(JOB, carrier=carrier), R=FakeR(_answer([TRIP])))
+    assert looked and "Nothing booked again" in res["said"]
+    assert J.get(k)["steps"][step]["ok"] and steps.count(("sent", step)) == 1
+
+
 def test_the_home_pc_giving_up_waiting_books_nothing_twice_and_picks_up_what_was_made(steps):
     R = FakeR(timeout=True)
     res = B.book(dict(JOB), R=R)
@@ -274,6 +296,45 @@ def test_the_timer_finds_a_lost_answer_and_sends_what_follows_but_leaves_the_row
     assert any("Retry" in i["need"] for i in J.open_items() if i["key"] == k)
 
 
+def test_a_dashboard_error_after_the_command_was_numbered_is_never_taken_for_nothing_booked(steps):
+    class Lost(FakeR):
+        def ask_waiting(self, action, wait_total=90, on_id=None, **args):
+            if self.timeout:                 # the first press: queued, numbered, then the dashboard falls over
+                self.asked.append((action, args))
+                on_id(77)
+                raise Stop("The dashboard answered HTTP 502.")
+            return super().ask_waiting(action, wait_total, on_id, **args)
+    R = Lost(timeout=True)
+    res = B.book(dict(JOB), R=R)
+    k = J.key(JOB["orders"], DATE)
+    assert not res["ok"] and res.get("pending") and "Nothing was booked" not in res["said"]
+    assert J.get(k)["state"] == "asking" and J.get(k)["ask_id"] == 77
+    R.timeout = False
+    R.record = [{"id": 77, "ok": True, "said": "Booked", "trips": [TRIP]}]       # the work PC booked it after all
+    res = B.book(dict(JOB), R=R)
+    assert res["ok"] and "Already booked in CTMS: MAN-01000001" in res["said"]
+    assert [a for a, _ in R.asked].count("ctms_book") == 1
+
+
+def test_an_ask_whose_number_never_came_back_is_held_for_him_never_booked_again(steps, monkeypatch):
+    class Unreached(FakeR):
+        def ask_waiting(self, action, wait_total=90, on_id=None, **args):
+            self.asked.append((action, args))
+            raise Stop("Could not reach the dashboard at https://x: timed out", 4)     # the POST's answer lost
+    R = Unreached()
+    assert B.book(dict(JOB), R=R).get("pending")
+    k = J.key(JOB["orders"], DATE)
+    assert J.get(k)["state"] == "asking" and J.get(k)["ask_id"] is None
+    again = B.book(dict(JOB), R=R)                            # pressed again: not "never asked", not booked again
+    assert again.get("pending") and J.get(k)["state"] == "asking"
+    monkeypatch.setattr(J, "LOST_AFTER", -1)
+    B.retry()                                                 # the timer, once its answer is long overdue
+    assert J.get(k)["state"] == "unknown"
+    held = B.book(dict(JOB), R=R)
+    assert held.get("held") and not held["ok"]
+    assert [a for a, _ in R.asked].count("ctms_book") == 1
+
+
 def test_a_refused_ask_made_nothing_and_the_next_press_books(steps):
     class Off(FakeR):
         def ask_waiting(self, action, wait_total=90, on_id=None, **args):
@@ -288,6 +349,43 @@ def test_a_stop_after_the_first_vehicle_still_tells_the_site_about_it(steps):
                                                         ok=False, detail="Stopped after 90s: the carrier box")))
     assert res["ok"] and "Then CTMS stopped" in res["said"]
     assert ("site", "MAN-01000001") in steps
+
+
+def test_a_row_whose_look_after_the_paste_failed_is_kept_as_written_and_never_pasted_again(steps, monkeypatch, tmp_path):
+    from PIL import Image
+    monkeypatch.setattr(B, "tracker_rows", ROWS)
+    monkeypatch.setattr(B, "row_state", lambda im: {"blank": True, "above": True})
+
+    class Sheet(FakeR):
+        OUT = str(tmp_path)
+
+        def send_batch(self, name, steps_):
+            if name == "tracker-check":
+                raise Stop("Could not reach the dashboard: timed out", 4)
+            Image.new("RGB", (8, 8)).save(os.path.join(self.OUT, "latest.png"))
+            return 0
+
+        def save_state(self, payload):
+            pass
+    R = Sheet(_answer([TRIP]))
+    res = B.book(dict(JOB), R=R)
+    k = J.key(JOB["orders"], DATE)
+    assert res["ok"] and "1 row(s) written, but" in res["said"] and "check it by eye" in res["said"]
+    assert J.get(k)["steps"]["digihaul"]["written"] == ["MAN-01000001"] and "digihaul" not in J.left(J.get(k))
+    B.follow(k, R=R, only=["digihaul"])                      # his Retry
+    assert [a for a, _ in R.asked].count("paste") == 1
+
+
+def test_a_split_line_and_filters_left_changed_are_passed_on_to_him(steps):
+    notes = ["9000001-1-1 split into 2", "PUT BACK BY HAND on the well's filters: Date '06/11/2026'",
+             "the well's filters put back as they were", "9000001-1-1_S1 put up to NR_ARTIC_FL"]
+    answer = ({"ok": False, "detail": "Stopped after 90s: the carrier box"},
+              {"trips": [TRIP, {"manifest": "MAN-01000002", "status": "PLANNED"}], "seconds": 90, "notes": notes})
+    res = B.book(dict(JOB, vehicles=2), R=FakeR(answer))
+    assert "Then CTMS stopped" in res["said"]
+    for n in (notes[0], notes[1], notes[3]):
+        assert n in res["said"]
+    assert "put back as they were" not in res["said"]
 
 
 def test_a_rehearsal_never_touches_the_journal(steps, jpath):
