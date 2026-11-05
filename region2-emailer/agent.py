@@ -264,7 +264,8 @@ def _slim_hauliers():
         import carriers
         import hauliers
         out = []
-        for h in hauliers.load().get("hauliers", []):
+        _d = hauliers.load()           # couriers with a depot postcode (Fast-R) are on the layer too
+        for h in _d.get("hauliers", []) + _d.get("couriers", []):
             if h.get("do_not_use") or not h.get("postcode"):
                 continue
             out.append({"name": h["name"], "loc": h.get("location", ""),

@@ -126,6 +126,9 @@ _OVERRIDES = {
     # use them" - Delali, 01/11/2026. Still tier 1 - above every tier 2 - but
     # last of the tier 1s, however near.
     "aht logistics": {"rarely": True},
+    # Fast-R went on the haulier map at his ask (05/11/2026): a courier on the contact sheet with no depot, so the
+    # registered office stands in. Vans only - the small loads Parcel Pass usually gets.
+    "fast-r": {"location": "Cottingham", "postcode": "HU16 4DA", "outward": "HU16"},
 }
 
 

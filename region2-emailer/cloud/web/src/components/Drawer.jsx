@@ -366,6 +366,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
   // is booked through the haulier list, not the courier.
   const pp = parcelPassFor(r);
   const parcelH = (hauliers || []).find((h) => h.parcel) || null;
+  // Fast-R: a same-day van courier, the other firm for the small loads Parcel Pass usually gets (his ask 05/11)
+  const fastH = (hauliers || []).find((h) => /fast-?r/i.test(h.name) && !h.parcel) || null;
   // the materials team that owns this product - the alt-contact escalation.
   // When the product doesn't map to a team (blank/odd materials), EVERY team
   // is offered instead - an unreachable contact still needs escalating.
@@ -653,6 +655,20 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
                 </div>
               )}
               {parcelH && composeBox(parcelH)}
+              {fastH && (
+                <div className="ppbtns">
+                  <b>Or Fast-R</b>
+                  <span className="mono">{fastH.phone}</span>
+                  <HaulierCalls h={fastH} onCall={onCall} />
+                  {fastH.email && (
+                    <button className="callbtn mail"
+                      onClick={() => (composing === fastH.name ? setComposing(null) : startCompose(fastH))}>
+                      Email
+                    </button>
+                  )}
+                </div>
+              )}
+              {fastH && composeBox(fastH)}
             </div>
           ) : (
             <div className="ppcard warn">
