@@ -178,7 +178,10 @@ def plan(ref, rows, its, want=None):
     fix, said = [], []
     for i, it in enumerate(its):
         new_id = None
-        if it["identifier"].upper() not in products:
+        own = str(it.get("product") or "").strip().upper()
+        if it["identifier"].upper() not in products and not (own and any(own.startswith(p) or p.startswith(own)
+                                                                         for p in products)):
+            # an item can be a catalogue number (7116293's 0057/100500/001) whose own Product is the Detail tab's: right
             if len(products) != 1:
                 raise Doubt(f"{ref}: item {it['identifier']} isn't one of the Detail tab's products "
                             f"({', '.join(sorted(products))}) - which should it be?")

@@ -141,3 +141,11 @@ def test_a_tab_pages_prefix_said_over_and_over_is_still_the_same_field():
     els = _card("Order Items", items=[("WHEELSETS", 8)])
     els[3]["nm"] = "Order Items tab page Order Items tab page Order Items tab page Identifier Required"
     assert [(i["identifier"], i["ordered"]) for i in L.items(els)] == [("WHEELSETS", 8.0)]
+
+
+def test_an_item_by_catalogue_number_whose_own_product_is_the_details_is_left_alone():
+    rows = [{"product": "LOOSE_BALLAS", "qty": 28.0, "weight": None, "qty_box": None}]
+    its = [{"identifier": "0057/100500/001", "product": "LOOSE_BALLAST", "ordered": 28.0, "cell": None}]
+    assert L.plan("9100001-1-1_S1", rows, its) == {"items": [], "qty": None, "said": []}
+    its[0]["product"] = "SLEEPERS"
+    assert L.plan("9100001-1-1_S1", rows, its)["items"] == [(0, "LOOSE_BALLAS", None)]
