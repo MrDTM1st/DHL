@@ -671,6 +671,13 @@ class Booking:
         if ordered is not None:
             self.type_into(ctms_lines.field(self.look(card=True), ctms_lines.ITEM_WINDOW, "Ordered"), f"{ordered:g}")
             self.run([_key("tab", 0.2)])
+            # his rule (03/11, forgotten on 7116293 06/11): a new quantity means the weight is cleared, so the Save fills it
+            # back in from the quantity - a split copies the old weight into every part otherwise. A Delivered 0 goes too
+            for name in ("Weight", "Delivered"):
+                box = ctms_lines.field(self.look(card=True), ctms_lines.ITEM_WINDOW, name)
+                if box is not None and (name == "Weight" or str(box.get("v") or "").strip() in ("0", "0.0", ".0")):
+                    self.run([{"action": "click", "screen": ctms_lines.point(box), "after": 0.15}, _key("home"),
+                              _key("shift+end"), _key("delete", 0.2)])
         win = ctms_lines.item_window(self.look(card=True))
         if (identifier and win["identifier"].upper() != identifier.upper()) or (
                 ordered is not None and not ctms_lines.same(win["ordered"], ordered)):

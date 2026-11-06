@@ -69,6 +69,7 @@ class FakeCtms:
         self.catalog = [("S&C", "S&C"), ("WHEELSETS", "Wheelsets"), ("WHEELSET_AXLE", "Wheelset axle")]
         self.card_tab, self.card_dirty, self.card_row = "Detail", False, 0
         self.item_win = None            # {"row", "id", "ordered"} while the item window is up
+        self.weights = []               # each item Save's Weight box, as it was saved
         self.lov = None                 # Ctrl+L's choices while its list is up
         self.focus = None
         self.saves = []                 # what each save put on: ("item", ref, id, ordered) / ("card", ref, qty)
@@ -160,6 +161,10 @@ class FakeCtms:
             front += [{"r": "internal frame", "nm": "Create,Edit or Delete Order Item", "lv": 0, "at": [18, 151, 826, 486]},
                       {"r": "text", "nm": "Identifier Required", "v": self.item_win["id"], "lv": 1, "at": [133, 323, 357, 23]},
                       {"r": "text", "nm": "Ordered", "v": f"      {self.item_win['ordered']:g}", "lv": 1, "at": [133, 459, 110, 24]},
+                      {"r": "text", "nm": "Delivered", "v": self.item_win.get("delivered", "       0"), "lv": 1,
+                       "at": [500, 459, 110, 24]},
+                      {"r": "text", "nm": "Weight", "v": self.item_win.get("weight", "34,970.00"), "lv": 1,
+                       "at": [133, 493, 110, 23]},
                       {"r": "push button", "nm": "Save", "lv": 1, "at": [138, 584, 100, 30]},
                       {"r": "push button", "nm": "Exit", "lv": 1, "at": [618, 584, 100, 30]}]
         if self.lov is not None:
@@ -189,6 +194,8 @@ class FakeCtms:
             self.focus = "id"
         elif nm == "Ordered" and self.item_win:
             self.focus = "ordered"
+        elif nm in ("Weight", "Delivered") and self.item_win:
+            self.focus = nm.lower()
         elif nm == "Qty":
             self.focus = "qty"
         elif nm == "OK ALT O":
@@ -199,6 +206,7 @@ class FakeCtms:
         elif nm == "Save" and self.item_win:
             li["items"][self.item_win["row"]] = {"id": self.item_win["id"], "ordered": self.item_win["ordered"]}
             self.saves.append(("item", self.card, self.item_win["id"], self.item_win["ordered"]))
+            self.weights.append(self.item_win.get("weight", "34,970.00"))
         elif nm == "Exit":
             self.item_win, self.focus = None, None
         return True
@@ -356,6 +364,9 @@ class FakeCtms:
         self.current = ref
 
     def key(self, k):
+        if k == "delete" and self.item_win and self.focus in ("weight", "delivered"):
+            self.item_win[self.focus] = ""
+            return
         if k == "ctrl+l" and self.card and self.item_win and self.focus == "id":
             self.lov = [c for c in self.catalog if c[0].upper().startswith(self.item_win["id"].upper())]
             return
@@ -843,6 +854,7 @@ def test_a_quantity_not_the_orders_is_put_right_in_both_places():
     job = _job(ctms)
     job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1, qty={"9100001": 16})
     assert ("item", "9100001-1-1", "S&C", 16.0) in ctms.saves and ("card", "9100001-1-1", 16.0) in ctms.saves
+    assert ctms.weights == [""]         # cleared, so CTMS works it out from the new quantity (his rule, 03/11)
     assert ctms.line_info["9100001-1-1"]["qty"] == 16 and job.trips[0]["status"] == "ACCEPTED"
 
 
