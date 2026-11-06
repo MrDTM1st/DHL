@@ -105,7 +105,14 @@ def owed_first(orders, listing=None):
     import ctms_todo
     items = ctms_todo.listing() if listing is None else listing
     want = set(ctms_todo._bases(orders))
-    return [i for i in items if i.get("kind") in BLOCKS and want & set(ctms_todo._bases(i.get("orders") or []))]
+    return [i for i in items if (i.get("kind") in BLOCKS or _services(i))
+            and want & set(ctms_todo._bases(i.get("orders") or []))]
+
+
+def _services(item):
+    """A Night / Saturday / Sunday the order needs ("Add NIGHT before it's booked"): the desk's to put on before it
+    books, not his (his 06/11) - the to-do's Run adds it, as it does an update."""
+    return item.get("source") == "services"
 
 
 def run_owed(items):
@@ -113,18 +120,18 @@ def run_owed(items):
     (all done, in words). Anything it can't type - a hand-written item, a doubt only he can settle - stays undone, and
     the booking with it."""
     import ctms_run
-    runnable = [i for i in items if i.get("kind") == "update"]
+    runnable = [i for i in items if i.get("kind") == "update" or _services(i)]
     if len(runnable) < len(items):
-        other = next(i for i in items if i.get("kind") != "update")
+        other = next(i for i in items if i not in runnable)
         return False, (f"{other['what']}: that's on the CTMS to-do and has to go on before the booking, and it isn't "
                        "something Book can type. Do it, or tick it off.")
     try:
         res = _quiet(ctms_run.run, [i["id"] for i in runnable])
     except Exception as e:
-        return False, f"The CTMS to-do's update for these orders couldn't be run first ({e})."
+        return False, f"What the CTMS to-do has for these orders couldn't be run first ({e})."
     if not res.get("ok"):
-        return False, f"The CTMS to-do's update has to go on first, and it didn't all go: {res.get('said')}."
-    return True, f"The CTMS to-do's update went on first: {res.get('said')}."
+        return False, f"What the CTMS to-do has for these orders has to go on first, and it didn't all go: {res.get('said')}."
+    return True, f"What the CTMS to-do had for these orders went on first: {res.get('said')}."
 
 
 _QTY = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*x\b", re.I)

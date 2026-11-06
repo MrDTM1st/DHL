@@ -140,8 +140,9 @@ def run(ids, run_id=0):
                             "said": f"not run - {p['status']}" + (f": {why}" if why else "")})
             continue
         if p.get("lookup"):                # looked up and still not known, or the look-up itself failed
+            still = "CTMS still has nothing under it (not imported yet?)" if p.get("kind") == "services" else ""
             results.append({"id": p["id"], "ok": False, "waits": True,
-                            "said": f"not run - {not_looked or 'the CTMS look-up did not reach it'}"})
+                            "said": f"not run - {not_looked or still or 'the CTMS look-up did not reach it'}"})
             continue
         try:
             R = R or _client()

@@ -3263,6 +3263,50 @@ def test_book_says_what_it_left_changed_in_ctms_and_a_missing_picture_loses_no_t
         W.find_windows, W.picture, B.LOG, B.ctms_book.Booking, B.book_record.keep = keep
 
 
+def test_an_nn_number_customer_ref_never_finds_is_looked_for_by_its_booking_ref():
+    # his 03/11: "you put that in the customer reference, not the booking reference" - a DTS job's NN number
+    assert CO.by_booking_ref("NN4230978-2256") and CO.by_booking_ref("N5139446-276") and CO.by_booking_ref("nn5139446-284/1")
+    assert not CO.by_booking_ref("9100020") and not CO.by_booking_ref("AH12/11/26UB")
+    assert [s["px"] for s in CO.search("NN1%", booking=True) if s.get("px")][:2] == [[626, 226], [728, 147]]
+    assert [s["px"] for s in CO.search("9100020%") if s.get("px")][:2] == [[626, 226], [728, 122]]
+    keep = (W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    W.idle_seconds = lambda: None
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        ran, refreshes = [], []
+
+        def step(action, args):
+            what = tuple(args["px"]) if "px" in args else args.get("name") or args.get("key") or args.get("text")
+            ran.append((action, what))
+            if what == (742, 226):
+                refreshes.append(1)
+                if len(refreshes) == 1:          # the Customer Ref search: nothing changes, nothing found
+                    raise B.Unchanged("CTMS did not answer within 15s - nothing changed where it should have")
+            return "ok"
+        b.window_step = step
+        b._batch_look = lambda times, t0: {"kind": "window", "times": times}
+        b._seen = lambda t, name, box: name == "os-card"
+        reads = [{"elements": []}, _summary_read([]),
+                 _summary_read([_line("SU/5112026RMCV9", "UNSCHEDULED", "07/11/26 16:00", "261107")])]
+        J.read_fields = lambda win, skip=(): reads.pop(0)
+        b.handle({"id": 1, "action": "ctms_check",
+                  "orders": [{"key": "NN4230978-2256|07/11/2026", "ref": "NN4230978-2256", "date": "07/11/2026"}]})
+        r, sent = desk.sent[-1][1], [s for p, s in desk.sent if p == "/api/ctms/orders"][-1]
+        assert r["ok"], r
+        got = sent["orders"]["NN4230978-2256|07/11/2026"]
+        assert [x["ref"] for x in got["lines"]] == ["SU/5112026RMCV9"] and got["by"] == "booking ref"
+        assert [w for a, w in ran if a == "type"] == ["NN4230978-2256%", "NN4230978-2256%"]
+        boxes = [w for a, w in ran if w in ((728, 122), (728, 147))]
+        assert boxes == [(728, 122), (728, 147)]                # Customer Ref first, then Booking Ref
+    finally:
+        W.find_windows, W.picture, W.idle_seconds, J.read_fields, B.LOG = keep
+
+
 def test_check_ctms_now_looks_up_the_maps_orders_with_acting_on_for_that_only():
     fresh()
     day = lambda n: (datetime.now() + timedelta(days=n)).strftime("%d/%m/%Y")     # noqa: E731

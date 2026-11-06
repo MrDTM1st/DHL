@@ -56,6 +56,17 @@ def search_ref(order):
     return (m.group(1) if m else order) + "%"
 
 
+# A DTS or supplier job's NN number (NN4230978-2256, NN5139446-284, N5139446-276): CTMS keeps it as the Booking Ref,
+# and the lines' Customer Ref can be something else altogether (HT Rail's SU/5112026RMCV9), so a Customer Ref search
+# for it can find nothing (his 03/11: "you put that in the customer reference, not the booking reference")
+BOOKING_REF = re.compile(r"N{1,2}\d{6,8}-\d+(?:/\d+)?", re.I)
+
+
+def by_booking_ref(order):
+    """The order is one CTMS may know only by its Booking Ref."""
+    return bool(BOOKING_REF.fullmatch(str(order or "").strip()))
+
+
 def belongs(line_ref, order):
     """A line CTMS listed is one of this order's - the % could bring back a longer ref sharing its front."""
     base, ref = search_ref(order)[:-1], str(line_ref or "").strip()
@@ -106,11 +117,12 @@ def upto(fields, now=None, days=UPTO_DAYS):
             {"action": "type", "text": want.strftime("%d/%m/%y"), "after": 0.1}]
 
 
-def search(ref):
+def search(ref, booking=False):
     """One search: Clear (the last one's lines go), the ref typed over whatever the box holds, Refresh - waited on
-    until the list's first line changes. Nothing found leaves it empty: that wait then runs out."""
+    until the list's first line changes. Nothing found leaves it empty: that wait then runs out. booking: the ref goes
+    in the card's Booking Ref box, the one under Customer Ref, instead."""
     return [_click(626, 226, after=0.4),
-            _click(728, 122, after=0.15), {"action": "key", "key": "home", "after": 0.05},
+            _click(728, 147 if booking else 122, after=0.15), {"action": "key", "key": "home", "after": 0.05},
             {"action": "key", "key": "shift+end", "after": 0.05}, {"action": "type", "text": ref, "after": 0.1},
             _click(742, 226, react=True, box=[30, 228, 395, 250], timeout=15)]
 

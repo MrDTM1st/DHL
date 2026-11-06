@@ -474,20 +474,26 @@ def _services_day(it):
 
 
 def plan_services(it, found):
-    """Night / Saturday / Sunday on the order, by the Run ("that's your job", his 04/11) - on its own: nothing else on the
-    line is read or typed. Lines CTMS has none open for (booked, or not imported yet) stay his: taking a service onto a
-    booked one means unbooking it."""
+    """Night / Saturday / Sunday on the order, by the Run ("that's your job", his 04/11; "they are not for me to do",
+    06/11) - on its own: nothing else on the line is read or typed. Book runs it before it books (book_run.owed_first).
+    An order CTMS showed nothing under at the last look-up (not imported then, or an NN number it holds as the Booking
+    Ref) is looked up again by the Run, never handed to him. Only lines all booked already stay his: taking a service
+    onto a booked line means taking it off its trip."""
     orders = it.get("orders") or []
     owed = SERVICES_ASK.match(str(it.get("what") or "")).group(1).split(" + ")
     date = _services_day(it)
     base = {"id": it["id"], "kind": "services", "orders": orders, "what": it.get("what") or "", "checks": [], "lookup": None}
     lines = _lines_for(found, orders, date)
+    first = []
     if lines is not None and not lines:
-        return dict(base, status="yours", lines=[], set={},
-                    explain=["CTMS has no open line for it: booked already, or not imported yet"])
+        if any(g.get("lines") for k, g in (found or {}).items() if k.split("|")[0] in _orders(orders)):
+            return dict(base, status="yours", lines=[], set={},
+                        explain=["It was booked already without it: putting it on now means taking the line off its trip"])
+        lines = None                       # nothing at all under it then: the Run looks again before it types
+        first = ["CTMS showed nothing under it at the last look-up (not imported yet?): the Run looks again first"]
     return dict(base, status="ready", lines=[ln.get("ref") for ln in lines or []],
                 set={"services": {code: True for code in owed}, "anyway": True},
-                explain=[f"{' + '.join(owed)} for the hours it runs"],
+                explain=first + [f"{' + '.join(owed)} for the hours it runs"],
                 lookup=None if lines else {"ref": str(orders[0]), "date": date, "cards": False,
                                            **({"also": [str(o) for o in orders[1:]]} if len(orders) > 1 else {})})
 
