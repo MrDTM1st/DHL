@@ -210,6 +210,14 @@ def test_a_night_with_no_open_line_stays_his():
     assert p["status"] == "yours" and "booked already" in p["explain"][0]
 
 
+def test_a_night_ctms_showed_nothing_for_is_looked_up_again_by_the_run_not_handed_to_him():
+    # his 06/11: "they are not for me to do" - not imported then, or an NN number CTMS holds as the Booking Ref
+    p = P.plan([_night("NN4230978-2256")], [], {"NN4230978-2256|07/11/2026": {"lines": []}})[0]
+    assert p["status"] == "ready" and p["lookup"] == {"ref": "NN4230978-2256", "date": "07/11/2026", "cards": False}
+    assert p["set"] == {"services": {"NIGHT": True, "SATURDAY": True}, "anyway": True}
+    assert "looks again first" in p["explain"][0]
+
+
 def test_a_night_waits_for_an_update_that_needs_an_answer():
     rec = _rec("9100091", "07/11/2026", contact={"confidence": "low"})
     rec.pop("site_contact", None)

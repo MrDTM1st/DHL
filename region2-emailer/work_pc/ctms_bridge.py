@@ -915,6 +915,25 @@ class Bridge:
                 stopped, lost = "Order Summary was no longer on the screen", True
                 break
             got = {"lines": [r for r in rows if ctms_orders.belongs(r["ref"], o["ref"])]}
+            if not got["lines"] and ctms_orders.by_booking_ref(o["ref"]):
+                # an NN number CTMS may hold only as the Booking Ref: looked for there too, and every line that search
+                # brings back is that job's, whatever its Customer Ref says
+                try:
+                    run(ctms_orders.search(ctms_orders.search_ref(o["ref"]), booking=True))
+                except Unchanged:
+                    pass
+                except Exception as e:
+                    stopped = f"searching for {o['ref']} by its Booking Ref: the search couldn't be done ({why(e)})"
+                    break
+                try:
+                    rows = ctms_orders.lines(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ))
+                except Exception as e:
+                    stopped = f"reading {o['ref']}'s lines: {why(e)}"
+                    break
+                if rows is None:
+                    stopped, lost = "Order Summary was no longer on the screen", True
+                    break
+                got = {"lines": list(rows), "by": "booking ref"} if rows else got
             for line in ctms_orders.open_lines(got["lines"], str(o.get("date") or "")) if o.get("veh") else []:
                 try:
                     run(ctms_orders.search(line["ref"]))            # the line alone: the list's first row

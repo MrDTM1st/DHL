@@ -60,7 +60,7 @@ const hostOf = (u) => { try { return new URL(u).host; } catch { return ''; } };
 // escalations, orders to update from a site's reply, bookings. The Run button (his ask 01/11: "turn execute CTMS into
 // a button") types the ready ones in - ctms_run_plan says what each would type, and holds whatever it can't be sure
 // of with the site's own words and a drop-down for his pick.
-const TODO_KIND = { note: 'Note', update: 'Update', booking: 'Book', other: 'To do' };
+const TODO_KIND = { note: 'Note', update: 'Update', booking: 'Book', services: 'Services', other: 'To do' };
 const ddmm = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? m[3] + '/' + m[2] : ''; };
 const PLAN_STATUS = { ready: 'Ready', held: 'Needs you', yours: 'Yours', done: 'Done in CTMS' };
 
@@ -287,7 +287,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
         const p = plan.length ? t : null;
         return (
           <div className="ctms-act ctms-todo" key={t.id}>
-            <span className={'ctms-todo-kind ' + t.kind}>{TODO_KIND[t.kind] || t.kind}</span>
+            <span className={'ctms-todo-kind ' + t.kind}>{t.source === 'services' ? TODO_KIND.services : (TODO_KIND[t.kind] || t.kind)}</span>
             <span className="d"><b className="mono">{(t.orders || []).join(' / ')}</b> {t.what}
               {p && p.status === 'ready' && <div className="ctms-plan">{planText(p)}</div>}
               {p && (p.explain || []).map((e) => <div className="ctms-plan why" key={e}>{e}</div>)}

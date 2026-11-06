@@ -127,6 +127,21 @@ def test_an_update_or_booking_item_on_the_to_do_stops_it_a_note_doesnt():
     assert B.owed_first(["9100009"], items) == []
 
 
+def test_a_services_reminder_goes_on_before_the_booking_by_the_run_not_left_to_him(monkeypatch):
+    import ctms_run
+    night = {"id": "t1", "kind": "other", "source": "services", "orders": ["9100004"],
+             "what": "Add NIGHT before it's booked (deliver Thu 12/11 23:00)"}
+    hand = {"id": "t2", "kind": "other", "orders": ["9100004"], "what": "Ring the site"}
+    assert B.owed_first(["9100004-1-1"], [night, hand]) == [night]          # a hand-written "other" doesn't hold it
+    ran = []
+    monkeypatch.setattr(ctms_run, "run", lambda ids: ran.append(ids) or {"ok": True, "said": "1 of 1 done in CTMS"})
+    ok, said = B.run_owed([night])
+    assert ok and ran == [["t1"]] and "went on first" in said
+    upd = {"id": "t3", "kind": "update", "orders": ["9100004"], "what": "Update 9100004"}
+    ok, said = B.run_owed([upd, night, dict(hand, kind="booking")])
+    assert not ok and said.startswith("Ring the site") and "isn't something Book can type" in said
+
+
 def test_a_haulier_is_never_taken_for_the_site_on_a_mail_with_the_order_in_its_subject():
     site = "9100001 example yard en1 1aa"
     args = dict(orders=["9100001"], site_topic=site, contact="site@example.net", not_site={"ops@acme-haulage.example"})
