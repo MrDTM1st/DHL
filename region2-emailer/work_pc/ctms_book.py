@@ -847,7 +847,7 @@ class Booking:
                 self.run([{"action": "click", "screen": [box["at"][0] + box["at"][2] - 10, box["at"][1] + box["at"][3] // 2],
                            "after": 0.5}])
                 box = (ctms_filters.boxes(self.look(), window) or {}).get(name) or box
-                rows = ctms_filters.list_rows(self.els, box)
+                rows = ctms_filters.list_rows(self.els, box) or ctms_filters.frame_rows(self.els, window, box)
                 if rows:
                     break
             keys = ctms_filters.moves(rows or [], want or "")
@@ -910,6 +910,42 @@ class Booking:
         if stuck:
             raise Stop(f"The well's filters wouldn't all clear ({', '.join(stuck)}). Nothing was booked.")
         return True
+
+    def set_filters(self, region=None, strategy=None):
+        """His way to an order (02/11, again 09/11: "you know what region it belongs to ... you go to order filters, you put
+        on a region, and you go to a strategy if you know what strategy it is. Instead of just like blindly going into the
+        order while hoping it's going to be there"): To Plan Reg on the delivery end's region, Business Type on the
+        order's strategy when it's known - each only when it isn't on it already - applied, closed. Left as set: the next
+        booking sets its own."""
+        reg = ctms_filters.plan_reg(region)
+        if not reg and not strategy:
+            return
+        self.look()
+        self.filter_window(ctms_filters.PANEL)
+        changed, stuck = [], []
+        if reg and ctms_filters.values(self.els, ctms_filters.PANEL).get(ctms_filters.REGION) != reg:
+            if self.set_box(ctms_filters.PANEL, ctms_filters.REGION, reg):
+                changed.append(ctms_filters.PANEL)
+            else:
+                stuck.append(f"{ctms_filters.REGION} {reg}")
+        if strategy:
+            self.filter_window(ctms_filters.ADVANCED)
+            if ctms_filters.values(self.els, ctms_filters.ADVANCED).get(ctms_filters.STRATEGY) != strategy:
+                if self.set_box(ctms_filters.ADVANCED, ctms_filters.STRATEGY, strategy):
+                    changed.append(ctms_filters.ADVANCED)
+                else:
+                    stuck.append(f"{ctms_filters.STRATEGY} {strategy}")
+        if ctms_filters.ADVANCED in changed:
+            self.apply_filters(ctms_filters.ADVANCED)
+        if changed:                        # the panel's Refresh re-queries the well, whichever was changed
+            if ctms_filters.boxes(self.els, ctms_filters.PANEL) is None:
+                self.filter_window(ctms_filters.PANEL)
+            self.apply_filters(ctms_filters.PANEL)
+        self.close_filters()
+        if stuck:
+            raise Stop(f"The well's filters wouldn't go to {', '.join(stuck)}. Nothing was booked.")
+        self.said.append(f"the well on {' / '.join(x for x in (reg, strategy) if x)}"
+                         + ("" if changed else " already"))
 
     def restore_filters(self):
         """His filters put back as he had them, each read back. What won't go back is said, for him to put back."""
@@ -1121,9 +1157,10 @@ class Booking:
         except (Stop, RuntimeError) as e:
             self.said.append(str(e))
 
-    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None):
+    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, region=None, strategy=None):
         """The whole booking. self.trips says what was made, however it ended."""
         self.start()
+        self.set_filters(region, strategy)
         self.set_day(sched_for_day(date))
         self.stage("the date")
         lines = self.lines(orders, date)

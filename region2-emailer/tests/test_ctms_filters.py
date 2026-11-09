@@ -13,16 +13,20 @@ import ctms_book as B  # noqa: E402
 import ctms_filters as F  # noqa: E402
 
 PANEL_AT, ADV_AT = [30, 491, 426, 456], [378, 284, 523, 574]
-BUSINESS = ["", "Strategy 1 - Flats & Hiabs", "Strategy 2 - Bulk", "Strategy 3 - Rails"]
+BUSINESS = ["", "Strategy 1 - Flats & Hiabs", "Strategy 2 - Bulk", "Strategy 3 - Rails", "Strategy 6 - Ad-Hoc/Projects"]
+REGIONS = ["MULTI", "PR1", "PR2", "PR3", "PR4"]
 DELIVERY = ["All", "STANDARD", "NEXT DAY", "EMERGENCY"]
 
 
 class Filters:
     """Planning with Order Filters and Advanced Order Filters: drop-downs that only move by their keys."""
 
-    def __init__(self, business="", delivery="All", show_all=True, weight="", stuck=()):
+    def __init__(self, business="", delivery="All", show_all=True, weight="", stuck=(), region=None, named_by_value=False):
         self.vals = {"Business Type": business, "Delivery Type": delivery, "Show All Orders": show_all, "Weight": weight}
-        self.lists = {"Business Type": BUSINESS, "Delivery Type": DELIVERY}
+        if region is not None:
+            self.vals["To Plan Reg"] = region
+        self.lists = {"Business Type": BUSINESS, "Delivery Type": DELIVERY, "To Plan Reg": REGIONS}
+        self.named_by_value = named_by_value   # live 09/11: Business Type hands over its value as its name
         self.panel = self.adv = False
         self.open_list = None             # (name, index picked while open)
         self.stuck = set(stuck)           # boxes CTMS won't change
@@ -33,7 +37,9 @@ class Filters:
         return {"Delivery Type": ("combo box", [506, 319, 225, 27], ADV_AT, "Delivery Type"),
                 "Business Type": ("combo box", [506, 571, 225, 28], ADV_AT, ""),
                 "Show All Orders": ("check box", [444, 677, 120, 24], ADV_AT, "Show All Orders"),
-                "Weight": ("text", [146, 736, 77, 27], PANEL_AT, "Weight")}
+                "Weight": ("text", [146, 736, 77, 27], PANEL_AT, "Weight"),
+                **({"To Plan Reg": ("combo box", [150, 564, 76, 27], PANEL_AT, "To Plan Reg")}
+                   if "To Plan Reg" in self.vals else {})}
 
     def read(self, tree=True, skip=()):
         els = [{"r": "internal frame", "nm": "Planning", "lv": 0, "at": [20, 151, 1648, 807]},
@@ -47,14 +53,21 @@ class Filters:
             for n, (role, bat, wat, nm) in self._boxes().items():
                 if wat is not at:
                     continue
-                e = {"r": role, "nm": nm, "lv": 1, "at": bat}
                 v = self.vals[n]
+                if n == "Business Type" and self.named_by_value:
+                    nm = v
+                e = {"r": role, "nm": nm, "lv": 1, "at": bat}
                 if role == "check box":
                     e["st"] = ["checked"] if v else None
                 elif v:
                     e["v"] = v
                 els.append(e)
-                if self.open_list and self.open_list[0] == n:
+                if self.open_list and self.open_list[0] == n and n == "To Plan Reg":
+                    # its rows are the window's own labels, laid over the box with the picked one level with it
+                    k0 = self.open_list[1]
+                    els += [{"r": "label", "nm": row, "lv": 1, "at": [bat[0] - 9, bat[1] + 22 * (k - k0), 70, 22],
+                             "st": ["selected"] if k == k0 else None} for k, row in enumerate(self.lists[n])]
+                elif self.open_list and self.open_list[0] == n:
                     els += [{"r": "label", "nm": row, "lv": 2, "at": [bat[0], bat[1] + 23 * (k + 1), 200, 22],
                              "st": ["selected"] if k == self.open_list[1] else None} for k, row in enumerate(self.lists[n])]
             els += [{"r": "push button", "nm": b, "lv": 1, "at": bat} for b, bat in btns]
@@ -173,3 +186,53 @@ def test_a_rehearsal_says_which_filters_it_would_clear_and_clears_none():
     job.look()
     assert job.clear_filters() is False and f.vals["Business Type"] == "Strategy 2 - Bulk"
     assert "would be cleared and put back: Business Type 'Strategy 2 - Bulk'" in job.said[-1]
+
+
+def test_a_region_is_named_the_way_to_plan_reg_lists_it():
+    assert F.plan_reg("R4") == "PR4" and F.plan_reg("PR2") == "PR2" and F.plan_reg("2") == "PR2"
+    assert F.plan_reg("") is None and F.plan_reg(None) is None
+
+
+def test_business_type_named_by_its_own_value_is_still_known_by_where_it_sits():
+    f = Filters(business="Strategy 1 - Flats & Hiabs", named_by_value=True)
+    f.panel = f.adv = True  # noqa
+    assert F.values(f.read(), F.ADVANCED)["Business Type"] == "Strategy 1 - Flats & Hiabs"
+
+
+def test_the_well_is_put_on_the_orders_region_and_strategy_before_the_order_is_looked_for():
+    f = Filters(business="Strategy 1 - Flats & Hiabs", region="PR2", named_by_value=True)
+    job = _job(f)
+    job.set_filters("R4", "Strategy 6 - Ad-Hoc/Projects")
+    assert f.vals["To Plan Reg"] == "PR4" and f.vals["Business Type"] == "Strategy 6 - Ad-Hoc/Projects"
+    assert "Search" in f.applied and "Refresh" in f.applied and not f.panel and not f.adv
+    assert job.said[-1] == "the well on PR4 / Strategy 6 - Ad-Hoc/Projects"
+
+
+def test_filters_already_right_are_left_alone():
+    f = Filters(business="Strategy 1 - Flats & Hiabs", region="PR4")
+    job = _job(f)
+    job.set_filters("R4", "Strategy 1 - Flats & Hiabs")
+    assert f.applied == [] and not f.panel and not f.adv and job.said[-1].endswith("already")
+
+
+def test_a_region_alone_leaves_the_strategy_as_it_is():
+    f = Filters(business="Strategy 1 - Flats & Hiabs", region="PR2")
+    job = _job(f)
+    job.set_filters("R4")
+    assert f.vals["To Plan Reg"] == "PR4" and f.vals["Business Type"] == "Strategy 1 - Flats & Hiabs"
+    assert f.applied == ["Refresh"]
+
+
+def test_no_region_and_no_strategy_touches_nothing():
+    f = Filters(region="PR2")
+    job = _job(f)
+    job.set_filters(None, None)
+    assert f.applied == [] and not f.panel
+
+
+def test_a_region_that_wont_take_stops_the_booking():
+    import pytest
+    f = Filters(region="PR2", stuck=("To Plan Reg",))
+    job = _job(f)
+    with pytest.raises(B.Stop, match="wouldn't go to To Plan Reg PR4"):
+        job.set_filters("R4")

@@ -3226,7 +3226,7 @@ def test_book_says_what_it_left_changed_in_ctms_and_a_missing_picture_loses_no_t
         def __init__(self, run, read, seen, t, dry=False):
             self.trips, self.stages, self.reads, self.veh_kept, self.said = [], [], [], "", []
 
-        def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None):
+        def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, **kw):
             self.said += ["9100001-1-1 split into 2", "the well's filters cleared to find it: Business Type 'Bulk'"]
             if goes.get("stop"):
                 raise RuntimeError("The carrier screen didn't open.")

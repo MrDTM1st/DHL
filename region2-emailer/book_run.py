@@ -100,6 +100,15 @@ def record_of(ident):
         return {}
 
 
+def region_for(postcode):
+    """The NR region of a delivery postcode ("R4"), "" when it isn't known."""
+    try:
+        import nr_regions
+        return nr_regions.region_of(postcode or "") if postcode else ""
+    except Exception:
+        return ""
+
+
 def owed_first(orders, listing=None):
     """What the CTMS to-do has for these orders that has to go on before the booking."""
     import ctms_todo
@@ -954,9 +963,16 @@ def book(job, R=None, now=None):
     args = {k_: job[k_] for k_ in ("orders", "date", "carrier", "trailer", "vehicles", "dry") if job.get(k_) not in (None, "")}
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
-    qty = quantities(record_of(job.get("record")) or {})
+    rec = record_of(job.get("record")) or {}
+    qty = quantities(rec)
     if qty:
         args["qty"] = qty
+    # his 09/11: the well's Order Filters on the order's region (the delivery end) - and its strategy when known - first
+    region = job.get("region") or region_for(rec.get("postcode"))
+    if region:
+        args["region"] = region
+    if job.get("strategy"):
+        args["strategy"] = job["strategy"]
     wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
     numbered = []
     if not dry:

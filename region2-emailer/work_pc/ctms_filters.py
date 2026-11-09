@@ -18,6 +18,8 @@ times as the rows between them, Enter - a click on an open list's row can pick n
 import re
 
 PANEL = "Order Filters"
+REGION = "To Plan Reg"           # the delivery end's region, the panel's (his 02/11, again 09/11)
+STRATEGY = "Business Type"         # Advanced's: "Strategy 1 - Flats & Hiabs", "Strategy 6 - Ad-Hoc/Projects" ...
 ADVANCED = "Advanced Order Filters"
 # A clean well, as seen 03/11: what each box holds when nothing is filtered
 CLEAN = {"Delivery Type": "All", "Service Type": "All", "Show All Orders": True, "Inc Nulls?": True}
@@ -54,12 +56,11 @@ def point(e):
 
 
 def name_of(e, window, origin):
-    """A box's name: its own, or where it sits in its window when it has none."""
-    nm = str(e.get("nm") or "").strip()
-    if nm:
-        return nm
+    """A box's name: where it sits in its window when that's one of the known places - Business Type hands over its own
+    VALUE as its name once one is picked ("Strategy 1 - Flats & Hiabs", live 09/11) - else its own."""
     dx, dy = e["at"][0] - origin[0], e["at"][1] - origin[1]
-    return next((n for (x, y), n in UNNAMED.get(window, {}).items() if abs(dx - x) <= NEAR and abs(dy - y) <= NEAR), None)
+    placed_as = next((n for (x, y), n in UNNAMED.get(window, {}).items() if abs(dx - x) <= NEAR and abs(dy - y) <= NEAR), None)
+    return placed_as or str(e.get("nm") or "").strip() or None
 
 
 def boxes(els, window):
@@ -110,6 +111,25 @@ def list_rows(els, box):
         if e.get("r") == "label":
             rows.append((str(e.get("nm") or "").strip(), "selected" in (e.get("st") or [])))
     return rows or None
+
+
+def frame_rows(els, window, box):
+    """An open drop-down whose rows the Access Bridge hands over as the WINDOW's labels, not the box's own (To Plan Reg,
+    live 09/11: MULTI, PR1 .. PR4 laid over the box, the picked one level with it): the labels in its column, top down,
+    as (name, picked). None when there are none."""
+    _head, inside = _frame(els, window)
+    if not inside or not placed(box):
+        return None
+    x = box["at"][0]
+    col = sorted((e for e in inside if e.get("r") == "label" and placed(e) and abs(e["at"][0] - x) <= 20
+                  and str(e.get("nm") or "").strip()), key=lambda e: e["at"][1])
+    return [(str(e.get("nm")).strip(), "selected" in (e.get("st") or [])) for e in col] or None
+
+
+def plan_reg(region):
+    """To Plan Reg's row for a region as the toolkit names it: "R4" / "PR4" / "4" -> "PR4". None when there's no number."""
+    m = re.search(r"(\d+)", str(region or ""))
+    return f"PR{int(m.group(1))}" if m else None
 
 
 def moves(rows, want):

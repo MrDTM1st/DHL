@@ -260,3 +260,9 @@ def test_his_map_comes_first_then_the_match_then_what_the_contact_list_has():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_the_well_is_filtered_on_the_delivery_ends_region():
+    # his 09/11: Book puts Order Filters on the order's region before it looks for the order
+    import book_run as BR
+    assert BR.region_for("LU2 9PW") == "R4" and BR.region_for("DN16 1BP") == "R2" and BR.region_for("") == ""
