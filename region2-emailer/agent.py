@@ -1861,6 +1861,47 @@ def main():
                 push_tracker()
                 push_panel()
                 report("done" if res["ok"] else "error", res["said"], tail(out, 6))
+            elif action == "nr_date":
+                # the Network Rail team email when a site asks for another day than we offered (his rule 09/11,
+                # nr_date.py): data {rid, do: send|yes|no|dismiss, to, cc, subject, message}. It takes the
+                # tracker's lock itself
+                import tempfile
+                data = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                do = str(data.get("do") or "")
+                rid = str(data.get("rid") or "")
+                args, edits = None, None
+                if do == "send":
+                    fd, edits = tempfile.mkstemp(prefix="nr_date_", suffix=".json")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump({k: data.get(k) for k in ("to", "cc", "subject", "message") if k in data}, f)
+                    args = ["nr_date.py", "send", rid, edits]
+                elif do in ("yes", "no"):
+                    args = ["nr_date.py", "answer", rid, do]
+                elif do == "dismiss":
+                    args = ["nr_date.py", "dismiss", rid]
+                if not (rid and args):
+                    report("error", "Network Rail email: which order, and send / yes / no?")
+                else:
+                    report("running", "Emailing Network Rail…" if do == "send" else "Saving Network Rail's answer…")
+                    try:
+                        out = run(args, timeout=120)
+                    except subprocess.TimeoutExpired:
+                        out = ""
+                    finally:
+                        if edits:
+                            os.remove(edits)
+                    res = None
+                    for line in reversed(out.splitlines()):
+                        if line.startswith("{"):
+                            try:
+                                res = json.loads(line)
+                            except ValueError:
+                                pass
+                            break
+                    if res is None:
+                        res = {"ok": False, "said": "Network Rail email: it did not finish - see the output."}
+                    push_tracker()
+                    report("done" if res["ok"] else "error", res["said"], tail(out, 6))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -
                 # user-reviewed text, sent once, never tracker-enrolled

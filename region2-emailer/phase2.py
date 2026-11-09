@@ -550,7 +550,11 @@ def check(ns=None):
             # the date the site asks for is the date the order gets in CTMS (his rule for updating an order
             # from a reply) - and the dashboard shows the same (his ask, 31/10). A date that is not firm waits
             # for his confirm on the Tracker page (learn_detail), which moves it then.
-            moved += tracker.move_date(d, r, dd.firm_date(r["details"]), "the site's reply")
+            # ...unless it is EARLIER than the day we offered (Network Rail is asked first, the order stays put) or
+            # in a later week (it moves, and Network Rail is told) - his rule 09/11, nr_date.py
+            import nr_date
+            moved += nr_date.on_new_date(d, r, dd.firm_date(r["details"]), "the site's reply",
+                                         reply_eid=str(getattr(item, "EntryID", "") or ""))
         except Exception as e:
             r["details_note"] = str(e)[:140]
         try:   # the order now owes CTMS an update from the reply - the CTMS page's to-do list, under the name of
@@ -1012,7 +1016,8 @@ def learn_detail(rec_id, field, value):
             cell["value"] = value
         cell["confidence"] = dd.HIGH
         r["missing"] = dd.missing(det, product_type_of(r))
-        moved = field == "date" and tracker.move_date(d, r, value, "your confirm")
+        import nr_date      # an earlier day than offered waits for Network Rail; a later week tells them
+        moved = field == "date" and nr_date.on_new_date(d, r, value, "your confirm")
         tracker.save(d)
         return (f"learned {field}={value!r} for {rec_id} (from {raw[:40]!r})"
                 + (f" - the order moves to {value}" if moved else ""))

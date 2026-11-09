@@ -49,9 +49,21 @@ export function isUrgent(r) {
 // wants booking - purple on the map. The rest are still being chased - red, a reply that left something out
 // included. An ad hoc or DTS job comes with its details on the form. Booked jobs are not here at all: the home PC
 // takes them off.
+// A Network Rail date email still to send, or an earlier day still waiting on their answer (nr_date.py, his 09/11).
+export function nrOpen(r) {
+  const s = ((r && r.nr_date) || {}).state;
+  return s === 'to_send' || s === 'sent';
+}
+
+// Held on the day we offered while Network Rail is asked about the site's earlier day - not ready to book.
+export function nrHeld(r) {
+  return nrOpen(r) && r.nr_date.kind === 'earlier';
+}
+
 export function isReady(r) {
   if (r.kind === 'adhoc' || r.kind === 'dts') return true;
   if (r.kind === 'pinned' || r.kind === 'collection') return false;
+  if (nrHeld(r)) return false;
   if (r.ctms_veh) return true;      // a Veh Type filled in CTMS - the details are in, by phone or otherwise (30/10)
   if (r.phoned_at) return true;     // updated over the phone: its form asks everything the job needs (03/11)
   return !!r.reply_at && Array.isArray(r.missing) && r.missing.length === 0;
@@ -83,6 +95,7 @@ export function statusLabel(r) {
   // stage fields below mean anything for one of these
   if (r.kind === 'pinned') return r.booked ? 'By hand — booked in'
     : (r.tracked ? 'By hand — tracked' : 'By hand — map only');
+  if (nrHeld(r)) return 'Waiting on Network Rail - earlier day asked (' + dateShort(r.nr_date.asked) + ')';
   if (isReady(r)) return 'Ready to book';
   if (r.reply_at) return (r.missing || []).length ? 'Replied — still needs ' + r.missing.join(', ') : 'Replied';
   if (r.ooo_at) return 'Out of office';

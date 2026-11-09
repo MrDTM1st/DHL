@@ -155,12 +155,15 @@ def apply(record_id, form, now=None):
     rec["phoned_at"] = stamp
     rec["reply_at"] = rec.get("reply_at") or stamp              # answered: never chased again
     rec["sendoff_ready"] = True
-    moved = tracker.move_date(d, rec, got["date"]["value"], "your phone call")
+    import nr_date      # an earlier day than offered waits for Network Rail; a later week tells them (09/11)
+    moved = nr_date.on_new_date(d, rec, got["date"]["value"], "your phone call")
     tracker.save(d)
     ctms_todo.phoned(rec, when=stamp, answers=answers)
     orders = " / ".join(rec.get("orders") or [])
     return {"ok": True, "said": f"{orders}: the call's details are on the order"
                                 + (f", its delivery moved to {got['date']['value']}" if moved else "")
+                                + (f", kept on {nr_date.held(rec)} until Network Rail say yes to the earlier day"
+                                   if nr_date.held(rec) else "")
                                 + " - on the CTMS to-do list to update."}
 
 

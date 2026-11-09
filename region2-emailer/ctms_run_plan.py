@@ -203,6 +203,16 @@ def plan_update(it, rec, found):
     d = rec.get("details") or ((it.get("details") or {}).get("details")) or {}
     order = (it.get("orders") or [""])[0]
     explain, checks, s = [], [], {}
+    # an earlier day than the one we offered waits for Network Rail's yes (his rule 09/11, nr_date.py): nothing is
+    # typed until they answer; their no keeps the day we offered
+    nd = rec.get("nr_date") or {}
+    if nd.get("kind") == "earlier" and nd.get("state") in ("to_send", "sent"):
+        return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
+                "status": "yours", "lines": [], "set": {}, "checks": [],
+                "explain": [f"Waiting on Network Rail: the site asked for {nd.get('asked')}, earlier than the "
+                            f"{nd.get('offered')} we offered - nothing is typed until they say yes"]}
+    if nd.get("kind") == "earlier" and nd.get("state") == "not_allowed":
+        answers = dict(answers, date=nd.get("offered") or "")
 
     def doubt(field, label, quote, options=(), why="", text=False):
         if field in answers:

@@ -13,6 +13,7 @@ import PhoneUpdate from './PhoneUpdate.jsx';
 import BookForm from './BookForm.jsx';
 import { BookingStatus, bookingOf } from './BookingsCard.jsx';
 import { ctmsTeams, ctmsStatus } from '../api.js';
+import NrDateBox from './NrDateBox.jsx';
 
 // A haulier's Call buttons - the contact sheet sometimes holds two numbers in
 // the one cell ("01632 960102 / 07700 900102"), and both are worth a button.
@@ -537,6 +538,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
         </div>
         <div className="drawer-b">
           <BookingStatus b={bookingOf(r, bookings)} onCommand={onCommand} />
+          <NrDateBox r={r} onCommand={onCommand} />
           {(booking || bookRun) && (
             <BookForm record={r} hauliers={hauliers} recs={recs} run={bookRun} onBook={onBook}
               asks={asks} todo={todo} bookings={bookings} approved={approved} onApprove={onApprove} onUnapprove={onUnapprove}

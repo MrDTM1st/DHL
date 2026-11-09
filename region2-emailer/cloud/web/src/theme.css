@@ -915,3 +915,14 @@ a.callbtn:hover{ color:var(--red-ink); }
 .approvedbar .ab-run{ display:grid; gap:4px; font-size:12.5px; }
 .approvedbar .ab-said{ font-size:12px; color:var(--faint); overflow-wrap:anywhere; }
 .bookstatus{ border-left:3px solid var(--red); }
+
+/* Network Rail date change (nr_date.py, his 09/11): the order's panel box and the Dashboard card */
+.nrdate { margin: 4px 0 10px; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--input); border-radius: 6px; }
+.nrdate.open { border-left-color: var(--purple, #7B2CBF); }
+.nrdate-h { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 13px; }
+.nrdate-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+.nrdate-said { overflow-wrap: anywhere; }
+.nrdate-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.nrdate-who { font-size: 12.5px; font-weight: 700; color: var(--red-ink, var(--red)); }
+.nrcard { border-left-color: var(--purple, #7B2CBF); }
+.nrcard .nrdate { margin: 4px 0 0; }

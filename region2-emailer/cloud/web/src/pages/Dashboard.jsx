@@ -3,6 +3,7 @@ import { I } from '../icons.jsx';
 import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.js';
 import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
+import { NrDateCard } from '../components/NrDateBox.jsx';
 
 // ---- Holiday cover / handover card ----
 function HolidayCard({ panel, onCommand }) {
@@ -512,6 +513,8 @@ export default function Dashboard({
       </div>
 
       <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
+
+      <NrDateCard records={records} onCommand={onCommand} />
 
       <MyWeek week={panel && panel.planner_week} />
 
