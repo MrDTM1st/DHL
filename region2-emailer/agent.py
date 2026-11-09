@@ -448,6 +448,16 @@ def _asks():
         return {}
 
 
+def _om():
+    """A DTS whose site can't be reached goes to Order Management (his rule 09/11): who they are, and per DTS who we
+    have emailed and when Order Management was last asked (om_contact sweep, Sent Items)."""
+    try:
+        import om_contact
+        return {"team": om_contact.ORDER_MANAGEMENT, "dts": om_contact.load()}
+    except Exception:
+        return {}
+
+
 def _synergy_sites():
     """Collection sites from the template's Supplier Details tab, so the unknown
     -site pop-up can offer them as a dropdown instead of six blank boxes. The
@@ -534,6 +544,7 @@ def push_panel():
             "pins": _pins(),
             "asks": _asks(),
             "mat_teams": _mat_teams(),
+            "om": _om(),
             "ctms_todo": _ctms_todo(),
             "ctms_plan": _ctms_plan(),
             "planner_week": _planner_week(),
@@ -737,6 +748,8 @@ def _bg_jobs():
         ("phase2_check", ["phase2.py", "check"], 1200, 1800, lambda: True),
         # who has already been asked to cover each job (read-only, Sent Items)
         ("haulier_asks", ["haulier_asks.py"], 1800, 600, lambda: True),
+        # who each open DTS's site has been emailed by, and whether Order Management was asked (read-only, Sent Items)
+        ("om_tries", ["om_contact.py", "sweep"], 1800, 300, lambda: True),
         # a booked DTS onto the team's DTS sheet, through the work PC (his 03/11)
         ("dts_sheet", ["dts_sheet.py", "run"], 300, 180, lambda: True),
         # keep the order index fresh
@@ -1915,6 +1928,7 @@ def main():
                         json.dump(e, f, indent=1)
                     out = run(["send_order.py", "sendhaulier"])
                     label = ("Alternative-contact request" if e.get("what") == "alt_contact"
+                             else "Order Management request" if e.get("what") == "om_alt_contact"
                              else "Cover request")
                     if "sent to" in out:
                         report("done", f"{label} sent to {e.get('haulier') or e['to']}.",

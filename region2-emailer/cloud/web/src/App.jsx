@@ -477,7 +477,7 @@ export default function App() {
             onCall={onCall} onPhoneUpdate={onPhoneUpdate} openPhone={phoneFor === selectedId}
             onAdhocBooked={onAdhocBooked} onBook={onBook}
             bookRun={bookRun && bookRun.record === selectedId ? bookRun : null} onBookDone={() => setBookRun(null)}
-            onCommand={onCommand} matTeams={panel.mat_teams || {}} onUploadCsv={onUploadCsv}
+            onCommand={onCommand} matTeams={panel.mat_teams || {}} om={panel.om || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
             asks={panel.asks || {}} nocTeams={panel.noc_teams || []}
             todo={panel.ctms_todo || []} bookings={panel.bookings || []}

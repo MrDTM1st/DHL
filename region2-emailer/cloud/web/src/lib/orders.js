@@ -435,6 +435,47 @@ export function materialsTypeFor(r) {
   return null;
 }
 
+// A DTS whose delivery site can't be reached: the email to Network Rail's
+// Order Management team asking for another contact (his rule 09/11/2026).
+// `om` is the agent's panel.om ({team, dts: {ref: {tried, asked}}}): tried =
+// our emails about the DTS to someone outside DHL (Sent Items). The DTS's own
+// contact is usually just a name and a phone number, so the call is written
+// in for him to check before he sends. Returns {to, subject, message}.
+export function omAltContact(r, om) {
+  const refs = (r.orders || []).map(String);
+  const ref = refs.join(' / ');
+  const site = r.worksite || r.site || '';
+  const t = (r.details || {}).time || {};
+  const win = t.earliest ? ` (${t.earliest}${t.latest ? ' - ' + t.latest : ''})` : '';
+  const c = (r.details || {}).contact || {};
+  const name = String(c.name || r.name || '').trim();
+  const nice = name.toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+  const tried = [];
+  if (name || c.phone) tried.push(`- ${[nice, c.phone].filter(Boolean).join(', ')} (the contact on the DTS): called, no answer`);
+  const seen = new Set();
+  refs.forEach((o) => (((om && om.dts) || {})[o] || {}).tried?.forEach((x) => {
+    const k = `${x.to}|${x.at}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    tried.push(`- ${x.name && x.name.toLowerCase() !== x.to ? x.name + ' <' + x.to + '>' : x.to}: emailed ${String(x.at || '').slice(0, 16)}, no reply`);
+  }));
+  const coll = (r.collections && r.collections[0]) || { site: r.collection_site, pc: r.collection_pc };
+  const lines = ['Hi,', '',
+    `I have been trying to reach the delivery site contact for DTS ${ref} but I have not managed to get hold of them.`, '',
+    `DTS: ${ref}`,
+    `Delivery site: ${[site, r.postcode].filter(Boolean).join(', ')}`,
+    `Delivery date: ${r.delivery_date || 'not given'}${win}`];
+  if (coll && (coll.site || coll.pc)) lines.push(`Collection: ${[coll.site, coll.pc].filter(Boolean).join(', ')}${r.collection_date ? ' on ' + r.collection_date : ''}`);
+  lines.push('', 'Who I have tried:', ...(tried.length ? tried : ['- (nobody named on the DTS)']), '',
+    'Could you send me an alternative contact for the delivery site so I can get the delivery booked in?', '',
+    'Kind regards');
+  return {
+    to: ((om && om.team) || {}).email || 'ordermanagement@networkrail.co.uk',
+    subject: `${ref} ${site} ${r.postcode || ''} - alternative contact needed`.replace(/\s+/g, ' ').trim(),
+    message: lines.join('\n'),
+  };
+}
+
 // Is any leg of this job at night (window starting 20:00-05:59) or on a
 // weekend? Some carriers avoid that work - DHL NOC in particular - so the
 // ranking needs to know. Returns e.g. ['night', 'weekend'] or [].

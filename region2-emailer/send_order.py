@@ -363,6 +363,21 @@ def send_haulier(ns):
     untracked-order recovery excludes these for the same reason)."""
     import json as _json
     e = _json.load(open(PENDING_HAULIER, encoding="utf-8"))
+    if e.get("what") == "om_alt_contact":
+        # a DTS's site can't be reached: Order Management, sent on the DTS's own thread (om_contact, his rule 09/11)
+        import om_contact
+        ok, said = om_contact.send(ns, e)
+        if ok:
+            try:
+                os.remove(PENDING_HAULIER)   # done - never resendable by accident
+            except Exception:
+                pass
+            say(f"Order Management request {said}")
+            say("SEND_RESULT sent=1")
+            return 1
+        say(f"NOT sent: {said}")
+        say("SEND_RESULT sent=0")
+        return 0
     to, cc, _removed = bd.clean_to_cc(e.get("to", ""), e.get("cc", ""))
     if not to:
         print("No recipient - nothing sent.")

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   ordLabel, statusLabel, dueText, dateShort, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
-  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, siteContactOf, stamp, answerText,
+  fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, omAltContact, siteContactOf, stamp, answerText,
   emailedBack,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
@@ -170,7 +170,7 @@ function clearEdit(id) {
 }
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUpdate, openPhone,
-  onAdhocBooked, onBook, bookRun, onBookDone, pickedHaulier, onPickHaulier, onCommand, matTeams, onUploadCsv, asks, nocTeams = [],
+  onAdhocBooked, onBook, bookRun, onBookDone, pickedHaulier, onPickHaulier, onCommand, matTeams, om, onUploadCsv, asks, nocTeams = [],
   todo = [], bookings = [], approved = false, onApprove, onUnapprove }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
@@ -237,6 +237,15 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
         '', 'Kind regards'].join('\n'),
       what: 'alt_contact',
     });
+  };
+  // A DTS's site can't be reached: Order Management for another contact (his rule 09/11). Sent on the DTS's own
+  // thread by the home PC (om_contact.send), so the trail goes with it.
+  const startOmCompose = () => {
+    const o = omAltContact(r, om);
+    setComposing('Order Management');
+    setKind('team');
+    setRemembered(false);
+    setDraft({ to: o.to, cc: '', subject: o.subject, message: o.message, what: 'om_alt_contact' });
   };
   const sendCompose = (h) => {
     if (!draft.to.trim() || !draft.message.trim()) return;
@@ -410,7 +419,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
       )}
       <div className="hcompose-foot">
         <span className="hint-sig">
-          {r.form_file ? 'signature, QR & the filled request form are attached automatically'
+          {draft.what === 'om_alt_contact' ? "signature & QR are added; it goes on the DTS's own email trail"
+            : r.form_file ? 'signature, QR & the filled request form are attached automatically'
             : 'signature & QR are added automatically'}
         </span>
         <button className="btn mini" onClick={() => setComposing(null)}>Cancel</button>
@@ -580,6 +590,29 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
               {composeBox({ name: team.name })}
             </div>
           )}
+          {r.kind === 'dts' && (() => {
+            const asked = (r.orders || []).map((o) => ((om && om.dts) || {})[String(o)] || {})
+              .map((x) => x.asked).filter(Boolean).sort().pop();
+            return (
+              <div style={{ margin: '2px 0 10px' }}>
+                <button className="btn mini"
+                  onClick={() => (composing === 'Order Management' ? setComposing(null) : startOmCompose())}>
+                  Can't reach the site? Ask Order Management for another contact
+                </button>
+                {asked && (
+                  <div className="s" style={{ marginTop: 4 }}>
+                    Order Management asked {asked.slice(8, 10)}/{asked.slice(5, 7)} {asked.slice(11, 16)}.
+                  </div>
+                )}
+                {composing === 'Order Management' && (
+                  <div className="s" style={{ marginTop: 4 }}>
+                    Check "Who I have tried" before sending: add when you called. It goes on the DTS's own email trail.
+                  </div>
+                )}
+                {composeBox({ name: 'Order Management' })}
+              </div>
+            );
+          })()}
           {teamChoices.length > 0 && (
             <div style={{ margin: '2px 0 10px' }}>
               <div className="lbl" style={{ marginBottom: 6 }}>
