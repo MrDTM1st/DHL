@@ -363,7 +363,7 @@ export function jobOf(r) {
   if (rails) {
     out.push(RAIL);
     if (metres !== null && metres > 18.3) out.push(TROMBONE);
-    else if (metres !== null && metres > 13.6) out.push(FLAT_60);    // longer than a normal trailer
+    else if (metres !== null && metres > 13.72) out.push(FLAT_60);   // longer than 45 ft: 13.716 m short rails go on a 40ft artic (his 10/11)
   }
   if (wheelsets) out.push(WHEELSETS);
   // offloading - what lifts it off at the site

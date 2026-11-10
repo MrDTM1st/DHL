@@ -49,17 +49,38 @@ def _quiet(fn, *a, **k):
 
 
 def do_item(R, p, first, last):
-    """One item, on the work PC: {"done", "held", "clean", "said", "seconds"}."""
-    item = {"kind": p["kind"], "lines": p.get("lines") or [], "set": p.get("set") or {}}
-    wait = ITEM_SECONDS + LINE_SECONDS * max(1, len(item["lines"]))
-    (result, payload), _ = _quiet(R.ask_waiting, "ctms_item", wait_total=wait, item=item, first=first, last=last)
-    try:
-        _quiet(R.trace, f"item-{p['id']}", {"item": item}, result, payload)
-    except Exception:
-        pass
-    payload = payload or {}
-    return {"done": bool(payload.get("done")), "held": bool(payload.get("held")),
-            "clean": bool(payload.get("clean")), "said": str(result.get("detail") or ""), "seconds": payload.get("seconds")}
+    """One item, on the work PC: {"done", "held", "clean", "said", "seconds"}. An update whose lines take different
+    vehicles - rails and ballast on one reply (his 10/11) - goes as one command a vehicle, each with its own lines;
+    one that doesn't finish stops the rest of that item."""
+    groups = p.get("groups") or [None]
+    outs = []
+    for i, g in enumerate(groups):
+        s = dict(p.get("set") or {})
+        lines = p.get("lines") or []
+        if g:
+            lines = list(g.get("lines") or [])
+            s["veh"] = g["veh"]
+            if g.get("services") is not None:
+                s["services"] = g["services"]
+        item = {"kind": p["kind"], "lines": lines, "set": s}
+        wait = ITEM_SECONDS + LINE_SECONDS * max(1, len(item["lines"]))
+        (result, payload), _ = _quiet(R.ask_waiting, "ctms_item", wait_total=wait, item=item,
+                                      first=first and i == 0, last=last and i == len(groups) - 1)
+        try:
+            _quiet(R.trace, f"item-{p['id']}" + (f"-{i + 1}" if g else ""), {"item": item}, result, payload)
+        except Exception:
+            pass
+        payload = payload or {}
+        outs.append({"done": bool(payload.get("done")), "held": bool(payload.get("held")),
+                     "clean": bool(payload.get("clean")), "said": str(result.get("detail") or ""),
+                     "seconds": payload.get("seconds")})
+        if not outs[-1]["done"]:
+            break
+    if groups == [None]:
+        return outs[0]
+    return {"done": len(outs) == len(groups) and all(o["done"] for o in outs), "held": any(o["held"] for o in outs),
+            "clean": all(o["clean"] for o in outs), "said": "; ".join(o["said"] for o in outs if o["said"]),
+            "seconds": round(sum(float(o["seconds"] or 0) for o in outs), 1)}
 
 
 def file_emails(p):

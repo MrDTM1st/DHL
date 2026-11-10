@@ -182,6 +182,27 @@ def test_a_run_looks_up_what_only_ctms_knows_first_then_plans_it_again():
     assert ticked == ["n1"] and "the work PC was busy" in out["said"] and "stopped" not in out["said"], out
 
 
+def test_lines_on_different_vehicles_go_as_one_command_a_vehicle():
+    # his 10/11: one reply for rails and ballast - the rails on a 40ft artic, the bags on a rigid, never one for all
+    p = {"id": "m", "kind": "update", "orders": ["5999901", "7999901"], "status": "ready",
+         "lines": ["5999901-1-1", "7999901-1-1"], "set": {"deliver": "16/11/26 06:00-14:00"},
+         "groups": [{"lines": ["5999901-1-1"], "veh": "artic", "services": {"HIAB": True, "PTS": True}},
+                    {"lines": ["7999901-1-1"], "veh": "rigid", "services": {"HIAB": True, "PTS": False}}]}
+    fake = FakeRemote()
+    out, ticked = _run([p], fake)
+    sent = [i[1] for i in fake.items]
+    assert out["ok"] and ticked == ["m"] and len(sent) == 2, out
+    assert sent[0]["item"]["lines"] == ["5999901-1-1"] and sent[0]["item"]["set"]["veh"] == "artic"
+    assert sent[1]["item"]["lines"] == ["7999901-1-1"] and sent[1]["item"]["set"]["veh"] == "rigid"
+    assert sent[1]["item"]["set"]["services"] == {"HIAB": True, "PTS": False}
+    assert all(s["item"]["set"]["deliver"] == "16/11/26 06:00-14:00" for s in sent)
+    assert [(s["first"], s["last"]) for s in sent] == [(True, False), (False, True)]
+    # the first group not done: the second isn't sent, and the item isn't ticked off
+    fake = FakeRemote({"5999901-1-1": {"done": False, "clean": True, "said": "5999901-1-1: stopped"}})
+    out, ticked = _run([p], fake)
+    assert ticked == [] and len(fake.items) == 1 and not out["ok"]
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

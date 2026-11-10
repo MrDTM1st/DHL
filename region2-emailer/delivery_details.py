@@ -394,6 +394,11 @@ def parse_access(text):
         vehicle = mv.group(1).replace(" ", "")
     clauses = [c for c in re.split(r"[,./;]|\band\b", s) if c.strip()]
     artic = rear = None
+    # "artics ok" said outright, wherever it sits: in "hiab required artics ok rear steer not required" (10/11) it shared
+    # a clause with the rear steer, and the whole reply's "not" was read as no artics
+    said_yes = re.search(r"\b(?:artics?|arctics?)\s+(?:are\s+|is\s+)?(?:ok|okay|fine|good|yes|can|allowed|welcome)\b", s)
+    said_no = re.search(r"\b(?:no|not)\s+(?:artics?|arctics?)\b|\b(?:artics?|arctics?)\s+(?:no|not|cannot|can't|cant)\b", s)
+    told = "yes" if said_yes and not said_no else "no" if said_no and not said_yes else None
     for c in clauses:
         if "rear" in c:
             rear = _yesno(c) or "yes"          # "rear steer" alone means it's needed
@@ -404,6 +409,8 @@ def parse_access(text):
         a, r = _yesno(clauses[0]), _yesno(clauses[1])
         if a and r:
             artic, rear = a, r
+    if told:
+        artic = told
     if artic is None:
         artic = _yesno(s)
     if artic is None and vehicle:

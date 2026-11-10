@@ -21,7 +21,8 @@ export function defaultTrailer(r, job) {
   const mats = `${r.materials || ''} ${(r.product_codes || []).join(' ')}`;
   if (/stone\s*-?\s*blower|\bloose\b|100500\/001/i.test(mats)) return 'NR_R_TIP26_8';
   if (job.metres !== null && job.metres > 18.3) return 'NR_TROM_80FT';
-  if (job.metres !== null && job.metres > 13.6) return 'NR_60_ART_FL';
+  // 45 ft (13.716 m) short rails go on a 40ft artic, his 10/11 - "too short for a 60-foot"
+  if (job.metres !== null && job.metres > 13.72) return 'NR_60_ART_FL';
   if (job.byWeight === 'rigid') return 'NR_FLAT_RIG';
   if (job.byWeight === 'artic' || job.rails) return 'NR_ARTIC_FL';
   return '';

@@ -459,6 +459,122 @@ def test_no_site_contact_in_the_reply_means_the_sender_on_the_sheets_name_and_nu
     assert p["status"] == "held" and "No number for Jo Colleague" in c["why"] and c["text"]
 
 
+# ---- his 10/11: each line on what fits its own load; 45 ft short rails on a 40ft artic -----------------------------------
+RAIL_45FT = "RAIL SHORT, 56E1, 260 GRADE, 13.716M, UNDRILLED"
+
+
+def _mixed(found_weights=None, cards=True, **details):
+    """One reply for two rails orders and two bagged-ballast orders, as 10/11's was (made-up numbers, real first digits)."""
+    rec = dict(_rec("5999901", "16/11/2026", **details), orders=["5999901", "5999902", "7999901", "7999902"],
+               materials="15x rails, 20x ballast", product_codes=["0057/100500/002", RAIL_45FT], ctms_weight=None)
+    it = dict(_item("5999901"), orders=list(rec["orders"]))
+    line = lambda ref: {"ref": ref, "status": "UNSCHEDULED", "deliver_by": "16/11/26 17:01"}  # noqa: E731
+    found = {f"{o}|16/11/2026": {"lines": [line(f"{o}-1-1")]} for o in rec["orders"]}
+    if cards:
+        for o in rec["orders"]:
+            found[f"{o}|16/11/2026"]["veh"] = {f"{o}-1-1": False}
+            if found_weights and f"{o}-1-1" in found_weights:
+                found[f"{o}|16/11/2026"]["weight"] = {f"{o}-1-1": found_weights[f"{o}-1-1"]}
+    return it, rec, found
+
+
+def test_45ft_short_rails_go_on_a_40ft_artic_not_a_60ft():
+    rec = dict(_rec("9100090", "05/11/2026"), materials="15x rails", product_codes=[RAIL_45FT], ctms_weight=11000)
+    p = P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "artic", p
+    assert any("13.716 m rails - a 40ft artic" in e for e in p["explain"]), p["explain"]
+    rec = dict(rec, product_codes=["RAIL SHORT, 56E1, 15.24M"])               # 50 ft: too long for the 40ft
+    assert P.plan([_item("9100090")], [rec], _found("9100090", "05/11/2026"))[0]["set"]["veh"] == "60ft"
+
+
+def test_a_reply_covering_rails_and_ballast_puts_each_line_on_what_fits_it():
+    weights = {"5999901-1-1": 3840.0, "5999902-1-1": 7680.0, "7999901-1-1": 10000.0, "7999902-1-1": 10000.0}
+    it, rec, found = _mixed(weights, pts={"value": "yes", "confidence": "high"})
+    p = P.plan([it], [rec], found)[0]
+    assert p["status"] == "ready" and "veh" not in p["set"], p
+    by = {tuple(g["lines"]): g for g in p["groups"]}
+    rails, ballast = by[("5999901-1-1", "5999902-1-1")], by[("7999901-1-1", "7999902-1-1")]
+    assert rails["veh"] == "artic" and ballast["veh"] == "rigid", p["groups"]          # never the rails' vehicle on the bags
+    assert rails["services"]["HIAB"] and ballast["services"]["HIAB"]
+    assert rails["services"]["REAR STEER"] and not ballast["services"]["REAR STEER"]   # a rigid never gets rear steer
+    assert rails["services"]["PTS"] and not ballast["services"]["PTS"]                 # PTS only ever on the rails
+    assert "Rear steer required" in p["set"]["comments"]
+    assert any(e.startswith("5999901-1-1, 5999902-1-1: 13.716 m rails - a 40ft artic") for e in p["explain"]), p["explain"]
+    assert any(e.startswith("7999901-1-1: 10,000 kg in CTMS - a rigid") for e in p["explain"]), p["explain"]
+    assert p["lines"] == ["5999901-1-1", "5999902-1-1", "7999901-1-1", "7999902-1-1"]
+    # the ballast lines' weights not read yet: the run opens their cards first, and nothing is typed on a guess
+    it, rec, found = _mixed(cards=False)
+    p = P.plan([it], [rec], found)[0]
+    assert p["lookup"] and p["lookup"]["cards"] is True and not p["groups"] and "veh" not in p["set"], p
+    # not looked up at all: no vehicle for the whole reply either
+    p = P.plan([it], [rec], {})[0]
+    assert p["lookup"]["cards"] is True and "veh" not in p["set"] and not p["groups"], p
+
+
+def test_two_ten_bag_ballast_lines_are_rigids_never_one_artic():
+    rec = dict(_rec("7999911", "16/11/2026"), orders=["7999911", "7999912"], materials="20x ballast",
+               product_codes=["0057/100500/002"], ctms_weight=None)
+    it = dict(_item("7999911"), orders=["7999911", "7999912"])
+    line = lambda ref: {"ref": ref, "status": "UNSCHEDULED", "deliver_by": "16/11/26 17:01"}  # noqa: E731
+    found = {f"{o}|16/11/2026": {"lines": [line(f"{o}-1-1")], "veh": {f"{o}-1-1": False},
+                                 "weight": {f"{o}-1-1": 10000.0}} for o in ("7999911", "7999912")}
+    p = P.plan([it], [rec], found)[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "rigid" and not p["groups"], p
+    # one line of all 20: an artic, as before
+    rec1 = dict(rec, orders=["7999911"])
+    p = P.plan([_item("7999911")], [rec1], {"7999911|16/11/2026": found["7999911|16/11/2026"]})[0]
+    assert p["set"]["veh"] == "artic", p
+
+
+def test_a_mixed_reply_whose_lines_cant_be_told_apart_is_his():
+    it, rec, found = _mixed({"5999901-1-1": 1.0})
+    for k in list(found):                      # numbers that say nothing about whose they are
+        g = found.pop(k)
+        g["lines"] = [dict(ln, ref="9" + ln["ref"][1:]) for ln in g["lines"]]
+        found["9" + k[1:]] = g
+    rec = dict(rec, orders=["9" + o[1:] for o in rec["orders"]])
+    it = dict(it, orders=list(rec["orders"]))
+    p = P.plan([it], [rec], found)[0]
+    assert p["status"] == "held" and any(c["field"] == "veh_lines" for c in p["checks"]) and "veh" not in p["set"], p
+
+
+def test_an_answer_counts_only_for_the_question_it_answered():
+    # 60ft picked when the 45 ft rails' only choice was the 60ft: now they fit a 40ft artic, and the pick isn't carried on
+    rec = dict(_rec("9100091", "05/11/2026", artic_access={"value": "no", "confidence": "high", "raw": "no"}),
+               materials="2x rails", product_codes=[RAIL_45FT])
+    p = P.plan([dict(_item("9100091"), answers={"veh": "60ft"})], [rec], _found("9100091", "05/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "veh")
+    assert p["status"] == "held" and c["options"] == ["artic"], p
+    p = P.plan([dict(_item("9100091"), answers={"veh": "artic"})], [rec], _found("9100091", "05/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["veh"] == "artic", p
+
+
+def test_a_date_typed_as_161126_reads_and_one_that_doesnt_is_asked_again():
+    assert P._day("161126") == "16/11/2026" and P._day("16112026") == "16/11/2026" and P._day("16.11.26") == "16/11/2026"
+    assert P._day("16/11/26 17:01") == "16/11/2026" and P._day("the 16th") == ""
+    rec = _rec("9100093", "16/11/2026")
+    rec["details"]["date"] = {"value": None, "confidence": "amber", "options": [], "raw": "Yes the 16th would be fine"}
+    p = P.plan([dict(_item("9100093"), answers={"date": "161126"})], [rec], _found("9100093", "16/11/2026"))[0]
+    assert p["set"]["deliver"] == "16/11/26 08:00-12:00", p
+    p = P.plan([dict(_item("9100093"), answers={"date": "the 16th"})], [rec], _found("9100093", "16/11/2026"))[0]
+    c = next(c for c in p["checks"] if c["field"] == "date")
+    assert p["status"] == "held" and "didn't read as a date" in c["why"] and "deliver" not in p["set"], p
+
+
+def test_artics_ok_in_one_run_on_sentence_reads_as_yes():
+    import delivery_details as DD
+    keep = DD.recall
+    DD.recall = lambda field, raw: None            # what the parser reads by itself, not a remembered correction
+    try:
+        a, r, _veh, _conf = DD.parse_access("yes the 16th would be fine between 06.00 and 14.00 hiab required artics ok "
+                                            "rear steer not required")
+        assert (a, r) == ("yes", "no"), (a, r)
+        assert DD.parse_access("no artics please, rear steer needed")[0] == "no"
+        assert DD.parse_access("artic no, rear steer no")[0] == "no"
+    finally:
+        DD.recall = keep
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
