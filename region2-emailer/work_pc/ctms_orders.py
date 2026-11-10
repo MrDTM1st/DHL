@@ -127,6 +127,111 @@ def search(ref, booking=False):
             _click(742, 226, react=True, box=[30, 228, 395, 250], timeout=15)]
 
 
+# -- the Order Search card where the Access Bridge places it (10/11/2026)
+# CTMS as its own app draws the card shorter than Edge did (its Clear and Refresh about 24 px higher) and not always
+# where Edge had it (sometimes on the right of the window), so search()'s stored points clicked beside the buttons and
+# every search "found nothing": the to-do's Run, Book's split and the map's look-up alike. The card's parts are found
+# by their names and clicked where the Access Bridge places them; the stored points stay as the fallback for a read
+# that hasn't got the card in it.
+CARD_TITLE = "Order Search"
+FIRST_ROW_BOX = [30, 228, 395, 250]   # Order Summary's first line, as the recipes were measured: what a Refresh changes
+
+
+def _els(fields):
+    return ((fields or {}).get("elements") if isinstance(fields, dict) else fields) or []
+
+
+def _frame_els(fields, title):
+    """The elements inside the window whose title starts with `title`; None when that window isn't there."""
+    els = _els(fields)
+    i0 = next((i for i, e in enumerate(els) if e.get("r") == "internal frame"
+               and str(e.get("nm") or "").startswith(title)), None)
+    if i0 is None:
+        return None
+    lv0, out = els[i0].get("lv", 0), []
+    for e in els[i0 + 1:]:
+        if e.get("lv", 0) <= lv0:
+            break
+        out.append(e)
+    return out
+
+
+def _placed(e):
+    at = (e or {}).get("at") or []
+    return len(at) == 4 and at[2] > 0 and at[3] > 0
+
+
+def _mid(e):
+    x, y, w, h = e["at"]
+    return [x + w // 2, y + h // 2]
+
+
+def card_parts(fields):
+    """The Search card's boxes and buttons the Access Bridge places on the screen: {customer, booking, close, clear,
+    refresh}, each only when it is there (the app names its boxes "Enter a Customer Ref to search for" and so on).
+    None when the card's window isn't there at all."""
+    part = _frame_els(fields, CARD_TITLE)
+    if part is None:
+        return None
+    got = {}
+    for e in part:
+        nm, r = str(e.get("nm") or ""), e.get("r")
+        key = ("customer" if r == "text" and "Customer Ref" in nm else
+               "booking" if r == "text" and "Booking Ref" in nm else
+               nm.lower() if r == "push button" and nm in ("Close", "Clear", "Refresh") else None)
+        if key and key not in got and _placed(e):
+            got[key] = e
+    return got
+
+
+def card_up(fields):
+    """The Search card is on the screen, wherever it sits: its window there with something of it placed."""
+    return bool(card_parts(fields))
+
+
+def search_at(fields, ref, booking=False):
+    """search(), each click where the Access Bridge places the card's parts in `fields` (a read taken with the card
+    up). Without them (an older read, a card it couldn't read) search() itself. No anchor here: with the card up the
+    window offset could read the card's title bar - the batch's anchor, taken before, places the watched box."""
+    p = card_parts(fields) or {}
+    box = p.get("booking" if booking else "customer")
+    if not (box and p.get("clear") and p.get("refresh")):
+        return search(ref, booking=booking)
+    return [{"action": "click", "screen": _mid(p["clear"]), "after": 0.4},
+            {"action": "click", "screen": _mid(box), "after": 0.15}, {"action": "key", "key": "home", "after": 0.05},
+            {"action": "key", "key": "shift+end", "after": 0.05}, {"action": "type", "text": ref, "after": 0.1},
+            {"action": "click", "screen": _mid(p["refresh"]), "react": True, "box": list(FIRST_ROW_BOX), "timeout": 15}]
+
+
+def card_close_at(fields):
+    """The Search card's Close where the Access Bridge places it; the stored point when the read hasn't got it."""
+    p = card_parts(fields) or {}
+    if p.get("close"):
+        return [{"action": "click", "screen": _mid(p["close"]), "after": 0.5}]
+    return [_click(509, 226, after=0.5)]
+
+
+def first_status(fields):
+    """Order Summary's first line's Status cell where the Access Bridge places it; None when none is read."""
+    part = _frame_els(fields, "Order Summary") or []
+    cells = [e for e in part if e.get("r") == "text" and _placed(e)
+             and re.fullmatch(r"Enter value for : STATUS(?:\s+Required)?", str(e.get("nm") or ""))]
+    return min(cells, key=lambda e: e["at"][1]) if cells else None
+
+
+def open_line_at(fields, t):
+    """open_line(), the card's Close and the line's Status cell where the Access Bridge places them in `fields` (a read
+    taken after the search). Without the cell, open_line()'s stored point for it (after the card's own Close, if read)."""
+    cell = first_status(fields)
+    if cell is None:
+        return card_close_at(fields) + open_line(t)[1:]       # open_line's first step is the card's stored Close
+    return card_close_at(fields) + [
+        {"action": "click", "screen": _mid(cell), "double": True, "react": True, "box": [20, 121, 1250, 171],
+         "timeout": 20},
+        {"action": "anchor", "window": True},
+        _find(t, "od-vehtype", (940, 250, 1100, 380), 5)]
+
+
 def open_line(t):
     """The one line the last search found, opened: the card closed first (left open it sits over the order), the
     line's Status cell double-clicked, the order's own card waited for - its Veh Type label seen there."""
@@ -136,11 +241,13 @@ def open_line(t):
             _find(t, "od-vehtype", (940, 250, 1100, 380), 5)]
 
 
-def close_line(t):
-    """The order's Close - nothing was changed, so nothing is asked - then Order Summary's Search card again."""
+def close_line(t, then_card=True):
+    """The order's Close - nothing was changed, so nothing is asked - then Order Summary's Search card again.
+    then_card=False: the card's labels aren't waited for here - the app can open the card elsewhere (10/11), so the
+    caller looks for it through the Access Bridge as well."""
     return [_click(424, 733, react=True, timeout=15),
             {"action": "anchor", "window": True},
-            _find(t, "os-search", SEARCH_BOX, 10, click=True, react=True)] + card(t)
+            _find(t, "os-search", SEARCH_BOX, 10, click=True, react=True)] + (card(t) if then_card else [])
 
 
 def close_summary(t):
@@ -162,7 +269,9 @@ def lines(fields):
     for e in els[i0 + 1:]:
         if e.get("lv", 0) <= lv0:
             break
-        m = re.fullmatch(r"Enter value for : (\w+)", e.get("nm") or "")
+        # the app adds " Required" to a required column's name ("Enter value for : STATUS Required", 10/11): left
+        # unread, every status came back blank - and a blank status is never UNSCHEDULED, so an open line read as booked
+        m = re.fullmatch(r"Enter value for : (\w+)(?:\s+Required)?", e.get("nm") or "")
         if e.get("r") == "text" and m and m.group(1) in COLUMNS and e.get("at"):
             cols.setdefault(COLUMNS[m.group(1)], []).append((e["at"][1], str(e.get("v") or "").strip()))
     down = {k: [v for _, v in sorted(cells)] for k, cells in cols.items()}

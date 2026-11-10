@@ -358,8 +358,8 @@ class Booking:
                 raise Stop("An order is open in CTMS with changes not saved. Nothing was touched: save or close it and "
                            "press Book again.")
         if any(f.startswith("Order Summary") for f in frames(self.els)):       # the to-do's Run leaves it up, and its card
-            if self.seen("os-card", ctms_orders.CARD_BOX):
-                self.run([_click((509, 226), after=0.5)])
+            if self.seen("os-card", ctms_orders.CARD_BOX) or ctms_orders.card_up(self.els):
+                self.run(ctms_orders.card_close_at(self.els))
             self.run(ctms_orders.close_summary(self.t))
             self.look()
         self.carrier_window_away()
@@ -780,20 +780,32 @@ class Booking:
         self.unasked()
 
     # -- why the well hasn't got it: Order Summary asked, the filters cleared when they're what hides it
+    def search_card(self, card=False):
+        """Order Search's card up after to_orders: known by its labels where Edge drew it, or through the Access Bridge
+        wherever the app opens it (10/11). The read taken with it up, for where its boxes are."""
+        try:
+            self.run(ctms_orders.card(self.t))
+        except RuntimeError:
+            if not ctms_orders.card_up(self.look(card=card)):
+                raise
+            return self.els
+        return self.look(card=card)
+
     def summary_lines(self, orders):
         """Every line of these orders as Order Summary lists them (searches and reads only), then back to Planning."""
-        self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t) + ctms_orders.card(self.t))
-        far = ctms_orders.upto(self.look(card=True), self.now)
+        self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t))
+        card = self.search_card(card=True)
+        far = ctms_orders.upto(card, self.now)
         if far:
             self.run(far)
         got = []
         for o in orders:
             try:
-                self.run(ctms_orders.search(ctms_orders.search_ref(o)))
+                self.run(ctms_orders.search_at(card, ctms_orders.search_ref(o)))
             except RuntimeError:
                 pass                           # nothing found leaves the list empty
             got += [r for r in ctms_orders.lines({"elements": self.look(card=True)}) or [] if ctms_orders.belongs(r["ref"], o)]
-        self.run([_click((509, 226), after=0.5)] + ctms_orders.close_summary(self.t) + [ANCHOR])
+        self.run(ctms_orders.card_close_at(card) + ctms_orders.close_summary(self.t) + [ANCHOR])
         self.look()
         return got
 
@@ -974,19 +986,20 @@ class Booking:
     def split(self, ref, parts):
         """One line into equal parts, through Order Summary: its menu's Split Orders, the number, Process, OK, Exit, and
         back to Planning with the well refreshed. CTMS names them _S1, _S2 ... and halves the weight itself."""
-        self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t) + ctms_orders.card(self.t))
-        far = ctms_orders.upto(self.look(), self.now)
+        self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t))
+        card = self.search_card()
+        far = ctms_orders.upto(card, self.now)
         if far:
             self.run(far)
         try:
-            self.run(ctms_orders.search(ref))
+            self.run(ctms_orders.search_at(card, ref))
         except RuntimeError:
             pass                               # the same line listed already: nothing changes on the screen
         self.look()
         one = [r for r in ctms_orders.lines({"elements": self.els}) or [] if r["ref"] == ref]
         if len(one) != 1 or one[0]["status"] != ctms_orders.OPEN:
             raise Stop(f"Order Summary doesn't show {ref} as one unscheduled line - nothing was split.")
-        self.run([_click((509, 226), after=0.5),            # the card closed
+        self.run(ctms_orders.card_close_at(card) + [       # the card closed
                   _click((155, 238), after=0.3), _click((155, 238), right=True, after=0.3),
                   _find(self.t, "os-split", SUMMARY_MENU, 3, click=True, after=0.2),
                   _find(self.t, "split-title", SPLIT_TITLE, 8),

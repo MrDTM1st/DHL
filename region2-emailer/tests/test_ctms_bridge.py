@@ -3108,7 +3108,8 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
         ran, reads, seen = [], [], {}
 
         def step(action, args):
-            what = args.get("name") or (tuple(args["px"]) if "px" in args else args.get("key") or args.get("text"))
+            what = args.get("name") or (tuple(args["px"]) if "px" in args else tuple(args["screen"]) if "screen" in args
+                                        else args.get("key") or args.get("text"))
             ran.append((action, what, bool(args.get("double"))))
             return "ok"
         b.window_step = step
@@ -3140,7 +3141,9 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
             ran.index(("find", "os-card", False))                       # the card was not up: the menu first
         typed = [w for a, w, _ in ran if a == "type"]
         assert typed == ["9100020%", "9100020-2-1", "AH01/11/2026/AB-CD%"], typed   # searches only
-        assert [x for x in ran if x[2]] == [("click", (267, 238), True)]           # one line opened: the open one
+        # one line opened, the open one: its Status cell double-clicked where the Access Bridge places it (10/11)
+        assert [x for x in ran if x[2]] == [("click", (40, 337), True)]
+        assert ran.index(("click", (509, 226), False)) < ran.index(("click", (40, 337), True))   # the card shut first
         i = ran.index(("find", "od-vehtype", False))
         assert ran[i + 1] == ("click", (424, 733), False)                # its Close - and never a Save (337,733)
         assert not any(w == (337, 733) for _, w, _ in ran) and ran[-1] == ("find", "os-close", False)

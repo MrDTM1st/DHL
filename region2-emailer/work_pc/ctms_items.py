@@ -168,7 +168,7 @@ def summary_line(els, ref):
         return None
     cols = {}
     for e in frame:
-        m = re.fullmatch(r"Enter value for : (\w+)", str(e.get("nm") or ""))
+        m = re.fullmatch(r"Enter value for : (\w+)(?:\s+Required)?", str(e.get("nm") or ""))   # the app's " Required"
         if e.get("r") == "text" and m and m.group(1) in ("EXTERNAL_REF", "EARLY_AVAIL", "LATE_DEL") and e.get("at"):
             cols.setdefault(m.group(1), []).append((e["at"][1], str(e.get("v") or "").strip()))
     down = {k: [v for _, v in sorted(c)] for k, c in cols.items()}
@@ -315,7 +315,11 @@ class Items:
                 self.run([ctms_orders._find(self.t, "os-search", ctms_orders.SEARCH_BOX, 5, click=True, react=True)])
             else:
                 self.run([{"action": "anchor"}] + ctms_orders.to_orders(self.t))
-        self.run(ctms_orders.card(self.t))
+        try:
+            self.run(ctms_orders.card(self.t))
+        except RuntimeError:
+            if not ctms_orders.card_up(self.look()):    # the app's card can open away from where Edge's sat (10/11)
+                raise
         far = ctms_orders.upto(self.look())       # a later order isn't listed at all under tomorrow's "up to"
         if far:
             self.run(far)
@@ -324,14 +328,18 @@ class Items:
         """One line's card, proved to be that line's by its Customer Ref. A scheduled line asks "are you sure?" instead of
         opening, and stops here. read_line: Order Summary's times for it kept first, as self.line."""
         self.to_search()
+        parts = ctms_orders.card_parts(self.els)          # to_search's read: the card up
+        if parts and not parts.get("customer"):
+            raise Stop(f"{ref}: CTMS's Order Search card is up without its Customer Ref box. Open the card's fields "
+                       "(its Layout) and press Run again.")
         try:
-            self.run(ctms_orders.search(ref))
+            self.run(ctms_orders.search_at(self.els, ref))
         except RuntimeError:
             raise Stop(f"{ref}: CTMS's search found nothing for it.")
         if read_line:
             self.line = summary_line(self.look(), ref)
         try:
-            self.run(ctms_orders.open_line(self.t))
+            self.run(ctms_orders.open_line_at(self.els if read_line else self.look(), self.t))
         except RuntimeError:
             raise Stop(f"{ref}: its card wouldn't open - it may have been booked since.")
         self.look()
@@ -398,8 +406,12 @@ class Items:
     def finish(self):
         """The run's end: Order Summary and its card closed, Planning as it was."""
         self.run([{"action": "anchor"}, ANCHOR])
-        if self.seen("os-card", ctms_orders.CARD_BOX):
-            self.run([_click((509, 226), after=0.5)])
+        try:
+            self.look()                       # the app's card can be up away from where Edge's sat (10/11)
+        except Exception:
+            self.els = []
+        if self.seen("os-card", ctms_orders.CARD_BOX) or ctms_orders.card_up(self.els):
+            self.run(ctms_orders.card_close_at(self.els))
         self.run(ctms_orders.close_summary(self.t))
 
     # -- the items

@@ -576,6 +576,54 @@ def test_the_parsers():
     o.open_card, o.asked = True, "Do you want to discard your changes?"
     words, buttons = I.question(o.read())
     assert words == "Orders Do you want to discard your changes?" and sorted(buttons) == ["cancel", "ok"]
+    # the app's required columns come as "... Required" (10/11)
+    req = [{"r": "internal frame", "nm": "Order Summary", "lv": 0},
+           {"r": "text", "nm": "Enter value for : EXTERNAL_REF", "v": "9100001-1-1", "lv": 3, "at": [0, 100]},
+           {"r": "text", "nm": "Enter value for : LATE_DEL Required", "v": "b", "lv": 3, "at": [0, 100]}]
+    assert I.summary_line(req, "9100001-1-1") == {"ready_at": "", "deliver_by": "b"}
+
+
+class AppCardOrder(FakeOrder):
+    """CTMS as its own app (10/11): the Search card open over on the right, where Edge's never was - its picture isn't
+    found where Edge's showed, and its boxes and buttons are where the Access Bridge places them."""
+    CARD = [{"r": "internal frame", "nm": "Order Search", "lv": 0},
+            {"r": "text", "nm": "Enter a Customer Ref to search for", "lv": 2, "at": [1600, 180, 160, 22]},
+            {"r": "push button", "nm": "Close", "lv": 2, "at": [1580, 255, 70, 24]},
+            {"r": "push button", "nm": "Clear", "lv": 2, "at": [1660, 255, 70, 24]},
+            {"r": "push button", "nm": "Refresh", "lv": 2, "at": [1740, 255, 70, 24]}]
+
+    def __init__(self, card=None, **kw):
+        super().__init__(**kw)
+        self.card = list(self.CARD if card is None else card)
+
+    def read(self):
+        return super().read() + ([] if self.open_card else list(self.card))
+
+
+def test_the_apps_card_is_searched_where_the_access_bridge_places_it():
+    o = AppCardOrder()
+    o.missing = {"os-card"}
+    said = _items(o).note(o.ref, NOTE)
+    assert o.si == "BPA ref" + NOTE and o.saved == 1 and "added" in said
+    aimed = [s["screen"] for s in o.steps if s["action"] == "click" and s.get("screen")]
+    assert aimed[:4] == [[1695, 267], [1680, 191], [1775, 267], [1615, 267]]      # Clear, Customer Ref, Refresh, Close
+    assert not o.clicks((626, 226), (728, 122), (742, 226), (509, 226))            # none of Edge's stored points
+    # the card up without its Customer Ref box (its fields folded away): said so, nothing searched or typed
+    o = AppCardOrder(card=[e for e in AppCardOrder.CARD if "Customer Ref" not in e["nm"]])
+    o.missing = {"os-card"}
+    try:
+        _items(o).note(o.ref, NOTE)
+        raise AssertionError("should have stopped")
+    except I.Stop as e:
+        assert "without its Customer Ref box" in str(e) and o.typed == [] and o.saved == 0
+    # no card anywhere: what it always said
+    o = AppCardOrder(card=[])
+    o.missing = {"os-card"}
+    try:
+        _items(o).note(o.ref, NOTE)
+        raise AssertionError("should have stopped")
+    except RuntimeError as e:
+        assert "os-card" in str(e) and o.typed == []
 
 
 if __name__ == "__main__":

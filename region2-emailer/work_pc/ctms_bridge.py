@@ -885,12 +885,26 @@ class Bridge:
 
         def why(e):
             return str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
+
+        def card_up(last=None):
+            """The Search card up - its labels where Edge drew it, or the app's card wherever it opened (10/11) - and
+            a read that says where its boxes are: `last` again when it had the card in it and nothing moved."""
+            try:
+                run(ctms_orders.card(t))
+            except RuntimeError:
+                fields = ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)
+                if not ctms_orders.card_up(fields):
+                    raise
+                return fields
+            if last is not None and not ctms_orders.card_up(last):
+                return last                     # Edge's card: its stored points, as ever - no read for nothing
+            return ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)
         try:
             run([{"action": "anchor"}, {"action": "click", "px": [1000, 37], "after": 0.4}])  # Java's focus
             if not self._seen(t, "os-card", ctms_orders.CARD_BOX):
                 run(ctms_orders.to_orders(t))
-            run(ctms_orders.card(t))
-            run(ctms_orders.upto(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)))   # later orders listed at all
+            card_read = card_up()
+            run(ctms_orders.upto(card_read))   # later orders listed at all
         except Exception as e:
             return done(False, f"Could not get to CTMS's Order Search: {why(e)} Nothing was looked up - the "
                                "picture shows where it stopped.", dict(self._batch_look(times, t0), kind="ctms_check"))
@@ -900,7 +914,7 @@ class Bridge:
                 stopped = f"out of time after {len(found)} of {len(orders)}"
                 break
             try:
-                run(ctms_orders.search(ctms_orders.search_ref(o["ref"])))
+                run(ctms_orders.search_at(card_read, ctms_orders.search_ref(o["ref"])))
             except Unchanged:
                 pass                    # nothing found leaves the list empty - CTMS's answer changed nothing
             except Exception as e:
@@ -919,7 +933,7 @@ class Bridge:
                 # an NN number CTMS may hold only as the Booking Ref: looked for there too, and every line that search
                 # brings back is that job's, whatever its Customer Ref says
                 try:
-                    run(ctms_orders.search(ctms_orders.search_ref(o["ref"]), booking=True))
+                    run(ctms_orders.search_at(card_read, ctms_orders.search_ref(o["ref"]), booking=True))
                 except Unchanged:
                     pass
                 except Exception as e:
@@ -936,18 +950,19 @@ class Bridge:
                 got = {"lines": list(rows), "by": "booking ref"} if rows else got
             for line in ctms_orders.open_lines(got["lines"], str(o.get("date") or "")) if o.get("veh") else []:
                 try:
-                    run(ctms_orders.search(line["ref"]))            # the line alone: the list's first row
-                    one = [r for r in ctms_orders.lines(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)) or []
-                           if r["ref"] == line["ref"]]
+                    run(ctms_orders.search_at(card_read, line["ref"]))            # the line alone: the list's first row
+                    listed = ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ)
+                    one = [r for r in ctms_orders.lines(listed) or [] if r["ref"] == line["ref"]]
                     if one and one[0]["status"] == ctms_orders.OPEN:     # unscheduled: opening it asks nothing
-                        run(ctms_orders.open_line(t))
+                        run(ctms_orders.open_line_at(listed, t))
                         bgra, w, h = self._frame()
                         got.setdefault("veh", {})[line["ref"]] = ctms_orders.veh_filled(
                             bgra, w, h, self.batch.get("off", (0, 0)))
                         kg = ctms_orders.card_weight(ctms_jab.read_fields(self.win, skip=ctms_items.NOT_READ))
                         if kg is not None:
                             got.setdefault("weight", {})[line["ref"]] = kg
-                        run(ctms_orders.close_line(t))
+                        run(ctms_orders.close_line(t, then_card=False))
+                        card_read = card_up(card_read)       # the card opened again: where it sits now
                 except Exception as e:
                     stopped, lost = f"looking at {line['ref']}'s card: {why(e)}", True
                     break
@@ -957,8 +972,8 @@ class Bridge:
         closed = False
         if not lost:
             try:
-                if self._seen(t, "os-card", ctms_orders.CARD_BOX):
-                    run([{"action": "click", "px": [509, 226], "after": 0.5}])     # the Search card's Close
+                if self._seen(t, "os-card", ctms_orders.CARD_BOX) or ctms_orders.card_up(card_read):
+                    run(ctms_orders.card_close_at(card_read))     # the Search card's Close
                 run(ctms_orders.close_summary(t))
                 closed = True
             except Exception:
