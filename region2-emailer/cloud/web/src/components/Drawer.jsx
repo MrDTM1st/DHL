@@ -238,11 +238,11 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
       what: 'alt_contact',
     });
   };
-  // A DTS's site can't be reached: Order Management for another contact (his rule 09/11). Sent on the DTS's own
+  // A DTS's site can't be reached: Supplier Queries for another contact (his rule 09/11). Sent on the DTS's own
   // thread by the home PC (om_contact.send), so the trail goes with it.
   const startOmCompose = () => {
     const o = omAltContact(r, om);
-    setComposing('Order Management');
+    setComposing('Supplier Queries');
     setKind('team');
     setRemembered(false);
     setDraft({ to: o.to, cc: '', subject: o.subject, message: o.message, what: 'om_alt_contact' });
@@ -596,20 +596,20 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
             return (
               <div style={{ margin: '2px 0 10px' }}>
                 <button className="btn mini"
-                  onClick={() => (composing === 'Order Management' ? setComposing(null) : startOmCompose())}>
-                  Can't reach the site? Ask Order Management for another contact
+                  onClick={() => (composing === 'Supplier Queries' ? setComposing(null) : startOmCompose())}>
+                  Can't reach the site? Ask Supplier Queries for another contact
                 </button>
                 {asked && (
                   <div className="s" style={{ marginTop: 4 }}>
-                    Order Management asked {asked.slice(8, 10)}/{asked.slice(5, 7)} {asked.slice(11, 16)}.
+                    Supplier Queries asked {asked.slice(8, 10)}/{asked.slice(5, 7)} {asked.slice(11, 16)}.
                   </div>
                 )}
-                {composing === 'Order Management' && (
+                {composing === 'Supplier Queries' && (
                   <div className="s" style={{ marginTop: 4 }}>
                     Check "Who I have tried" before sending: add when you called. It goes on the DTS's own email trail.
                   </div>
                 )}
-                {composeBox({ name: 'Order Management' })}
+                {composeBox({ name: 'Supplier Queries' })}
               </div>
             );
           })()}

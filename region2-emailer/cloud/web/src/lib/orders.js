@@ -436,7 +436,7 @@ export function materialsTypeFor(r) {
 }
 
 // A DTS whose delivery site can't be reached: the email to Network Rail's
-// Order Management team asking for another contact (his rule 09/11/2026).
+// Supplier Queries team asking for another contact (his rule 09/11/2026; Supplier Queries, not Order Management, 10/11).
 // `om` is the agent's panel.om ({team, dts: {ref: {tried, asked}}}): tried =
 // our emails about the DTS to someone outside DHL (Sent Items). The DTS's own
 // contact is usually just a name and a phone number, so the call is written
@@ -470,7 +470,7 @@ export function omAltContact(r, om) {
     'Could you send me an alternative contact for the delivery site so I can get the delivery booked in?', '',
     'Kind regards');
   return {
-    to: ((om && om.team) || {}).email || 'ordermanagement@networkrail.co.uk',
+    to: ((om && om.team) || {}).email || 'supplierqueries@networkrail.co.uk',
     subject: `${ref} ${site} ${r.postcode || ''} - alternative contact needed`.replace(/\s+/g, ' ').trim(),
     message: lines.join('\n'),
   };

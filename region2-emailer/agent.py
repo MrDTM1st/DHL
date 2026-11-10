@@ -449,7 +449,7 @@ def _asks():
 
 
 def _om():
-    """A DTS whose site can't be reached goes to Order Management (his rule 09/11): who they are, and per DTS who we
+    """A DTS whose site can't be reached goes to Supplier Queries (his rule 09/11, corrected 10/11): who they are, and per DTS who we
     have emailed and when Order Management was last asked (om_contact sweep, Sent Items)."""
     try:
         import om_contact
@@ -1928,7 +1928,7 @@ def main():
                         json.dump(e, f, indent=1)
                     out = run(["send_order.py", "sendhaulier"])
                     label = ("Alternative-contact request" if e.get("what") == "alt_contact"
-                             else "Order Management request" if e.get("what") == "om_alt_contact"
+                             else "Supplier Queries request" if e.get("what") == "om_alt_contact"
                              else "Cover request")
                     if "sent to" in out:
                         report("done", f"{label} sent to {e.get('haulier') or e['to']}.",

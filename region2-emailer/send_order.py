@@ -364,7 +364,7 @@ def send_haulier(ns):
     import json as _json
     e = _json.load(open(PENDING_HAULIER, encoding="utf-8"))
     if e.get("what") == "om_alt_contact":
-        # a DTS's site can't be reached: Order Management, sent on the DTS's own thread (om_contact, his rule 09/11)
+        # a DTS's site can't be reached: Supplier Queries, sent on the DTS's own thread (om_contact, his rule 09/11)
         import om_contact
         ok, said = om_contact.send(ns, e)
         if ok:
@@ -372,7 +372,7 @@ def send_haulier(ns):
                 os.remove(PENDING_HAULIER)   # done - never resendable by accident
             except Exception:
                 pass
-            say(f"Order Management request {said}")
+            say(f"Supplier Queries request {said}")
             say("SEND_RESULT sent=1")
             return 1
         say(f"NOT sent: {said}")

@@ -19,8 +19,9 @@ HAULIER = "jobs@haulier.example"
 
 
 def test_address_is_order_management():
-    assert om.OM == "ordermanagement@networkrail.co.uk"
-    assert om.ORDER_MANAGEMENT["name"] == "Order Management"
+    assert om.OM == "supplierqueries@networkrail.co.uk"
+    assert om.ORDER_MANAGEMENT["name"] == "Supplier Queries"
+    assert om._ours("OrderManagement@networkrail.co.uk")        # asked before 10/11: never taken for the site
 
 
 def test_subject_matches_every_other_alt_contact_email():

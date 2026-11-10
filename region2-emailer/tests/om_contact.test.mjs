@@ -32,7 +32,7 @@ const R = {
 {
   // no panel data yet: the address still known, nobody named says so plainly
   const o = omAltContact({ ...R, details: {} }, undefined);
-  assert.equal(o.to, 'ordermanagement@networkrail.co.uk');
+  assert.equal(o.to, 'supplierqueries@networkrail.co.uk');
   assert.match(o.message, /\(nobody named on the DTS\)/);
   assert.match(o.message, /Delivery date: 12\/11\/2026\n/);
 }
