@@ -110,11 +110,27 @@ _WHY = (
 )
 
 
+# a helpdesk's wrapping round a reply (a Tier 1's ticket system, 05/11), links, rules - none of it their words
+_WRAPPING = (r"-#-#-.*?-#-#-", r"your request #\S+ has been updated\.?(?:\s*you can reply to this email above\.?)?",
+             r"<https?://[^>\s]*>?", r"_{4,}", r"\b[\w'\u2019. -]{2,40}\sstaff - \d\d/\d\d/\d{4} \d\d:\d\d")
+_SIGN_OFF = re.compile(r"\b(?:kind regards|best regards|warm regards|many thanks|regards|thanks|thank you|cheers|"
+                       r"best wishes)\b", re.I)
+
+
 def own_words(body):
-    """A reply's own words - the quoted ask under them cut off."""
+    """A reply's own words: a helpdesk's wrapping taken off, the quoted ask under them and the signature after them
+    cut off - so a reason is read from what they wrote, never from a job title or an address in the signature."""
     body = re.sub(r"\s+", " ", str(body or "")).strip()
+    for pat in _WRAPPING:
+        body = re.sub(pat, " ", body, flags=re.I)
+    body = re.sub(r"\s+", " ", body).strip()
     m = _QUOTED.search(body)
-    return (body[:m.start()] if m else body).strip()
+    body = (body[:m.start()] if m else body).strip()
+    for s in _SIGN_OFF.finditer(body):
+        if s.start() >= 15:                    # "Thanks for asking, but..." opens a message, it doesn't sign one off
+            body = body[:s.start()]
+            break
+    return body.strip(" ,;-")
 
 
 def reason_of(words):
@@ -214,44 +230,112 @@ def _value(details, key):
     return v.get("value") if isinstance(v, dict) else None
 
 
-def details(orders, tracker=None, waitlist=None):
-    """What the tracker and the wait list know of these orders' job:
-    {date, collection, postcode, product, quantity, vehicle, rear_steer, sure: {field: bool}} - {} when neither knows
-    them."""
+def vehicle_code(code):
+    """The form's vehicle type from a vehicle code or words an order carries ('NR_7.5T', 'ARTIC HIAB', '60ft flat'),
+    or None."""
+    c = str(code or "").upper().replace("_", " ")
+    if not c.strip():
+        return None
+    hiab = "HIAB" in c or "CRANE" in c
+    if "TROMBONE" in c or "EXTEND" in c or re.search(r"\b80\s?(?:FT|FOOT|')", c):
+        return "Trombone Hiab" if hiab else "Trombone"
+    if re.search(r"\b60\s?(?:FT|FOOT|')", c):
+        return "60ft Hiab" if hiab else "60ft Flat"
+    if "MOFF" in c:
+        return "Artic Moffett"
+    if "TIPPER" in c:
+        return "Rigid Tipper" if "RIGID" in c else "Artic Tipper"
+    if "CURTAIN" in c:
+        return "Curtainsider"
+    if "RIGID" in c or re.search(r"\b(?:3\.5|7\.5|18|26)\s?T(?:ONNE)?\b", c):
+        return "Rigid Flat / Hiab"
+    if "ARTIC" in c or re.search(r"\b40\s?(?:FT|FOOT|')|\bFLAT\b", c):
+        return "Artic Hiab" if hiab else "Artic Flat"
+    return None
+
+
+_POSTCODE = re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b")
+
+
+def _left_the_map(orders, todo=None, booked=None):
+    """What's still known of a job gone from the map: its day from the CTMS to-do's answers (the site's delivery day),
+    its postcode from the booked ad hoc's subject line."""
     want = {_ord(o) for o in orders}
-    rows = []
+    if todo is None:
+        todo = _json(os.path.join(HERE, "_ctms_todo.json"), {}).get("items") or []
+    if booked is None:
+        booked = _json(os.path.join(HERE, "_adhoc_booked.json"), [])
+    got = {}
+    for it in todo:
+        if isinstance(it, dict) and want & {_ord(o) for o in it.get("orders") or []}:
+            day = iso_date((it.get("answers") or {}).get("date") if isinstance(it.get("answers"), dict) else "")
+            got["date"] = day or got.get("date", "")
+    for b in booked:
+        if isinstance(b, dict) and _ord(b.get("ref")) in want:
+            pcs = _POSTCODE.findall(str(b.get("subject") or "").upper())
+            if pcs:
+                got["postcode"] = pcs[-1]
+    return {k: v for k, v in got.items() if v}
+
+
+def details(orders, tracker=None, waitlist=None, adhocs=None, pins=None, todo=None, booked=None):
+    """What the desk knows of these orders' job - the tracker, the map's ad hocs and pins, the wait list, and for a job
+    gone from the map what the CTMS to-do and the booked ad hocs kept:
+    {date, collection, postcode, product, quantity, vehicle, rear_steer, sure: {field: bool}} - {} when nothing does.
+    The job's date is its delivery day (his word, 11/11)."""
+    want = {_ord(o) for o in orders}
     if tracker is None:
         tracker = _json(os.path.join(HERE, "tracker.json"), {}).get("records") or []
     if waitlist is None:
         waitlist = _json(os.path.join(HERE, "waitlist.json"), {}).get("entries") or []
-    for r in tracker:
-        if want & {_ord(o) for o in r.get("orders") or []}:
-            rows.append(("tracker", r))
-    for e in waitlist:
-        if want & {_ord(o) for o in e.get("orders") or []}:
-            rows.append(("waitlist", e))
+    if adhocs is None:
+        adhocs = _json(os.path.join(HERE, "_adhocs.json"), [])
+    if pins is None:
+        pins = _json(os.path.join(HERE, "_pins.json"), [])
+    rows = [(where, r) for where, got in (("tracker", tracker), ("adhoc", adhocs), ("pin", pins),
+                                          ("waitlist", waitlist))
+            for r in got if isinstance(r, dict) and want & {_ord(o) for o in r.get("orders") or []}]
     if not rows:
-        return {}
+        left = _left_the_map(orders, todo, booked)
+        return dict(left, sure={k: True for k in left}) if left else {}
     where, r = rows[0]
     d = r.get("details") if isinstance(r.get("details"), dict) else {}
     materials = str(r.get("materials") or "")
-    codes = " ".join(str(c) for c in r.get("product_codes") or [])
-    adhoc = r.get("kind") == "adhoc" or any(_ord(o).startswith("AH") for o in orders)
+    codes = " ".join(str(c) for c in r.get("product_codes") or []) + " " + str(r.get("product") or "")
+    adhoc = r.get("kind") == "adhoc" or where == "adhoc" or any(_ord(o).startswith("AH") for o in orders)
     product = product_of(materials, codes, adhoc=adhoc)
     m = re.match(r"\s*(\d+)\s*x\s*(.*)", materials)
-    quantity = (f"{m.group(1)} {m.group(2)}" if m and not re.search(r"\d{4}/", m.group(2)) else
-                (m.group(1) if m else ""))
-    date = iso_date(_value(d, "date")) or iso_date(r.get("delivery_date") if where == "tracker" else r.get("date"))
-    vehicle, v_sure = vehicle_of(product, _value(d, "offloading"), rail_length(codes, materials),
-                                 _value(d, "artic_access"), quantity)
+    quantity = str(r.get("qty") or "").strip() or (
+        f"{m.group(1)} {m.group(2)}" if m and not re.search(r"\d{4}/", m.group(2)) else (m.group(1) if m else ""))
+    date = iso_date(_value(d, "date")) or iso_date(r.get("delivery_date")) or iso_date(r.get("date"))
+    coded = vehicle_code(_value(d, "vehicle"))            # the vehicle the request asked for, when it names one
+    vehicle, v_sure = (coded, True) if coded else vehicle_of(product, _value(d, "offloading"),
+                                                             rail_length(codes, materials), _value(d, "artic_access"),
+                                                             quantity)
     steer = str(_value(d, "rear_steer") or "").lower()
     collection = ", ".join(x for x in (str(r.get("collection_site") or "").strip(),
                                        str(r.get("collection_pc") or "").strip()) if x)
     return {"date": date, "collection": collection, "postcode": str(r.get("postcode") or "").strip().upper(),
             "product": product or "", "quantity": quantity, "vehicle": vehicle or "",
             "rear_steer": "Yes" if steer == "yes" else "No",
-            # Date of Job: the delivery day is read as the job's day - his to confirm (11/11), so unsure till then
-            "sure": {"date": False, "product": bool(product), "vehicle": v_sure, "rear_steer": steer in ("yes", "no")}}
+            "sure": {"date": True, "product": bool(product), "vehicle": v_sure, "rear_steer": steer in ("yes", "no")}}
+
+
+def _fill(rec):
+    """Blanks on an open response filled from what the desk knows now - never over anything already there, so his
+    changes stay. -> whether anything was filled."""
+    known = details(rec["orders"])
+    sure = known.get("sure") or {}
+    filled = False
+    for f in ("date", "collection", "postcode", "product", "quantity", "vehicle"):
+        if not rec.get(f) and known.get(f):
+            rec[f] = known[f]
+            filled = True
+            if f in sure and not sure[f] and f not in rec.setdefault("unsure", []):
+                rec["unsure"].append(f)
+    if filled:
+        rec["status"] = _status(rec)
+    return filled
 
 
 # ---- the store
@@ -534,17 +618,19 @@ def _replies(ns, jobs, days=ASK_DAYS + 2):
 
 def refresh(ns=None, asks=None, replies=None, now=None):
     """Responses made from the replies: the newest reply that says yes or no decides - a no with its reason makes a
-    response (or ticks the haulier on one for the same job). -> how many were made or added to."""
+    response (or ticks the haulier on one for the same job). Blanks on the open ones are filled first, from whatever
+    the desk has learnt of their jobs since. -> how many were made or added to."""
     if asks is None:
         import haulier_asks
         asks = haulier_asks.load()
     jobs = asked_jobs(asks, now)
-    if not jobs:
-        return 0
-    got = replies(jobs) if replies else _replies(ns, jobs)
+    got = (replies(jobs) if replies else _replies(ns, jobs)) if jobs else {}
     n = 0
     with locked():
         d = load()
+        for rec in d["items"]:                    # details that have turned up since: blanks filled, his words kept
+            if rec.get("status") in ("ready", "held", "failed"):
+                _fill(rec)
         for job, orders in jobs.items():
             verdict = None
             for msg in sorted(got.get(job) or [], key=lambda x: x["when"]):

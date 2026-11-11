@@ -56,6 +56,17 @@ def test_a_no_is_read_from_their_own_words_with_its_reason_and_a_quote_is_not_a_
     assert R.reason_of("Yes we can do this, will confirm the driver") is None
     reason, sure = R.reason_of("Can't get a HIAB there on a Saturday")                       # two at once
     assert reason == "No Availability - Night/Weekend" and sure is False
+    # a Tier 1's helpdesk wraps the reply (05/11): its header, links and the signature are none of their words - an
+    # address on "Rigid Road" in the signature must not make it a vehicle no
+    ticket = ("-#-#- Please reply above this line -#-#- Your request #ABC-123 has been updated. You can reply to this "
+              "email above ________ <https://help.example/avatar/xyz> Sam Example Staff - 05/11/2026 13:20 Hi, Sorry "
+              "nothing available for this one until monday now? Kind Regards Sam Example Managing Director "
+              "<https://help.example/x> Unit 1, Rigid Road")
+    assert R.own_words(ticket) == "Hi, Sorry nothing available for this one until monday now?"
+    assert R.reason_of(R.own_words(ticket)) == ("No Availability - Date of Job/Notice", True)
+    signed = "Hi, sorry this is not a movement we could service. Regards Pat Example Transport Planner, Artic Way"
+    assert R.own_words(signed) == "Hi, sorry this is not a movement we could service."
+    assert R.own_words("Thanks for asking, but we can't help") == "Thanks for asking, but we can't help"
 
 
 def test_product_vehicle_and_rail_length_are_worked_out_the_desk_s_way():
@@ -79,15 +90,62 @@ def test_a_response_takes_the_job_s_details_and_waits_while_anything_is_worked_o
     assert (rec["date"], rec["collection"], rec["postcode"], rec["product"], rec["quantity"], rec["vehicle"],
             rec["rear_steer"], rec["consolidated"]) == ("2026-11-16", "Steel Works, ZZ1 1AA", "ZZ9 9ZZ", "Rail",
                                                         "15 rails", "Artic Hiab", "No", "No")
-    assert rec["unsure"] == ["date"] and rec["status"] == "held"                          # the job's day: his to say
-    assert R.gaps(rec) == ["the date of the job (NOT CERTAIN)"]
-    told = R.make(["9100002"], ["DHL NOC"], "No Availability - Vehicle Type", given={"date": "16/11/2026"},
+    assert rec["unsure"] == [] and rec["status"] == "ready" and R.gaps(rec) == []   # the job's day: its delivery day
+    steer = R.make(["9100003"], ["DHL NOC"], "No Availability - General", tracker=TRACKER, waitlist=[], now=NOW)
+    assert steer["unsure"] == ["rear_steer"] and steer["status"] == "held"           # the site never said: his to say
+    assert R.gaps(steer) == ["rear-steer (NOT CERTAIN)"]
+    told = R.make(["9100003"], ["DHL NOC"], "No Availability - General", given={"rear_steer": "No"},
                   tracker=TRACKER, waitlist=[], now=NOW)
     assert told["unsure"] == [] and told["status"] == "ready"
     nothing = R.make(["9100099"], ["Lawsons"], "No Availability - General", tracker=TRACKER, waitlist=[], now=NOW)
     assert nothing["status"] == "held" and "the product" in R.gaps(nothing) and "the vehicle" in R.gaps(nothing)
     # every question on the form is required: collection, postcode and quantity too
     assert {"the collection site", "the postcode", "the quantity"} <= set(R.gaps(nothing))
+
+
+def test_an_ad_hoc_on_the_map_gives_its_details_and_the_vehicle_it_asked_for():
+    adhocs = [{"id": "adhoc|AH1", "kind": "adhoc", "orders": ["AH12/11/26ZZZZ"], "postcode": "ZZ6 6ZZ",
+               "collection_site": "Yard", "collection_pc": "ZZ5 5ZZ", "materials": "2 Pallets", "qty": "2 Pallets",
+               "product": "PALLET", "delivery_date": "12/11/2026", "details": {"vehicle": {"value": "NR_7.5T"}}}]
+    got = R.details(["AH12/11/26ZZZZ"], tracker=[], waitlist=[], adhocs=adhocs, pins=[])
+    assert (got["date"], got["collection"], got["postcode"], got["product"], got["quantity"], got["vehicle"]) == (
+        "2026-11-12", "Yard, ZZ5 5ZZ", "ZZ6 6ZZ", "Pallets", "2 Pallets", "Rigid Flat / Hiab")
+    assert got["sure"]["date"] and got["sure"]["vehicle"]
+    assert R.vehicle_code("NR_ARTIC_HIAB") == "Artic Hiab" and R.vehicle_code("60ft flat") == "60ft Flat"
+    assert R.vehicle_code("1800KG") is None and R.vehicle_code("") is None
+
+
+def test_a_job_gone_from_the_map_keeps_its_day_and_postcode_from_what_the_desk_kept():
+    got = R.details(["9100050"], tracker=[], waitlist=[], adhocs=[], pins=[],
+                    todo=[{"orders": ["9100050"], "answers": {"date": "09/11/26"}}],
+                    booked=[{"ref": "9100050", "subject": "RE: 9100050 Town - Some Yard ZZ4 4ZZ"}])
+    assert got["date"] == "2026-11-09" and got["postcode"] == "ZZ4 4ZZ" and not got.get("product")
+    assert R.details(["9100051"], tracker=[], waitlist=[], adhocs=[], pins=[], todo=[], booked=[]) == {}
+
+
+def test_blanks_on_an_open_response_fill_in_as_the_details_turn_up_and_his_words_stay():
+    _store()
+    d = R.load()
+    rec = R.make(["9100060"], ["DHL NOC"], "No Availability - General", given={"quantity": "3 lengths"},
+                 tracker=[], waitlist=[], now=NOW)
+    R.add(d, rec)
+    R.save(d)
+    assert rec["status"] == "held" and not rec["date"]
+    later = [{"orders": ["9100060"], "delivery_date": "20/11/2026", "collection_site": "Depot",
+              "collection_pc": "ZZ3 3ZZ", "postcode": "ZZ7 7ZZ", "materials": "3x rails",
+              "product_codes": ["RAIL SHORT, 56E1, 13.716M"],
+              "details": {"offloading": {"value": "HIAB"}, "rear_steer": {"value": "no"}}}]
+    keep = R.details
+    R.details = lambda orders, tracker=None, waitlist=None, **k: keep(orders, later, [], adhocs=[], pins=[],
+                                                                        todo=[], booked=[])
+    try:
+        assert R.refresh(asks={}, replies=lambda jobs: {}, now=NOW) == 0                  # nothing new asked
+        got = R.find(R.load(), rec["id"])
+        assert (got["date"], got["collection"], got["postcode"], got["product"], got["vehicle"]) == (
+            "2026-11-20", "Depot, ZZ3 3ZZ", "ZZ7 7ZZ", "Rail", "Artic Hiab")
+        assert got["quantity"] == "3 lengths" and got["status"] == "ready"                 # his words kept
+    finally:
+        R.details = keep
 
 
 def test_the_same_job_and_reason_ticks_another_haulier_and_a_known_no_is_not_added_twice():
@@ -178,7 +236,7 @@ def test_send_goes_only_when_the_form_takes_it_and_never_with_a_gap():
         asked.append((action, args))
         return {"ok": True, "detail": "Filled in 10 answer(s), every one read back, and submitted: thanks"}, {
             "submitted": True}
-    out = R.send(rec["id"], ask=ok)                         # held for its date: his press of Send is his word on it
+    out = R.send(rec["id"], ask=ok)                         # complete: it goes as it stands
     assert out["ok"] and "Rejection form sent" in out["said"]
     assert asked[0][0] == "form_fill" and asked[0][1]["submit"] is True
     assert asked[0][1]["answers"][1] == {"q": "Date of Job", "text": "11/16/2026"}
