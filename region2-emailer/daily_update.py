@@ -683,14 +683,15 @@ def make_draft(ns, now, force=False, auto=False):
             a = str(r.Address or "")
         if a.lower() == me:
             m.Recipients.Remove(i)
-    m.Display(False)                                   # his signature goes in, as on any reply he writes
-    font = "font-family:Calibri,Arial,sans-serif;font-size:11pt"
-    new, n = re.subn(r"(<body[^>]*>)", lambda mm: mm.group(1) + f'<div style="{font}">{body}</div>', m.HTMLBody,
-                     count=1, flags=re.I)
-    m.HTMLBody = new if n == 1 else f'<div style="{font}">{body}</div>' + m.HTMLBody
-    m.Save()
-    entry = str(m.EntryID)
-    m.Close(0)                                         # olSave - it stays in Drafts, nothing sent
+    with _PicturePrompt():
+        m.Display(False)                               # his signature goes in, as on any reply he writes
+        font = "font-family:Calibri,Arial,sans-serif;font-size:11pt"
+        new, n = re.subn(r"(<body[^>]*>)", lambda mm: mm.group(1) + f'<div style="{font}">{body}</div>',
+                         m.HTMLBody, count=1, flags=re.I)
+        m.HTMLBody = new if n == 1 else f'<div style="{font}">{body}</div>' + m.HTMLBody
+        m.Save()
+        entry = str(m.EntryID)
+        m.Close(0)                                     # olSave - it stays in Drafts, nothing sent
     st = {"key": key, "for": item.ReceivedTime.strftime("%d/%m %H:%M"), "from": str(item.SenderName),
           "draft_at": now.strftime("%H:%M"), "summary": summary, "text": text[:6000], "day": now.strftime("%Y-%m-%d"),
           "entry": entry, "saved": _modified(ns, entry, store)}
@@ -698,6 +699,46 @@ def make_draft(ns, now, force=False, auto=False):
     return {"ok": True, "said": (f"Your reply to {_first(item.SenderName) or 'the'} Region 2 Updates is in Drafts: "
                                  f"{summary['orders']} order(s), {summary['checks']} to check" + earlier + "."),
             "summary": summary}
+
+
+class _PicturePrompt:
+    """Outlook's "Automatic Picture Download" prompt (pictures in the email replied to) answered No while the draft is
+    made - at 15:30 nobody is there to click it, and the draft would hang on it (it stopped sends here on 11/11)."""
+
+    def __enter__(self):
+        import threading
+        self.stop = threading.Event()
+        threading.Thread(target=self._watch, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.wait(0.5)
+        self.stop.set()
+        return False
+
+    def _watch(self):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        except Exception:
+            return                                     # not Windows: nothing to answer
+        while not self.stop.is_set():
+            found = []
+
+            def seen(h, _l):
+                buf = ctypes.create_unicode_buffer(200)
+                user32.GetWindowTextW(h, buf, 200)
+                if buf.value == "Automatic Picture Download" and user32.IsWindowVisible(h):
+                    found.append(h)
+                return True
+            user32.EnumWindows(proc(seen), 0)
+            for h in found:
+                no = user32.GetDlgItem(h, 7)           # IDNO
+                if no:
+                    user32.PostMessageW(no, 0x00F5, 0, 0)   # BM_CLICK
+            self.stop.wait(0.5)
 
 
 def _modified(ns, entry, store):
