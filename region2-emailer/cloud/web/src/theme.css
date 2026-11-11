@@ -935,3 +935,21 @@ a.callbtn:hover{ color:var(--red-ink); }
 .statushd .rj-auto{ margin-left:8px; padding:2px 9px 2px 4px; font-size:11px; }
 .rj-row-foot{ margin-top:6px; }
 .ctms-held.rj-add{ margin-top:10px; background:var(--seg); }
+
+/* emails nobody has answered yet (inbox_watch, 11/11) */
+.inbox-card.calm { border-left-color: var(--line3, #c9c9c9); }
+.inbox-card.quiet { padding: 10px 16px; margin-bottom: 14px; }
+.inbox-card.quiet h3 { font-size: 14px; }
+.inbox-pri { display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  border-radius: 6px; padding: 2px 6px; margin-right: 8px; vertical-align: 1px; background: var(--seg); color: var(--ink2); }
+.inbox-pri.urgent { background: var(--red); color: #fff; }
+.inbox-pri.high { background: var(--yellow-d); color: #1a1a1a; }
+
+/* his reply to the day's Region 2 Updates (daily_update, 11/11) */
+.upd-card { border-left-color: var(--yellow-d); }
+.upd-card.waiting { border-left-color: var(--line3); }
+.upd-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.upd-text { font-size: 13px; line-height: 1.45; padding: 8px 10px; margin: 4px 0 8px; background: var(--seg);
+  border-radius: 8px; max-height: 420px; overflow: auto; overflow-wrap: anywhere; }
+.upd-text .upd-week { font-weight: 700; margin-top: 6px; }
+.upd-mark { background: var(--yellow); color: #1a1a1a; border-radius: 3px; padding: 0 2px; }

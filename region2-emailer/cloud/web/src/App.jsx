@@ -148,6 +148,48 @@ export default function App() {
     });
   }, [panel]);
 
+  // ---- and an email past its time (inbox_watch, his managers' 11/11 "urgent emails and queries are not missed"): the
+  // bell once a conversation has waited longer than its priority allows - and again only if someone writes on it again ----
+  // ---- and his Region 2 Updates reply in Drafts (daily_update, 11/11): one note when a draft lands ----
+  const knownUpdate = useRef('');
+  useEffect(() => {
+    const u = panel && panel.update_reply;
+    if (!u || !u.draft_at) return;
+    const id = 'u-' + (u.for || '') + '-' + u.draft_at;
+    if (knownUpdate.current === id) return;
+    knownUpdate.current = id;
+    const s = u.summary || {};
+    setNotes((ns) => (ns.some((n) => n.id === id) ? ns : [{
+      id,
+      kind: 'info',
+      title: 'Your Region 2 Updates reply is in Drafts',
+      msg: (s.orders || 0) + ' order(s)' + (s.checks ? ', ' + s.checks + ' marked [check]' : '')
+        + ' - read it, add your words, then send it from Outlook.',
+      createdAt: Date.now(),
+      read: false,
+    }, ...ns]));
+  }, [panel]);
+
+  const knownInbox = useRef(new Set());
+  useEffect(() => {
+    const late = ((panel && panel.inbox && panel.inbox.items) || []).filter((i) => i.alarm);
+    const fresh = late.filter((i) => !knownInbox.current.has(i.id));
+    fresh.forEach((i) => knownInbox.current.add(i.id));
+    if (!fresh.length) return;
+    const created = Date.now();
+    setNotes((ns) => {
+      const have = new Set(ns.map((n) => n.id));
+      return [...fresh.map((i) => ({
+        id: 'm-' + i.id,
+        kind: i.pri === 'urgent' ? 'urgent' : 'info',
+        title: 'Email waiting ' + i.waited + ': ' + i.from,
+        msg: i.subject + ' - ' + i.why + (i.n > 1 ? ' (' + i.n + ' emails in the thread)' : '') + '.',
+        createdAt: created,
+        read: false,
+      })).filter((n) => !have.has(n.id)), ...ns];
+    });
+  }, [panel]);
+
   // ---- and when an order's email is answered by someone other than the site with the details (his 02/11): the
   // materials team answering an escalation (a contact typed in, or a screenshot of one), or a reply with nothing to
   // book with ("is the delivery date still ok?") - told as what they are, never as "Danny replied" ----

@@ -624,6 +624,17 @@ CHECK_RETRY = 300
 CHECK_LAST_FOR = 2 * 3600
 _check_slot = {"done": [], "next_try": 0.0, "pending": None}     # pending: (the time's "YYYY-MM-DD HH:MM", command id)
 
+# A look-up the home PC asks for (11/11, his "a held escalation asks the work PC to look up just that order"): an
+# escalation is held until CTMS has been looked at today, and on a busy day no set time ever gets its three quiet
+# minutes. Its orders alone - a few take well under a minute - wait for one quiet minute instead, tried every
+# CHECK_WANT_RETRY seconds until it runs or CHECK_WANT_FOR runs out. Look mum, no hands for that look-up only, as a
+# set time's; it searches and reads, never saves.
+CHECK_WANT_IDLE = 1
+CHECK_WANT_RETRY = 120
+CHECK_WANT_FOR = 4 * 3600
+CHECK_WANT_MAX = 10
+_check_want = {"orders": [], "why": "", "until": 0.0, "next_try": 0.0, "pending": None}   # pending: command id
+
 
 def _uk_time(utc):
     """UK clock time for a UTC one: GMT, or BST from 01:00 GMT on March's last Sunday to October's - Railway runs
@@ -699,7 +710,14 @@ def _ctms_due_check_locked(uk=None, now=None):
 
 
 def _check_answered_locked(cid, postponed):
-    """A set-time look-up answered: done for that time - or, the work PC in use, tried again in CHECK_RETRY."""
+    """A set-time look-up answered: done for that time - or, the work PC in use, tried again in CHECK_RETRY. The home
+    PC's own look-up likewise: done, or tried again in CHECK_WANT_RETRY. A set time's look-up that ran covers it too."""
+    if _check_want["pending"] is not None and _check_want["pending"] == cid:
+        _check_want["pending"] = None
+        if postponed:
+            _check_want["next_try"] = time.time() + CHECK_WANT_RETRY
+        else:
+            _check_want["orders"] = []
     pend = _check_slot["pending"]
     if not pend or pend[1] != cid:
         return
@@ -708,6 +726,45 @@ def _check_answered_locked(cid, postponed):
         _check_slot["next_try"] = time.time() + CHECK_RETRY
     else:
         _check_slot["done"] = (_check_slot["done"] + [pend[0]])[-20:]
+        if _check_want["pending"] is None:
+            _check_want["orders"] = []          # the map's look-up has just covered them
+
+
+def _ctms_want_check_locked(now=None):
+    """Queue the look-up the home PC asked for, when one is waiting: the bridge online, the work PC not set to look
+    only, no other look-up waiting or running, the try before given its CHECK_WANT_RETRY. Returns the command queued,
+    or None."""
+    now = time.time() if now is None else now
+    want, pend = _check_want, _check_want["pending"]
+    if pend is not None and not (any(c["id"] == pend for c in _ctms["queue"])
+                                 or (_ctms["running"] and _ctms["running"]["id"] == pend)):
+        want["pending"], want["next_try"] = None, now + CHECK_WANT_RETRY    # gone unanswered: again in a while
+        return None
+    if not want["orders"] or pend is not None or now < want["next_try"]:
+        return None
+    if now > want["until"]:
+        want["orders"] = []
+        return None
+    if not _ctms_online() or _ctms["state"].get("control") is False:
+        return None
+    if any(c["action"] == "ctms_check" for c in _ctms["queue"]) or (
+            _ctms["running"] and _ctms["running"].get("action") == "ctms_check"):
+        return None
+    _ctms["next_id"] += 1
+    cid = _ctms["next_id"]
+    refs = " / ".join(o["ref"] for o in want["orders"])
+    if not _ctms_armed():
+        _ctms["control_until"] = time.time() + 10 * 60
+        _ctms["armed_for"] = cid
+        _ctms_note_locked(f"Look mum, no hands mode switched on to look up {refs} in CTMS "
+                          f"({want['why'] or 'for the home PC'}) - that only.")
+    cmd = {"id": cid, "action": "ctms_check", "orders": [dict(o) for o in want["orders"]], "idle": CHECK_WANT_IDLE,
+           "by": "escalation look-up", "queued_at": now}
+    _ctms["queue"].append(cmd)
+    _ctms["asked"][cid] = cmd["by"]
+    want["pending"] = cid
+    _ctms_cv.notify_all()
+    return cmd
 
 
 # "Set up this PC": the work PC's whole setup as one file to double-click, with
@@ -1937,6 +1994,8 @@ class Handler(BaseHTTPRequestHandler):
                                  if _ctms["book_run"] else None),
                     "rejection_run": ({k: v for k, v in _ctms["rejection_run"].items() if k not in ("before", "until")}
                                       if _ctms["rejection_run"] else None),
+                    "check_want": {"orders": [o["ref"] for o in _check_want["orders"]], "why": _check_want["why"],
+                                   "waiting": _check_want["pending"] is not None},
                     "next_check": _check_next(_uk_now()),     # ... and when they will be by themselves
                     "queued": [{"id": c["id"], "action": c["action"], "name": c.get("name", ""),
                                 "by": c.get("by", ""), "age": int(now - c["queued_at"])} for c in _ctms["queue"]],
@@ -2379,6 +2438,34 @@ class Handler(BaseHTTPRequestHandler):
                                           said=str(data.get("said") or "")[:500],
                                           manifests=[str(m)[:20] for m in (data.get("manifests") or [])[:8]])
             return self._json(200, {"ok": True})
+        if path == "/api/ctms/check_want":
+            # the home PC wants these orders looked up in CTMS soon (11/11): an escalation is held until CTMS has been
+            # looked at today. Queued at the work PC's next quiet minute (_ctms_want_check_locked), the set times as ever
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            got, seen = [], set()
+            for o in (data.get("orders") if isinstance(data.get("orders"), list) else [])[:CHECK_WANT_MAX]:
+                if not isinstance(o, dict):
+                    continue
+                ref, date = str(o.get("ref") or "").strip(), str(o.get("date") or "").strip()
+                date = date if _DDMMYYYY.fullmatch(date) else ""
+                if _CHECK_REF.fullmatch(ref) and f"{ref}|{date}" not in seen:
+                    seen.add(f"{ref}|{date}")
+                    got.append({"key": f"{ref}|{date}", "ref": ref, "date": date, "veh": True})
+            with _lock:
+                if not got:
+                    out = (400, {"error": "no orders to look up"})
+                else:
+                    have = {o["key"] for o in _check_want["orders"]}
+                    fresh_want = not _check_want["orders"]
+                    _check_want["orders"] = (_check_want["orders"] + [o for o in got if o["key"] not in have])[
+                        :CHECK_WANT_MAX]
+                    _check_want["why"] = str(data.get("why") or "")[:80]
+                    _check_want["until"] = time.time() + CHECK_WANT_FOR
+                    if fresh_want and _check_want["pending"] is None:
+                        _check_want["next_try"] = 0.0
+                    out = (200, {"ok": True, "orders": len(_check_want["orders"]), "online": _ctms_online()})
+            return self._json(*out)
         if path == "/api/ctms/rejection":
             # the CTMS page's rejection Send (his 11/11: "make it act and look like the CTMS to-do list"): his press is the
             # go-ahead to fill in and submit the ready ones on the work PC, one after another. Look mum, no hands on for
@@ -2556,6 +2643,7 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms_take_state_locked(data.get("state"))
                 _ctms_sweep_locked()
                 _ctms_due_check_locked()            # a set-time look-up of the map's orders, when one is due
+                _ctms_want_check_locked()           # ... or the few orders the home PC is waiting on (escalations)
                 _rejection_auto_locked()            # a complete rejection form, when Auto is on and he's away
                 # Held open until there is work, or something the bridge has
                 # to know changes (pictures wanted, the switch flipped).

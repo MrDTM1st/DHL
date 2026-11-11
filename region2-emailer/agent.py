@@ -552,10 +552,30 @@ def push_panel():
             "no_address": _no_address(),
             "bookings": _bookings(),
             "rejections": _rejections(),
+            "inbox": _inbox(),
+            "update_reply": _update_reply(),
             "home_code": _home_code(),
         })
     except Exception:
         pass
+
+
+def _update_reply():
+    """His Region 2 Updates reply (daily_update) - today's draft, or when their email came in."""
+    try:
+        import daily_update
+        return daily_update.panel()
+    except Exception:
+        return {}
+
+
+def _inbox():
+    """Emails nobody has answered yet (inbox_watch) - the Dashboard's "Emails waiting for you" card and its bell."""
+    try:
+        import inbox_watch
+        return inbox_watch.panel()
+    except Exception:
+        return {}
 
 
 def _rejections():
@@ -746,6 +766,7 @@ PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # monitor_tick: new mail, check
 PUSH_DUE = os.path.join(HERE, "_push_due")       # monitor_tick: an ad hoc went on the map - push its CSV and pin now
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
 SEND_JOBS = ("waitlist_release", "chase")
+_said_today = {}        # a job's failure said once a day, not every run
 
 
 def _bg_jobs():
@@ -773,6 +794,12 @@ def _bg_jobs():
         # the Haulier Rejection Form: Tier 1 no's read from their replies onto the rejection card (rejections.py,
         # read-only in the mailbox). Nothing is sent from here - the card's Send does that, or the dashboard's Auto
         ("rejections", ["rejections.py", "refresh"], 1800, 600, lambda: True),
+        # emails nobody has answered yet - the Dashboard's "Emails waiting for you" and its bell (inbox_watch.py, his
+        # managers' 11/11 "make sure ... urgent emails and queries are not missed"). Read-only; ~10 s a look
+        ("inbox_watch", ["inbox_watch.py", "scan"], 300, 240, lambda: True),
+        # his reply to the day's Region 2 Updates, drafted into Outlook's Drafts at 15:30 on a working day once their
+        # email is in (daily_update.py due - once a day; never sent, he reads it and sends it)
+        ("daily_update", ["daily_update.py", "due"], 600, 600, lambda: True),
         # who each open DTS's site has been emailed by, and whether Order Management was asked (read-only, Sent Items)
         ("om_tries", ["om_contact.py", "sweep"], 1800, 300, lambda: True),
         # a booked DTS onto the team's DTS sheet, through the work PC (his 03/11)
@@ -800,7 +827,7 @@ class BackgroundJobs:
     # start" are spread a minute apart instead of all firing at once; the rest
     # wait a full interval, as before.
     SOON = ("book_retry", "adhoc_sweep", "phase2_check", "haulier_asks", "waitlist_release",
-            "waitscan", "recover", "planner_week", "rejections")
+            "waitscan", "recover", "planner_week", "rejections", "inbox_watch")
     LOG_MAX = 256 * 1024
 
     def __init__(self):
@@ -924,6 +951,18 @@ class BackgroundJobs:
         elif key == "rejections":
             if rc == 0:
                 push_panel()                  # new no's onto the rejection card - and in front of the dashboard's Auto
+        elif key == "inbox_watch":
+            if rc == 0:
+                push_panel()                  # what's waiting, onto the Dashboard - the bell rings from it
+        elif key == "daily_update":
+            res = _last_json(out) or {}
+            if res.get("summary"):            # the reply was drafted just now
+                push_panel()
+                report("done", res.get("said", ""), tail(out, 3))
+            elif rc != 0 and "couldn't be drafted" in str(res.get("said")):
+                if _said_today.get(key) != time.strftime("%Y-%m-%d"):
+                    _said_today[key] = time.strftime("%Y-%m-%d")
+                    report("error", res["said"] + " The Dashboard's Draft it now tries again.", tail(out, 8))
         elif key == "adhoc_sweep":
             n = 0
             for line in out.splitlines():
@@ -1831,6 +1870,26 @@ def main():
                 report("done" if res["ok"] else "error",
                        "Home PC: " + res["said"] + (" The agents start again on it in a moment." if res.get("changed")
                                                      and res["ok"] else ""), tail(out, 6))
+            elif action == "update_draft":
+                # the Dashboard's Region 2 Updates card: Draft it now / Draft it again - into Drafts, never sent
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                report("running", "Drafting your Region 2 Updates reply…")
+                try:
+                    out = run(["daily_update.py", "draft"] + (["--force"] if d.get("again") else []), timeout=300)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = _last_json(out) or {"ok": False, "said": "The reply didn't finish drafting - look in Drafts "
+                                                                "before trying again."}
+                push_panel()
+                report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
+            elif action == "inbox_dealt":
+                # the inbox card's Dealt with: answered another way (a call, Teams) - it stays off unless they write again
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                iid = str(d.get("id") or "")[:20]
+                out = run(["inbox_watch.py", "dealt", iid], timeout=60) if iid else ""
+                res = _last_json(out) or {"ok": False, "said": "That email couldn't be taken off the list."}
+                push_panel()
+                report("done" if res.get("ok") else "error", "Emails waiting: " + res.get("said", ""), tail(out, 3))
             elif action == "rejection":
                 # the rejection card: a no he was told by phone or Teams (add), his changes (edit), Not needed
                 # (drop), the Auto switch - the store changed, nothing sent

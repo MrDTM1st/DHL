@@ -4,6 +4,8 @@ import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.j
 import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
 import { NrDateCard } from '../components/NrDateBox.jsx';
+import InboxCard from '../components/InboxCard.jsx';
+import UpdateReplyCard from '../components/UpdateReplyCard.jsx';
 
 // ---- Holiday cover / handover card ----
 function HolidayCard({ panel, onCommand }) {
@@ -511,6 +513,10 @@ export default function Dashboard({
         </div>
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
+
+      <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
+
+      <UpdateReplyCard data={panel && panel.update_reply} onCommand={onCommand} />
 
       <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
 

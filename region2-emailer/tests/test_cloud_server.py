@@ -252,6 +252,58 @@ def test_odd_input_is_dropped_never_the_connection():
         fresh()
 
 
+# ---- a look-up the home PC asks for (11/11) ----------------------------------------------------------------
+def test_an_escalation_s_orders_are_looked_up_at_the_next_quiet_minute_and_retried_until_they_are():
+    fresh()
+    S._queue.clear()
+    keep = dict(S._check_want)
+    S._check_want.update(orders=[], why="", until=0.0, next_try=0.0, pending=None)
+    try:
+        assert call("/api/ctms/check_want", {"orders": [{"ref": "9100070"}]})[0] == 401      # the home PC's to ask
+        assert call("/api/ctms/check_want", {"orders": [{"ref": "!"}]}, key=AGENT)[0] == 400
+        code, r = call("/api/ctms/check_want", {"orders": [{"ref": "9100070", "date": "20/11/2026"},
+                                                           {"ref": "9100070", "date": "20/11/2026"},
+                                                           {"ref": "9100071", "date": "nope"}],
+                                                "why": "an escalation"}, key=AGENT)
+        assert code == 200 and r["orders"] == 2
+        with S._lock:
+            assert S._ctms_want_check_locked() is None                      # the bridge offline: nothing queued
+            S._ctms["seen"] = time.time()
+            cmd = S._ctms_want_check_locked()
+            assert cmd and cmd["idle"] == S.CHECK_WANT_IDLE == 1 and cmd["by"] == "escalation look-up"
+            assert [(o["ref"], o["date"], o["veh"]) for o in cmd["orders"]] == [("9100070", "20/11/2026", True),
+                                                                                ("9100071", "", True)]
+            assert S._ctms["armed_for"] == cmd["id"]                       # for that look-up alone
+            assert S._ctms_want_check_locked() is None                      # one at a time
+        # the work PC in use: tried again two minutes on - not before
+        call("/api/ctms/result", {"id": cmd["id"], "action": "ctms_check", "ok": False, "detail": "Not looked up",
+                                  "payload": {"postponed": True}}, key=BRIDGE)
+        with S._lock:
+            S._ctms["queue"].clear()
+            S._ctms["seen"] = time.time()
+            assert S._ctms_want_check_locked(now=time.time() + 30) is None
+            cmd2 = S._ctms_want_check_locked(now=time.time() + S.CHECK_WANT_RETRY + 1)
+            assert cmd2 and cmd2["id"] != cmd["id"]
+        st = call("/api/ctms/status")[1]["check_want"]
+        assert st == {"orders": ["9100070", "9100071"], "why": "an escalation", "waiting": True}
+        call("/api/ctms/result", {"id": cmd2["id"], "action": "ctms_check", "ok": True, "detail": "Looked up"},
+             key=BRIDGE)
+        assert S._check_want["orders"] == [] and S._check_want["pending"] is None          # looked up: done
+        with S._lock:
+            S._ctms["queue"].clear()
+            assert S._ctms_want_check_locked(now=time.time() + 3600) is None
+        # asked again and left too long: it lapses rather than looking up a stale list
+        call("/api/ctms/check_want", {"orders": [{"ref": "9100072"}]}, key=AGENT)
+        with S._lock:
+            assert S._ctms_want_check_locked(now=time.time() + S.CHECK_WANT_FOR + 10) is None
+            assert S._check_want["orders"] == []
+    finally:
+        S._check_want.clear()
+        S._check_want.update(keep)
+        fresh()
+        S._queue.clear()
+
+
 # ---- the rejection card (11/11) ----------------------------------------------------------------------------
 def test_a_rejection_send_switches_acting_on_for_its_run_only_and_back_when_it_ends():
     fresh()
