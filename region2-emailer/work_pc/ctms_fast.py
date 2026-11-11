@@ -18,6 +18,7 @@ of the bridge (nothing gets installed on the work PC).
 MENU_GREY = (102, 102, 102)
 CANON_MENU_BOTTOM = 50      # the menu bar's last row on the pictures every recipe was measured on (29-30/10)
 CANON_MENU_LEFT = 15        # and its first column
+CANON_MENU_HEIGHT = 30      # and how many rows tall it is - the CTMS app's too, home and work screens (10-11/11)
 BLOCK_W, BLOCK_H = 40, 20   # the screen is compared in blocks this size
 QUIET_BLOCKS = 2            # a blinking caret changes a block or two - more than that is CTMS answering
 
@@ -67,6 +68,29 @@ def anchor(bgra, w, h):
         if left is not None:
             return left - CANON_MENU_LEFT, bottom - CANON_MENU_BOTTOM
     return None
+
+
+def menu_height(bgra, w, h):
+    """How many rows tall CTMS's grey menu bar is drawn - or None when no column shows the whole bar (something
+    over it, or its top cut off at the picture's edge). Windows' display scale draws CTMS bigger or smaller, the bar
+    with it, and every recipe's points and pictures were measured at one size: this is how a batch can tell (11/11,
+    his home and work screens differ). The tallest column counts - a letter of a menu's name only shortens a run."""
+    best = None
+    for x in (600, 900, 300, 1200):
+        if x >= w:
+            continue
+        run, start = 0, None
+        for y in range(min(h, 200)):
+            if near(rgb_at(bgra, w, x, y), MENU_GREY, 6):
+                start = y if run == 0 else start
+                run += 1
+            elif run >= 5:
+                if start > 0:
+                    best = max(best or 0, run)
+                break
+            else:
+                run = 0
+    return best
 
 
 TITLE_TEALS = ((54, 76, 76), (120, 186, 186))   # a window's title bar in CTMS, active and not

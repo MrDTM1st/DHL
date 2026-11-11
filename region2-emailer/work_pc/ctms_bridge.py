@@ -139,6 +139,8 @@ WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # where CTMS sits now, waiting for it to answer, a pixel it must show, a small picture kept for the answer.
 BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle", "find")
 STEPS_MAX = 120         # a whole order update - times, comments, services, vehicle - is ~90 steps
+SCALE_SLACK = 0.05      # the bar is 30 rows at the size measured: a row off is drawing, two is another scale
+                        # (110% draws 33, 125% 35-38) - and every fixed point would be that much off
 SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
 CHECK_ORDERS = 40       # orders one CTMS look-up takes (the map holds a few dozen at most)
@@ -1201,6 +1203,24 @@ class Bridge:
         self.batch["size"] = (w, h)
         return bgra, w, h
 
+    def _scale_guard(self):
+        """Once a command, before its first step touches CTMS's own window: CTMS drawn at the size every recipe was
+        measured at, or nothing is done. Windows' display scale (125%, 150% ...) draws it bigger, and the fixed
+        points and pictures of the Run, Book, the import and order look-ups would all miss (11/11: his screens at home
+        and at work differ). Read off the menu bar's height; a picture that does not show the bar decides nothing."""
+        if self.batch.get("scale_ok") or (self.win or {}).get("kind") != "java":
+            return
+        bgra, w, h = self._frame()
+        tall = ctms_fast.menu_height(bgra, w, h)
+        if tall is not None:
+            ratio = tall / ctms_fast.CANON_MENU_HEIGHT
+            if abs(ratio - 1) > SCALE_SLACK:
+                raise RuntimeError(
+                    f"CTMS is drawn at {ratio:.0%} of the size the Run and Book were set up on, so their clicks "
+                    f"would miss: Windows' display scale on this screen is different (Settings > System > Display "
+                    f"> Scale - set it to what your other screen uses). Nothing was clicked.")
+        self.batch["scale_ok"] = True
+
     def _point(self, args, at_key="at", px_key="px"):
         """Where a step aims, as the fraction ctms_act takes. A px point - the picture's own pixels, as the recipes
         were measured - moves by the batch's anchor and is taken of the window as it is now (Forms lays its windows
@@ -1363,6 +1383,8 @@ class Bridge:
 
         In a batch a step can also carry react (wait for CTMS to answer it, see _react) and after (seconds to
         pause instead of the usual 0.4 after a click / 0.3 after a key), and aim with px instead of at."""
+        if action != "wait":
+            self._scale_guard()
         if action in BATCH_STEPS:
             return self.batch_step(action, args)
         react = bool(args.get("react")) and action != "wait"

@@ -2144,6 +2144,46 @@ def test_the_anchor_reads_how_far_ctms_has_moved_off_its_menu_bar():
     assert F.anchor(_ctms_frame(w, h, top=21, bar_rows=0), w, h) is None   # no bar: says so, never guesses
 
 
+def test_the_menu_bar_s_height_is_how_big_ctms_is_drawn():
+    w, h = 700, 120
+    assert F.menu_height(_ctms_frame(w, h, top=21), w, h) == F.CANON_MENU_HEIGHT == 30
+    assert F.menu_height(_ctms_frame(w, h, top=21, bar_rows=38), w, h) == 38       # 125%: a taller bar
+    letter = {(300, 31): 0xFF000000}                                              # a menu name's letter
+    assert F.menu_height(_ctms_frame(w, h, top=21, extra=letter), w, h) == 30     # the whole column counts
+    assert F.menu_height(_ctms_frame(w, h, top=0), w, h) is None                  # top cut off: can't tell
+    assert F.menu_height(_ctms_frame(w, h, top=21, bar_rows=0), w, h) is None     # no bar: says nothing
+
+
+def test_ctms_drawn_at_another_display_scale_stops_a_command_before_its_first_click():
+    keep = (W.find_windows, W.picture, B.LOG, A.click, A.to_front, A._send, B.time.sleep)
+    w, h = 700, 200
+    W.find_windows = lambda: [dict(FAKE_WIN, kind="java", content=None, frame=[0, 0, w, h])]
+    frames = {"now": _ctms_frame(w, h, top=21, bar_rows=38)}                     # Windows at 125%
+    W.picture = lambda win: (frames["now"], w, h, "from the window")
+    clicks = []
+    A.click = lambda hwnd, fx, fy, area, double=False, right=False: clicks.append((fx, fy)) or "Clicked"
+    A.to_front, A._send, B.time.sleep = (lambda hwnd: True), (lambda inputs: None), (lambda s: None)
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        b.handle({"id": 1, "action": "steps", "steps": [{"action": "click", "px": [100, 100]},
+                                                        {"action": "key", "key": "tab"}]})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "127%" in body["detail"] and "Display > Scale" in body["detail"]
+        assert "step 1 of 2" in body["detail"] and clicks == []                   # nothing touched
+        frames["now"] = _ctms_frame(w, h, top=21)                                 # the size it was measured at
+        b.handle({"id": 2, "action": "steps", "steps": [{"action": "click", "px": [100, 100]}]})
+        assert desk.sent[-1][1]["ok"], desk.sent[-1][1]["detail"]
+        assert len(clicks) == 1
+        frames["now"] = _ctms_frame(w, h, top=21, bar_rows=0)                     # bar hidden: decides nothing
+        b.handle({"id": 3, "action": "steps", "steps": [{"action": "click", "px": [100, 100]}]})
+        assert desk.sent[-1][1]["ok"] and len(clicks) == 2
+    finally:
+        W.find_windows, W.picture, B.LOG, A.click, A.to_front, A._send, B.time.sleep = keep
+
+
 def test_the_screen_is_compared_in_blocks_and_a_blinking_caret_is_not_an_answer():
     w, h = 200, 100
     white = [[0xFFFFFFFF] * w for _ in range(h)]
