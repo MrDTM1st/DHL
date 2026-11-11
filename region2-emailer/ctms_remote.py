@@ -1083,6 +1083,11 @@ def main(argv=None):
     p = sub.add_parser("fields", help="CTMS's fields by name, through Java's Access Bridge")
     p.add_argument("--all", action="store_true", help="every one, not just the first 300")
     sub.add_parser("fields-setup", help="the work PC fetches the 32-bit Python that reading fields needs")
+    sub.add_parser("form-read", help="the Haulier Rejection Form's questions and boxes by name (use form first)")
+    p = sub.add_parser("form-fill", help="answers put into the rejection form by name, read back (use form first)")
+    p.add_argument("answers", help='a JSON file: [{"q": "Haulier Name", "tick": ["DHL NOC"]}, '
+                                   '{"q": "Date of Job", "text": "11/16/2026"}, {"q": "Rear-Steer", "pick": "No"}]')
+    p.add_argument("--submit", action="store_true", help="press Submit once every answer reads back")
     p = sub.add_parser("drag", help="press at one point of CTMS's picture and let go at another")
     p.add_argument("--from", dest="start", required=True, help="X,Y on the latest picture")
     p.add_argument("--to", dest="end", required=True, help="X,Y on the latest picture")
@@ -1299,6 +1304,19 @@ def run(a):
         print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
         if payload and payload.get("kind") == "fields":
             print_fields(payload, full=a.all)
+        return 0 if result.get("ok") else 3
+    if c in ("form-read", "form-fill"):
+        args = {}
+        if c == "form-fill":
+            with open(a.answers, encoding="utf-8") as f:
+                args = {"answers": json.load(f), "submit": bool(a.submit)}
+        result, payload = ask(c.replace("-", "_"), wait_total=150, **args)
+        trace(c, args, result, payload)
+        print(("DONE  " if result.get("ok") else "NOT DONE  ") + str(result.get("detail") or ""))
+        for it in (payload or {}).get("items") or []:
+            state = "" if "on" not in it else (" [x]" if it["on"] else " [ ]")
+            held = f" = {it['v']!r}" if it.get("v") else (" (empty)" if "v" in it else "")
+            print(f"{'  ' * min(int(it.get('d') or 0), 12)}{it.get('k')}: {it.get('nm')}{state}{held}")
         return 0 if result.get("ok") else 3
     if c == "fields-setup":
         result, payload = ask("fields_setup", wait_total=400)

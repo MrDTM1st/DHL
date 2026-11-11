@@ -77,7 +77,8 @@ CTMS_KEY = (hmac.new(DASH_KEY.encode(), b"ctms-bridge-v1", hashlib.sha256).hexdi
 CTMS_OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 CTMS_READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking
              "prompt",                   # ... at the "open or save?" box CTMS's browser puts up after an export
-             "book_recall")              # ... and what the work PC's own record says a Book made (book_record)
+             "book_recall",              # ... and what the work PC's own record says a Book made (book_record)
+             "form_read")                # ... and the Haulier Rejection Form, read by name (11/11)
 CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / Claude's own text pasted
               "click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
               "reload", "dialog", "tab", "drag",   # Claude acting - only while the switch is on
@@ -87,7 +88,8 @@ CTMS_DRIVE = ("steps", "paste",          # a batch of the window steps below / C
               "ctms_check",                        # the map's orders looked up in CTMS (/api/ctms/check)
               "ctms_book",                         # one order's trips made in CTMS (/api/ctms/book)
               "ctms_item",                         # one item of the CTMS to-do, as the home PC's Run hands it over
-              "teams_send")                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
+              "teams_send",                        # a message to DHL NOC in the work PC's Teams (/api/ctms/teams)
+              "form_fill")                         # the Haulier Rejection Form filled in by name (11/11)
 CTMS_ADMIN = ("update", "fields_setup", "shared_folder", "folder_read", "dts_add", "dts_date")
 CTMS_STEP_ACTIONS = ("click", "drag", "key", "type", "wait", "paste",   # what one of a batch's steps can be
                      "anchor", "waitfor", "check", "snap", "settle",   # ... and the batch looking between them
@@ -475,6 +477,27 @@ def _ctms_args(action, data):
                          for o in data["orders"][:40]
                          if isinstance(o, dict) and _CHECK_REF.fullmatch(str(o.get("ref") or ""))]
         num("idle", 0, 60)
+    if action == "form_fill" and isinstance(data.get("answers"), list):
+        # the Haulier Rejection Form's answers (11/11): each a question's words with a tick list, one pick (and its
+        # Other words) or text - cut to size; Submit only when asked
+        answers = []
+        for a in data["answers"][:20]:
+            if not isinstance(a, dict) or not str(a.get("q") or "").strip():
+                continue
+            one = {"q": str(a["q"])[:80]}
+            if isinstance(a.get("tick"), list):
+                one["tick"] = [str(x)[:80] for x in a["tick"][:12] if str(x).strip()]
+            elif a.get("pick") is not None:
+                one["pick"] = str(a["pick"])[:80]
+                if a.get("other") is not None:
+                    one["other"] = str(a["other"])[:200]
+            elif a.get("text") is not None:
+                one["text"] = str(a["text"])[:200]
+            else:
+                continue
+            answers.append(one)
+        out["answers"] = answers
+        out["submit"] = bool(data.get("submit"))
     return out
 
 

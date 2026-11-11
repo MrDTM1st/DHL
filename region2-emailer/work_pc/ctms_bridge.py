@@ -92,6 +92,7 @@ import ctms_book
 import ctms_drive
 import ctms_export
 import ctms_fast
+import ctms_form
 import ctms_import
 import ctms_items
 import ctms_jab
@@ -122,7 +123,8 @@ LOCK_PORT = 8792
 OBSERVE = ("look", "capture", "net")          # the dashboard's own buttons
 READ = ("see", "wait", "tabs", "probe", "fields", "use",   # Claude looking: no switch needed
         "prompt",            # ... at the "open or save?" box CTMS's browser puts up (ctms_window.prompts)
-        "book_recall")       # ... and what this PC's Book made, from its own record (book_record): CTMS untouched
+        "book_recall",       # ... and what this PC's Book made, from its own record (book_record): CTMS untouched
+        "form_read")         # ... and the Haulier Rejection Form read by name, nothing changed (ctms_form, 11/11)
 DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "forward",
          "reload", "dialog", "tab", "drag",
          "steps", "paste",
@@ -132,7 +134,8 @@ DRIVE = ("click", "type", "key", "select", "scroll", "hover", "goto", "back", "f
          "ctms_check",     # ... and the map's orders looked up in CTMS (searches only, nothing saved)
          "ctms_book",      # ... and the order panel's Book: one order's trips made in one go (ctms_book)
          "ctms_item",      # ... and one item of the CTMS to-do done in one go (ctms_items)
-         "teams_send")     # ... and a dashboard message sent to DHL NOC in this PC's Teams (ctms_teams)
+         "teams_send",     # ... and a dashboard message sent to DHL NOC in this PC's Teams (ctms_teams)
+         "form_fill")      # ... and the Haulier Rejection Form filled in by name - Submit only when asked (ctms_form)
 # What one step in CTMS's own window (or the tracker's page) can be - alone, or one of a batch ("steps").
 WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # ... and what only a batch can carry: looking at the screen between the steps, on this PC (ctms_fast) -
@@ -746,6 +749,30 @@ class Bridge:
         """The allowed page a window shows, named for a sentence's start: "The DigiHaul Job Tracker" ..."""
         name = TITLES.get(ctms_window.page_of(win.get("title")) or "page")
         return name[0].upper() + name[1:]
+
+    # -- the Haulier Rejection Form (11/11): read and filled in through UI Automation, by name (ctms_form) --
+    def form(self, action, cmd, done):
+        """Only while the form's tab is the window being worked (`use form`): read - nothing changed - or fill, every
+        answer read back, Submit pressed only when asked and only once all of them read back."""
+        if self.target != "form" or not self.scan_window(force=True):
+            return done(False, "The rejection form isn't the window being worked - `use form` first (its tab open "
+                               "in Edge).", {"kind": "form"})
+        if action == "form_read":
+            got = ctms_form.read(self.win["hwnd"])
+            return done(True, f"Read {len(got['items'])} thing(s) on {got['doc']} in {got['took']}s.",
+                        dict(got, kind="form"))
+        answers = cmd.get("answers") if isinstance(cmd.get("answers"), list) else []
+        if not answers:
+            return done(False, "No answers to put in.", {"kind": "form"})
+        got = ctms_form.fill(self.win["hwnd"], answers, submit=bool(cmd.get("submit")))
+        if got["off"]:
+            said = "; ".join(got["off"]) + ("" if got["submitted"] or any("Submit" in o for o in got["off"])
+                                            else " - so it wasn't submitted.")
+        elif got["submitted"]:
+            said = f"Filled in {got['filled']} answer(s), every one read back, and submitted: {got['said'][:160]}"
+        else:
+            said = f"Filled in {got['filled']} answer(s), every one read back - not submitted."
+        return done(not got["off"], said, dict(got, kind="form"))
 
     # -- the "open or save?" box CTMS's browser puts up (31/10) --
     def prompt_look(self):
@@ -1620,6 +1647,8 @@ class Bridge:
                                        "Edge - open CTMS there as normal.")
                 p = ctms_jab.read_fields(self.win)
                 return done(True, ctms_jab.summary(p), dict(p, kind="fields", title=self.win["title"]))
+            if action in ("form_read", "form_fill"):
+                return self.form(action, cmd, done)
             if action == "fields_setup":
                 return done(True, ctms_jab.setup())
             if action == "prompt":

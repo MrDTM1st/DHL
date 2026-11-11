@@ -1214,6 +1214,63 @@ def test_use_form_works_the_rejection_forms_tab_and_never_mixes_it_up_with_the_t
         W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
 
 
+def test_the_rejection_form_is_read_by_name_while_looking_and_filled_only_while_claude_can_act():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, B.ctms_form.read, B.ctms_form.fill)
+    form = dict(FAKE_WIN, hwnd=6161, kind="page", score=1, title="Haulier Rejection Form 2026 - Work - Microsoft Edge",
+                content=[8, 90, 992, 692])
+    W.find_windows = lambda: [dict(FAKE_WIN), dict(form)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: None)
+    seen = {}
+    B.ctms_form.read = lambda hwnd: (seen.update(read=hwnd) or {
+        "items": [{"k": "checkbox", "nm": "DHL NOC", "d": 3, "on": False}], "doc": "Haulier Rejection Form 2026",
+        "took": 0.1})
+
+    def fill(hwnd, answers, submit=False):
+        seen.update(fill=(hwnd, answers, submit))
+        return {"filled": len(answers), "off": [], "submitted": submit, "items": [],
+                "said": "Your response was submitted." if submit else ""}
+    B.ctms_form.fill = fill
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.handle({"id": 1, "action": "form_read"})                                   # CTMS is being worked
+        assert desk.sent[-1][1]["ok"] is False and "use form" in desk.sent[-1][1]["detail"]
+        b.handle({"id": 2, "action": "use", "target": "form"})
+        b.handle({"id": 3, "action": "form_read"})                                   # looking: no switch needed
+        body = desk.sent[-1][1]
+        assert body["ok"] and body["payload"]["kind"] == "form" and seen["read"] == 6161
+        answers = [{"q": "Haulier Name", "tick": ["DHL NOC"]}]
+        b.handle({"id": 4, "action": "form_fill", "answers": answers})               # 'Claude can act' is off
+        assert desk.sent[-1][1]["ok"] is False and "fill" not in seen
+        b.armed = True
+        b.handle({"id": 5, "action": "form_fill", "answers": answers})
+        body = desk.sent[-1][1]
+        assert body["ok"] and "not submitted" in body["detail"] and seen["fill"] == (6161, answers, False)
+        b.handle({"id": 6, "action": "form_fill", "answers": answers, "submit": True})
+        assert desk.sent[-1][1]["ok"] and "submitted: Your response was submitted." in desk.sent[-1][1]["detail"]
+        B.ctms_form.fill = lambda hwnd, answers, submit=False: {"filled": 1, "off": ["DHL NOC isn't ticked"],
+                                                                "submitted": False, "said": "", "items": []}
+        b.handle({"id": 7, "action": "form_fill", "answers": answers, "submit": True})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "DHL NOC isn't ticked - so it wasn't submitted." in body["detail"]
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, B.ctms_form.read, B.ctms_form.fill = keep
+
+
+def test_the_dashboard_lets_form_answers_through_cleaned_and_cut_to_size():
+    out = S._ctms_args("form_fill", {"answers": [
+        {"q": "Haulier Name", "tick": ["DHL NOC", "", "x" * 300]}, {"q": "Date of Job", "text": "11/16/2026"},
+        {"q": "Rejection Reason", "pick": "Other", "other": "no HIAB"}, {"q": "", "text": "dropped"},
+        "not an answer", {"q": "Nothing chosen"}], "submit": 1, "evil": "x"})
+    assert out["submit"] is True and "evil" not in out
+    assert out["answers"] == [{"q": "Haulier Name", "tick": ["DHL NOC", "x" * 80]},
+                              {"q": "Date of Job", "text": "11/16/2026"},
+                              {"q": "Rejection Reason", "pick": "Other", "other": "no HIAB"}]
+    assert "form_read" in S.CTMS_READ and "form_fill" in S.CTMS_DRIVE
+
+
 def test_the_dashboard_queues_use_without_the_switch_and_keeps_which_window_is_worked():
     import types
     fresh()
