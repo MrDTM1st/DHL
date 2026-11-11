@@ -690,13 +690,14 @@ def make_draft(ns, now, force=False, auto=False):
                          m.HTMLBody, count=1, flags=re.I)
         m.HTMLBody = new if n == 1 else f'<div style="{font}">{body}</div>' + m.HTMLBody
         m.Save()
-        entry = str(m.EntryID)
+        entry, top = str(m.EntryID), _top(m)
         m.Close(0)                                     # olSave - it stays in Drafts, nothing sent
     st = {"key": key, "for": item.ReceivedTime.strftime("%d/%m %H:%M"), "from": str(item.SenderName),
           "draft_at": now.strftime("%H:%M"), "summary": summary, "text": text[:6000], "day": now.strftime("%Y-%m-%d"),
-          "entry": entry, "saved": _modified(ns, entry, store)}
+          "entry": entry, "saved": _modified(ns, entry, store), "top": top}
     _save_state(st)
-    return {"ok": True, "said": (f"Your reply to {_first(item.SenderName) or 'the'} Region 2 Updates is in Drafts: "
+    first = _first(item.SenderName)
+    return {"ok": True, "said": (f"Your reply to {first + chr(39) + 's' if first else 'the'} Region 2 Updates is in Drafts: "
                                  f"{summary['orders']} order(s), {summary['checks']} to check" + earlier + "."),
             "summary": summary}
 
@@ -741,6 +742,15 @@ class _PicturePrompt:
             self.stop.wait(0.5)
 
 
+def _top(item):
+    """A fingerprint of everything above the quoted email (whitespace aside) - any word of his changes it."""
+    try:
+        t = re.sub(r"\s+", " ", str(item.Body or "").split("\nFrom:", 1)[0]).strip()
+        return hashlib.sha1(t.encode("utf-8")).hexdigest()[:16] if t else ""
+    except Exception:
+        return ""
+
+
 def _modified(ns, entry, store):
     try:
         return ns.GetItemFromID(entry, store).LastModificationTime.strftime("%Y-%m-%d %H:%M:%S")
@@ -757,10 +767,11 @@ def _earlier_draft(ns, store, st):
         old = ns.GetItemFromID(st["entry"], store)
         if str(old.Parent.Name).strip().lower() != "drafts" or old.Sent:
             return ""
-        if st.get("saved") and _modified(ns, st["entry"], store) == st["saved"]:
+        if ((st.get("saved") and _modified(ns, st["entry"], store) == st["saved"])
+                or (st.get("top") and _top(old) == st["top"])):
             old.Delete()
             return " (the earlier draft is in Deleted Items)"
-        return " - the earlier one has your words in it, so it's still in Drafts too"
+        return " - the earlier one may have your changes in it, so it's still in Drafts too"
     except Exception:
         return ""
 

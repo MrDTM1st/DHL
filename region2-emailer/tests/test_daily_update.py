@@ -262,3 +262,15 @@ def test_the_agent_s_job_does_nothing_out_of_hours_or_twice_and_never_opens_outl
     assert D.main(["daily_update.py", "due", "--now", "2026-11-11T18:10"]) == 0 and said().startswith("Not time")
     D._save_state({"day": "2026-11-11", "replied": "15:05"})
     assert D.main(["daily_update.py", "due", "--now", "2026-11-11T15:40"]) == 0 and "already" in said()
+
+
+def test_drafting_again_knows_a_draft_he_has_written_in():
+    body = "Hi Sam,\r\n9100001 – Emailed Jo Site 04/11; waiting on a reply.\r\n\r\nKind regards\r\nPat\r\nFrom: Sam Boss\r\n..."
+    top = D._top(types.SimpleNamespace(Body=body))
+    assert top and D._top(types.SimpleNamespace(Body=body.replace("\r\n\r\n", "\r\n \r\n"))) == top   # spacing aside
+    for his in (body.replace("a reply.", "a reply. Rang them, booked for Friday."),       # after the last line
+                body.replace("Hi Sam,", "Hi Sam, all sorted bar one."),                    # at the top
+                body.replace("Kind regards", "Call me if needed.\r\nKind regards")):       # above his signature
+        assert D._top(types.SimpleNamespace(Body=his)) != top
+    assert D._top(types.SimpleNamespace(Body=body.replace("From: Sam Boss", "From: Sam Boss (edited quote)"))) == top
+    assert D._top(types.SimpleNamespace(Body="")) == ""
