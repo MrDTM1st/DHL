@@ -133,16 +133,26 @@ def own_words(body):
     return body.strip(" ,;-")
 
 
+# a softer no: regret with a negative in it ("this is not a movement we would be able to service I'm afraid", 04/11)
+_REGRET = re.compile(r"\b(?:sorry|afraid|unfortunately|regret)\b", re.I)
+_NEGATIVE = re.compile(r"\b(?:not|no|never)\b|n['’]t\b", re.I)
+_FINE = re.compile(r"\bno (?:problem|problems|worries|bother)\b|\bnot a problem\b", re.I)
+
+
 def reason_of(words):
     """(the form's reason, sure) for a reply that says no, or None for one that doesn't - a price quoted is a quote,
-    not a no. Two reasons named at once: the first in the form's order, marked unsure."""
-    w = str(words or "")
-    if not _NO.search(w) or _PRICE.search(w):
+    not a no. Sure only for a plain no ("unable", "can't", "no availability") naming one reason: a softer one (regret
+    and a negative) or two reasons at once is NOT CERTAIN, so it waits for his Send - Auto never sends it."""
+    w = _FINE.sub(" ", str(words or ""))              # "sorry, no problem" is a yes
+    if _PRICE.search(w):
+        return None
+    plain = bool(_NO.search(w))
+    if not plain and not (_REGRET.search(w) and _NEGATIVE.search(w)):
         return None
     hits = [reason for reason, pat in _WHY if re.search(pat, w, re.I)]
     if not hits:
-        return "No Availability - General", True
-    return hits[0], len(hits) == 1
+        return "No Availability - General", plain
+    return hits[0], plain and len(hits) == 1
 
 
 # ---- the job's details

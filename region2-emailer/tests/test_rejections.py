@@ -67,6 +67,12 @@ def test_a_no_is_read_from_their_own_words_with_its_reason_and_a_quote_is_not_a_
     signed = "Hi, sorry this is not a movement we could service. Regards Pat Example Transport Planner, Artic Way"
     assert R.own_words(signed) == "Hi, sorry this is not a movement we could service."
     assert R.own_words("Thanks for asking, but we can't help") == "Thanks for asking, but we can't help"
+    # a softer no - regret and a negative - is a no, but NOT CERTAIN: it waits for his Send, Auto never sends it
+    assert R.reason_of(R.own_words(signed)) == ("No Availability - General", False)
+    assert R.reason_of("this is not a movement we would be able to service I’m afraid") == (
+        "No Availability - General", False)
+    assert R.reason_of("Sorry, no problem, we'll cover it") is None
+    assert R.reason_of("Sorry for the delay - can you resend the drawing?") is None
 
 
 def test_product_vehicle_and_rail_length_are_worked_out_the_desk_s_way():
