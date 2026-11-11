@@ -4,7 +4,8 @@ Edge's tabs, by name - so `use ctms` / `use tracker` can bring up the tab they n
 The bridge itself never sees Edge's tab strip: its pictures are cut to the page, its clicks stay inside
 the page, and the browser's own tab keys are refused there. So this picks the tab the way a screen
 reader does - Windows UI Automation, built into Windows, asked through ctypes like the rest of work_pc -
-and only ever a tab whose name is CTMS's (CTMS_TAB_WORDS) or the tracker's (ctms_window.PAGE_WORDS).
+and only ever a tab whose name is CTMS's (CTMS_TAB_WORDS) or an allowed page's (ctms_window.PAGES: the tracker,
+the Haulier Rejection Form).
 No other tab is selected, pictured or named back, nothing is clicked or typed to do it, and UI
 Automation is told to leave the keyboard focus alone, so Edge gives the tab's own page its focus back,
 as it does when the tab is clicked. One more is read and then closed, never selected (31/10): the tab a CTMS
@@ -24,7 +25,10 @@ IS_WIN = os.name == "nt"
 # CTMS's tab by its name - the title Oracle Forms gives it ("Oracle Fusion Middleware Forms Services" on
 # the work PC). Not plain "ctms": SharePoint pages, emails and the dashboard's own page say that too.
 CTMS_TAB_WORDS = ("oracle fusion middleware", "forms services", "frmservlet", "calidus")
-WHAT = {"ctms": "CTMS's tab", "page": "the DigiHaul Job Tracker's tab"}
+WHAT = {"ctms": "CTMS's tab", "page": "the DigiHaul Job Tracker's tab", "form": "the Haulier Rejection Form's tab"}
+NOT_OPEN = {"ctms": "CTMS is not open in any Edge tab.",
+            "page": "The DigiHaul Job Tracker is not open in any Edge tab.",
+            "form": "The Haulier Rejection Form is not open in any Edge tab - open it once from its link, in Edge."}
 
 # UI Automation as UIAutomationClient.h lays it out: the class, the interfaces, and the slot of each method used.
 CLSID_CUIAutomation8 = "{E22AD333-B25F-460C-83D0-0581107395C9}"
@@ -91,10 +95,9 @@ def is_ctms(name):
 def _matches(name, target):
     """Is a tab (or Edge's title - the selected tab's) the one `target` wants?"""
     n = (name or "").lower()
-    tracker = any(w in n for w in ctms_window.PAGE_WORDS)
-    if target == "page":
-        return tracker
-    return not tracker and any(w in n for w in CTMS_TAB_WORDS)
+    if target in ctms_window.PAGES:
+        return any(w in n for w in ctms_window.PAGES[target])
+    return not any(w in n for w in ctms_window.PAGE_WORDS) and any(w in n for w in CTMS_TAB_WORDS)
 
 
 class _Session:
@@ -232,8 +235,7 @@ def _select(target):
         try:
             pick = _pick([(hwnd, s.tabs(hwnd)) for hwnd in _edge_windows()], target)
             if not pick:
-                return False, ("CTMS is not open in any Edge tab." if target == "ctms"
-                               else "The DigiHaul Job Tracker is not open in any Edge tab.")
+                return False, NOT_OPEN[target]
             hwnd, el = pick
             if not s.select(el):
                 return False, f"Edge would not bring up {WHAT[target]} - select it yourself."

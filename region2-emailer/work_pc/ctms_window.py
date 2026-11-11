@@ -12,10 +12,11 @@ person would; at this step only by looking:
   find      the window CTMS is in: an Edge window with Internet Explorer
             content and a Java applet inside it, or a Java window of its own,
             or a window whose title says CTMS / Calidus / Oracle Forms. Only
-            those are described - never the rest of what is open. One web page
-            besides CTMS may be worked too, named in PAGE_WORDS (the DigiHaul
-            Job Tracker, where a booking is logged): only while it is the
-            selected tab, and only its page.
+            those are described - never the rest of what is open. Web pages
+            besides CTMS may be worked too, named in PAGES (the DigiHaul Job
+            Tracker, where a booking is logged; the Haulier Rejection Form, where
+            a haulier's "no" is logged, 11/11): only while one is the selected
+            tab, and only its page.
   picture   that window and nothing else, never the rest of the screen. Of an
             Edge window, only the CTMS part: not the tab strip (other tabs'
             titles) or the address bar. Taken straight from the window, so it
@@ -49,7 +50,9 @@ TITLE_WORDS = ("ctms", "calidus", "oracle fusion middleware", "forms services", 
 # The one web page besides CTMS the bridge may work, by its tab's title - the online Excel sheet each booking is
 # logged in (29/10). Only while it is the selected tab, and only its page: never the tab strip, the address bar
 # or any other tab. Anything else stays unseen.
-PAGE_WORDS = ("digihaul job tracker",)
+PAGES = {"page": ("digihaul job tracker",),       # `use tracker`: where a booking is logged
+         "form": ("haulier rejection form",)}     # `use form`: where a NOC / Tier 1 "no" is logged (11/11)
+PAGE_WORDS = tuple(w for words in PAGES.values() for w in words)
 EDGE_CLASS = "Chrome_WidgetWin_1"
 IE_CLASS = "Internet Explorer_Server"
 RENDER_CLASS = "Chrome_RenderWidgetHostHWND"     # where Edge draws a web page
@@ -274,8 +277,14 @@ def idle_seconds():
 
 
 def is_page(cls, title):
-    """Is this an Edge window whose selected tab is the one allowed web page?"""
+    """Is this an Edge window whose selected tab is one of the allowed web pages?"""
     return cls == EDGE_CLASS and any(w in (title or "").lower() for w in PAGE_WORDS)
+
+
+def page_of(title):
+    """Which allowed web page an Edge title (its selected tab's) is: "page" the tracker, "form", or None."""
+    t = (title or "").lower()
+    return next((k for k, words in PAGES.items() if any(w in t for w in words)), None)
 
 
 def score(cls, title, ie, ie_showing, java):

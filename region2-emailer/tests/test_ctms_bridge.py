@@ -942,6 +942,11 @@ def test_only_a_window_ctms_can_be_in_counts_never_one_that_mentions_it():
 def test_only_ctmss_tab_or_the_trackers_is_ever_brought_up_and_a_hung_edge_is_not_waited_on():
     assert TB._matches("Oracle Fusion Middleware Forms Services", "ctms")
     assert TB._matches("DigiHaul Job Tracker.xlsx - Memory usage - 19.6 MB", "page")          # Edge adds the memory
+    assert TB._matches("Haulier Rejection Form 2026 and 3 more pages - Work - Microsoft\u200b Edge", "form")
+    assert not TB._matches("Haulier Rejection Form 2026", "page") and not TB._matches("Haulier Rejection Form 2026", "ctms")
+    assert not TB._matches("DigiHaul Job Tracker.xlsx", "form")
+    assert W.page_of("Haulier Rejection Form 2026 - Work") == "form" and W.page_of("DigiHaul Job Tracker.xlsx") == "page"
+    assert W.page_of("Inbox - Outlook") is None
     assert not TB._matches("DigiHaul Job Tracker.xlsx", "ctms") and not TB._matches("Oracle Fusion Middleware", "page")
     for other in ("CTMS user guide - SharePoint", "Haulage Desk - CTMS", "Inbox - Outlook", ""):
         assert not TB._matches(other, "ctms") and not TB._matches(other, "page"), other
@@ -1174,6 +1179,41 @@ def test_use_switches_the_bridge_between_ctms_and_the_tracker_and_stays_put_when
         W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
 
 
+def test_use_form_works_the_rejection_forms_tab_and_never_mixes_it_up_with_the_tracker():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send)
+    ctms = dict(FAKE_WIN)
+    tracker = dict(FAKE_WIN, hwnd=5151, kind="page", score=1, title="DigiHaul Job Tracker.xlsx - Work - Microsoft Edge",
+                   content=[8, 90, 992, 692])
+    form = dict(FAKE_WIN, hwnd=6161, kind="page", score=1, title="Haulier Rejection Form 2026 - Work - Microsoft Edge",
+                content=[8, 90, 992, 692])
+    open_now = [ctms, tracker, form]
+    W.find_windows = lambda: [dict(w) for w in open_now]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: None)
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.handle({"id": 1, "action": "use", "target": "form"})
+        body = desk.sent[-1][1]
+        assert body["ok"] and b.win["hwnd"] == 6161 and "Haulier Rejection Form" in body["payload"]["note"]
+        assert b.state()["target"] == "form"
+        b.handle({"id": 2, "action": "use", "target": "page"})
+        assert desk.sent[-1][1]["ok"] and b.win["hwnd"] == 5151                      # the tracker, never the form
+        b.handle({"id": 3, "action": "use", "target": "form"})
+        b.armed = True
+        b.handle({"id": 4, "action": "key", "key": "ctrl+l"})                        # the browser's own keys: refused
+        assert desk.sent[-1][1]["ok"] is False and b.win["hwnd"] == 6161
+        b.armed = False
+        b.handle({"id": 5, "action": "use", "target": "ctms"})
+        open_now.remove(form)                                                        # its tab closed
+        b.handle({"id": 6, "action": "use", "target": "form"})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and b.target == "ctms" and "open it once from its link" in body["detail"]
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send = keep
+
+
 def test_the_dashboard_queues_use_without_the_switch_and_keeps_which_window_is_worked():
     import types
     fresh()
@@ -1181,6 +1221,8 @@ def test_the_dashboard_queues_use_without_the_switch_and_keeps_which_window_is_w
     assert call("/api/ctms/command", {"action": "use", "target": "elsewhere"}, key=AGENT)[0] == 200
     good, bad = S._ctms["queue"][-2:]
     assert good["target"] == "page" and "target" not in bad
+    assert call("/api/ctms/command", {"action": "use", "target": "form"}, key=AGENT)[0] == 200
+    assert S._ctms["queue"][-1]["target"] == "form"                                  # the rejection form (11/11)
     poll({"version": "2", "view": "window", "target": "page",
           "window": {"found": True, "title": "DigiHaul Job Tracker.xlsx", "kind": "page", "java": 0, "showing": True}})
     assert call("/api/ctms/status")[1]["state"]["target"] == "page"

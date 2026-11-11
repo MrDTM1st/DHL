@@ -139,6 +139,8 @@ WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # where CTMS sits now, waiting for it to answer, a pixel it must show, a small picture kept for the answer.
 BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle", "find")
 STEPS_MAX = 120         # a whole order update - times, comments, services, vehicle - is ~90 steps
+WORKED = {"ctms": "CTMS", "page": "the tracker", "form": "the rejection form"}      # what `use` can work
+TITLES = {"ctms": "CTMS's window", "page": "the DigiHaul Job Tracker", "form": "the Haulier Rejection Form"}
 SCALE_SLACK = 0.05      # the bar is 30 rows at the size measured: a row off is drawing, two is another scale
                         # (110% draws 33, 125% 35-38) - and every fixed point would be that much off
 SNAPS_MAX = 8
@@ -380,8 +382,9 @@ class Bridge:
         # when it is found it is what the bridge watches - ahead of any tab.
         self.win = None
         self.win_checked = 0.0
-        # Which window the bridge works: CTMS's ("ctms"), or the one allowed web page ("page" - the DigiHaul
-        # Job Tracker, ctms_window.PAGE_WORDS). Claude switches it with `use`; every start is CTMS.
+        # Which window the bridge works: CTMS's ("ctms"), or an allowed web page (ctms_window.PAGES): "page" the
+        # DigiHaul Job Tracker, "form" the Haulier Rejection Form (11/11). Claude switches it with `use`; every start
+        # is CTMS.
         self.target = "ctms"
         # `use` has just had Edge bring a tab up (ctms_tabs): Edge decides where its keyboard focus lands,
         # so keys wait until Claude has clicked into the page.
@@ -397,11 +400,11 @@ class Bridge:
         except Exception as e:
             wins = []
             self.shot_error = f"Could not look for CTMS's window ({type(e).__name__})."
-        wins = [w for w in wins if (w.get("kind") == "page") == (self.target == "page")]
+        wins = [w for w in wins if self._worked(w)]
         old, self.win = self.win, (wins[0] if wins else None)
         if bool(old) != bool(self.win) or (old and self.win and old["hwnd"] != self.win["hwnd"]):
             if self.win:
-                say(f"Found {'the tracker' if self.target == 'page' else 'CTMS'}'s window: "
+                say(f"Found {WORKED.get(self.target, 'CTMS')}'s window: "
                     f"{self.win['title'][:80] or '?'} ({self.win['process'] or self.win['class']})")
                 log("window", title=self.win["title"][:120], window_kind=self.win["kind"], java=self.win["java"])
             else:
@@ -410,6 +413,13 @@ class Bridge:
             self.shot_hash = None
         return self.win
 
+    def _worked(self, w):
+        """Is this window the one being worked: CTMS's, or the allowed page `use` picked - the tracker and the
+        rejection form are never mixed up (11/11)."""
+        if w.get("kind") == "page":
+            return ctms_window.page_of(w.get("title")) == self.target
+        return self.target == "ctms"
+
     def window_picture(self):
         """(BGRA, w, h, how) of the window being worked, found afresh - it may have moved."""
         if not self.scan_window(force=True):
@@ -417,6 +427,10 @@ class Bridge:
         return ctms_window.picture(self.win)
 
     def not_found(self):
+        if self.target == "form":
+            return ("The Haulier Rejection Form is not the selected tab of any Edge window - open it once from its "
+                    "link in Edge and leave the tab there; `use form` brings it up while Claude can act (`use ctms` "
+                    "goes back to CTMS).")
         if self.target == "page":
             return ("The DigiHaul Job Tracker is not the selected tab of any Edge window - select its tab, or "
                     "`use tracker` brings it up while Claude can act (`use ctms` goes back to CTMS).")
@@ -719,13 +733,19 @@ class Bridge:
         return {"kind": "window", "img": base64.b64encode(ctms_window.png(bgra, w, h)).decode(),
                 "mime": "image/png", "img_w": w, "img_h": h, "title": win["title"], "how": how,
                 "window": {k: win[k] for k in ("kind", "process", "java", "ie_showing", "foreground", "minimized")},
-                "note": ("The DigiHaul Job Tracker (its tab is selected): only its page is pictured. Click a point "
+                "note": (self._page_title(win) + " (its tab is selected): only its page is pictured. Click a point "
                          "with click --at X,Y; type --focused and keys work, the browser's own keys do not."
                          if win.get("kind") == "page" else
                          "CTMS's own window: a picture, read by eye - no numbered list. Click a point on it "
                          "with click --at X,Y (--double to open an order); type --focused and keys also work.")
                         + (" Edge has just switched tabs: click into the page before any keys."
                            if self.click_first else "")}
+
+    @staticmethod
+    def _page_title(win):
+        """The allowed page a window shows, named for a sentence's start: "The DigiHaul Job Tracker" ..."""
+        name = TITLES.get(ctms_window.page_of(win.get("title")) or "page")
+        return name[0].upper() + name[1:]
 
     # -- the "open or save?" box CTMS's browser puts up (31/10) --
     def prompt_look(self):
@@ -1664,11 +1684,12 @@ class Bridge:
                 said, payload = self.prompt_look()
                 return done(True, f"{detail}. Now: {said}", payload)
             if action == "use":
-                # which window to work - CTMS's, or the tracker's page. Its tab not the selected one: while
-                # Claude can act, Edge brings it up by its name (ctms_tabs). Not found even so: stay where we were.
+                # which window to work - CTMS's, or an allowed page (the tracker, the rejection form). Its tab not
+                # the selected one: while Claude can act, Edge brings it up by its name (ctms_tabs). Not found even
+                # so: stay where we were.
                 want, was = cmd.get("target"), self.target
-                if want not in ("ctms", "page"):
-                    raise RuntimeError("Use which window? use ctms, or use tracker.")
+                if want not in WORKED:
+                    raise RuntimeError("Use which window? use ctms, use tracker or use form.")
                 self.target = want
                 brought = None
                 if not self.scan_window(force=True) and self.allow_control and self.armed:
@@ -1698,21 +1719,22 @@ class Bridge:
                     self.scan_window(force=True)
                     if brought:
                         why = brought[1] if not brought[0] else (
-                            "Edge brought its tab up, but " + ("the tracker's page" if want == "page"
+                            "Edge brought its tab up, but " + (f"{TITLES[want]}'s page" if want != "ctms"
                                                                else "CTMS's window") + " did not show.")
                     else:
-                        why = (("The DigiHaul Job Tracker's tab is not the selected one in Edge" if want == "page"
+                        why = ((TITLES[want][0].upper() + TITLES[want][1:] + "'s tab is not the selected one in Edge"
+                                + (" (open it once from its link in Edge, and leave the tab there)" if want == "form"
+                                   else "") if want != "ctms"
                                 else "CTMS is not open in your Edge, or its tab is not the selected one")
                                + " - select it, or switch 'Claude can act' on and use brings it up itself.")
-                    raise RuntimeError(why + " Still working " + ("the tracker." if was == "page" else "CTMS."))
-                return done(True, (brought[1] + " " if brought else "") + "Now working "
-                            + ("the DigiHaul Job Tracker." if want == "page" else "CTMS's window."),
+                    raise RuntimeError(why + " Still working " + WORKED.get(was, "CTMS") + ".")
+                return done(True, (brought[1] + " " if brought else "") + "Now working " + TITLES[want] + ".",
                             self.window_look())
             if self.win:
                 # CTMS's own window (Oracle Forms in IE mode): keys, typing, clicks
                 # (left, double, right) and drags go to it through ctms_act.
                 if action == "see":
-                    return done(True, "Looked at " + ("the tracker." if self.target == "page" else "CTMS's window."),
+                    return done(True, "Looked at " + WORKED.get(self.target, "CTMS") + ".",
                                 self.window_look())
                 if action in WINDOW_STEPS:
                     return done(True, self.window_step(action, cmd), self.window_look())

@@ -401,7 +401,7 @@ def _ctms_args(action, data):
         out["dry"] = bool(data.get("dry"))
     if data.get("dir") in ("up", "down", "left", "right", "to"):
         out["dir"] = data["dir"]
-    if data.get("target") in ("ctms", "page"):      # which window the bridge works
+    if data.get("target") in ("ctms", "page", "form"):      # which window the bridge works (form: 11/11)
         out["target"] = data["target"]
     branch = str(data.get("branch") or "")
     if re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", branch) and ".." not in branch:
