@@ -73,6 +73,15 @@ class FakeCtms:
         self.lov = None                 # Ctrl+L's choices while its list is up
         self.focus = None
         self.saves = []                 # what each save put on: ("item", ref, id, ordered) / ("card", ref, qty)
+        self.list_of = None             # which drop-down the open list hangs from: trailer / alt
+        self.shift = (0, 0)             # how far the carrier screen and payment box sit from these places
+        self.types = None               # the Delivery Types list while it's up: {"find": typed, "rows": listed}
+        self.type_list = list(TYPE_CODES)   # its rows as CTMS sorts them
+        self.type_set = None            # the code its OK put on the card
+        self.split_up = False           # the Split window
+        self.split_names = ("Process", "Exit")
+        self.split_typed = ""
+        self.split_done = False
 
     # -- what the Access Bridge hands over
     def upto(self):
@@ -86,6 +95,9 @@ class FakeCtms:
     def read(self, tree=True, skip=()):
         """As the Access Bridge hands it over: without tree, the manifest tree's own box but none of its rows."""
         self.reads += 1
+        return self._els(tree, skip)
+
+    def _els(self, tree=True, skip=()):
         els = [{"r": "internal frame", "nm": "Planning", "lv": 0, "at": [20, 130, 1648, 807]},
                {"r": "tree", "nm": "", "lv": 1, "at": [35, 228, 396, 696]},
                {"r": "text", "nm": "Sched", "v": self.sched, "lv": 1, "at": [79, 202, 80, 21]},
@@ -121,18 +133,37 @@ class FakeCtms:
                         {"r": "option pane", "nm": self.alert, "lv": 1, "at": [900, 440, 300, 100]},
                         {"r": "push button", "nm": "OK ALT O", "lv": 2, "at": OK_AT}]
         if self.up in ("carrier", "payment", "confirm"):
-            els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
+            dx, dy = self.shift
+            els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437 + dx, 130 + dy, 1216, 379]})
             for i, c in enumerate(self.carriers):
-                els.append({"r": "text", "nm": "", "v": c, "lv": 2, "at": [492, 235 + 23 * i, 113, 23]})
-            els.append({"r": "combo box", "nm": "", "lv": 2, "at": [1088, 387, 290, 23]})
-            els.append({"r": "combo box", "nm": "", "lv": 2, "at": [853, 463, 254, 29]})
+                els.append({"r": "text", "nm": "", "v": c, "lv": 2, "at": [492 + dx, 235 + dy + 23 * i, 113, 23]})
+            for which, (x, y, w, h) in (("trailer", TRAILER_AT), ("alt", ALT_AT)):
+                els.append({"r": "combo box", "nm": "", "lv": 2, "at": [x + dx, y + dy, w, h]})   # no names of their own
+                shown = self.list is not None and self.list_of == which
+                els.append({"r": "list", "nm": "", "lv": 3,
+                            "at": [LIST_X + dx, LIST_Y + dy, LIST_W, 22 * len(self.list)] if shown else [-1, -1, -1, -1]})
             if self.list:
                 for i, name in enumerate(self.list):
-                    els.append({"r": "label", "nm": name, "lv": 2, "at": [853, 309 + 22 * i, 239, 22]})
+                    els.append({"r": "label", "nm": name, "lv": 2, "at": [LIST_X + dx, LIST_Y + dy + 22 * i, LIST_W, 22]})
+            on = None if self.up == "carrier" else ["disabled"]
+            els += [{"r": "push button", "nm": name, "lv": 2, "at": [x + dx, y + dy, w, h], "st": on}
+                    for name, (x, y, w, h) in (("Select Carrier", SELECT_AT), ("Exit", EXIT_AT))]
+        if self.up == "payment":
+            dx, dy = self.shift
+            els[0:0] = [{"r": "internal frame", "nm": B.PAYMENT_FRAME, "lv": 0, "at": [560 + dx, 600 + dy, 420, 200]}] + [
+                {"r": "push button", "nm": name, "lv": 1, "at": [x + dx, y + dy, w, h]}
+                for name, (x, y, w, h) in (("Create Trip", CREATE_AT), ("Cancel", CANCEL_AT))]
+        if self.split_up:
+            els[0:0] = [{"r": "internal frame", "nm": "Split Orders", "lv": 0, "at": [500, 400, 500, 300]},
+                        {"r": "text", "nm": "Number of splits", "v": self.split_typed, "lv": 1, "at": [620, 440, 60, 23]}] + [
+                {"r": "push button", "nm": name, "lv": 1, "at": at}
+                for name, at in zip(self.split_names, ([560, 620, 100, 30], [800, 620, 100, 30]))]
         if self.card:
             els += self.card_els()
         if self.carrier_behind:     # last: CTMS reads its windows front first, so a new carrier window comes before this one
-            els.append({"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]})
+            els += [{"r": "internal frame", "nm": B.CARRIER_FRAME, "lv": 0, "at": [437, 130, 1216, 379]}] + [
+                {"r": "push button", "nm": name, "lv": 2, "at": list(at), "st": ["disabled"]}   # behind Planning (11/11)
+                for name, at in (("Select Carrier", SELECT_AT), ("Exit", EXIT_AT))]
         return els
 
     def info(self, ref):
@@ -173,6 +204,13 @@ class FakeCtms:
                        "st": ["selected"] if k == 0 else None} for k, (a, b) in enumerate(self.lov)]
             front += [{"r": "push button", "nm": "OK ALT O", "lv": 1, "at": [363, 763, 61, 31]},
                       {"r": "push button", "nm": "Cancel ALT C", "lv": 1, "at": [429, 763, 61, 31]}]
+        if self.types is not None:          # mid-window: where it sits depends on CTMS's window (10-11/11)
+            front += [{"r": "internal frame", "nm": B.TYPES_FRAME, "lv": 0, "at": [700, 420, 420, 500], "types": True},
+                      {"r": "text", "nm": "Find", "v": self.types["find"], "lv": 1, "at": [760, 470, 350, 22], "types": True}]
+            front += [{"r": "label", "nm": f"Delivery_Type:{v}", "lv": 2, "at": [-1, -1, -1, -1],
+                       "st": ["selected"] if k == 0 else None} for k, v in enumerate(self.types["rows"])]
+            front += [{"r": "push button", "nm": name, "lv": 1, "at": [x, 880, 61, 31], "types": True}
+                      for name, x in (("Find ALT F", 760), ("OK ALT O", 830), ("Cancel ALT C", 900))]
         return front + els
 
     def card_click(self, sc):
@@ -183,6 +221,9 @@ class FakeCtms:
             return False
         hit = min(under, key=lambda e: e["at"][2] * e["at"][3])
         nm, li = hit["nm"], self.info(self.card)
+        if hit.get("types"):
+            self.types_click(hit)
+            return True
         if hit["r"] == "page tab":
             self.card_tab = nm
         elif nm.endswith("Identifier Required") and not self.item_win:
@@ -211,6 +252,75 @@ class FakeCtms:
             self.item_win, self.focus = None, None
         return True
 
+    def types_click(self, hit):
+        """The Delivery Types list: its Find box, Find (any case, as Forms' Find), OK, Cancel."""
+        name = hit["nm"].split(" ALT ")[0]
+        if hit["r"] == "text":
+            self.focus = "types"
+        elif name == "Find":
+            want = self.types["find"].rstrip("%").upper()
+            self.types["rows"] = [v for v in self.type_list if v.upper().startswith(want)]
+        elif name == "OK":
+            self.type_set = self.types["rows"][0]
+            self.types, self.focus = None, None
+        elif name == "Cancel":
+            self.types, self.focus = None, None
+
+    def list_click(self, sc):
+        """A click on the open drop-down: its scroll arrow does nothing here, a row is picked. True when it was on it."""
+        dx, dy = self.shift
+        if not (LIST_X + dx <= sc[0] <= LIST_X + dx + LIST_W and LIST_Y + dy <= sc[1] < LIST_Y + dy + 22 * len(self.list)):
+            return False
+        if sc[0] >= LIST_X + dx + LIST_W - 20:
+            return True                                   # its own scroll arrow
+        name = self.list[(sc[1] - LIST_Y - dy) // 22]
+        setattr(self, "trailer_picked" if name.startswith("NR_") else "alt_picked", name)
+        self.list, self.list_of = None, None
+        return True
+
+    def named_click(self, sc):
+        """A click on the carrier screen, the payment box or the Split window, worked by what is under it as read."""
+        frame, hit = "", None
+        for e in self._els(tree=False):
+            if e["r"] == "internal frame":
+                frame = e["nm"]
+                continue
+            at = e.get("at") or []
+            if (e["r"] in ("push button", "combo box", "text") and len(at) == 4 and at[2] > 0
+                    and at[0] <= sc[0] <= at[0] + at[2] and at[1] <= sc[1] <= at[1] + at[3]
+                    and frame.startswith((B.CARRIER_FRAME, B.PAYMENT_FRAME, "Split"))):
+                if hit is None or at[2] * at[3] < hit[1]["at"][2] * hit[1]["at"][3]:
+                    hit = (frame, e)
+        if hit is None:
+            return False
+        frame, e = hit
+        name = e["nm"]
+        if "disabled" in (e.get("st") or []):
+            return True                                   # a window behind something: the click does nothing
+        if frame.startswith(B.CARRIER_FRAME):
+            if e["r"] == "combo box":
+                self.list_of = "trailer" if e["at"][2] == TRAILER_AT[2] else "alt"
+                self.list = list(TRAILERS) if self.list_of == "trailer" else ["ACME", "BRAVO"]
+            elif e["r"] == "text":
+                self.row_picked = e["v"]
+            elif name == "Select Carrier":
+                self.carrier_picked = getattr(self, "alt_picked", None) or getattr(self, "row_picked", "")
+                self.up = "payment"
+            elif name == "Exit":
+                self.up = None
+        elif frame.startswith(B.PAYMENT_FRAME):
+            if name == "Create Trip":
+                self.up = "confirm"
+            elif name == "Cancel":
+                self.up = "carrier"
+        elif e["r"] == "text":
+            self.focus = "split"
+        elif name == self.split_names[0]:
+            self.alert, self.split_done = "Split done", True
+        elif name == self.split_names[1]:
+            self.split_up = False
+        return True
+
     def seen(self, name, box):
         return {"sc-title": self.up == "carrier", "cp-title": self.up == "payment", "cc-title": self.up == "confirm"}.get(name, False)
 
@@ -232,6 +342,10 @@ class FakeCtms:
                 self.item_win["ordered"] = float(s["text"])
             elif self.card and self.focus == "qty":
                 self.pending_qty, self.card_dirty = float(s["text"]), True
+            elif self.types is not None and self.focus == "types":
+                self.types["find"] = s["text"]
+            elif self.split_up and self.focus == "split":
+                self.split_typed = s["text"]
             if self.list is not None and s["text"][:1] == "D":
                 self.list = [c for c in ALT_CARRIERS if c.startswith("D")][:8]
 
@@ -260,6 +374,8 @@ class FakeCtms:
             self.page = 0
         elif name == "mt-set-status":
             self.menu = "status"
+        elif name == "os-split":
+            self.split_up = True
 
     def click(self, s):
         px = tuple(s.get("px") or ())
@@ -282,6 +398,10 @@ class FakeCtms:
                 return
             if self.card and self.card_click(sc):
                 return
+            if self.up == "carrier" and self.list and self.list_click(sc):
+                return
+            if self.named_click(sc):
+                return
             if self.panel and not self.panel_stuck and list(sc) == [503 + 1006 - B.PLANNED_X, 513 + B.PLANNED_Y]:
                 self.panel = None
                 return
@@ -295,42 +415,17 @@ class FakeCtms:
                     if s.get("double"):
                         self.card = r["cust_ref"]
                     return
-            if self.up == "carrier" and self.list:
-                for i, name in enumerate(self.list):
-                    if abs(sc[1] - (309 + 22 * i + 11)) < 12 and sc[0] > 800:
-                        (self.__setattr__("trailer_picked", name) if name.startswith("NR_") else self.__setattr__("alt_picked", name))
-                        self.list = None
-                        return
-            if self.up == "carrier":
-                for i, c in enumerate(self.carriers):
-                    if abs(sc[1] - (235 + 23 * i + 11)) < 12:
-                        self.row_picked = c
-                        return
             if abs(sc[0] - (1127 + 33)) < 40 and abs(sc[1] - 572) < 14:
                 self.reversed = not self.reversed
                 self.page = 0
             return
-        if px == B.TRAILER_BOX:
-            self.list = list(TRAILERS)
-        elif px == B.ALT_CARRIER_BOX:
-            self.list = ["ACME", "BRAVO"]
-        elif px == B.SELECT_CARRIER:
-            self.carrier_picked = getattr(self, "alt_picked", None) or getattr(self, "row_picked", "")
-            self.up = "payment"
-        elif px == B.CREATE_TRIP:
-            self.up = "confirm"
-        elif px == B.PAYMENT_CANCEL:
-            assert self.up == "payment", "a click on a box that's gone lands on Planning behind it"
-            self.up = "carrier"
-        elif px == B.CARRIER_EXIT:
-            self.up = None
+        if px == B.TYPE_LIST and self.card and self.card_tab == "Add Detail":
+            self.types = {"find": "%", "rows": list(self.type_list)}
         elif px == B.ORDERS_BUTTON:
             self.panel = list(self.trip_lines.get(self.selected) or [""])
         elif px == B.PLANNING_SAVE:
             self.saved += 1
             self.status_line = ""
-        elif px == (417, 656):
-            self.alert = "Split done"
         elif px == B.ORDER_SAVE:
             self.typed.append("<order saved>")
             if self.card_dirty:
@@ -390,6 +485,11 @@ class FakeCtms:
 
 TO_BOX = (758, 523, 80, 23)
 TRAILERS = ("NR_BULK_SKIP", "NR_ARTIC_FL", "NR_FLAT_RIG")
+TYPE_CODES = ("EMERGENCY", "Emergency", "NEXT DAY", "STANDARD")      # as CTMS sorts the Delivery Types list
+TRAILER_AT, ALT_AT = (1088, 387, 290, 23), (853, 463, 254, 29)        # the carrier screen's drop-downs, as first read
+LIST_X, LIST_Y, LIST_W = 853, 309, 239                                # where an opened one's list sits
+SELECT_AT, EXIT_AT = (700, 470, 129, 31), (834, 470, 120, 31)         # nowhere the old fixed points were
+CREATE_AT, CANCEL_AT = (600, 700, 146, 30), (600, 731, 146, 30)
 ALT_CARRIERS = ("DAWN_HAULAGE", "DELTA_DH", "DOVER FREIGHT")
 
 
@@ -771,7 +871,55 @@ def test_an_urgent_order_is_put_up_on_its_own_card_before_the_trip():
     job = _book(ctms, date="03/11/2026")
     assert "EMERGENCY%" in ctms.typed and ctms.typed.index("EMERGENCY%") < ctms.typed.index("<order saved>")
     assert job.said == ["9100001-1-1 put up to EMERGENCY"] and job.trips[0]["status"] == "ACCEPTED"
-    assert ctms.card is None
+    assert ctms.card is None and ctms.type_set == "EMERGENCY" and ctms.types is None   # picked off the list by name
+
+
+def test_a_delivery_types_list_whose_top_row_isnt_the_code_is_cancelled_and_the_card_left_unsaved():
+    ctms = FakeCtms([_row("9100001-1-1", "03/11/26 08:00")])
+    ctms.type_list = ["Emergency", "EMERGENCY", "NEXT DAY", "STANDARD"]    # the look-alike on top
+    try:
+        _book(ctms, date="03/11/2026")
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "gave Emergency for EMERGENCY" in str(e) and "left unsaved" in str(e)
+    assert ctms.types is None and ctms.type_set is None and ctms.card is None
+    assert "<order saved>" not in ctms.typed and ctms.tree == {}
+
+
+def test_the_carrier_screen_and_payment_box_are_worked_where_ctms_puts_them_by_their_names():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.shift = (-300, 260)                       # CTMS's window another size: both boxes somewhere else (his 11/11)
+    job = _book(ctms, carrier="DELTA_DH")
+    assert job.trips[0]["status"] == "ACCEPTED" and job.trips[0]["carrier"] == "DELTA_DH"
+    assert ctms.trailer_picked == "NR_ARTIC_FL"
+    pressed = [s["screen"] for s in ctms.steps if s.get("action") == "click" and s.get("screen")]
+    assert [SELECT_AT[0] - 300 + 64, SELECT_AT[1] + 260 + 15] in pressed      # Select Carrier, where it was read
+    assert [CREATE_AT[0] - 300 + 73, CREATE_AT[1] + 260 + 15] in pressed      # and the payment box's Create Trip
+
+
+def test_a_dry_run_backs_out_of_the_boxes_by_their_names_wherever_they_sit():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.shift = (-300, 260)
+    job = _book(ctms, dry=True)
+    assert job.trips[0]["status"] == "rehearsed" and ctms.up is None and ctms.tree == {}
+
+
+def test_the_split_window_is_worked_by_its_names_wherever_it_opens():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.split_up = True                           # Order Summary's Split Orders pressed
+    _job(ctms).split_into("9100001-1-1", 2)
+    assert ctms.split_typed == "2" and ctms.split_done and not ctms.split_up and not ctms.alert
+
+
+def test_a_split_window_without_its_named_buttons_stops_saying_what_it_has():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.split_up, ctms.split_names = True, ("Go", "Close")
+    try:
+        _job(ctms).split_into("9100001-1-1", 2)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "its buttons: Go, Close" in str(e) and "nothing was split" in str(e)
+    assert not ctms.split_done and ctms.split_typed == ""
 
 
 def test_a_card_that_isnt_the_lines_is_closed_unchanged():

@@ -46,17 +46,16 @@ ROW_MENU = (430, 25, 810, 880)     # a well row's menu: beside the row, as far u
 TREE_MENU = (190, 25, 430, 880)    # a manifest's menu, likewise
 STATUS_MENU = (400, 25, 520, 880)  # its Set Status list
 SUMMARY_MENU = (150, 200, 345, 760)  # an Order Summary line's menu
-CARRIER_TITLE = (430, 40, 700, 90)
-PAYMENT_TITLE = (500, 370, 800, 420)
-SPLIT_TITLE = (350, 370, 600, 420)
+PAYMENT_FRAME = "Confirm Payment"
+TYPES_FRAME = "Delivery Types"
+SPLIT_WORD = "split"               # in the Split window's name (not seen on the CTMS app yet, 11/11)
+# The carrier screen, the payment box, the Delivery Types list and the Split window are worked by what the Access Bridge
+# names their boxes and buttons, never by points (his 11/11): CTMS's window isn't one size at home and at work, and a box
+# CTMS puts in the middle of its window moves with it - the Delivery Types list did, on the app (10/11).
 
 MENU_BAR = (1000, 37)              # an empty bit of it: gives Java the focus, closes a menu left open
 SCHED_ARROW = (162, 133)
-TRAILER_BOX = (1228, 319)
-TRAILER_UP = (1347, 165)           # the open trailer list's up arrow - a row a click
-ALT_CARRIER_BOX = (971, 400)
-SELECT_CARRIER, CARRIER_EXIT = (912, 363), (1042, 363)
-CREATE_TRIP, PAYMENT_CANCEL = (1015, 449), (1015, 479)
+TYPE_LIST = (273, 252)             # the card's Delivery Type list button: the card opens at CTMS's top left and stays
 PLANNING_SAVE = (1337, 98)
 ORDERS_BUTTON = (1360, 166)
 PLANNED_X, PLANNED_Y = 13, 10      # Planned Orders' own X, from its top right corner: the panel doesn't open in one place
@@ -70,6 +69,7 @@ PAGES = 6                          # pages of the well looked through
 LIST_PAGES = 8                     # looks down a drop-down: a letter of the carrier list can run to dozens
 MANIFEST = re.compile(r"(MAN-\d+)\s*\((\w+)\)")
 SCHEDULED_ON = re.compile(r"scheduled on trip:\s*(\d+)\s*/\s*(MAN-\d+)", re.I)
+TYPE_ROW = re.compile(r"[^:\t]+:([^\t]*)")   # a list's row as the Access Bridge names it: "Column:value" (live 03/11)
 ANCHOR = {"action": "anchor", "window": True}
 # What a read leaves out (03/11, measured live): Planning's Stops and Resources tab pages, never read by Book; with an
 # order's card up, Planning and the OPOKUD window behind it altogether - the card is all that's wanted then
@@ -226,6 +226,68 @@ def confirm_box(els):
     return {"carrier": m.group(1), "revenue": m.group(2).replace(",", ""), "cost": m.group(3).replace(",", "")}
 
 
+def carrier_up(els):
+    """The carrier screen up in front: its Select Carrier there to press, or None. The window never goes - one left behind
+    Planning reads with its buttons disabled (11/11) - so its being there says nothing."""
+    return ctms_lines.button(els, CARRIER_FRAME, "Select Carrier")
+
+
+def drop_downs(els):
+    """The carrier screen's drop-downs, the trailer's then the Alternative Carrier's, each with the list it opens (None
+    till it's open). They have no names of their own - each reads as what it holds (11/11) - so their order tells them
+    apart. [] when the screen isn't up."""
+    win = ctms_rows._frame(els, CARRIER_FRAME) or []
+    out = []
+    for i, e in enumerate(win):
+        if e.get("r") == "combo box" and placed(e):
+            after = win[i + 1] if i + 1 < len(win) else {}
+            out.append((e, after if after.get("r") == "list" and placed(after) else None))
+    return out
+
+
+def window_with(els, word):
+    """The first window with this word in its name - its frame, then what's inside it - or None when none is open."""
+    i0 = next((i for i, e in enumerate(els) if e.get("r") == "internal frame"
+               and word.lower() in str(e.get("nm") or "").lower()), None)
+    if i0 is None:
+        return None
+    lv0, out = els[i0].get("lv", 0), [els[i0]]
+    for e in els[i0 + 1:]:
+        if e.get("lv", 0) <= lv0:
+            break
+        out.append(e)
+    return out
+
+
+def button_in(win, name):
+    """A push button among these, enabled and on the screen, by its words before any ALT shortcut, any case."""
+    return next((e for e in win or [] if e.get("r") == "push button" and placed(e) and "disabled" not in (e.get("st") or [])
+                 and re.sub(r"\s+ALT\s+\w$", "", str(e.get("nm") or "")).strip().lower() == name.lower()), None)
+
+
+def edit_box(win):
+    """The first box among these that takes typing: on the screen, neither disabled nor read-only."""
+    return next((e for e in win or [] if e.get("r") == "text" and placed(e)
+                 and not {"disabled", "read-only"} & set(e.get("st") or [])), None)
+
+
+def type_rows(els):
+    """The Delivery Types list's rows, top first, each as its first column reads - None when the list isn't up."""
+    win = ctms_rows._frame(els, TYPES_FRAME)
+    if win is None:
+        return None
+    rows = (TYPE_ROW.match(str(e.get("nm") or "")) for e in win if e.get("r") == "label")
+    return [m.group(1).strip() for m in rows if m]
+
+
+def split_window(els):
+    """The Split window's number box, Process and Exit as {"box", "process", "exit"} - None while one of them isn't
+    there by its name."""
+    win = window_with(els, SPLIT_WORD)
+    parts = {"box": edit_box(win), "process": button_in(win, "Process"), "exit": button_in(win, "Exit")}
+    return parts if all(v is not None for v in parts.values()) else None
+
+
 def line_wants(refs, orders, qty):
     """Each line's quantity as the desk knows the order's: an order of one line has the order's whole quantity; an order
     over several lines has no figure a line (only the total could be checked, and which line is short can't be told), so
@@ -322,6 +384,19 @@ class Booking:
             raise Stop(f"CTMS asked \"{q[0][:200]}\" and its OK couldn't be found - look at it.")
         return dict({"action": "click", "screen": _at(ok)}, **extra)
 
+    def until(self, check, seconds, what, card=False):
+        """CTMS read until check(els) gives its answer - the boxes that move with CTMS's window found by their names (his
+        11/11: the window isn't one size at home and at work) - or the booking stopped there, nothing more done."""
+        end = time.time() + seconds
+        while True:
+            got = check(self.look(card=card))
+            if got:
+                return got
+            if time.time() >= end:
+                raise Stop(f"{what} didn't come up, so nothing more was done. On the screen: "
+                           + " | ".join(frames(self.els))[:200])
+            time.sleep(0.3)
+
     # -- getting about
     def start(self):
         """CTMS with Planning up and nothing open over it - an order left open with changes stops the run, untouched."""
@@ -369,8 +444,9 @@ class Booking:
         CTMS's Window menu is never opened for it (his call 04/11)."""
         if not any(f.startswith(CARRIER_FRAME) for f in frames(self.els)):
             return
-        if self.seen("sc-title", CARRIER_TITLE):
-            self.run([_click(CARRIER_EXIT, after=0.8)])
+        leave = ctms_lines.button(self.els, CARRIER_FRAME, "Exit")       # enabled only with the screen in front (11/11)
+        if leave is not None:
+            self.run([{"action": "click", "screen": _at(leave), "after": 0.8}])
             self.look()
 
     def set_sched(self, want):
@@ -589,10 +665,14 @@ class Booking:
         q = ctms_rows.question(self.look(asking=True))
         if q and "confirm create trip" in q[0].lower() and placed(q[1].get("no") or {}):
             self.run([{"action": "click", "screen": _at(q[1]["no"]), "after": 0.8}])
-        if self.seen("cp-title", PAYMENT_TITLE):
-            self.run([_click(PAYMENT_CANCEL, after=0.8)])
-        if self.seen("sc-title", CARRIER_TITLE):
-            self.run([_click(CARRIER_EXIT, after=0.8)])
+            self.look(asking=True)
+        cancel = ctms_lines.button(self.els, PAYMENT_FRAME, "Cancel")
+        if cancel is not None:
+            self.run([{"action": "click", "screen": _at(cancel), "after": 0.8}])
+            self.look(asking=True)
+        leave = ctms_lines.button(self.els, CARRIER_FRAME, "Exit")
+        if leave is not None:
+            self.run([{"action": "click", "screen": _at(leave), "after": 0.8}])
 
     def tidy(self):
         """As he left it: the Deliver column back, the well's To back, no carrier window left in front. A trip not saved
@@ -733,14 +813,38 @@ class Booking:
         return bool(todo["items"] or todo["qty"] is not None)
 
     def set_type(self, ref, typ):
-        """The delivery type up to his band on the card that is open (Add Detail), not saved yet."""
-        self.run([_click((288, 187), react=True, box=[20, 200, 1250, 700], timeout=10),   # Add Detail
-                  _click((273, 252), react=True, timeout=10),                              # Delivery Type's list
-                  _click((960, 299), after=0.2), _key("home"), _key("shift+end"),
-                  {"action": "type", "text": typ + "%", "after": 0.1},
-                  _click((887, 721), react=True, timeout=10),                              # its Find
-                  _click((978, 721), react=True, timeout=10), ANCHOR])                     # its OK
+        """The delivery type up to his band on the card that is open (Add Detail), not saved yet. The Delivery Types list
+        opens in the middle of CTMS's window, so it moves with the window's size (seen 10-11/11): its Find box, Find and
+        OK are found by their names, and the top row its Find gives must read the code exactly - "Emergency" sits in the
+        list beside "EMERGENCY". Anything else: the list cancelled and the booking stopped, the card not saved."""
+        self.look(card=True)
+        self.card_tab("Add Detail")
+        self.run([_click(TYPE_LIST, after=0.3)])
+        win = self.until(lambda els: ctms_rows._frame(els, TYPES_FRAME), 8, "The Delivery Types list", card=True)
+        box, find = edit_box(win), button_in(win, "Find")
+        if box is None or find is None:
+            self.leave_types()
+            raise Stop(f"{ref}: the Delivery Types list's Find couldn't be found by its name. The card was left unsaved "
+                       "and nothing was booked.")
+        self.type_into(box, typ + "%")
+        self.run([{"action": "click", "screen": _at(find), "after": 0.4}, {"action": "settle", "quiet": 0.3, "timeout": 8}])
+        rows = type_rows(self.look(card=True)) or []
+        ok = ctms_lines.button(self.els, TYPES_FRAME, "OK")
+        if not rows or rows[0] != typ or ok is None:
+            self.leave_types()
+            raise Stop(f"{ref}: the Delivery Types list gave {rows[0] if rows else 'no row'} for {typ}"
+                       + ("" if ok is not None else ", and its OK couldn't be found")
+                       + ". The card was left unsaved and nothing was booked.")
+        self.run([{"action": "click", "screen": _at(ok), "after": 0.4}, ANCHOR])
+        if ctms_rows._frame(self.look(card=True), TYPES_FRAME) is not None:
+            raise Stop(f"{ref}: the Delivery Types list wouldn't close. The card was left unsaved and nothing was booked.")
         self.said.append(f"{ref} put up to {typ}")
+
+    def leave_types(self):
+        """The Delivery Types list shut by its Cancel with nothing picked - Escape when its Cancel can't be found."""
+        cancel = ctms_lines.button(self.els, TYPES_FRAME, "Cancel")
+        self.run([{"action": "click", "screen": _at(cancel), "after": 0.4}] if cancel is not None else [_key("escape", 0.4)])
+        self.look(card=True)
 
     def prepare_line(self, ref, want=None):
         """One line made ready to book on its own card, opened once: the checks (Order Items' product, the quantity), the
@@ -753,7 +857,11 @@ class Booking:
             self.close_card(saved=False)
             raise
         if typ and not self.dry:
-            self.set_type(ref, typ)
+            try:
+                self.set_type(ref, typ)
+            except Stop:
+                self.close_card(saved=False)
+                raise
             changed = True
         elif typ:
             self.said.append(f"{ref} would be put up to {typ}")
@@ -1001,14 +1109,8 @@ class Booking:
             raise Stop(f"Order Summary doesn't show {ref} as one unscheduled line - nothing was split.")
         self.run(ctms_orders.card_close_at(card) + [       # the card closed
                   _click((155, 238), after=0.3), _click((155, 238), right=True, after=0.3),
-                  _find(self.t, "os-split", SUMMARY_MENU, 3, click=True, after=0.2),
-                  _find(self.t, "split-title", SPLIT_TITLE, 8),
-                  _click((580, 533), after=0.2), _key("home"), _key("shift+end"), {"action": "type", "text": str(parts), "after": 0.1},
-                  _click((417, 656), after=0.2)])
-        q = self.asked(seconds=20)
-        if q is None:
-            raise Stop(f"Split gave no answer for {ref}: look at it in CTMS.")
-        self.run([self.ok_step(q, after=0.8), _click((648, 654), after=1.5), ANCHOR])
+                  _find(self.t, "os-split", SUMMARY_MENU, 3, click=True, after=0.2)])
+        self.split_into(ref, parts)
         self.look()
         if any(f.startswith("Order details for") for f in frames(self.els)):       # Exit opens a part's card: nothing done on it
             self.run([_click(ORDER_CLOSE, react=True, timeout=15), ANCHOR])
@@ -1018,18 +1120,49 @@ class Booking:
         self.said.append(f"{ref} split into {parts}")
         return [f"{ref}_S{i}" for i in range(1, parts + 1)]
 
+    def split_into(self, ref, parts):
+        """The Split window, opened off Order Summary's menu: the number typed, Process, CTMS's answer OK'd, Exit. It
+        sits in the middle of CTMS's window, so it moves with the window's size (11/11): its box and buttons are found
+        by their names. One that hasn't them stops with nothing split, saying what it has."""
+        win = self.until(lambda els: window_with(els, SPLIT_WORD), 8, "The Split window")
+        got = split_window(self.els)
+        if got is None:
+            has = [re.sub(r"\s+ALT\s+\w$", "", str(e.get("nm") or "")).strip() for e in win if e.get("r") == "push button"]
+            raise Stop(f"The Split window's number box, Process or Exit couldn't be found by name (its buttons: "
+                       f"{', '.join(h for h in has if h) or 'none'}) - nothing was split, and it's left open.")
+        self.type_into(got["box"], parts)
+        self.run([{"action": "click", "screen": _at(got["process"]), "after": 0.2}])
+        q = self.asked(seconds=20)
+        if q is None:
+            raise Stop(f"Split gave no answer for {ref}: look at it in CTMS.")
+        self.run([self.ok_step(q, after=0.8), {"action": "click", "screen": _at(got["exit"]), "after": 1.5}, ANCHOR])
+
     # -- the trip
-    def pick_from(self, box, name, what, letter="", up=False):
+    def pick_from(self, which, name, what, letter="", up=False):
         """One row of the carrier screen's drop-downs, by its words: opened, jumped by its first letter when it takes one
         (never a whole word: each letter jumps again), read, clicked. The trailer list opens at its end, so looks further
-        up; the carrier list, jumped, further down. Its read is the screen's, for whoever needs it next."""
-        self.run([_click(box, after=0.5)] + ([{"action": "type", "text": letter, "after": 0.4}] if letter else []))
+        up by its own scroll arrow; the carrier list, jumped, further down. which: 0 the trailer's drop-down, 1 the
+        Alternative Carrier's - where the Access Bridge places them (11/11). Its read is the screen's, for whoever needs
+        it next."""
+        boxes = drop_downs(self.els)
+        if len(boxes) < 2:
+            raise Stop(f"The carrier screen's {what} drop-down couldn't be found - nothing was booked.")
+        self.run([{"action": "click", "screen": _at(boxes[which][0]), "after": 0.5}]
+                 + ([{"action": "type", "text": letter, "after": 0.4}] if letter else []))
         for _ in range(LIST_PAGES):
             row = list_row(self.look(), name)
             if row:
                 self.run([{"action": "click", "screen": [row["at"][0] + 40, row["at"][1] + row["at"][3] // 2], "after": 0.7}])
                 return
-            self.run([_click(TRAILER_UP, after=0.1)] * 6 if up else [_key("down", 0.03)] * 7)
+            if up:
+                shown = drop_downs(self.els)
+                opened = shown[which][1] if len(shown) > which else None
+                if opened is None:
+                    break
+                x, y, w, _ = opened["at"]
+                self.run([{"action": "click", "screen": [x + w - 10, y + 9], "after": 0.1}] * 6)   # its up arrow
+            else:
+                self.run([_key("down", 0.03)] * 7)
         self.run([_key("escape", 0.4)])
         raise Stop(f"{name} isn't on CTMS's {what} list for this order - nothing was booked.")
 
@@ -1038,15 +1171,19 @@ class Booking:
         Carrier list when his carrier isn't one of the lane's rows. Select Carrier."""
         self.run([ANCHOR])
         if trailer:
-            self.pick_from(TRAILER_BOX, trailer, "trailer", up=True)
+            self.pick_from(0, trailer, "trailer", up=True)
         else:
             self.look()
         cell = carrier_cell(self.els, name)
         if cell is not None:
             self.run([{"action": "click", "screen": _at(cell), "after": 0.3}])
         else:
-            self.pick_from(ALT_CARRIER_BOX, name, "carrier", letter=name[:1])
-        self.run([_click(SELECT_CARRIER, after=0.1), _find(self.t, "cp-title", PAYMENT_TITLE, 8)])
+            self.pick_from(1, name, "carrier", letter=name[:1])
+        pick = carrier_up(self.els)
+        if pick is None:
+            raise Stop("The carrier screen's Select Carrier couldn't be found by its name, so nothing was booked.")
+        self.run([{"action": "click", "screen": _at(pick), "after": 0.1}])
+        self.until(lambda els: ctms_lines.button(els, PAYMENT_FRAME, "Create Trip"), 8, "The payment box")
         self.veh_kept = trailer
 
     def create(self, row, carrier, trailer, haulage, keep=False):
@@ -1054,13 +1191,16 @@ class Booking:
         dry run the box's figures, the last box answered No."""
         before = manifests(self.els if self.has_tree else self.look(tree=True))
         self.row_menu(row, "wm-create-trip", keep=keep)
-        self.run([_find(self.t, "sc-title", CARRIER_TITLE, 10)])
+        self.until(carrier_up, 10, "The carrier screen")
         self.carrier(carrier, trailer)
         self.stage("the carrier")
         steps = []
         if haulage is not None:          # the cursor sits in Haulage Amount, its 0.00 selected
             steps = [{"action": "type", "text": f"{float(haulage):g}", "after": 0.1}, _key("tab", 0.3)]
-        self.run(steps + [_click(CREATE_TRIP, after=0.1)])
+        make = ctms_lines.button(self.els, PAYMENT_FRAME, "Create Trip")      # the payment box as carrier() read it
+        if make is None:
+            raise Stop("The payment box's Create Trip couldn't be found by its name, so nothing was booked.")
+        self.run(steps + [{"action": "click", "screen": _at(make), "after": 0.1}])
         asked = self.asked("Confirm Create Trip")
         box = confirm_box(self.els)
         if box is None:
