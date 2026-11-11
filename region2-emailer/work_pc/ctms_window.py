@@ -582,9 +582,9 @@ def content_area(win):
 
 def _not_showing(win):
     if win.get("kind") == "page":
-        return ("The tracker's tab is selected, but the bridge does not know where its page sits yet - show "
-                "CTMS's tab in that window for a few seconds (it measures the page area there), then the "
-                "tracker's tab again. Resizing the window means doing that again.")
+        which = "The rejection form" if page_of(win.get("title")) == "form" else "The tracker"
+        return (which + "'s tab is selected, but Edge has not said where its page sits yet - try again in a few "
+                "seconds (the bridge measures it by name; resizing the window means measuring it again).")
     return ("CTMS is not the selected tab in its window - select the CTMS tab (it can sit behind other "
             "windows), then try again.")
 

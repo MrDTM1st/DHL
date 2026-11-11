@@ -414,7 +414,26 @@ class Bridge:
                 say("CTMS's window has gone (closed, or not open in Edge).")
                 log("window", title="")
             self.shot_hash = None
+        if self.win and self.win.get("kind") == "page" and not self.win.get("content"):
+            self._measure_page()
         return self.win
+
+    def _measure_page(self):
+        """A web page whose area isn't known - Edge gives a normal tab no window of its own, and CTMS (an app since
+        10/11) leaves no tab beside it to borrow one from (11/11): the page's own rectangle, read by name, kept for
+        the window's size. Tried at most every 10 seconds."""
+        if time.time() - getattr(self, "measured_at", 0) < 10:
+            return
+        self.measured_at = time.time()
+        win = self.win
+        try:
+            area = ctms_form.page_area(win["hwnd"])
+        except Exception:
+            area = None
+        area = area and ctms_window._inside(area, win.get("frame") or win["rect"])
+        if area:
+            ctms_window._remember_area(win["hwnd"], win["rect"], area)
+            win["content"] = area
 
     def _worked(self, w):
         """Is this window the one being worked: CTMS's, or the allowed page `use` picked - the tracker and the
@@ -751,20 +770,51 @@ class Bridge:
         return name[0].upper() + name[1:]
 
     # -- the Haulier Rejection Form (11/11): read and filled in through UI Automation, by name (ctms_form) --
+    def _form_window(self):
+        """The Edge window showing the rejection form - its tab the selected one - found by itself, whatever window
+        the bridge is working (left as it was). Not showing while Claude can act: Edge brings its tab up by name."""
+        def find():
+            try:
+                wins = ctms_window.find_windows()
+            except Exception:
+                wins = []
+            return next((w for w in wins if w.get("kind") == "page"
+                         and ctms_window.page_of(w.get("title")) == "form"), None)
+        win = find()
+        if win is None and self.allow_control and self.armed:
+            ok = ctms_tabs.select("form")[0]
+            end = time.time() + 4
+            while ok and win is None and time.time() < end:
+                time.sleep(0.3)
+                win = find()
+        return win
+
     def form(self, action, cmd, done):
-        """Only while the form's tab is the window being worked (`use form`): read - nothing changed - or fill, every
-        answer read back, Submit pressed only when asked and only once all of them read back."""
-        if self.target != "form" or not self.scan_window(force=True):
-            return done(False, "The rejection form isn't the window being worked - `use form` first (its tab open "
-                               "in Edge).", {"kind": "form"})
+        """The rejection form, wherever its tab is (11/11): read - nothing changed - or fill, every answer read back,
+        Submit pressed only when asked and only once all of them read back. The window being worked stays as it is,
+        so a send from the dashboard never moves CTMS's place."""
+        win = self._form_window()
+        if win is None:
+            return done(False, "The Haulier Rejection Form isn't the selected tab of any Edge window - open it once "
+                               "from its link in Edge and leave the tab there (while Claude can act, its tab is "
+                               "brought up by name).", {"kind": "form"})
         if action == "form_read":
-            got = ctms_form.read(self.win["hwnd"])
+            got = ctms_form.read(win["hwnd"])
             return done(True, f"Read {len(got['items'])} thing(s) on {got['doc']} in {got['took']}s.",
                         dict(got, kind="form"))
         answers = cmd.get("answers") if isinstance(cmd.get("answers"), list) else []
         if not answers:
             return done(False, "No answers to put in.", {"kind": "form"})
-        got = ctms_form.fill(self.win["hwnd"], answers, submit=bool(cmd.get("submit")))
+        # the form brought up while it is filled - a date picker takes its date only when the page has the focus -
+        # and whatever was in front put back after (11/11)
+        u32 = getattr(ctms_act, "user32", None)
+        back = u32.GetForegroundWindow() if u32 else None
+        ctms_act.to_front(win["hwnd"])
+        try:
+            got = ctms_form.fill(win["hwnd"], answers, submit=bool(cmd.get("submit")))
+        finally:
+            if back and int(back) != int(win["hwnd"]):
+                ctms_act.to_front(back)
         if got["off"]:
             said = "; ".join(got["off"]) + ("" if got["submitted"] or any("Submit" in o for o in got["off"])
                                             else " - so it wasn't submitted.")

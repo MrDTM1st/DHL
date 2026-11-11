@@ -11,6 +11,7 @@ On a thread of its own, like ctms_tabs: UI Automation wants COM set up its own w
 answering must not stop the bridge. Standard library only, like everything else in work_pc\\.
 """
 import os
+import re
 import threading
 import time
 
@@ -23,10 +24,10 @@ IS_WIN = os.name == "nt"
 KINDS = {50000: "button", 50001: "calendar", 50002: "checkbox", 50003: "combo", 50004: "edit", 50005: "link",
          50006: "image", 50007: "item", 50008: "list", 50013: "radio", 50020: "text", 50025: "custom",
          50026: "group", 50030: "document", 50033: "pane", 50036: "table"}
-KEEP = ("button", "checkbox", "combo", "edit", "radio", "group", "list", "item", "text", "custom", "calendar")
+KEEP = ("button", "checkbox", "combo", "edit", "radio", "group", "list", "item", "text", "custom", "calendar", "link")
 DOCUMENT = 50030
 # Slots in UIAutomationClient.h: an element's own (counted on from ctms_tabs' 14 / 21 / 23 / 30), then each pattern's
-EL_IS_PASSWORD, EL_RECT = 35, 43
+EL_FOCUS, EL_IS_PASSWORD, EL_RECT = 3, 35, 43
 PATTERN_VALUE, PATTERN_TOGGLE = 10002, 10015
 IID_VALUE = "{A94CD8B1-0844-4CD6-9D2D-640537AB39E9}"
 IID_TOGGLE = "{94CF8058-9B8D-4AB9-8BFD-4CD0A33C8C70}"
@@ -116,6 +117,15 @@ if IS_WIN:
                 T.oleaut32.SysFreeString(b)
             return True
 
+        def focus(self, el):
+            """The page's focus put on it, as a click into it would - leaving a box is what makes the form's date
+            picker take the date typed into it (11/11)."""
+            try:
+                T._fn(el, EL_FOCUS)(el)
+            except OSError:
+                return False
+            return True
+
 
 def is_form(name):
     """Is this (a page's or a tab's name) the rejection form?"""
@@ -144,6 +154,12 @@ def _document(s, hwnd):
             break
         level = deeper
     return first
+
+
+def _area(s, el):
+    """Where it sits on screen: [left, top, right, bottom], or None."""
+    r = s.rect(el)
+    return [r[0], r[1], r[0] + r[2], r[1] + r[3]] if r and r[2] > 0 and r[3] > 0 else None
 
 
 def _item(s, el, kind, depth):
@@ -212,35 +228,56 @@ def _groups(items):
     return out
 
 
+def _question(name):
+    """A question's words with its number taken off: '10. Rejection Reason Required to answer' reads
+    'rejection reason required to answer'."""
+    return re.sub(r"^\d+\s*[.)]\s*", "", _norm(name))
+
+
+def _found(named, q):
+    """Indexes from [(index, name)] that are question q: its words first (number aside), else anywhere in it."""
+    first = [i for i, nm in named if _question(nm).startswith(q)]
+    return first or [i for i, nm in named if q in _norm(nm)]
+
+
+def _is_choice(name, label):
+    """A choice by its own words, exactly - the form's Other reads 'Other answer' (11/11)."""
+    n, want = _norm(name), _norm(label)
+    return n == want or (want == "other" and n == "other answer")
+
+
 def plan(items, answers):
     """[(how, index, value)] for answers [{"q", "tick": [labels]} | {"q", "pick", "other"?} | {"q", "text"}], each
     question found by its words and each choice by its exact words. Raises ValueError naming whatever isn't on the
     page - and then nothing at all is done."""
     groups, steps, missing = _groups(items), [], []
+    boxes = [(i, it["nm"]) for i, it in enumerate(items) if it["k"] in ("edit", "combo") and not it.get("password")]
     for a in answers:
         q = _norm(a["q"])
-        if "text" in a:
-            box = next((i for i, it in enumerate(items) if it["k"] == "edit" and not it.get("password")
-                        and q in _norm(it["nm"])), None)
-            if box is None:
+        if "text" in a:                                   # a text box, or the date's combo box (the real form)
+            found = _found(boxes, q)
+            if not found:
                 missing.append(f"{a['q']}: its box")
             else:
-                steps.append(("text", box, str(a["text"])))
+                steps.append(("text", found[0], str(a["text"])))
             continue
-        hits = [g for g in groups if q in _norm(items[g]["nm"])]
+        kind, how = ("checkbox", "tick") if "tick" in a else ("radio", "pick")
+        # the question's own group holds choices of its kind - a choice that only shares its words is not it
+        # ('No Availability - Vehicle Type' is a Rejection Reason, not the Vehicle Type question)
+        asking = [(g, items[g]["nm"]) for g in groups if any(items[k]["k"] == kind for k in groups[g])]
+        hits = _found(asking, q)
         if not hits:
             missing.append(f"{a['q']}: the question")
             continue
         inside = groups[min(hits, key=lambda g: len(groups[g]))]          # the innermost: the question itself
-        kind, how = ("checkbox", "tick") if "tick" in a else ("radio", "pick")
         for label in (a["tick"] if "tick" in a else [a["pick"]]):
-            opt = next((i for i in inside if items[i]["k"] == kind and _norm(items[i]["nm"]) == _norm(label)), None)
+            opt = next((k for k in inside if items[k]["k"] == kind and _is_choice(items[k]["nm"], label)), None)
             if opt is None:
                 missing.append(f"{a['q']}: {label}")
             else:
                 steps.append((how, opt, label))
         if a.get("other") is not None:
-            box = next((i for i in inside if items[i]["k"] == "edit" and not items[i].get("password")), None)
+            box = next((k for k in inside if items[k]["k"] == "edit" and not items[k].get("password")), None)
             if box is None:
                 missing.append(f"{a['q']}: its Other box")
             else:
@@ -309,8 +346,23 @@ def read(hwnd, timeout=25.0):
     def work(s):
         t0 = time.time()
         doc, name = _page(s, hwnd)
-        return {"items": [it for it, _ in _walk(s, doc)], "doc": name[:NAME_MAX], "took": round(time.time() - t0, 2)}
+        return {"items": [it for it, _ in _walk(s, doc)], "doc": name[:NAME_MAX], "took": round(time.time() - t0, 2),
+                "area": _area(s, doc)}
     return _on_thread(work, timeout, "read")
+
+
+def page_area(hwnd, timeout=10.0):
+    """Where the page showing in this Edge window sits on screen, [left, top, right, bottom], or None - any page,
+    the tracker's too. Edge gives a normal tab no window of its own to measure (the work PC's), and CTMS - an app of
+    its own since 10/11 - no longer leaves a tab beside it to borrow the area from (11/11)."""
+    def work(s):
+        for _ in range(4):
+            doc = _document(s, hwnd)
+            if doc is not None:
+                return _area(s, doc)
+            time.sleep(0.8)
+        return None
+    return _on_thread(work, timeout, "measured")
 
 
 def fill(hwnd, answers, submit=False, timeout=60.0):
@@ -321,9 +373,24 @@ def fill(hwnd, answers, submit=False, timeout=60.0):
         doc, _ = _page(s, hwnd)
         pairs = _walk(s, doc)
         items = [it for it, _ in pairs]
+        if confirmed(items):                          # still thanking for the last response: a fresh form first
+            again = next((el for it, el in pairs if it["k"] in ("link", "button")
+                          and "another response" in _norm(it["nm"])), None)
+            if again is None or not s.invoke(again):
+                raise RuntimeError("the form is still showing its thanks for the last response, with no way on to a "
+                                   "fresh one - reload its tab.")
+            end = time.time() + 10
+            while time.time() < end:
+                time.sleep(0.8)
+                doc, _ = _page(s, hwnd)
+                pairs = _walk(s, doc)
+                items = [it for it, _ in pairs]
+                if any(it["k"] == "button" and _norm(it["nm"]) == "submit" for it in items):
+                    break
         steps = plan(items, answers)
         for how, i, value in steps:
             el = pairs[i][1]
+            s.focus(el)                               # into it first, as a click would
             if how == "tick" and not items[i].get("on"):
                 s.toggle(el)
             elif how == "pick" and not items[i].get("on"):
@@ -331,6 +398,9 @@ def fill(hwnd, answers, submit=False, timeout=60.0):
             elif how == "text":
                 s.set_value(el, value)
             time.sleep(0.15)
+        away = next((pairs[i][1] for how, i, _ in steps if how != "text"), None)
+        if away is not None:
+            s.focus(away)                             # and out of the last box: the date picker takes its date then
         time.sleep(0.6)
         pairs = _walk(s, doc)
         items = [it for it, _ in pairs]

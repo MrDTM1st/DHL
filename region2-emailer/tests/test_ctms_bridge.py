@@ -1235,12 +1235,14 @@ def test_the_rejection_form_is_read_by_name_while_looking_and_filled_only_while_
     try:
         desk = _Rec()
         b = B.Bridge(desk, 1, "", allow_control=True)
-        b.handle({"id": 1, "action": "form_read"})                                   # CTMS is being worked
-        assert desk.sent[-1][1]["ok"] is False and "use form" in desk.sent[-1][1]["detail"]
-        b.handle({"id": 2, "action": "use", "target": "form"})
-        b.handle({"id": 3, "action": "form_read"})                                   # looking: no switch needed
+        W.find_windows = lambda: [dict(FAKE_WIN)]
+        b.handle({"id": 1, "action": "form_read"})                                   # its tab isn't showing anywhere
+        assert desk.sent[-1][1]["ok"] is False and "selected tab" in desk.sent[-1][1]["detail"]
+        W.find_windows = lambda: [dict(FAKE_WIN), dict(form)]
+        b.handle({"id": 3, "action": "form_read"})                                   # looking: no switch, no `use`
         body = desk.sent[-1][1]
         assert body["ok"] and body["payload"]["kind"] == "form" and seen["read"] == 6161
+        assert b.target == "ctms"                                                    # CTMS is still the one worked
         answers = [{"q": "Haulier Name", "tick": ["DHL NOC"]}]
         b.handle({"id": 4, "action": "form_fill", "answers": answers})               # 'Claude can act' is off
         assert desk.sent[-1][1]["ok"] is False and "fill" not in seen
@@ -1257,6 +1259,25 @@ def test_the_rejection_form_is_read_by_name_while_looking_and_filled_only_while_
         assert body["ok"] is False and "DHL NOC isn't ticked - so it wasn't submitted." in body["detail"]
     finally:
         W.find_windows, W.picture, B.LOG, A.to_front, A._send, B.ctms_form.read, B.ctms_form.fill = keep
+
+
+def test_a_page_with_no_window_to_measure_is_measured_by_name_and_kept():
+    keep = (W.find_windows, W._remember_area, B.ctms_form.page_area)
+    form = dict(FAKE_WIN, hwnd=6262, kind="page", score=1, title="Haulier Rejection Form 2026 - Work - Microsoft Edge",
+                rect=[0, 0, 1000, 700], frame=[0, 0, 1000, 700], content=None)
+    W.find_windows = lambda: [dict(FAKE_WIN), dict(form)]
+    kept, asked = {}, []
+    W._remember_area = lambda h, rect, content: kept.update({h: content})
+    B.ctms_form.page_area = lambda hwnd: (asked.append(hwnd) or [8, 90, 1200, 692])
+    try:
+        b = B.Bridge(_Rec(), 1, "", allow_control=True)
+        b.target = "form"
+        win = b.scan_window(force=True)
+        assert win["content"] == [8, 90, 1000, 692] and kept == {6262: [8, 90, 1000, 692]}   # kept inside the window
+        b.scan_window(force=True)                     # asked again within 10 s: not measured again
+        assert asked == [6262]
+    finally:
+        W.find_windows, W._remember_area, B.ctms_form.page_area = keep
 
 
 def test_the_dashboard_lets_form_answers_through_cleaned_and_cut_to_size():

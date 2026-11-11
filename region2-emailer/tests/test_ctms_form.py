@@ -87,6 +87,54 @@ def test_only_a_page_that_has_taken_the_response_counts_as_submitted():
     assert F.confirmed([{"k": "text", "nm": "Haulier Rejection Form 2026", "d": 1}]) == ""   # gone, but no word of it
 
 
+def _real(**on):
+    """The form as the work PC's Edge reads it (11/11): each question a group named with its number and 'Required
+    to answer ... Single choice.', each choice beside a group of its own words, the date a combo box, Other a choice
+    called 'Other answer' with a box of its own."""
+    return [
+        {"k": "group", "nm": "Haulier Rejection Form 2026", "d": 1},
+        {"k": "text", "nm": "1. Haulier Name Required to answer", "d": 2},
+        {"k": "group", "nm": "1. Haulier Name Required to answer Multiple choice. ", "d": 2},
+        {"k": "checkbox", "nm": "DE O'Reilly", "d": 3, "on": False},
+        {"k": "group", "nm": "DE O'Reilly", "d": 3},
+        {"k": "text", "nm": "DE O'Reilly", "d": 4},
+        {"k": "checkbox", "nm": "DHL NOC", "d": 3, "on": bool(on.get("noc"))},
+        {"k": "group", "nm": "DHL NOC", "d": 3},
+        {"k": "text", "nm": "DHL NOC", "d": 4},
+        {"k": "combo", "nm": "2. Date of Job Required to answer Date. ", "d": 2, "v": on.get("date", "")},
+        {"k": "edit", "nm": "3. Collection Site Single line text. ", "d": 2, "v": ""},
+        {"k": "group", "nm": "8. Vehicle Type Required to answer Single choice. ", "d": 2},
+        {"k": "radio", "nm": "Artic Hiab", "d": 3, "on": False},
+        {"k": "group", "nm": "Artic Hiab", "d": 3},
+        {"k": "text", "nm": "Artic Hiab", "d": 4},
+        {"k": "radio", "nm": "Other answer", "d": 3, "on": False},
+        {"k": "edit", "nm": "Other answer", "d": 3, "v": ""},
+        {"k": "group", "nm": "10. Rejection Reason Required to answer Single choice. ", "d": 2},
+        {"k": "radio", "nm": "No Availability - Vehicle Type", "d": 3, "on": False},
+        {"k": "group", "nm": "No Availability - Vehicle Type", "d": 3},
+        {"k": "text", "nm": "No Availability - Vehicle Type", "d": 4},
+        {"k": "radio", "nm": "Other answer", "d": 3, "on": False},
+        {"k": "edit", "nm": "Other answer", "d": 3, "v": ""},
+        {"k": "button", "nm": "Submit", "d": 2},
+    ]
+
+
+def test_the_real_form_s_names_a_date_combo_and_other_answer():
+    page = _real()
+    steps = F.plan(page, [{"q": "Haulier Name", "tick": ["DHL NOC"]}, {"q": "Date of Job", "text": "11/16/2026"},
+                          {"q": "Vehicle Type", "pick": "Artic Hiab"},
+                          {"q": "Rejection Reason", "pick": "Other", "other": "no HIAB"}])
+    assert [(how, i) for how, i, _ in steps] == [("tick", 6), ("text", 9), ("pick", 12), ("pick", 21), ("text", 22)]
+    # Vehicle Type is question 8 - not the Rejection Reason that shares its words
+    assert F.plan(page, [{"q": "Vehicle Type", "pick": "Other", "other": "Low loader"}]) == [
+        ("pick", 15, "Other"), ("text", 16, "Low loader")]
+    try:
+        F.plan(page, [{"q": "Vehicle Type", "pick": "No Availability - Vehicle Type"}])
+        raise AssertionError("a Rejection Reason is no Vehicle Type")
+    except ValueError as e:
+        assert "Vehicle Type: No Availability - Vehicle Type" in str(e)
+
+
 def test_the_form_is_known_by_its_name_alone():
     assert F.is_form("Haulier Rejection Form 2026") and F.is_form("Haulier Rejection Form 2026 - Work - Microsoft Edge")
     assert not F.is_form("DigiHaul Job Tracker.xlsx") and not F.is_form("")
