@@ -23,6 +23,7 @@ TRACKER = [{"orders": ["9100001", "9100002"], "kind": "delivery", "delivery_date
             "materials": "15x rails", "product_codes": ["RAIL SHORT, 56E1, 260 GRADE, 13.716M, UNDRILLED"],
             "details": {"offloading": {"value": "HIAB"}, "rear_steer": {"value": "no"}}},
            {"orders": ["9100003"], "kind": "delivery", "delivery_date": "18/11/2026", "postcode": "ZZ8 8ZZ",
+            "collection_site": "Quarry", "collection_pc": "ZZ2 2AA",
             "materials": "40x bagged ballast", "product_codes": ["BALLAST 1 TONNE BAGS"], "details": {}},
            {"orders": ["9100004"], "kind": "delivery", "delivery_date": "19/11/2026", "postcode": "ZZ7 7ZZ",
             "materials": "1x S&C panel", "product_codes": [], "details": {}}]
@@ -85,6 +86,8 @@ def test_a_response_takes_the_job_s_details_and_waits_while_anything_is_worked_o
     assert told["unsure"] == [] and told["status"] == "ready"
     nothing = R.make(["9100099"], ["Lawsons"], "No Availability - General", tracker=TRACKER, waitlist=[], now=NOW)
     assert nothing["status"] == "held" and "the product" in R.gaps(nothing) and "the vehicle" in R.gaps(nothing)
+    # every question on the form is required: collection, postcode and quantity too
+    assert {"the collection site", "the postcode", "the quantity"} <= set(R.gaps(nothing))
 
 
 def test_the_same_job_and_reason_ticks_another_haulier_and_a_known_no_is_not_added_twice():

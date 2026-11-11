@@ -318,6 +318,11 @@ def gaps(rec):
         out.append("the haulier")
     if not iso_date(rec.get("date")):
         out.append("the date of the job")
+    # every question on the form is required - these three too, though the page's screen-reader names don't say so
+    # (the red asterisks on the work PC's form, 11/11)
+    for f, words in (("collection", "the collection site"), ("postcode", "the postcode"), ("quantity", "the quantity")):
+        if not str(rec.get(f) or "").strip():
+            out.append(words)
     if rec.get("consolidated") not in YES_NO:
         out.append("consolidated or not")
     if rec.get("product") not in PRODUCTS:
@@ -421,15 +426,12 @@ def answers(rec):
         raise ValueError("Not sent - it needs " + ", ".join(left) + ".")
     day = datetime.strptime(iso_date(rec["date"]), "%Y-%m-%d")
     out = [{"q": "Haulier Name", "tick": list(rec["hauliers"])},
-           {"q": "Date of Job", "text": f"{day.month}/{day.day}/{day.year}"}]          # the form's M/d/yyyy
-    if rec.get("collection"):
-        out.append({"q": "Collection Site", "text": rec["collection"]})
-    if rec.get("postcode"):
-        out.append({"q": "Delivery Postcode", "text": rec["postcode"]})
-    out += [{"q": "Consolidated Delivery", "pick": rec["consolidated"]},
-            {"q": "Product Type", "pick": rec["product"]}]
-    if rec.get("quantity"):
-        out.append({"q": "Quantity", "text": rec["quantity"]})
+           {"q": "Date of Job", "text": f"{day.month}/{day.day}/{day.year}"},          # the form's M/d/yyyy
+           {"q": "Collection Site", "text": rec["collection"]},
+           {"q": "Delivery Postcode", "text": rec["postcode"]},
+           {"q": "Consolidated Delivery", "pick": rec["consolidated"]},
+           {"q": "Product Type", "pick": rec["product"]},
+           {"q": "Quantity", "text": rec["quantity"]}]
     out.append(dict({"q": "Vehicle Type", "pick": rec["vehicle"]},
                     **({"other": rec["vehicle_other"]} if rec["vehicle"] == "Other" else {})))
     out.append({"q": "Rear-Steer", "pick": rec["rear_steer"]})
