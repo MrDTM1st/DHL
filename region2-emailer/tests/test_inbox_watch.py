@@ -90,6 +90,11 @@ def test_answered_means_a_reply_a_forward_or_anything_he_sent_since_on_it():
     assert W.answered(m, {"conv": {}, "subject": {}, "order_to": {("9100001", "someone@site.example"): [later]}})
     assert not W.answered(m, {"conv": {}, "subject": {}, "order_to": {("9100001", "other@site.example"): [later]}})
     assert W._norm_subject("RE: FW: EXT: A question") == "a question"
+    # the day's updates: only his reply answers them - not a forward, nor an email to his manager about one listed order
+    up = msg(subject="RE: Region 2 Updates 11/11", from_addr="sam.boss@dhl.example", orders=["9100001"])
+    assert not W.answered(dict(up, verb=104), NOBODY_SENT) and W.answered(dict(up, verb=102), NOBODY_SENT)
+    assert not W.answered(up, {"conv": {}, "subject": {}, "order_to": {("9100001", "sam.boss@dhl.example"): [later]}})
+    assert W.answered(up, {"conv": {"C-m1": [later]}, "subject": {}, "order_to": {}})
 
 
 def test_what_the_tracker_took_in_and_forms_on_the_map_stay_off_but_a_colleague_s_email_does_not():

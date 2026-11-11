@@ -52,6 +52,7 @@ UPDATE_WAIT = 120                                       # the daily update: repl
 WORK_START, WORK_END = dtime(8, 0), dtime(16, 30)
 MAX_ITEMS = 40
 REPLIED, FORWARDED = (102, 103), (104,)                 # PR_LAST_VERB_EXECUTED
+UPDATES = re.compile(r"region\s*2\s*update", re.I)       # the day's Region 2 Updates - his reply is due, filed or not
 
 URGENT_WORDS = re.compile(
     r"\b(?:urgent(?:ly)?|asap|a\.s\.a\.p|today|tonight|this (?:morning|afternoon|evening)|derail\w*|emergency|"
@@ -124,7 +125,8 @@ def _domain(addr):
 def answered(msg, sent):
     """Has he answered it: a reply or forward on the email itself, or anything he sent since - on the same
     conversation, under the same subject, or to the same person about one of its orders."""
-    if msg.get("verb") in REPLIED + FORWARDED:
+    updates = bool(UPDATES.search(str(msg.get("subject") or "")))
+    if msg.get("verb") in (REPLIED if updates else REPLIED + FORWARDED):
         return True
     after = msg["received"]
     if any(t > after for t in sent["conv"].get(msg.get("conv") or "", ())):
@@ -132,6 +134,8 @@ def answered(msg, sent):
     subj = _norm_subject(msg.get("subject"))
     if subj and len(subj) > 6 and any(t > after for t in sent["subject"].get(subj, ())):
         return True
+    if updates:
+        return False                  # an email to his manager about one order on the list isn't his reply to it
     addr = str(msg.get("from_addr") or "").lower()
     for o in msg.get("orders") or ():
         if any(t > after for t in sent["order_to"].get((o, addr), ())):
@@ -152,7 +156,7 @@ def weigh(msg, ctx):
     if ctx["handled"](msg):
         return None
     to_me = msg.get("to_me", True)
-    if re.search(r"region\s*2\s*update", subject, re.I):
+    if UPDATES.search(subject):
         return "urgent", "the day's Region 2 Updates - your reply is due"
     if any(m in who for m in ctx["managers"]):
         # an ask from his manager can't wait; a note that asks nothing ("here's next week's rota") can
@@ -361,6 +365,13 @@ def collect(ns, now, me):
         if f.EntryID not in seen:
             seen.add(f.EntryID)
             folders.append(f)
+    # the day's Region 2 Updates needs his reply wherever it was filed - Completed included, for that email only
+    filed = set()
+    for f in _subfolders(inbox, ("Inbox", "Regions", "Region 2", "Completed")) if inbox is not None else []:
+        if f.EntryID not in seen:
+            seen.add(f.EntryID)
+            filed.add(str(f.EntryID))
+            folders.append(f)
     cut = now - timedelta(days=max(DAYS.values()))
     msgs = []
     verb = "http://schemas.microsoft.com/mapi/proptag/0x10810003"
@@ -371,16 +382,19 @@ def collect(ns, now, me):
             items.Sort("[ReceivedTime]", True)
         except Exception:
             continue
+        only_updates = str(f.EntryID) in filed
         for i in range(1, min(items.Count, 400) + 1):
             try:
                 it = items.Item(i)
                 when = it.ReceivedTime.replace(tzinfo=None)
             except Exception:
                 continue
-            if when < cut:
+            if when < cut or (only_updates and when.date() < now.date()):
                 break
             try:
                 if not str(it.MessageClass).startswith("IPM.Note"):
+                    continue
+                if only_updates and not UPDATES.search(str(getattr(it, "Subject", "") or "")):
                     continue
                 try:
                     v = it.PropertyAccessor.GetProperty(verb)
