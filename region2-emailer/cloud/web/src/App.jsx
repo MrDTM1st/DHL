@@ -177,16 +177,26 @@ export default function App() {
     fresh.forEach((i) => knownInbox.current.add(i.id));
     if (!fresh.length) return;
     const created = Date.now();
+    // a burst (the first look of the day, say) is one note, not a dozen
+    const fresh_notes = fresh.length > 3 ? [{
+      id: 'm-' + fresh.map((i) => i.id).join('-').slice(0, 60),
+      kind: fresh.some((i) => i.pri === 'urgent') ? 'urgent' : 'info',
+      title: fresh.length + ' emails waiting past their time',
+      msg: fresh.slice(0, 3).map((i) => i.from + ': ' + i.subject).join(' · ')
+        + ' - and ' + (fresh.length - 3) + ' more on the Dashboard.',
+      createdAt: created,
+      read: false,
+    }] : fresh.map((i) => ({
+      id: 'm-' + i.id,
+      kind: i.pri === 'urgent' ? 'urgent' : 'info',
+      title: 'Email waiting ' + i.waited + ': ' + i.from,
+      msg: i.subject + ' - ' + i.why + (i.n > 1 ? ' (' + i.n + ' emails in the thread)' : '') + '.',
+      createdAt: created,
+      read: false,
+    }));
     setNotes((ns) => {
       const have = new Set(ns.map((n) => n.id));
-      return [...fresh.map((i) => ({
-        id: 'm-' + i.id,
-        kind: i.pri === 'urgent' ? 'urgent' : 'info',
-        title: 'Email waiting ' + i.waited + ': ' + i.from,
-        msg: i.subject + ' - ' + i.why + (i.n > 1 ? ' (' + i.n + ' emails in the thread)' : '') + '.',
-        createdAt: created,
-        read: false,
-      })).filter((n) => !have.has(n.id)), ...ns];
+      return [...fresh_notes.filter((n) => !have.has(n.id)), ...ns];
     });
   }, [panel]);
 

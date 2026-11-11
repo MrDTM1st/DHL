@@ -244,6 +244,7 @@ def test_the_card_before_and_after_the_draft(monkeypatch, tmp_path):
         {"why": "a haulier", "received": "11/11 14:00", "from": "Ops"},
         {"why": "the day's Region 2 Updates - your reply is due", "received": "11/11 14:20", "from": "Sam Boss"}]}))
     assert D.panel(NOW) == {"due": "15:30", "arrived": "14:20", "by": "Sam Boss"}
+    assert D.panel(datetime(2026, 11, 11, 18, 30))["late"] is True           # 15:30 came and went: Draft it now
     assert D.panel(datetime(2026, 11, 12, 9, 0)) == {"due": "15:30"}         # yesterday's email isn't today's
     D._save_state({"day": "2026-11-11", "draft_at": "15:30", "for": "11/11 14:20", "from": "Sam Boss",
                    "summary": {"orders": 6}, "text": "Hi Sam,", "entry": "x", "saved": "y"})

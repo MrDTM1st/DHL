@@ -36,8 +36,9 @@ export default function UpdateReplyCard({ data, onCommand }) {
         <div className="noaddress-head">
           <h3>Region 2 Updates reply</h3>
           <span className="noaddress-why">
-            {(data.by ? data.by.replace(/\s*\(.*\)/, '') + "'s" : 'Their')} email came in at {data.arrived}. Your reply is drafted into Outlook
-            at {data.due}, with where each order stands.
+            {(data.by ? data.by.replace(/\s*\(.*\)/, '') + "'s" : 'Their')} email came in at {data.arrived}.
+            {data.late ? ' It has no reply yet - Draft it now puts one in Drafts, with where each order stands.'
+              : ` Your reply is drafted into Outlook at ${data.due}, with where each order stands.`}
           </span>
         </div>
         <div className="noaddress-row">

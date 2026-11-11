@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "_daily_update.json")
 DRAFT_AT = (15, 30)                 # the draft is made then (or as the email lands, if later) - his reply is due by 4-5pm
+DRAFT_UNTIL = 18                    # ...and not after this hour: by then it's the Dashboard's Draft it now
 LOOK_BACK = 21                      # days of mail read for each order's story
 MAX_EVENTS = 6                      # the last this many steps of an order's story make its line
 CHECK = "[check]"
@@ -737,6 +738,8 @@ def panel(now=None):
             if str(i.get("why", "")).startswith("the day's Region 2") and str(i.get("received", "")).startswith(
                     now.strftime("%d/%m")):
                 out.update(arrived=str(i["received"])[-5:], by=i.get("from"))
+                if now.hour >= DRAFT_UNTIL:
+                    out["late"] = True        # the 15:30 draft didn't happen and won't now
                 break
     except Exception:
         pass
@@ -762,7 +765,7 @@ def main(argv):
         return 0
     if cmd in ("draft", "due"):
         if cmd == "due":
-            if now.weekday() >= 5 or (now.hour, now.minute) < DRAFT_AT or now.hour >= 18:
+            if now.weekday() >= 5 or (now.hour, now.minute) < DRAFT_AT or now.hour >= DRAFT_UNTIL:
                 print(json.dumps({"ok": True, "said": "Not time for the update reply."}))
                 return 0
             if _state().get("day") == now.strftime("%Y-%m-%d"):
