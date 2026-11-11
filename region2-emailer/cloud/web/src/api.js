@@ -277,3 +277,16 @@ export async function mailControl(on) {
   });
   return r.json();
 }
+
+// The rejection card's Send (his 11/11: auto-filled, the fewest clicks): this one response filled in and submitted on the
+// work PC by the home PC. Look mum, no hands is switched on for it, back as it was after.
+export async function ctmsRejection(id, edits) {
+  const r = await req('/api/ctms/rejection', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, edits }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}

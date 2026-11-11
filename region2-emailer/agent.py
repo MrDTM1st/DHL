@@ -551,10 +551,20 @@ def push_panel():
             "noc_teams": _noc_teams(),
             "no_address": _no_address(),
             "bookings": _bookings(),
+            "rejections": _rejections(),
             "home_code": _home_code(),
         })
     except Exception:
         pass
+
+
+def _rejections():
+    """The Haulier Rejection Form's responses and the Auto switch (rejections.py) - the dashboard's rejection card."""
+    try:
+        import rejections
+        return rejections.panel()
+    except Exception:
+        return {}
 
 
 def _bookings():
@@ -679,6 +689,18 @@ def send_verdict(out):
     return n > 0, n
 
 
+def _last_json(out):
+    """The last JSON line a script printed - its {"ok", "said"} - or None."""
+    for line in reversed((out or "").splitlines()):
+        if line.startswith("{"):
+            try:
+                got = json.loads(line)
+                return got if isinstance(got, dict) else None
+            except ValueError:
+                continue
+    return None
+
+
 def tail(out, n=8):
     return "\n".join(out.strip().splitlines()[-n:])
 
@@ -748,6 +770,9 @@ def _bg_jobs():
         ("phase2_check", ["phase2.py", "check"], 1200, 1800, lambda: True),
         # who has already been asked to cover each job (read-only, Sent Items)
         ("haulier_asks", ["haulier_asks.py"], 1800, 600, lambda: True),
+        # the Haulier Rejection Form: Tier 1 no's read from their replies onto the rejection card (rejections.py,
+        # read-only in the mailbox). Nothing is sent from here - the card's Send does that, or the dashboard's Auto
+        ("rejections", ["rejections.py", "refresh"], 1800, 600, lambda: True),
         # who each open DTS's site has been emailed by, and whether Order Management was asked (read-only, Sent Items)
         ("om_tries", ["om_contact.py", "sweep"], 1800, 300, lambda: True),
         # a booked DTS onto the team's DTS sheet, through the work PC (his 03/11)
@@ -775,7 +800,7 @@ class BackgroundJobs:
     # start" are spread a minute apart instead of all firing at once; the rest
     # wait a full interval, as before.
     SOON = ("book_retry", "adhoc_sweep", "phase2_check", "haulier_asks", "waitlist_release",
-            "waitscan", "recover", "planner_week")
+            "waitscan", "recover", "planner_week", "rejections")
     LOG_MAX = 256 * 1024
 
     def __init__(self):
@@ -896,6 +921,9 @@ class BackgroundJobs:
                 pass
             if rc == 0:
                 push_tracker()
+        elif key == "rejections":
+            if rc == 0:
+                push_panel()                  # new no's onto the rejection card - and in front of the dashboard's Auto
         elif key == "adhoc_sweep":
             n = 0
             for line in out.splitlines():
@@ -1803,6 +1831,39 @@ def main():
                 report("done" if res["ok"] else "error",
                        "Home PC: " + res["said"] + (" The agents start again on it in a moment." if res.get("changed")
                                                      and res["ok"] else ""), tail(out, 6))
+            elif action == "rejection":
+                # the rejection card: a no he was told by phone or Teams (add), his changes (edit), Not needed
+                # (drop), the Auto switch - the store changed, nothing sent
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                do, rid = str(d.get("do") or ""), str(d.get("id") or "")[:20]
+                rec = d.get("rec") if isinstance(d.get("rec"), dict) else {}
+                args = (["rejections.py", "add", json.dumps(rec)] if do == "add" else
+                        ["rejections.py", "edit", rid, json.dumps(rec)] if do == "edit" and rid else
+                        ["rejections.py", "drop", rid] if do == "drop" and rid else
+                        ["rejections.py", "auto", "on" if d.get("on") else "off"] if do == "auto" else None)
+                out = run(args, timeout=60) if args else ""
+                res = _last_json(out) or {"ok": False, "said": "The rejection card's change didn't go through."}
+                push_panel()
+                report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
+            elif action == "rejection_send":
+                # the rejection card's Send, or the dashboard's Auto: filled in and submitted on the work PC. Look mum,
+                # no hands was switched on for this one by the dashboard - back as it was once it is told the end
+                rid = str(cmd.get("id") or "")[:20]
+                edits = cmd.get("edits") if isinstance(cmd.get("edits"), dict) else {}
+                report("running", "Filling in the haulier rejection form on the work PC…")
+                try:
+                    out = run(["rejections.py", "send", rid, json.dumps(edits)], timeout=240)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = _last_json(out) or {"ok": False, "said": "The rejection form didn't finish - look at the form "
+                                                             "on the work PC before sending it again."}
+                push_panel()
+                try:
+                    _req("/api/ctms/rejection/ran", {"run": cmd.get("run"), "ok": bool(res.get("ok")),
+                                                     "said": str(res.get("said") or "")[:400]})
+                except Exception:
+                    pass
+                report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
             elif action == "book_clear":
                 # the Bookings card's Done by hand / Clear: he has looked in CTMS or done the step himself
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}

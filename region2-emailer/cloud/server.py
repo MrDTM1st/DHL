@@ -141,6 +141,7 @@ _ctms = {
     "todo_run": None,      # the CTMS page's Run: {id, ids, state, at, said, results, ...}
     "rail_run": None,      # the Rail plan card's Export from CTMS: {id, week, state, at, said, ...}
     "book_run": None,      # the order panel's Book: {id, record, orders, carrier, state, at, said, trips, seconds, ...}
+    "rejection_run": None,  # the rejection card's Send, or Auto's: {id, rec, by, state, at, said, ...}
 }
 # Wakes a held check-in when there is work, and a held wait when its answer lands.
 _ctms_cv = threading.Condition(_lock)
@@ -247,6 +248,68 @@ def _ctms_going_locked(kind):
     over, whatever the home PC last said."""
     run = _ctms[kind]
     return bool(run and run.get("state") == "running" and time.time() < run["until"])
+
+
+def _rejection_edits(raw):
+    """The rejection card's changes to a response, cleaned: its own fields only, cut to size."""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for k in _REJECTION_FIELDS:
+        v = raw.get(k)
+        if k == "hauliers" and isinstance(v, list):
+            out[k] = [str(x)[:40] for x in v[:9] if str(x).strip()]
+        elif isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip():
+            out[k] = str(v)[:200]
+    return out
+
+
+def _rejection_start_locked(rid, edits, by):
+    """The rejection card's Send - or Auto's (11/11): one response filled in and submitted on the work PC by the home
+    PC (rejections.py send). Look mum, no hands on for the run, back as it was when it ends. -> (code, body)"""
+    if not _REJECTION_ID.fullmatch(str(rid or "")):
+        return 400, {"error": "Which one?"}
+    if _ctms_going_locked("rejection_run"):
+        return 409, {"error": "A rejection form is being sent already - it'll be a moment."}
+    for kind, what in (("book_run", "A booking"), ("todo_run", "A CTMS run"), ("rail_run", "The rail plan export")):
+        if _ctms_going_locked(kind):
+            return 409, {"error": f"{what} is going - send it when that's done."}
+    if _ctms["state"].get("control") is False:
+        return 409, {"error": "The work PC is set to look only - run python ctms_bridge.py --allow-control on it to "
+                              "let it send the form."}
+    _ctms["next_id"] += 1
+    run = _ctms["next_id"]
+    before = _ctms["control_until"]
+    until = max(before, time.time() + _REJECTION_RUN_MINUTES * 60)
+    _ctms["control_until"], _ctms["armed_for"] = until, None
+    _ctms["rejection_run"] = {"id": run, "rec": rid, "by": by, "before": before, "until": until, "state": "running",
+                              "at": datetime.now().strftime("%H:%M"), "said": ""}
+    _ctms_note_locked("Look mum, no hands mode switched on to send a haulier rejection form"
+                      + (" (Auto)" if by == "auto" else "") + " - back as it was when it's done.")
+    _queue.append({"action": "rejection_send", "id": rid, "edits": edits, "run": run, "queued_at": time.time()})
+    _ctms_cv.notify_all()
+    return 200, {"ok": True, "run": run, "agent": _agent_online()}
+
+
+def _rejection_auto_locked():
+    """His Auto switch on the rejection card (11/11): a complete response - nothing missing, nothing NOT CERTAIN -
+    goes by itself. One at a time, only while the work PC has been left alone a minute, never one Auto has started
+    before, never across a run of the dashboard's own. -> the response started, or None."""
+    rj = _panel.get("rejections") if isinstance(_panel, dict) else None
+    if not (isinstance(rj, dict) and rj.get("auto")) or not _ctms_online() or not _agent_online():
+        return None
+    idle = (_ctms["state"] or {}).get("idle")
+    if not isinstance(idle, (int, float)) or idle < _REJECTION_IDLE:
+        return None
+    for r in rj.get("open") or []:
+        if (isinstance(r, dict) and r.get("status") == "ready" and not r.get("gaps")
+                and r.get("id") not in _rejection_tried):
+            code, _ = _rejection_start_locked(str(r.get("id")), {}, "auto")
+            if code != 200:
+                return None
+            _rejection_tried.add(r.get("id"))
+            return r.get("id")
+    return None
 
 
 # A deploy restarts this server and empties its memory - "Claude can act" with it, though Delali switched it on
@@ -511,6 +574,12 @@ _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 _RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
 _BOOK_RUN_MINUTES = 25       # the longest a Book runs: the to-do's update first, a few vehicles, the row, the email
 _BOOK_BATCH_MAX = 12         # bookings one Book approved takes: a morning's ready orders
+_REJECTION_RUN_MINUTES = 4   # the rejection card's Send: Look mum, no hands on this long at most (~30 s a form)
+_REJECTION_IDLE = 60         # Auto sends one only while the work PC has been left alone this long (seconds)
+_REJECTION_FIELDS = ("orders", "hauliers", "reason", "other", "date", "collection", "postcode", "consolidated",
+                     "product", "quantity", "vehicle", "vehicle_other", "rear_steer")
+_REJECTION_ID = re.compile(r"r[0-9a-f]{6,16}")
+_rejection_tried = set()     # responses Auto has started since this start - it never starts one twice
 
 
 def _check_list_locked():
@@ -2321,6 +2390,29 @@ class Handler(BaseHTTPRequestHandler):
                                           said=str(data.get("said") or "")[:500],
                                           manifests=[str(m)[:20] for m in (data.get("manifests") or [])[:8]])
             return self._json(200, {"ok": True})
+        if path == "/api/ctms/rejection":
+            # the rejection card's Send (his 11/11: auto-filled, the fewest clicks): his press is the go-ahead to fill in
+            # and submit this one response on the work PC. Look mum, no hands on for the run, back as it was after
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                out = _rejection_start_locked(str(data.get("id") or "")[:20], _rejection_edits(data.get("edits")),
+                                              "dashboard")
+            return self._json(*out)
+        if path == "/api/ctms/rejection/ran":
+            # the home PC says the form was sent, or wasn't: the switch back as it was before
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["rejection_run"]
+                if run and run["id"] == data.get("run"):
+                    run.update(state="done", ok=bool(data.get("ok")), said=str(data.get("said") or "")[:400],
+                               ended=datetime.now().strftime("%H:%M"))
+                    if _ctms["control_until"] == run["until"]:
+                        _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
+                        _ctms_note_locked("Rejection form " + ("sent" if run["ok"] else "not sent")
+                                          + " - Look mum, no hands mode back as it was.")
+            return self._json(200, {"ok": True})
         if path == "/api/ctms/book/ran":
             # the home PC says the booking ended: what it made - and the switch back as it was before it
             if not self._is_agent():
@@ -2463,6 +2555,7 @@ class Handler(BaseHTTPRequestHandler):
                 _ctms_take_state_locked(data.get("state"))
                 _ctms_sweep_locked()
                 _ctms_due_check_locked()            # a set-time look-up of the map's orders, when one is due
+                _rejection_auto_locked()            # a complete rejection form, when Auto is on and he's away
                 # Held open until there is work, or something the bridge has
                 # to know changes (pictures wanted, the switch flipped).
                 deadline = time.time() + wait
@@ -2913,6 +3006,7 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(data, dict) and length < 400_000:
                 with _lock:
                     _panel = data
+                    _rejection_auto_locked()        # new complete rejection forms, when Auto is on and he's away
             self._json(200, {"ok": True})
         elif self.path == "/api/upload":
             # browser uploads a file for the agent to process (rail-plan CSV etc.)

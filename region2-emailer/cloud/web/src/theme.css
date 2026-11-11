@@ -926,3 +926,7 @@ a.callbtn:hover{ color:var(--red-ink); }
 .nrdate-who { font-size: 12.5px; font-weight: 700; color: var(--red-ink, var(--red)); }
 .nrcard { border-left-color: var(--purple, #7B2CBF); }
 .nrcard .nrdate { margin: 4px 0 0; }
+
+/* the rejection card (11/11): what was worked out rather than read, NOT CERTAIN until his Send */
+.rj-card .noaddress-head .switch{ padding:3px 10px 3px 5px; }
+.rj-unsure{ color:var(--amber-ink2, #8a5a00); font-weight:700; }
