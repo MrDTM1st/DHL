@@ -493,13 +493,23 @@ def _same_job(a, b):
             and a.get("date") == b.get("date"))
 
 
+def _known(old, rec):
+    """Is this no on the list already: the same job and reason, open or sent - or one he took off with Not needed, for
+    the same orders and haulier whatever reason or day it would be read with later (his 11/11: "remove those")."""
+    if not set(rec["hauliers"]) <= set(old["hauliers"]):
+        return False
+    if old.get("status") == "dropped":
+        return {_ord(o) for o in old["orders"]} == {_ord(o) for o in rec["orders"]}
+    return _same_job(old, rec)
+
+
 def add(d, rec):
     """Into the store: onto an open response for the same job and reason (another haulier ticked), else as its own.
-    A haulier already in a sent or dropped response for it is not put in again. -> the response it went into, or
-    None when there was nothing new."""
+    A haulier already in a sent response for it, or taken off those orders with Not needed, is not put in again.
+    -> the response it went into, or None when there was nothing new."""
     for old in d["items"]:
-        if _same_job(old, rec) and set(rec["hauliers"]) <= set(old["hauliers"]):
-            return None                           # known already - open, sent or dropped
+        if _known(old, rec):
+            return None                           # known already - open, sent or not needed
     for old in d["items"]:
         if _same_job(old, rec) and old.get("status") in ("ready", "held", "failed"):
             old["hauliers"] = sorted(set(old["hauliers"]) | set(rec["hauliers"]), key=HAULIERS.index)

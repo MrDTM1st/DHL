@@ -170,6 +170,15 @@ def test_the_same_job_and_reason_ticks_another_haulier_and_a_known_no_is_not_add
     other = R.make(["9100001"], ["Lawsons"], "No Availability - Rate", given={"date": "16/11/2026"},
                    tracker=TRACKER, waitlist=[], now=NOW)
     assert R.add(d, other) is other and len(d["items"]) == 2                              # another reason: its own
+    # Not needed: that haulier's no on those orders never comes back, whatever reason or day it is read with later
+    gone = R.make(["9100003"], ["Hargreaves"], "No Availability - General", tracker=[], waitlist=[], now=NOW)
+    R.add(d, gone)
+    gone["status"] = "dropped"
+    again = R.make(["9100003"], ["Hargreaves"], "No Availability - Rate", given={"date": "18/11/2026"},
+                   tracker=[], waitlist=[], now=NOW)
+    assert R.add(d, again) is None and len(d["items"]) == 3
+    other_haulier = R.make(["9100003"], ["Tennant"], "No Availability - General", tracker=[], waitlist=[], now=NOW)
+    assert R.add(d, other_haulier) is other_haulier                                     # another haulier's no is new
 
 
 def test_the_answers_are_the_form_s_words_in_its_order_and_nothing_goes_with_a_gap():
