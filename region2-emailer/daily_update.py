@@ -649,7 +649,8 @@ def _save_state(d):
 
 def make_draft(ns, now, force=False, auto=False):
     """Today's reply as a draft Reply All on their email - saved in Drafts, never sent. The 15:30 one (auto) isn't
-    made when he has replied already. -> {"ok", "said", ...}"""
+    made when he has replied already, or has filed their email out of the Inbox (dealt with - his rule, 11/11).
+    -> {"ok", "said", ...}"""
     import build_drafts as bd
     import send_order as so
     item = find_update(ns, now)
@@ -661,6 +662,12 @@ def make_draft(ns, now, force=False, auto=False):
         return {"ok": True, "said": f"Today's reply was drafted already at {st['draft_at']} - it's in Drafts.",
                 "already": True}
     if auto:
+        where = _folder_of(item)
+        if where and where.lower() != "inbox":
+            _save_state({"key": key, "day": now.strftime("%Y-%m-%d"), "dealt": where, "from": str(item.SenderName),
+                         "for": item.ReceivedTime.strftime("%d/%m %H:%M")})
+            return {"ok": True, "said": f"Today's Region 2 Updates is filed in {where} - dealt with, no draft needed.",
+                    "dealt": where}
         at = replied_at(ns, item)
         if at:
             _save_state({"key": key, "day": now.strftime("%Y-%m-%d"), "replied": at, "from": str(item.SenderName),
@@ -751,6 +758,13 @@ def _top(item):
         return ""
 
 
+def _folder_of(item):
+    try:
+        return str(item.Parent.Name).strip()
+    except Exception:
+        return ""
+
+
 def _modified(ns, entry, store):
     try:
         return ns.GetItemFromID(entry, store).LastModificationTime.strftime("%Y-%m-%d %H:%M:%S")
@@ -782,7 +796,8 @@ def panel(now=None):
     st = _state()
     due = "%02d:%02d" % DRAFT_AT
     if st.get("day") == now.strftime("%Y-%m-%d"):
-        return dict({k: st.get(k) for k in ("for", "from", "draft_at", "summary", "text", "replied")}, due=due)
+        return dict({k: st.get(k) for k in ("for", "from", "draft_at", "summary", "text", "replied", "dealt")},
+                    due=due)
     out = {"due": due}
     try:
         import inbox_watch

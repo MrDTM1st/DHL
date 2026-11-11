@@ -274,3 +274,17 @@ def test_drafting_again_knows_a_draft_he_has_written_in():
         assert D._top(types.SimpleNamespace(Body=his)) != top
     assert D._top(types.SimpleNamespace(Body=body.replace("From: Sam Boss", "From: Sam Boss (edited quote)"))) == top
     assert D._top(types.SimpleNamespace(Body="")) == ""
+
+
+def test_the_1530_draft_isnt_made_once_their_email_is_filed(monkeypatch, tmp_path):
+    # his rule, 11/11: filed into a folder = dealt with
+    monkeypatch.setattr(D, "STATE", str(tmp_path / "state.json"))
+    monkeypatch.setitem(sys.modules, "send_order", types.SimpleNamespace())
+    their = _Mail("RE: Region 2 Updates 11/11", "Sam Boss", datetime(2026, 11, 11, 14, 20), THEIR_EMAIL)
+    done = _Folder("Completed", [their])
+    their.Parent = done
+    _outlook(monkeypatch, [_Folder("Inbox", [], [_Folder("Regions", [], [_Folder("Region 2", [], [done])])])])
+    got = D.make_draft(None, NOW, auto=True)
+    assert got["dealt"] == "Completed" and "no draft needed" in got["said"]
+    assert D.panel(NOW)["dealt"] == "Completed" and not D.panel(NOW).get("draft_at")
+    assert D._folder_of(types.SimpleNamespace(Parent=types.SimpleNamespace(Name="Inbox"))) == "Inbox"

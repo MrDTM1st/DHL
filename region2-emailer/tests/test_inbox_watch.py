@@ -34,7 +34,7 @@ def msg(**kw):
     return m
 
 
-NOBODY_SENT = {"conv": {}, "subject": {}, "order_to": {}}
+NOBODY_SENT = {"conv": {}, "subject": {}, "ref": {}}
 
 
 def test_working_minutes_skip_nights_weekends_and_bank_holidays():
@@ -49,7 +49,8 @@ def test_working_minutes_skip_nights_weekends_and_bank_holidays():
 
 def test_who_it_is_from_decides_how_soon_it_matters():
     c = ctx()
-    assert W.weigh(msg(from_name="Sam Boss (Company)", from_addr="sam.boss@dhl.com"), c) == ("urgent", "your manager")
+    assert W.weigh(msg(from_name="Sam Boss (Company)", from_addr="sam.boss@dhl.com"), c) == (
+        "urgent", "your manager asks")
     assert W.weigh(msg(subject="RE: Region 2 Updates 11/11", from_name="Sam Boss"), c)[1].startswith("the day's Region 2")
     assert W.weigh(msg(words="We need this delivered today please"), c) == ("urgent", 'says "today"')
     assert W.weigh(msg(words="Still waiting on this", to_me=False), c)[0] == "high"     # copied in: one step down
@@ -57,20 +58,16 @@ def test_who_it_is_from_decides_how_soon_it_matters():
     assert W.weigh(msg(from_name="Order Management", from_addr="om@nr.example"), c)[0] == "high"
     assert W.weigh(msg(from_addr="a.person@networkrail.co.uk", subject="Delivery Query for: 9100001"), c) == (
         "high", "a Network Rail query")
-    assert W.weigh(msg(from_name="Sam Boss", words="Next week's rota is attached."), c) == (
-        "normal", "your manager (FYI)")
-    assert W.weigh(msg(from_addr="planner@haul.example"), c) == ("normal", "a haulier answering")
+    assert W.weigh(msg(from_addr="planner@haul.example"), c) == ("normal", "a haulier asking")
     assert W.weigh(msg(from_addr="planner@haul.example", words="New date for this one is Friday"), c) == (
-        "high", 'a haulier: "new date"')                                               # the site needs telling
-    assert W.weigh(msg(from_addr="planner@haul.example", words="Now covered, thanks"), c) == (
-        "low", "a haulier confirming")
+        "high", 'a haulier: "new date"')                         # a change needs passing on, asked or not
     assert W.weigh(msg(from_addr="fleet@aol.com"), c)[0] == "normal"                    # a haulier on webmail, by address
-    assert W.weigh(msg(from_addr="someone@aol.com"), c) == ("normal", "wrote to you")  # ... not everyone on it
+    assert W.weigh(msg(from_addr="someone@aol.com"), c) == ("normal", "asks you")      # ... not everyone on it
     assert W.weigh(msg(folder="Inbox\\ADHOC\\DTS"), c) == ("high", "a DTS")
-    assert W.weigh(msg(from_addr="colleague@dhl.com"), c) == ("normal", "a colleague")
-    assert W.weigh(msg(), c) == ("normal", "wrote to you")
-    assert W.weigh(msg(to_me=False), c) == ("low", "wrote to you (copied in)")
-    assert W.weigh(msg(crowd=True), c) == ("low", "wrote to you (round-robin)")
+    assert W.weigh(msg(from_addr="colleague@dhl.com"), c) == ("normal", "a colleague asking")
+    assert W.weigh(msg(), c) == ("normal", "asks you")
+    assert W.weigh(msg(to_me=False), c) == ("low", "asks you (copied in)")
+    assert W.weigh(msg(crowd=True), c) == ("low", "asks you (round-robin)")
     # nothing for him: his own, automatic, a notice
     assert W.weigh(msg(from_addr="me.desk@dhl.example"), c) is None
     assert W.weigh(msg(from_name="Pat Desk (Company)"), c) is None
@@ -80,21 +77,52 @@ def test_who_it_is_from_decides_how_soon_it_matters():
     assert W.weigh(msg(subject="Accepted: Catch up"), c) is None
 
 
+def test_what_asks_him_nothing_needs_no_reply():
+    # his 11/11: "some of the things you flagged don't even need a reply"
+    c = ctx()
+    boss = dict(from_name="Sam Boss", from_addr="sam.boss@dhl.com")
+    assert W.weigh(msg(words="Hi All See attached updated planner for today", **boss), c) is None
+    assert W.weigh(msg(words="Next week's rota is attached.", **boss), c) is None
+    assert W.weigh(msg(words="Thank you."), c) is None
+    assert W.weigh(msg(words="Please see attached. Please find the POD attached."), c) is None
+    assert W.weigh(msg(subject="RE: Derailment confirmations", words="Hello 9100001 - Delivered on the 28th"), c) is None
+    assert W.weigh(msg(from_addr="planner@haul.example", words="Now covered, thanks"), c) is None
+    # ...nor does a note to someone else on the thread
+    assert W.weigh(msg(words="Hi Lee Yes the sleepers are being delivered tomorrow for you", **boss), c) is None
+    assert W.weigh(msg(words="OFFICIAL\nHi Jo, Sorry for the delay. How can I help with the delivery?"), c) is None
+    # but a question or a request to him, or to everyone, does
+    assert W.weigh(msg(words="Hi Pat, can you get the haulier to send the first page?", **boss), c) == (
+        "urgent", "your manager asks")
+    assert W.weigh(msg(words="Hi all, could someone cover this on Friday?"), c) is not None
+    assert W.weigh(msg(words="Hi Jo and Pat, when can this be delivered"), c) is not None
+    assert W.weigh(msg(words="Morning, any update on this one"), c) is not None
+    assert W.weigh(msg(words="Hi, Can you confirm the time?"), c) is not None
+    assert W.weigh(msg(words="Dear Sir/Madam, could you advise on the delivery?"), c) is not None
+    assert W.weigh(msg(words="Please book this in for Tuesday"), c) is not None
+    assert W.weigh(msg(subject="Delivery tomorrow?", words="Sent from my phone"), c) is not None
+
+
+def test_only_the_inbox_is_read_filed_is_dealt_with():
+    assert W.FOLDERS == (("Inbox",),)                     # his rule: filed into a folder = dealt with
+
+
 def test_answered_means_a_reply_a_forward_or_anything_he_sent_since_on_it():
     m = msg(orders=["9100001"])
     assert W.answered(dict(m, verb=102), NOBODY_SENT) and W.answered(dict(m, verb=104), NOBODY_SENT)
     later, earlier = m["received"] + timedelta(minutes=5), m["received"] - timedelta(minutes=5)
-    assert W.answered(m, {"conv": {"C-m1": [later]}, "subject": {}, "order_to": {}})
-    assert not W.answered(m, {"conv": {"C-m1": [earlier]}, "subject": {}, "order_to": {}})      # before it came
-    assert W.answered(m, {"conv": {}, "subject": {"a question": [later]}, "order_to": {}})       # RE:/FW: aside
-    assert W.answered(m, {"conv": {}, "subject": {}, "order_to": {("9100001", "someone@site.example"): [later]}})
-    assert not W.answered(m, {"conv": {}, "subject": {}, "order_to": {("9100001", "other@site.example"): [later]}})
+    assert W.answered(m, {"conv": {"C-m1": [later]}, "subject": {}, "ref": {}})
+    assert not W.answered(m, {"conv": {"C-m1": [earlier]}, "subject": {}, "ref": {}})      # before it came
+    assert W.answered(m, {"conv": {}, "subject": {"a question": [later]}, "ref": {}})       # RE:/FW: aside
+    # acted on: anything he sent since naming its order - to anyone (the haulier, for his manager's ask)
+    assert W.answered(m, {"conv": {}, "subject": {}, "ref": {"9100001": [later]}})
+    assert not W.answered(m, {"conv": {}, "subject": {}, "ref": {"9100001": [earlier]}})
+    assert not W.answered(m, {"conv": {}, "subject": {}, "ref": {"9100002": [later]}})
     assert W._norm_subject("RE: FW: EXT: A question") == "a question"
     # the day's updates: only his reply answers them - not a forward, nor an email to his manager about one listed order
     up = msg(subject="RE: Region 2 Updates 11/11", from_addr="sam.boss@dhl.example", orders=["9100001"])
     assert not W.answered(dict(up, verb=104), NOBODY_SENT) and W.answered(dict(up, verb=102), NOBODY_SENT)
-    assert not W.answered(up, {"conv": {}, "subject": {}, "order_to": {("9100001", "sam.boss@dhl.example"): [later]}})
-    assert W.answered(up, {"conv": {"C-m1": [later]}, "subject": {}, "order_to": {}})
+    assert not W.answered(up, {"conv": {}, "subject": {}, "ref": {"9100001": [later]}})
+    assert W.answered(up, {"conv": {"C-m1": [later]}, "subject": {}, "ref": {}})
 
 
 def test_what_the_tracker_took_in_and_forms_on_the_map_stay_off_but_a_colleague_s_email_does_not():
@@ -156,6 +184,9 @@ def test_dealt_with_takes_it_off_and_keeps_it_off():
 def test_order_numbers_ad_hoc_and_dts_refs_are_picked_out():
     assert W.orders_in("RE: 9100001 / 9100002 Somewhere", "AH12/11/26ABC1 and NN1234567-89, not 91000011") == [
         "9100001", "9100002", "AH12/11/26ABC1", "NN1234567-89"]
+    # manifests and NR requests too, however they're written - what a POD ask and the email to the haulier share
+    assert W.orders_in("FW: order tomorrow RD100001/9100003", "manifest 261017-MAN-01500001 and MAN01500002") == [
+        "9100003", "MAN-01500001", "MAN-01500002", "RD100001"]
 
 
 def test_one_line_a_thread_its_most_pressing_reason_waiting_since_the_first_unanswered():
@@ -173,6 +204,6 @@ def test_one_line_a_thread_its_most_pressing_reason_waiting_since_the_first_unan
     assert first["ids"] == ["t1", "t2", "t3"] and first["alarm"] and first["received"] == "11/11 14:40"
     assert [i["id"] for i in out] == ["t3", "o1"]
     # answered in the thread since: only what came after his reply still counts
-    sent = {"conv": {"THREAD": [NOW - timedelta(minutes=30)]}, "subject": {}, "order_to": {}}
+    sent = {"conv": {"THREAD": [NOW - timedelta(minutes=30)]}, "subject": {}, "ref": {}}
     out = W.judge(thread, sent, c, NOW)
     assert [(i["id"], i["n"]) for i in out] == [("t3", 1)]
