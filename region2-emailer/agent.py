@@ -1845,25 +1845,29 @@ def main():
                 res = _last_json(out) or {"ok": False, "said": "The rejection card's change didn't go through."}
                 push_panel()
                 report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
-            elif action == "rejection_send":
-                # the rejection card's Send, or the dashboard's Auto: filled in and submitted on the work PC. Look mum,
-                # no hands was switched on for this one by the dashboard - back as it was once it is told the end
-                rid = str(cmd.get("id") or "")[:20]
-                edits = cmd.get("edits") if isinstance(cmd.get("edits"), dict) else {}
-                report("running", "Filling in the haulier rejection form on the work PC…")
+            elif action == "rejection_run":
+                # the CTMS page's rejection Send, or the dashboard's Auto: the ready ones filled in and submitted on the
+                # work PC one after another, as the to-do's Run goes (rejections.py run). Look mum, no hands was switched
+                # on for the run by the dashboard - back as it was once it is told the end
+                ids = [str(i) for i in cmd.get("ids") or [] if i][:20]
+                report("running", f"Sending {len(ids)} haulier rejection form(s) on the work PC…")
                 try:
-                    out = run(["rejections.py", "send", rid, json.dumps(edits)], timeout=240)
+                    out = run(["rejections.py", "run", "--run", str(cmd.get("run") or "")] + ids,
+                              timeout=60 + 240 * max(1, len(ids))) if ids else ""
                 except subprocess.TimeoutExpired:
                     out = ""
-                res = _last_json(out) or {"ok": False, "said": "The rejection form didn't finish - look at the form "
-                                                             "on the work PC before sending it again."}
+                res = _last_json(out) or {"ok": False, "results": [],
+                                          "said": "the run didn't finish - look at the form on the work PC before "
+                                                  "sending again"}
                 push_panel()
                 try:
                     _req("/api/ctms/rejection/ran", {"run": cmd.get("run"), "ok": bool(res.get("ok")),
-                                                     "said": str(res.get("said") or "")[:400]})
+                                                     "said": str(res.get("said") or "")[:400],
+                                                     "results": res.get("results") or []})
                 except Exception:
                     pass
-                report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
+                report("done" if res.get("ok") else "error", "Haulier rejection forms: " + res.get("said", "") + ".",
+                       tail(out, 6))
             elif action == "book_clear":
                 # the Bookings card's Done by hand / Clear: he has looked in CTMS or done the step himself
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}

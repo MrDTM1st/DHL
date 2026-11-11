@@ -405,35 +405,38 @@ def locked(wait=30.0):
             pass
 
 
+_MISSING = {"hauliers": "the haulier", "date": "the date of the job", "collection": "the collection site",
+            "postcode": "the postcode", "consolidated": "consolidated or not", "product": "the product",
+            "quantity": "the quantity", "vehicle": "the vehicle", "rear_steer": "rear-steer or not",
+            "reason": "the reason"}
+_UNSURE = dict(_MISSING, rear_steer="rear-steer", consolidated="consolidated")
+
+
+def needs(rec):
+    """What stops a response going, answer by answer in the form's order: [(field, "missing" | "unsure")] - [] when
+    it can go. Every question on the form is required, Collection Site, Delivery Postcode and Quantity too, though
+    the page's screen-reader names don't say so (the red asterisks on the work PC's form, 11/11)."""
+    bad = {
+        "hauliers": not rec.get("hauliers") or any(h not in HAULIERS for h in rec["hauliers"]),
+        "date": not iso_date(rec.get("date")),
+        "collection": not str(rec.get("collection") or "").strip(),
+        "postcode": not str(rec.get("postcode") or "").strip(),
+        "consolidated": rec.get("consolidated") not in YES_NO,
+        "product": rec.get("product") not in PRODUCTS or rec.get("product") == "S&C",
+        "quantity": not str(rec.get("quantity") or "").strip(),
+        "vehicle": rec.get("vehicle") not in VEHICLES or (rec["vehicle"] == "Other" and not rec.get("vehicle_other")),
+        "rear_steer": rec.get("rear_steer") not in YES_NO,
+        "reason": rec.get("reason") not in REASONS or (rec["reason"] == "Other" and not rec.get("other")),
+    }
+    out = [(f, "missing") for f in _MISSING if bad[f]]
+    out += [(f, "unsure") for f in _MISSING if f in (rec.get("unsure") or []) and not bad[f]]
+    return out
+
+
 def gaps(rec):
     """What stops a response going, in words: [] when it can go."""
-    out = []
-    if not rec.get("hauliers") or any(h not in HAULIERS for h in rec["hauliers"]):
-        out.append("the haulier")
-    if not iso_date(rec.get("date")):
-        out.append("the date of the job")
-    # every question on the form is required - these three too, though the page's screen-reader names don't say so
-    # (the red asterisks on the work PC's form, 11/11)
-    for f, words in (("collection", "the collection site"), ("postcode", "the postcode"), ("quantity", "the quantity")):
-        if not str(rec.get(f) or "").strip():
-            out.append(words)
-    if rec.get("consolidated") not in YES_NO:
-        out.append("consolidated or not")
-    if rec.get("product") not in PRODUCTS:
-        out.append("the product")
-    elif rec["product"] == "S&C":
-        out.append("S&C goes its own way, not on this form")
-    if rec.get("vehicle") not in VEHICLES or (rec["vehicle"] == "Other" and not rec.get("vehicle_other")):
-        out.append("the vehicle")
-    if rec.get("rear_steer") not in YES_NO:
-        out.append("rear-steer or not")
-    if rec.get("reason") not in REASONS or (rec["reason"] == "Other" and not rec.get("other")):
-        out.append("the reason")
-    names = {"date": "the date of the job", "product": "the product", "vehicle": "the vehicle",
-             "rear_steer": "rear-steer", "reason": "the reason", "quantity": "the quantity",
-             "collection": "the collection site", "postcode": "the postcode"}
-    out += [f"{names.get(f, f)} (NOT CERTAIN)" for f in rec.get("unsure") or [] if names.get(f, f) not in out]
-    return out
+    return [("S&C goes its own way, not on this form" if f == "product" and rec.get("product") == "S&C" else
+             _MISSING[f]) if kind == "missing" else _UNSURE[f] + " (NOT CERTAIN)" for f, kind in needs(rec)]
 
 
 def _status(rec):
@@ -535,17 +538,20 @@ def answers(rec):
 
 
 def _shown(rec):
-    """Its status as the card shows it: a send never heard back from is a failed one."""
-    if rec.get("status") == "sending" and time.time() - float(rec.get("sending_ts") or 0) >= SENDING_FOR:
+    """Its status as the list shows it: a send never heard back from is a failed one, and ready or held is worked out
+    afresh - never left over from an older rule."""
+    st = rec.get("status")
+    if st == "sending" and time.time() - float(rec.get("sending_ts") or 0) >= SENDING_FOR:
         return "failed"
-    return rec.get("status")
+    return _status(rec) if st in ("ready", "held") else st
 
 
 def panel(d=None):
     """The rejection card: what's open (with what stops each one going), the last few sent, and the Auto switch."""
     d = d or load()
     keep = FIELDS + ("id", "status", "said", "source", "made", "unsure", "note", "sent_at")
-    open_ = [dict({k: r.get(k) for k in keep}, status=_shown(r), gaps=gaps(r))
+    open_ = [dict({k: r.get(k) for k in keep}, status=_shown(r), gaps=gaps(r),
+                  needs=[{"f": f, "unsure": kind == "unsure"} for f, kind in needs(r)])
              for r in d["items"] if r.get("status") in OPEN]
     sent = [{k: r.get(k) for k in ("id", "orders", "hauliers", "reason", "sent_at")}
             for r in d["items"] if r.get("status") == "sent"][-5:]
@@ -686,13 +692,12 @@ def send(rid, edits=None, ask=None):
             return {"ok": False, "said": "That one is being sent already."}
         if edits:
             _apply(rec, {k: v for k, v in edits.items() if k in FIELDS})
-        rec["unsure"] = []                        # his press of Send is his word on what he saw
-        try:
-            filled = answers(rec)
-        except ValueError as e:
+        left = gaps(rec)                          # only a complete one, nothing NOT CERTAIN: his picks come first
+        if left:
             rec["status"] = _status(rec)
             save(d)
-            return {"ok": False, "said": str(e)}
+            return {"ok": False, "said": "Not sent - it needs " + ", ".join(left) + " first."}
+        filled = answers(rec)
         rec.update(status="sending", sending_ts=time.time())
         save(d)
     try:
@@ -714,6 +719,42 @@ def send(rid, edits=None, ask=None):
     names = " / ".join(rec["hauliers"]) if rec else ""
     return {"ok": ok, "said": (f"Rejection form sent: {names}, {' / '.join(rec['orders'])}." if ok and rec else
                                "Rejection form not sent: " + (said or "no answer from the work PC."))}
+
+
+def _tell(run_id, on, results):
+    """The CTMS page told how a run is going - never at the run's expense."""
+    if not run_id:
+        return
+    try:
+        import contextlib
+        import io
+        import ctms_remote as R
+        R.BASE, R.KEY = R._desk()
+        with contextlib.redirect_stdout(io.StringIO()):
+            R.http("POST", "/api/ctms/rejection/progress", {"run": run_id, "on": on, "results": results})
+    except Exception:
+        pass
+
+
+def run_all(rids, run_id="", ask=None, tell=None):
+    """The CTMS page's Send (or Auto's), as its to-do Run goes: the ready ones filled in and submitted on the work PC
+    one after another, each counted only when the form says it took it - one that doesn't stays on the list and the
+    rest carry on. {"ok", "said", "results": [{"id", "ok", "said"}]}"""
+    tell = tell or _tell
+    results = []
+    for rid in rids:
+        rec = find(load(), rid)
+        label = (" / ".join(rec["orders"]) + " - " + ", ".join(rec["hauliers"])) if rec else rid
+        tell(run_id, label, results)
+        out = send(rid, ask=ask)
+        results.append({"id": rid, "ok": bool(out["ok"]),
+                        "said": (label + ": " + ("sent" if out["ok"] else
+                                                 out["said"].replace("Rejection form not sent: ", "")))[:300]})
+    tell(run_id, "", results)
+    sent = sum(1 for r in results if r["ok"])
+    return {"ok": bool(results) and sent == len(results), "results": results,
+            "said": ("nothing to send" if not results else f"{sent} sent" if sent == len(results) else
+                     f"{sent} of {len(results)} sent - the rest are still on the list")}
 
 
 def main(argv):
@@ -756,6 +797,13 @@ def main(argv):
                                                 " - it needs a look before it goes.")) if got else
                           "That no is on the card already."}))
         return 0
+    if cmd == "run":                              # run [--run RUN_ID] ID ... : the CTMS page's Send, as its to-do Run
+        args, run_id = argv[2:], ""
+        if args[:1] == ["--run"]:
+            run_id, args = (args[1] if len(args) > 1 else ""), args[2:]
+        out = run_all([a for a in args if a][:20], run_id)
+        print(json.dumps(out))
+        return 0 if out["ok"] else 1
     if cmd in ("edit", "drop", "send"):
         rid = argv[2] if len(argv) > 2 else ""
         edits = json.loads(argv[3]) if len(argv) > 3 else {}

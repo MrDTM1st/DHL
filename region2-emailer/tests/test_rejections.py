@@ -249,7 +249,8 @@ def test_send_goes_only_when_the_form_takes_it_and_never_with_a_gap():
     assert R.find(R.load(), rec["id"])["status"] == "sent"
     assert R.send(rec["id"], ask=ok)["ok"] and len(asked) == 1                            # never twice
 
-    other = R.make(["9100003"], ["Tennant"], "No Availability - General", tracker=TRACKER, waitlist=[], now=NOW)
+    other = R.make(["9100003"], ["Tennant"], "No Availability - General", given={"rear_steer": "No"},
+                   tracker=TRACKER, waitlist=[], now=NOW)
     d = R.load()
     R.add(d, other)
     R.save(d)
@@ -262,12 +263,41 @@ def test_send_goes_only_when_the_form_takes_it_and_never_with_a_gap():
     assert R.find(R.load(), other["id"])["status"] == "failed"
 
     gap = R.make(["9100099"], ["Lawsons"], "No Availability - General", tracker=TRACKER, waitlist=[], now=NOW)
+    unsure = R.make(["9100003"], ["Hargreaves"], "No Availability - Rate", tracker=TRACKER, waitlist=[], now=NOW)
     d = R.load()
     R.add(d, gap)
+    R.add(d, unsure)
     R.save(d)
     n = len(asked)
     out = R.send(gap["id"], ask=refused)
     assert not out["ok"] and "the product" in out["said"] and len(asked) == n            # the work PC never asked
+    out = R.send(unsure["id"], ask=refused)                  # NOT CERTAIN: his pick first, as the CTMS to-do's held
+    assert not out["ok"] and "rear-steer (NOT CERTAIN)" in out["said"] and len(asked) == n
+
+
+def test_the_ready_ones_go_one_after_another_and_the_page_hears_each():
+    _store()
+    d = R.load()
+    a = R.make(["9100001"], ["DHL NOC"], "No Availability - Vehicle Type", tracker=TRACKER, waitlist=[], now=NOW)
+    b = R.make(["9100003"], ["Tennant"], "No Availability - General", given={"rear_steer": "No"},
+               tracker=TRACKER, waitlist=[], now=NOW)
+    R.add(d, a)
+    R.add(d, b)
+    R.save(d)
+    heard = []
+
+    def ask(action, answers, submit):
+        took = answers[0]["tick"] == ["DHL NOC"]
+        return {"ok": took, "detail": "submitted" if took else "Tennant Transport isn't ticked"}, {"submitted": took}
+    out = R.run_all([a["id"], b["id"]], "7", ask=ask, tell=lambda run, on, results: heard.append((on, len(results))))
+    assert not out["ok"] and out["said"] == "1 of 2 sent - the rest are still on the list"
+    assert [(r["id"], r["ok"]) for r in out["results"]] == [(a["id"], True), (b["id"], False)]
+    assert out["results"][0]["said"] == "9100001 - DHL NOC: sent"
+    assert "isn't ticked" in out["results"][1]["said"]
+    assert heard == [("9100001 - DHL NOC", 0), ("9100003 - Tennant Transport", 1), ("", 2)]
+    page = R.panel()
+    assert [r["id"] for r in page["open"]] == [b["id"]] and page["open"][0]["status"] == "failed"
+    assert page["open"][0]["needs"] == []                                              # complete: it can go again
 
 
 def test_a_send_never_heard_back_from_shows_as_failed_and_can_go_again():

@@ -258,17 +258,25 @@ def test_a_rejection_send_switches_acting_on_for_its_run_only_and_back_when_it_e
     S._queue.clear()
     S._ctms["rejection_run"] = None
     try:
-        assert call("/api/ctms/rejection", {"id": "not-one"})[0] == 400
-        code, r = call("/api/ctms/rejection", {"id": "r0123abcd9", "edits": {"date": "2026-11-16", "evil": "x",
-                                                                              "hauliers": ["DHL NOC", ""]}})
+        assert call("/api/ctms/rejection", {"ids": ["not-one"]})[0] == 400
+        code, r = call("/api/ctms/rejection", {"ids": ["r0123abcd9", "nope", "r0123abcd8"]})
         assert code == 200 and S._ctms_armed()
         job = S._queue[-1]
-        assert job["action"] == "rejection_send" and job["id"] == "r0123abcd9" and job["run"] == r["run"]
-        assert job["edits"] == {"date": "2026-11-16", "hauliers": ["DHL NOC"]}
-        assert call("/api/ctms/rejection", {"id": "r0123abcd9"})[0] == 409               # one at a time
+        assert job["action"] == "rejection_run" and job["ids"] == ["r0123abcd9", "r0123abcd8"] and job["run"] == r["run"]
+        assert call("/api/ctms/rejection", {"id": "r0123abcd9"})[0] == 409               # one run at a time
+        assert call("/api/ctms/rejection/progress", {"run": r["run"], "on": "x"})[0] == 401   # the home PC's to say
+        call("/api/ctms/rejection/progress", {"run": r["run"], "on": "9100002 - DHL NOC",
+                                              "results": [{"id": "r0123abcd9", "ok": True, "said": "sent"}]}, key=AGENT)
+        code, st = call("/api/ctms/status?visible=0")
+        assert st["rejection_run"]["on"] == "9100002 - DHL NOC" and len(st["rejection_run"]["results"]) == 1
+        assert "until" not in st["rejection_run"]                                         # the page's view only
         assert call("/api/ctms/rejection/ran", {"run": r["run"], "ok": True})[0] == 401   # not the dashboard's to say
-        assert call("/api/ctms/rejection/ran", {"run": r["run"], "ok": True, "said": "sent"}, key=AGENT)[0] == 200
+        assert call("/api/ctms/rejection/ran", {"run": r["run"], "ok": False, "said": "1 of 2 sent",
+                                                "results": [{"id": "r0123abcd9", "ok": True, "said": "sent"},
+                                                            {"id": "r0123abcd8", "ok": False, "said": "not taken"}]},
+                    key=AGENT)[0] == 200
         assert not S._ctms_armed() and S._ctms["rejection_run"]["state"] == "done"
+        assert [x["ok"] for x in S._ctms["rejection_run"]["results"]] == [True, False]
         S._ctms["book_run"] = {"id": 9, "state": "running", "until": time.time() + 600}
         code, b = call("/api/ctms/rejection", {"id": "r0123abcd9"})
         assert code == 409 and "booking" in b["error"]                                    # never across a Book
@@ -286,7 +294,7 @@ def test_auto_sends_a_complete_response_only_while_the_work_pc_is_left_alone_and
     keep = (S._panel, S._ctms_online, S._agent_online)
     held = {"id": "r1111111111", "status": "held", "gaps": ["the product"]}
     ready = {"id": "r2222222222", "status": "ready", "gaps": []}
-    sends = lambda: [q["id"] for q in S._queue if q["action"] == "rejection_send"]  # noqa: E731
+    sends = lambda: [i for q in S._queue if q["action"] == "rejection_run" for i in q["ids"]]  # noqa: E731
     try:
         S._ctms_online = S._agent_online = lambda: True
         S._ctms["state"] = {"idle": 5}

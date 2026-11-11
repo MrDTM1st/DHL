@@ -927,6 +927,11 @@ a.callbtn:hover{ color:var(--red-ink); }
 .nrcard { border-left-color: var(--purple, #7B2CBF); }
 .nrcard .nrdate { margin: 4px 0 0; }
 
-/* the rejection card (11/11): what was worked out rather than read, NOT CERTAIN until his Send */
-.rj-card .noaddress-head .switch{ padding:3px 10px 3px 5px; }
-.rj-unsure{ color:var(--amber-ink2, #8a5a00); font-weight:700; }
+/* the Haulier Rejection Form's list on the CTMS page (11/11), in the to-do's look */
+.ctms-todo-kind.noc{ background:var(--ink); color:var(--on-ink); }
+.ctms-todo-kind.tier1{ background:var(--red); color:#fff; }
+.ctms-plan-st.sending{ background:var(--seg); color:var(--ink2); }
+.ctms-plan-st.failed{ background:var(--red); color:#fff; }
+.statushd .rj-auto{ margin-left:8px; padding:2px 9px 2px 4px; font-size:11px; }
+.rj-row-foot{ margin-top:6px; }
+.ctms-held.rj-add{ margin-top:10px; background:var(--seg); }

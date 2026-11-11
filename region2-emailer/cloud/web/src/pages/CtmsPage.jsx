@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { I } from '../icons.jsx';
 import * as api from '../api.js';
 import { SetupPanel } from '../components/WorkPcSetup.jsx';
+import RejectionList from '../components/RejectionsCard.jsx';
 
 // The CTMS page: CTMS as the work PC's bridge (work_pc/ctms_bridge.py) sees
 // it, and "Look mum, no hands" - the switch that lets the haulage desk run it.
@@ -100,7 +101,7 @@ function HeldCheck({ item, c, onAnswer, busy }) {
   );
 }
 
-export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], onSettings }) {
+export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], onSettings, rejections, onCommand }) {
   const visible = usePageVisible();
   const [st, setSt] = useState(null);
   const [shot, setShot] = useState(null);
@@ -111,6 +112,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
   const [ctlBusy, setCtlBusy] = useState(false);
   const [answering, setAnswering] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
+  const [rjBusy, setRjBusy] = useState(false);
   const lastRun = st && st.todo_run;
   const running = !!(lastRun && lastRun.state === 'running');
   const runnable = plan.filter((p) => p.status === 'ready' || p.status === 'done');
@@ -140,6 +142,22 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
       else pushToast('Not started', String((e && e.message) || e), 'warn');
     } finally {
       setRunBusy(false);
+    }
+  }
+
+  // the rejection list's Send, as the to-do's Run: the ready ones sent on the work PC one after another (rejections.py)
+  async function runRejections(ids) {
+    if (!window.confirm(`Send ${ids.length} haulier rejection form(s) now? ${MODE} switches on for the run `
+      + 'and back as it was after.')) return;
+    setRjBusy(true);
+    try {
+      await api.ctmsRejectionRun(ids);
+      pushToast('Rejection forms going', `${ids.length} - each counts only when the form says it took it.`, 'go');
+    } catch (e) {
+      if (e instanceof api.AuthError) onAuthFail();
+      else pushToast('Not started', String((e && e.message) || e), 'warn');
+    } finally {
+      setRjBusy(false);
     }
   }
 
@@ -332,6 +350,13 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
     </div>
   );
 
+  // the Haulier Rejection Form's list (his 11/11: "put that on the CTMS page and make it act and look like the CTMS to do
+  // list"), with the to-do wherever the to-do is
+  const rejectCard = (
+    <RejectionList data={rejections} run={st && st.rejection_run} busy={rjBusy} onRun={runRejections}
+      onCommand={onCommand} pushToast={pushToast} />
+  );
+
   return (
     <div className="scroll"><div className="container page-anim">
       <div className="pagehead">
@@ -377,7 +402,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
               {attached && s.error ? <span className="ctms-err">{shotMeta ? ' · ' : ''}{deskWords(s.error)}</span> : null}
             </div>
           </div>
-          <div className="ctms-todo-desk">{todoCard}</div>
+          <div className="ctms-todo-desk">{todoCard}{rejectCard}</div>
         </div>
 
         <div className="ctms-col">
@@ -449,7 +474,7 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
             )}
           </div>
 
-          <div className="ctms-todo-phone">{todoCard}</div>
+          <div className="ctms-todo-phone">{todoCard}{rejectCard}</div>
 
           <div className="card statuscard">
             <div className="statushd"><span className="lbl">Activity</span></div>

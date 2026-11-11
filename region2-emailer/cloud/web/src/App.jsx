@@ -468,7 +468,8 @@ export default function App() {
           <Notifications notes={shownNotes} onOpen={openNote} onDismiss={dismissNote} markAll={markAll} clearAll={clearAll} />
         )}
         {page === 'ctms' && <CtmsPage onAuthFail={onAuthFail} pushToast={pushToast} todo={panel.ctms_todo || []}
-          plan={panel.ctms_plan || []} onSettings={() => setPage('settings')} />}
+          plan={panel.ctms_plan || []} onSettings={() => setPage('settings')}
+          rejections={panel.rejections} onCommand={onCommand} />}
         {page === 'settings' && <SettingsPage panel={panel} status={status} agentOnline={agentOnline}
           onCommand={onCommand} onAuthFail={onAuthFail} pushToast={pushToast} />}
         {selectedRecord && (
