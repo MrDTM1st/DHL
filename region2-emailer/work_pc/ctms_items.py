@@ -296,7 +296,10 @@ class Items:
                 self.press(q[1].get("cancel"))
                 raise Busy("An order is open in CTMS with changes not saved. Nothing was touched: save or close it and press "
                            "Run again.")
-        booking = ctms_book.Booking(self.run, self.read, self.seen, self.t)
+        # Booking reads CTMS with (tree, skip); the Run's own read takes neither - every read of the Run's is the
+        # whole window bar its own skips (11/11: a carrier window left up was closed by its Exit, found by name, and
+        # the read after it stopped the Run on a TypeError)
+        booking = ctms_book.Booking(self.run, lambda tree=False, skip=(): self.read(), self.seen, self.t)
         booking.els = self.els
         booking.carrier_window_away()
         self.els = booking.els

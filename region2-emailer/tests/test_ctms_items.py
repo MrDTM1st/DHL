@@ -253,6 +253,29 @@ def test_a_run_wont_start_on_top_of_an_order_someone_has_changed():
     assert o.discarded == 0 and o.open_card and not o.asked             # its Cancel pressed, the order still up
 
 
+def test_a_carrier_window_left_up_is_closed_by_its_exit_and_the_run_goes_on():
+    class WithCarrier(FakeOrder):
+        """Booking's carrier screen left up in front, its Exit placed by the Access Bridge. read() takes no
+        arguments - the Run's own read, as the bridge hands it over."""
+        carrier = True
+
+        def read(self):
+            els = super().read()
+            if self.carrier:
+                els = [{"r": "internal frame", "nm": "Select a Carrier", "lv": 0},
+                       {"r": "push button", "nm": "Exit ALT X", "lv": 2, "at": [900, 700, 80, 26]}] + els
+            return els
+
+        def click(self, s):
+            if s.get("screen") and list(s["screen"]) == [940, 713]:
+                self.carrier = False
+                return
+            super().click(s)
+    o = WithCarrier()
+    _items(o).begin()
+    assert not o.carrier
+
+
 def test_an_order_with_nothing_changed_is_closed_out_of_the_way_to_start():
     o = FakeOrder()
     o.open_card = True
