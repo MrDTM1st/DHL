@@ -332,13 +332,30 @@ def _fresh(s, hwnd, doc, pairs, wait=LOADING_FOR):
         time.sleep(0.8)
         try:
             doc, _ = _page(s, hwnd)
-        except RuntimeError:
-            continue                                  # still coming up: "Microsoft Forms" for now
-        pairs = _walk(s, doc)
+            pairs = _walk(s, doc)
+        except (RuntimeError, OSError):
+            continue                                  # still coming up ("Microsoft Forms"), or Edge busy, for now
         if any(it["k"] == "button" and _norm(it["nm"]) == "submit" for it, _ in pairs):
             return doc, pairs
     raise RuntimeError(f"'Submit another response' was pressed but no fresh form came up in {round(wait)}s - "
                        "nothing was filled in, so send it again.")
+
+
+def _confirm(s, hwnd, wait=15.0):
+    """The page's words once it has taken the response, looked for up to `wait` seconds after Submit - "" if it never
+    said so. A UI Automation error while the page changes is looked past (12/11 12:28: one made a response that had
+    gone in read as failed)."""
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(0.8)
+        try:
+            page = _document(s, hwnd)
+            said = confirmed([it for it, _ in _walk(s, page)]) if page is not None else ""
+        except OSError:
+            continue
+        if said:
+            return said
+    return ""
 
 
 # -- doing it, on a thread of its own
@@ -433,14 +450,10 @@ def fill(hwnd, answers, submit=False, timeout=60.0):
         if button is None or not s.invoke(button):
             out["off"] = ["the form's Submit couldn't be pressed"]
             return out
-        end = time.time() + 15
-        while time.time() < end:
-            time.sleep(0.8)
-            page = _document(s, hwnd)
-            said = confirmed([it for it, _ in _walk(s, page)]) if page is not None else ""
-            if said:
-                out.update(submitted=True, said=said)
-                return out
+        said = _confirm(s, hwnd)
+        if said:
+            out.update(submitted=True, said=said)
+            return out
         out["off"] = ["Submit was pressed but the form didn't confirm it - look at the form before trying again"]
         return out
     return _on_thread(work, timeout, "filled in")

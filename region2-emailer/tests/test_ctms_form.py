@@ -169,7 +169,12 @@ def _moments(monkeypatch, *pages):
     """The page as Edge shows it, look after look (the last one stays), with the clock made up so waits cost
     nothing."""
     left, now = list(pages), [1000.0]
-    monkeypatch.setattr(F, "_document", lambda s, hwnd: left.pop(0) if len(left) > 1 else left[0])
+    def document(s, hwnd):
+        page = left.pop(0) if len(left) > 1 else left[0]
+        if isinstance(page, Exception):
+            raise page                                           # Edge busy, as UI Automation says it
+        return page
+    monkeypatch.setattr(F, "_document", document)
     monkeypatch.setattr(F, "_walk", lambda s, doc: [(it, (doc["name"], i)) for i, it in enumerate(doc["items"])])
     monkeypatch.setattr(F, "time", types.SimpleNamespace(time=lambda: now[0],
                                                          sleep=lambda n: now.__setitem__(0, now[0] + n)))
@@ -209,3 +214,21 @@ def test_a_fresh_form_is_filled_in_as_it_is(monkeypatch):
     _moments(monkeypatch, FORM)
     doc, _ = F._page(edge, 1)
     assert F._fresh(edge, 1, doc, F._walk(edge, doc))[0] is FORM and edge.pressed == []
+
+
+HICCUP = OSError("[WinError -2147220991] An event was unable to invoke any of the subscribers")
+
+
+def test_an_edge_hiccup_while_the_fresh_form_comes_up_is_looked_past(monkeypatch):
+    edge = _Edge()
+    _moments(monkeypatch, THANKS, HICCUP, LOADING, FORM)
+    doc, _ = F._page(edge, 1)
+    assert F._fresh(edge, 1, doc, F._walk(edge, doc))[0] is FORM
+
+
+def test_a_response_that_went_in_reads_as_sent_through_an_edge_hiccup_after_submit(monkeypatch):
+    # 12/11 12:28: Submit went, then UI Automation errored once while the page changed, and it read as failed
+    _moments(monkeypatch, HICCUP, THANKS)
+    assert "Your response was submitted." in F._confirm(_Edge(), 1)
+    _moments(monkeypatch, FORM)                                  # never thanked: nothing claimed once the wait is up
+    assert F._confirm(_Edge(), 1) == ""
