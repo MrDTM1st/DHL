@@ -6,6 +6,9 @@ every answer has its place. Made-up answers only.
 """
 import os
 import sys
+import types
+
+import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "work_pc"))
@@ -138,3 +141,71 @@ def test_the_real_form_s_names_a_date_combo_and_other_answer():
 def test_the_form_is_known_by_its_name_alone():
     assert F.is_form("Haulier Rejection Form 2026") and F.is_form("Haulier Rejection Form 2026 - Work - Microsoft Edge")
     assert not F.is_form("DigiHaul Job Tracker.xlsx") and not F.is_form("")
+
+
+# -- a form coming up again after a sent one (12/11: his Send failed on it once after every sent response)
+LOADING = {"name": "Microsoft Forms", "items": []}
+THANKS = {"name": "Haulier Rejection Form 2026", "items": [
+    {"k": "text", "nm": "Your response was submitted.", "d": 1},
+    {"k": "link", "nm": "Submit another response", "d": 1}]}
+FORM = {"name": "Haulier Rejection Form 2026", "items": _real()}
+
+
+class _Edge:
+    """Just what _page and _fresh ask of UI Automation: a page's name, and a press."""
+
+    def __init__(self):
+        self.pressed = []
+
+    def name(self, doc):
+        return doc["name"]
+
+    def invoke(self, el):
+        self.pressed.append(el)
+        return True
+
+
+def _moments(monkeypatch, *pages):
+    """The page as Edge shows it, look after look (the last one stays), with the clock made up so waits cost
+    nothing."""
+    left, now = list(pages), [1000.0]
+    monkeypatch.setattr(F, "_document", lambda s, hwnd: left.pop(0) if len(left) > 1 else left[0])
+    monkeypatch.setattr(F, "_walk", lambda s, doc: [(it, (doc["name"], i)) for i, it in enumerate(doc["items"])])
+    monkeypatch.setattr(F, "time", types.SimpleNamespace(time=lambda: now[0],
+                                                         sleep=lambda n: now.__setitem__(0, now[0] + n)))
+
+
+def test_a_form_still_coming_up_is_waited_for_and_another_page_still_refused(monkeypatch):
+    _moments(monkeypatch, LOADING, LOADING, FORM)
+    assert F._page(_Edge(), 1, wait=F.LOADING_FOR)[1] == "Haulier Rejection Form 2026"
+    _moments(monkeypatch, LOADING, FORM)
+    with pytest.raises(RuntimeError, match=r"isn't the rejection form \(Microsoft Forms\)"):
+        F._page(_Edge(), 1)                                      # no wait asked for: as it was
+    _moments(monkeypatch, LOADING)
+    with pytest.raises(RuntimeError, match=r"isn't the rejection form \(Microsoft Forms\)"):
+        F._page(_Edge(), 1, wait=F.LOADING_FOR)                  # never the form: refused once the wait is up
+
+
+def test_after_a_sent_response_the_fresh_form_is_waited_for_through_microsoft_forms(monkeypatch):
+    edge = _Edge()
+    _moments(monkeypatch, THANKS, LOADING, LOADING, LOADING, FORM)
+    doc, _ = F._page(edge, 1)
+    doc, pairs = F._fresh(edge, 1, doc, F._walk(edge, doc))
+    assert edge.pressed == [("Haulier Rejection Form 2026", 1)]  # "Submit another response", once
+    assert doc is FORM and any(it["nm"] == "Submit" for it, _ in pairs)
+
+
+def test_no_fresh_form_in_time_stops_it_with_nothing_filled_in(monkeypatch):
+    edge = _Edge()
+    _moments(monkeypatch, THANKS, LOADING)
+    doc, _ = F._page(edge, 1)
+    with pytest.raises(RuntimeError, match="no fresh form came up") as e:
+        F._fresh(edge, 1, doc, F._walk(edge, doc))
+    assert "nothing was filled in" in str(e.value)
+
+
+def test_a_fresh_form_is_filled_in_as_it_is(monkeypatch):
+    edge = _Edge()
+    _moments(monkeypatch, FORM)
+    doc, _ = F._page(edge, 1)
+    assert F._fresh(edge, 1, doc, F._walk(edge, doc))[0] is FORM and edge.pressed == []

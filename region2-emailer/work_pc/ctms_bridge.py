@@ -771,8 +771,10 @@ class Bridge:
 
     # -- the Haulier Rejection Form (11/11): read and filled in through UI Automation, by name (ctms_form) --
     def _form_window(self):
-        """The Edge window showing the rejection form - its tab the selected one - found by itself, whatever window
-        the bridge is working (left as it was). Not showing while Claude can act: Edge brings its tab up by name."""
+        """(the Edge window showing the rejection form - its tab the selected one - or None, why not): found by
+        itself, whatever window the bridge is working (left as it was). Not showing while Claude can act: Edge brings
+        its tab up by name, and when it can't, Edge's own reason is handed back (12/11: a closed tab and a tab Edge
+        wouldn't bring up read the same before)."""
         def find():
             try:
                 wins = ctms_window.find_windows()
@@ -780,24 +782,26 @@ class Bridge:
                 wins = []
             return next((w for w in wins if w.get("kind") == "page"
                          and ctms_window.page_of(w.get("title")) == "form"), None)
-        win = find()
+        win, why = find(), ""
         if win is None and self.allow_control and self.armed:
-            ok = ctms_tabs.select("form")[0]
+            ok, why = ctms_tabs.select("form")
             end = time.time() + 4
             while ok and win is None and time.time() < end:
                 time.sleep(0.3)
                 win = find()
-        return win
+            if ok and win is None:
+                why = "Edge brought up the Haulier Rejection Form's tab, but no window showed it after - try again."
+        return win, ("" if win is not None else why)
 
     def form(self, action, cmd, done):
         """The rejection form, wherever its tab is (11/11): read - nothing changed - or fill, every answer read back,
         Submit pressed only when asked and only once all of them read back. The window being worked stays as it is,
         so a send from the dashboard never moves CTMS's place."""
-        win = self._form_window()
+        win, why = self._form_window()
         if win is None:
-            return done(False, "The Haulier Rejection Form isn't the selected tab of any Edge window - open it once "
-                               "from its link in Edge and leave the tab there (while Claude can act, its tab is "
-                               "brought up by name).", {"kind": "form"})
+            return done(False, why or "The Haulier Rejection Form isn't the selected tab of any Edge window - open it "
+                                      "once from its link in Edge and leave the tab there (while Claude can act, its "
+                                      "tab is brought up by name).", {"kind": "form"})
         if action == "form_read":
             got = ctms_form.read(win["hwnd"])
             return done(True, f"Read {len(got['items'])} thing(s) on {got['doc']} in {got['took']}s.",

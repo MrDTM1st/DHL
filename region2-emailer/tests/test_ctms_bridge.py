@@ -1261,6 +1261,28 @@ def test_the_rejection_form_is_read_by_name_while_looking_and_filled_only_while_
         W.find_windows, W.picture, B.LOG, A.to_front, A._send, B.ctms_form.read, B.ctms_form.fill = keep
 
 
+def test_a_form_tab_edge_cant_bring_up_is_reported_with_edge_s_own_reason():
+    keep = (W.find_windows, W.picture, B.LOG, A.to_front, A._send, B.ctms_tabs.select)
+    W.find_windows = lambda: [dict(FAKE_WIN)]                                    # the form's tab showing nowhere
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: None)
+    asked = []
+    B.ctms_tabs.select = lambda target, timeout=10.0: (
+        asked.append(target) or (False, "The Haulier Rejection Form is not open in any Edge tab - open it once "
+                                        "from its link, in Edge."))
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        b.handle({"id": 1, "action": "form_read"})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and asked == ["form"]
+        assert body["detail"].startswith("The Haulier Rejection Form is not open in any Edge tab")
+    finally:
+        W.find_windows, W.picture, B.LOG, A.to_front, A._send, B.ctms_tabs.select = keep
+
+
 def test_a_page_with_no_window_to_measure_is_measured_by_name_and_kept():
     keep = (W.find_windows, W._remember_area, B.ctms_form.page_area)
     form = dict(FAKE_WIN, hwnd=6262, kind="page", score=1, title="Haulier Rejection Form 2026 - Work - Microsoft Edge",

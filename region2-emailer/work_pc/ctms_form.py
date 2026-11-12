@@ -34,6 +34,7 @@ IID_TOGGLE = "{94CF8058-9B8D-4AB9-8BFD-4CD0A33C8C70}"
 TOGGLE_STATE, IS_SELECTED, VALUE_GET = 4, 6, 4      # TogglePattern, SelectionItemPattern, ValuePattern getters
 DO = 3                                              # Toggle / Select / SetValue: each pattern's first own method
 CONFIRMED = ("response was submitted", "your response has been", "thanks!", "thank you")
+LOADING_FOR = 15.0      # how long a form coming up may read "Microsoft Forms" before its own name is back (12/11)
 MAX_NODES, MAX_DEPTH, DOC_SEARCH = 3000, 40, 1500
 NAME_MAX = 160
 
@@ -192,21 +193,29 @@ def _walk(s, doc):
     return out
 
 
-def _page(s, hwnd):
+def _page(s, hwnd, wait=0.0):
     """The form's page in this window, waited for while Edge turns its page on for UI Automation (it does so from
-    the first ask, 11/11). Raises RuntimeError when it isn't there or isn't the form."""
-    doc = None
-    for _ in range(4):
-        doc = _document(s, hwnd)
-        if doc is not None:
-            break
-        time.sleep(0.8)
-    if doc is None:
-        raise RuntimeError("Edge's window has no page to read.")
-    name = s.name(doc)
-    if not is_form(name):
-        raise RuntimeError(f"the page showing isn't the rejection form ({name[:60] or 'no name'}).")
-    return doc, name
+    the first ask, 11/11) - and, given a wait, for that long while the page showing isn't the form yet: a form coming
+    up reads "Microsoft Forms" for a moment before its own name is back (12/11). Raises RuntimeError when it isn't
+    there or isn't the form."""
+    end = time.time() + wait
+    while True:
+        doc = None
+        for _ in range(4):
+            doc = _document(s, hwnd)
+            if doc is not None:
+                break
+            time.sleep(0.8)
+        if doc is None:
+            why = "Edge's window has no page to read."
+        else:
+            name = s.name(doc)
+            if is_form(name):
+                return doc, name
+            why = f"the page showing isn't the rejection form ({name[:60] or 'no name'})."
+        if time.time() >= end:
+            raise RuntimeError(why)
+        time.sleep(0.5)
 
 
 # -- what goes in, worked out from the page before anything is touched
@@ -306,6 +315,32 @@ def confirmed(items):
     return words[:300] if gone and any(w in words.lower() for w in CONFIRMED) else ""
 
 
+def _fresh(s, hwnd, doc, pairs, wait=LOADING_FOR):
+    """(doc, pairs) of a form ready to fill in. A page still thanking for the last response has its "Submit another
+    response" pressed and the fresh form waited for - it reads "Microsoft Forms" while it comes up, which is no reason
+    to stop (12/11: every send after a sent one failed on it once). Raises RuntimeError when there's no way on, or no
+    fresh form comes up in time - nothing filled in either way."""
+    if not confirmed([it for it, _ in pairs]):
+        return doc, pairs
+    again = next((el for it, el in pairs if it["k"] in ("link", "button")
+                  and "another response" in _norm(it["nm"])), None)
+    if again is None or not s.invoke(again):
+        raise RuntimeError("the form is still showing its thanks for the last response, with no way on to a "
+                           "fresh one - reload its tab.")
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(0.8)
+        try:
+            doc, _ = _page(s, hwnd)
+        except RuntimeError:
+            continue                                  # still coming up: "Microsoft Forms" for now
+        pairs = _walk(s, doc)
+        if any(it["k"] == "button" and _norm(it["nm"]) == "submit" for it, _ in pairs):
+            return doc, pairs
+    raise RuntimeError(f"'Submit another response' was pressed but no fresh form came up in {round(wait)}s - "
+                       "nothing was filled in, so send it again.")
+
+
 # -- doing it, on a thread of its own
 def _session(work):
     hr = T.ole32.CoInitializeEx(None, 0)          # COINIT_MULTITHREADED, as UI Automation clients are told to
@@ -345,7 +380,7 @@ def read(hwnd, timeout=25.0):
     Raises RuntimeError with what went wrong; nothing on the page is changed either way."""
     def work(s):
         t0 = time.time()
-        doc, name = _page(s, hwnd)
+        doc, name = _page(s, hwnd, wait=5.0)
         return {"items": [it for it, _ in _walk(s, doc)], "doc": name[:NAME_MAX], "took": round(time.time() - t0, 2),
                 "area": _area(s, doc)}
     return _on_thread(work, timeout, "read")
@@ -370,23 +405,9 @@ def fill(hwnd, answers, submit=False, timeout=60.0):
     pressed and the page's confirmation waited for. {"filled", "off": [what didn't read back], "submitted",
     "said", "items"}. A question or choice not on the page raises before anything is touched."""
     def work(s):
-        doc, _ = _page(s, hwnd)
-        pairs = _walk(s, doc)
+        doc, _ = _page(s, hwnd, wait=LOADING_FOR)     # a form still coming up is waited for (12/11)
+        doc, pairs = _fresh(s, hwnd, doc, _walk(s, doc))
         items = [it for it, _ in pairs]
-        if confirmed(items):                          # still thanking for the last response: a fresh form first
-            again = next((el for it, el in pairs if it["k"] in ("link", "button")
-                          and "another response" in _norm(it["nm"])), None)
-            if again is None or not s.invoke(again):
-                raise RuntimeError("the form is still showing its thanks for the last response, with no way on to a "
-                                   "fresh one - reload its tab.")
-            end = time.time() + 10
-            while time.time() < end:
-                time.sleep(0.8)
-                doc, _ = _page(s, hwnd)
-                pairs = _walk(s, doc)
-                items = [it for it, _ in pairs]
-                if any(it["k"] == "button" and _norm(it["nm"]) == "submit" for it in items):
-                    break
         steps = plan(items, answers)
         for how, i, value in steps:
             el = pairs[i][1]
