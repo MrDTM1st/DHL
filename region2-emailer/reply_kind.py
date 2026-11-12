@@ -24,6 +24,34 @@ def materials_team(addr):
     return teams.get(str(addr or "").strip().lower(), "")
 
 
+# a domain shared by people who aren't the haulier - only the haulier's own address counts on these
+SHARED_DOMAINS = {"dhl.com", "gmail.com", "googlemail.com", "hotmail.com", "hotmail.co.uk", "outlook.com",
+                  "live.co.uk", "yahoo.com", "yahoo.co.uk", "aol.com", "btinternet.com", "icloud.com"}
+
+
+def haulier_of(addr, directory=None):
+    """The haulier an address belongs to - its own address, or its firm's domain off the contact sheet. Hauliers don't
+    update orders (his 12/11: a haulier's helpdesk answer in the site's thread went on the to-do as the site's)."""
+    addr = str(addr or "").strip().lower()
+    if "@" not in addr:
+        return ""
+    if directory is None:
+        try:
+            import hauliers
+            directory = hauliers.load().get("hauliers") or []
+        except Exception:
+            directory = []
+    dom = addr.rsplit("@", 1)[1]
+    for h in directory:
+        for e in h.get("emails") or []:
+            e = str(e).strip().lower()
+            if "@" not in e:
+                continue
+            if e == addr or (dom not in SHARED_DOMAINS and e.rsplit("@", 1)[1].split()[0] == dom):
+                return h.get("name") or "a haulier"
+    return ""
+
+
 def own_text(body):
     """Their own words in a reply - above the mail they quote."""
     body = str(body or "")
@@ -99,6 +127,8 @@ def sort_out(record, mails, product_type=None):
     own = str(record.get("to") or "").strip().lower()
     team = blank = None
     for m in mails:
+        if m.get("addr") != own and haulier_of(m.get("addr")):
+            continue                              # a haulier: never the site's answer, nor a reply to chase back
         if m.get("addr") != own and materials_team(m.get("addr")):
             team = team or m
         elif gave_details(record, m.get("body"), product_type, m.get("who") or ""):

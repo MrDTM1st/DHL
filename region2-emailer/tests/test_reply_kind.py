@@ -32,6 +32,21 @@ ANSWERS = ("OFFICIAL\r\n\r\n    Date and time of delivery? 08:00 18/11/26\r\n   
            "Location? ///one.two.three\r\n\r\n \r\n\r\nSam Example\r\n\r\nSection Supervisor\r\n\r\n07700 900222\r\n" + QUOTED)
 
 
+def test_a_haulier_s_mail_in_the_site_s_thread_is_never_the_site_s_answer(monkeypatch):
+    sheet = [{"name": "Example Haulage", "emails": ["planning@examplehaulage.co.uk"]},
+             {"name": "Own Fleet", "emails": ["fleet@dhl.com"]}]
+    import hauliers
+    monkeypatch.setattr(hauliers, "load", lambda: {"hauliers": sheet})
+    assert K.haulier_of("Desk@ExampleHaulage.co.uk") == "Example Haulage"            # the firm's domain
+    assert K.haulier_of("fleet@dhl.com") == "Own Fleet" and K.haulier_of("someone@dhl.com") == ""
+    rec = {"to": "site@example.org", "orders": ["9100001"]}
+    body = "Delivery 16/11/2026 08:00-14:00, hiab offload, artics can access, no rear steer, contact 07700 900123"
+    haulier = {"addr": "desk@examplehaulage.co.uk", "who": "Example Haulage", "body": body}
+    assert K.sort_out(rec, [haulier]) == (None, None, None)
+    site = {"addr": "site@example.org", "who": "Site", "body": body}
+    assert K.sort_out(rec, [haulier, site])[0] is site
+
+
 def test_the_materials_teams_addresses_are_known_whatever_their_case():
     assert K.materials_team("SteelMaterials@networkrail.co.uk") == "Steel Materials"
     assert K.materials_team("steelmaterials@NETWORKRAIL.co.uk") == "Steel Materials"
