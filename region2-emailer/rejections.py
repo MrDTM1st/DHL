@@ -507,6 +507,11 @@ def _known(old, rec):
         return False
     if old.get("status") == "dropped":
         return {_ord(o) for o in old["orders"]} == {_ord(o) for o in rec["orders"]}
+    if old.get("status") == "sent" and not (old.get("date") and rec.get("date")):
+        # a booked job leaves the map and its day goes blank - the same no read again later is still the one sent
+        # (12/11: a sent no came back as a held duplicate with every detail missing)
+        return ({_ord(o) for o in old["orders"]} == {_ord(o) for o in rec["orders"]}
+                and old["reason"] == rec["reason"])
     return _same_job(old, rec)
 
 

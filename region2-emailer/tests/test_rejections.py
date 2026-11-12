@@ -181,6 +181,21 @@ def test_the_same_job_and_reason_ticks_another_haulier_and_a_known_no_is_not_add
     assert R.add(d, other_haulier) is other_haulier                                     # another haulier's no is new
 
 
+def test_a_sent_no_is_not_made_again_once_its_job_has_left_the_map_and_its_day_is_blank():
+    d = {"items": [], "auto": False}
+    sent = R.make(["9100005"], ["Hargreaves"], "No Availability - General", given={"date": "15/11/2026"},
+                  tracker=[], waitlist=[], now=NOW)
+    R.add(d, sent)
+    sent["status"] = "sent"
+    again = R.make(["9100005"], ["Hargreaves"], "No Availability - General", tracker=[], waitlist=[], now=NOW)
+    assert again["date"] == "" and R.add(d, again) is None and len(d["items"]) == 1
+    other_reason = R.make(["9100005"], ["Hargreaves"], "No Availability - Rate", tracker=[], waitlist=[], now=NOW)
+    assert R.add(d, other_reason) is other_reason                                       # another reason is its own
+    moved = R.make(["9100005"], ["Hargreaves"], "No Availability - General", given={"date": "22/11/2026"},
+                   tracker=[], waitlist=[], now=NOW)
+    assert R.add(d, moved) is moved                                                     # a known new day is a new job
+
+
 def test_a_postcode_must_be_a_postcode_not_a_what3words_put_in_its_place():
     # 12/11: an order's postcode field held a what3words, and it went onto the form as the Delivery Postcode
     w3w = [dict(TRACKER[0], orders=["9100060"], postcode="WTW: ALPHA.BETA.GAMMA")]
