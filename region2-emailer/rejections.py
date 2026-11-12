@@ -267,6 +267,12 @@ def vehicle_code(code):
 _POSTCODE = re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b")
 
 
+def is_postcode(text):
+    """A whole UK postcode and nothing else - not a what3words or a place put where the postcode goes (12/11: one
+    order's postcode field held 'WTW: ...', and it went onto the form as the Delivery Postcode)."""
+    return bool(re.fullmatch(r"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}", " ".join(str(text or "").upper().split())))
+
+
 def _left_the_map(orders, todo=None, booked=None):
     """What's still known of a job gone from the map: its day from the CTMS to-do's answers (the site's delivery day),
     its postcode from the booked ad hoc's subject line."""
@@ -325,7 +331,8 @@ def details(orders, tracker=None, waitlist=None, adhocs=None, pins=None, todo=No
     steer = str(_value(d, "rear_steer") or "").lower()
     collection = ", ".join(x for x in (str(r.get("collection_site") or "").strip(),
                                        str(r.get("collection_pc") or "").strip()) if x)
-    return {"date": date, "collection": collection, "postcode": str(r.get("postcode") or "").strip().upper(),
+    pc = str(r.get("postcode") or "").strip().upper()     # a what3words where the postcode goes isn't one (12/11)
+    return {"date": date, "collection": collection, "postcode": pc if is_postcode(pc) else "",
             "product": product or "", "quantity": quantity, "vehicle": vehicle or "",
             "rear_steer": "Yes" if steer == "yes" else "No",
             "sure": {"date": True, "product": bool(product), "vehicle": v_sure, "rear_steer": steer in ("yes", "no")}}
@@ -420,7 +427,7 @@ def needs(rec):
         "hauliers": not rec.get("hauliers") or any(h not in HAULIERS for h in rec["hauliers"]),
         "date": not iso_date(rec.get("date")),
         "collection": not str(rec.get("collection") or "").strip(),
-        "postcode": not str(rec.get("postcode") or "").strip(),
+        "postcode": not is_postcode(rec.get("postcode")),
         "consolidated": rec.get("consolidated") not in YES_NO,
         "product": rec.get("product") not in PRODUCTS or rec.get("product") == "S&C",
         "quantity": not str(rec.get("quantity") or "").strip(),

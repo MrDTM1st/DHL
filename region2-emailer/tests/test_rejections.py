@@ -181,6 +181,20 @@ def test_the_same_job_and_reason_ticks_another_haulier_and_a_known_no_is_not_add
     assert R.add(d, other_haulier) is other_haulier                                     # another haulier's no is new
 
 
+def test_a_postcode_must_be_a_postcode_not_a_what3words_put_in_its_place():
+    # 12/11: an order's postcode field held a what3words, and it went onto the form as the Delivery Postcode
+    w3w = [dict(TRACKER[0], orders=["9100060"], postcode="WTW: ALPHA.BETA.GAMMA")]
+    rec = R.make(["9100060"], ["JG Vesty"], "No Availability - Area", tracker=w3w, waitlist=[], now=NOW)
+    assert rec["postcode"] == "" and rec["status"] == "held" and R.gaps(rec) == ["the postcode"]
+    typed = R.make(["9100060"], ["JG Vesty"], "No Availability - Area", given={"postcode": "ZZ9 9ZZ"},
+                   tracker=w3w, waitlist=[], now=NOW)
+    assert typed["status"] == "ready" and R.answers(typed)[3] == {"q": "Delivery Postcode", "text": "ZZ9 9ZZ"}
+    typed["postcode"] = "WTW: ALPHA.BETA.GAMMA"                   # put back by hand: still not one
+    assert R.gaps(typed) == ["the postcode"]
+    assert R.is_postcode("zz9 9zz") and R.is_postcode("ZZ99ZZ") and R.is_postcode(" ZZ9  9ZZ ")
+    assert not R.is_postcode("///alpha.beta.gamma") and not R.is_postcode("ZZ9") and not R.is_postcode("A Station")
+
+
 def test_the_answers_are_the_form_s_words_in_its_order_and_nothing_goes_with_a_gap():
     rec = R.make(["9100001"], ["DHL NOC"], "Other", given={"date": "16/11/2026", "other": "no driver with tickets"},
                  tracker=TRACKER, waitlist=[], now=NOW)
