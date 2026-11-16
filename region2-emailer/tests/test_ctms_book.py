@@ -504,7 +504,7 @@ def _row(ref, deliver="06/11/26 08:30", del_type="STANDARD"):
     return {"cust_ref": ref, "booking_ref": "BK" + ref, "deliver": deliver, "del_type": del_type, "weight": "1000", "to_reg": "PR2"}
 
 
-def _job(ctms, dry=False, now=NOW):
+def _job(ctms, dry=False, now=NOW, stopped=None):
     # the tree's arrow, the keys and Enter land on the schedule worked out from them
     run = ctms.run
 
@@ -516,7 +516,7 @@ def _job(ctms, dry=False, now=NOW):
             ctms.want_sched = (d + timedelta(days=ups - downs)).strftime("%y%m%d")
         run(batch)
 
-    return B.Booking(steps, ctms.read, ctms.seen, T, now=now, dry=dry)
+    return B.Booking(steps, ctms.read, ctms.seen, T, now=now, dry=dry, stopped=stopped)
 
 
 def _book(ctms, orders=("9100001",), date="06/11/2026", carrier="DHL_NOC", trailer="NR_ARTIC_FL", haulage=None, vehicles=1, dry=False):
@@ -1131,3 +1131,107 @@ def test_a_forms_questions_words_come_from_its_pane_when_its_window_is_just_form
     framed = [{"r": "internal frame", "nm": "Change schedule to: 261106?", "lv": 0},
               {"r": "option pane", "nm": "", "lv": 1}, {"r": "push button", "nm": "OK", "lv": 2, "at": [1, 1, 5, 5]}]
     assert ctms_rows.question(framed)[0] == "Change schedule to: 261106?"
+
+
+# -- Stop on the dashboard while a Book runs (16/11: Stop pressed at 13:30:01, all four trips still made at 13:31)
+class _Stop:
+    """Stop as the booking asks about it: pressed once when(n) holds at its n-th ask, and pressed from then on."""
+
+    def __init__(self, when):
+        self.when, self.asked, self.pressed = when, 0, False
+
+    def __call__(self):
+        self.asked += 1
+        self.pressed = self.pressed or bool(self.when(self.asked))
+        return self.pressed
+
+
+def _split(n, base="AH5/11/YO"):
+    return [_row(f"{base}_S{i}") for i in range(1, n + 1)]
+
+
+def test_stop_pressed_as_a_trip_is_made_lets_it_finish_and_ends_the_booking_before_the_next():
+    ctms = FakeCtms(_split(4))
+    stop = _Stop(lambda n: bool(ctms.tree))            # pressed the moment CTMS had trip 1: between its Yes and Save
+    job = _job(ctms, stopped=stop)
+    try:
+        job.book(["AH5/11/YO"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 4)
+        raise AssertionError("it went on")
+    except B.StopPressed as e:
+        assert str(e) == "before trip 2" and isinstance(e, B.Stop)
+    assert [(t["manifest"], t["status"], t["lines"]) for t in job.trips] == [("MAN-01000100", "ACCEPTED", ["AH5/11/YO_S1"])]
+    assert ctms.tree == {"MAN-01000100": "ACCEPTED"} and ctms.saved >= 2      # saved and accepted, not left PLANNED
+    assert [r["cust_ref"] for r in ctms.well] == ["AH5/11/YO_S2", "AH5/11/YO_S3", "AH5/11/YO_S4"]
+    assert ctms.up is None and job.of == 4
+
+
+def test_stop_pressed_on_the_carrier_screen_answers_the_confirm_box_no_and_makes_no_trip():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    stop = _Stop(lambda n: ctms.up is not None)        # pressed while the carrier screen and its boxes were up
+    job = _job(ctms, stopped=stop)
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("it went on")
+    except B.StopPressed as e:
+        assert str(e) == "at trip 1's Confirm Create Trip box, answered No"
+    pressed = [s.get("screen") for s in ctms.steps if s.get("action") == "click"]
+    assert [NO_AT[0] + 20, NO_AT[1] + 10] in pressed and [YES_AT[0] + 20, YES_AT[1] + 10] not in pressed
+    assert ctms.up is None and ctms.tree == {} and job.trips == [] and ctms.saved == 0
+    assert [r["cust_ref"] for r in ctms.well] == ["9100001-1-1"]
+
+
+def test_a_stop_at_the_confirm_box_is_still_his_when_backing_out_fails_and_its_yes_is_never_pressed():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    real = ctms.click
+
+    def click(s):
+        if s.get("screen") == [NO_AT[0] + 20, NO_AT[1] + 10]:
+            raise RuntimeError("CTMS did not answer within 20s")
+        real(s)
+    ctms.click = click
+    job = _job(ctms, stopped=_Stop(lambda n: ctms.up is not None))
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("it went on")
+    except B.StopPressed as e:
+        assert "Confirm Create Trip box - backing out of it stopped there (CTMS did not answer within 20s)" in str(e)
+    assert ctms.tree == {} and [YES_AT[0] + 20, YES_AT[1] + 10] not in [s.get("screen") for s in ctms.steps]
+
+
+def test_stop_pressed_before_the_lines_are_touched_opens_no_card_and_books_nothing():
+    ctms = FakeCtms([_row("9100001-1-1", "03/11/26 08:00")])     # urgent: its card would be put up to EMERGENCY
+    stop = _Stop(lambda n: True)
+    job = _job(ctms, stopped=stop)
+    try:
+        job.book(["9100001"], "03/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("it went on")
+    except B.StopPressed as e:
+        assert str(e) == "before anything was changed on the order"
+    assert ctms.card is None and not any(s.get("double") for s in ctms.steps) and "<order saved>" not in ctms.typed
+    assert ctms.tree == {} and stop.asked == 1
+
+
+def test_stop_pressed_before_a_split_splits_nothing():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    stop = _Stop(lambda n: n >= 2)                     # pressed while the line was being checked
+    job = _job(ctms, stopped=stop)
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 2)
+        raise AssertionError("it went on")
+    except B.StopPressed as e:
+        assert str(e) == "before 9100001-1-1 was split"
+    assert not ctms.split_done and not any(s.get("name") == "os-split" for s in ctms.steps) and ctms.tree == {}
+
+
+def test_a_booking_asks_about_stop_only_at_its_safe_points_and_never_once_a_trip_is_confirmed():
+    ctms = FakeCtms([_row(r) for r in _lines(3)])
+    ctms.honours_selecting = False                     # two of its lines go on by Apply to Trip, after the Yes
+    stop = _Stop(lambda n: bool(ctms.tree))
+    job = _job(ctms, stopped=stop)
+    job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+    assert job.trips[0]["status"] == "ACCEPTED" and sorted(ctms.trip_lines["MAN-01000100"]) == _lines(3)
+    assert stop.asked == 3 and not stop.pressed        # before the lines, before the trip, at the Confirm box: no more
+    stop = _Stop(lambda n: False)
+    job = _job(FakeCtms(_split(2)), stopped=stop)
+    job.book(["AH5/11/YO"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 2)
+    assert [t["status"] for t in job.trips] == ["ACCEPTED", "ACCEPTED"] and stop.asked == 5

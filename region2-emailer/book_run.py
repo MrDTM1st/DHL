@@ -16,7 +16,9 @@ follows from here:
   5. the order off the map, its chain filed
 
 A stop at any point says what was done so far. Past the booking nothing undoes it: what couldn't be done is said, for him
-to do by hand.
+to do by hand. Stop pressed on the dashboard during the booking (16/11) ends it before its next trip: what CTMS made is
+kept, but nothing follows it by itself - no row, no email, still on the map - and the rest isn't booked till CTMS has
+been looked at and the job cleared on the Bookings card.
 
     python book_run.py run '{"record": "...", "orders": ["..."], "date": "dd/mm/yyyy", "carrier": "...", "trailer": "...",
                              "haulier": "...", "haulage": 450, "vehicles": 1, "dry": false}'
@@ -870,6 +872,11 @@ def _parsed_trips(text):
     return [{"manifest": m, "status": st} for m, st in re.findall(r"(MAN-\d+)\s+([A-Z]+)", str(text or ""))]
 
 
+def _by_you(text):
+    """Whether the bridge's words say Stop on the dashboard ended the booking ("Stopped by you after 1 of 4 trips: ...")."""
+    return str(text or "").startswith("Stopped by you")
+
+
 def recall(k, R=None):
     """An ask whose answer the home PC never had, looked for again: the dashboard by its command id, then the work PC's
     own record of what its Book made. Either answer goes into the journal as if it had come at the time. Nothing in CTMS
@@ -889,7 +896,8 @@ def recall(k, R=None):
     except Exception:
         result, payload = None, None
     if result is not None and (payload or {}).get("trips") is not None:
-        return J.answered(k, result.get("ok"), result.get("detail"), payload["trips"], e.get("carrier"))
+        return J.answered(k, result.get("ok"), result.get("detail"), payload["trips"], e.get("carrier"),
+                          pressed=bool(payload.get("stop_pressed")) or _by_you(result.get("detail")))
     try:
         got, back = _quiet(R.ask, "book_recall", wait_total=45, orders=e.get("orders"), date=e.get("date"), ask=cid)
     except Exception:
@@ -897,10 +905,12 @@ def recall(k, R=None):
     found = ((back or {}).get("found") or []) if got.get("ok") else None
     if found:
         f = found[0]
-        return J.answered(k, f.get("ok"), f.get("said"), f.get("trips"), e.get("carrier"))
+        return J.answered(k, f.get("ok"), f.get("said"), f.get("trips"), e.get("carrier"),
+                          pressed=bool(f.get("pressed")) or _by_you(f.get("said")))
     if result is not None:
         trips = _parsed_trips(result.get("detail"))
-        return J.answered(k, result.get("ok"), result.get("detail"), trips, e.get("carrier"))
+        return J.answered(k, result.get("ok"), result.get("detail"), trips, e.get("carrier"),
+                          pressed=_by_you(result.get("detail")))
     if found is not None and time.time() - float(e.get("asked_at") or 0) > J.LOST_AFTER:
         # the work PC answered and has nothing for that command: it never ran it, or died before it was done
         return J.lost(k, "the work PC has no record of booking it - it may have stopped part way")
@@ -946,7 +956,10 @@ def book(job, R=None, now=None):
             out["pending"] = True
             return out
         if v == "hold":
-            out["said"] = ("Not booked again: " + (f"{', '.join(e.get('short') or [])} was left short of ACCEPTED in CTMS"
+            out["said"] = ("Not booked again: " + (f"you pressed Stop on it after {mans or 'nothing'} ACCEPTED, so the rest "
+                                                  "isn't booked and nothing has followed it"
+                                                  if e.get("state") == "stopped" else
+                                                  f"{', '.join(e.get('short') or [])} was left short of ACCEPTED in CTMS"
                                                   if e.get("state") == "half" else
                                                   "the last press never said what it made")
                            + ". Look in CTMS, then Clear it on the Bookings card (or finish it there) and press Book again.")
@@ -1019,8 +1032,17 @@ def book(job, R=None, now=None):
     if dry:
         out.update(ok=bool(result.get("ok")), said=str(result.get("detail") or "The work PC didn't answer."))
         return out
-    e = J.answered(k, result.get("ok"), result.get("detail"), trips, job.get("carrier"))
+    pressed = bool(payload.get("stop_pressed"))
+    e = J.answered(k, result.get("ok"), result.get("detail"), trips, job.get("carrier"), pressed=pressed)
     made = J.accepted(e)
+    if pressed:
+        # Stop pressed (16/11): what CTMS made is kept, and nothing more is done by itself - no row, no email, still on
+        # the map - and nothing books the rest: the Bookings card holds it till CTMS has been looked at
+        out["stopped"] = True
+        out["said"] = str(result.get("detail") or "Stopped by you.") + (
+            " Nothing has followed it: no DigiHaul row, no site email, and it stays on the map. Look in CTMS, then "
+            "Clear it on the Bookings card." if made else "")
+        return out
     if not made:
         out["said"] = str(result.get("detail") or "The work PC didn't answer.")
         return out
@@ -1070,9 +1092,9 @@ def not_ready(rec):
 
 def go_on(res):
     """Whether the next booking of the batch may start: only after one that booked, or one that stopped before touching
-    anything ("Nothing was booked"). A refusal (Stop pressed, acting off), an answer still to come, a half-made trip or a
-    stop part way leaves CTMS for him to look at first."""
-    if res.get("refused") or res.get("pending") or res.get("held"):
+    anything ("Nothing was booked"). A refusal (Stop pressed, acting off), Stop pressed during a booking, an answer still
+    to come, a half-made trip or a stop part way leaves CTMS for him to look at first."""
+    if res.get("refused") or res.get("pending") or res.get("held") or res.get("stopped"):
         return False
     if res.get("ok"):
         return True
@@ -1095,7 +1117,7 @@ def batch(jobs, run_id=None, R=None, now=None):
     R = R or _client()
     t0 = time.time()
     results = []
-    stopped = ""
+    stopped, by_you = "", False
     for i, job in enumerate(jobs):
         named = " / ".join(str(o) for o in job.get("orders") or [])
         _progress(R, run_id, i, "running")
@@ -1113,13 +1135,13 @@ def batch(jobs, run_id=None, R=None, now=None):
         results.append({"orders": job.get("orders"), "ok": bool(res.get("ok")), "state": state, "said": res.get("said"),
                         "manifests": mans})
         if not go_on(res):
-            stopped = named
+            stopped, by_you = named, bool(res.get("stopped"))
             break
     booked = sum(1 for r in results if r["ok"])
     said = f"{booked} of {len(jobs)} booked"
     if stopped:
-        said += (f"; stopped at {stopped} so CTMS can be looked at" + (f", {len(jobs) - len(results)} not started"
-                                                                      if len(jobs) > len(results) else ""))
+        said += ((f"; you pressed Stop during {stopped}" if by_you else f"; stopped at {stopped} so CTMS can be looked at")
+                 + (f", {len(jobs) - len(results)} not started" if len(jobs) > len(results) else ""))
     skipped = [r for r in results if r["state"] != "booked"]
     if skipped:
         said += ". " + " ".join(f"{' / '.join(r['orders'] or [])}: {r['said']}" for r in skipped)

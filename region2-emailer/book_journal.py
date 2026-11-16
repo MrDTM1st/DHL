@@ -24,6 +24,8 @@ States of a job:
   clear     CTMS made nothing: a press of Book starts afresh
   half      a manifest was made but never reached ACCEPTED: only he can say what to do with it in CTMS
   unknown   asked, and neither the dashboard nor the work PC can say what came of it: he looks in CTMS
+  stopped   Stop on the dashboard ended it part way (16/11): what CTMS made is kept, but nothing follows it by itself and
+            nothing books the rest - Stop is pressed for a reason (a wrong carrier, a wrong price), so it waits for a look
   done      everything that follows the booking is done, or he took the rest on by hand
 """
 import json
@@ -121,7 +123,8 @@ def _change(k, fn, path=None, now=None):
 # -- what a press of Book finds
 def verdict(e):
     """What a press of Book should do with what the journal has: "book" (nothing in the way), "resume" (booked, steps
-    left), "finished" (booked, nothing left), "recall" (asked, answer not had yet), or "hold" (half / unknown: him)."""
+    left), "finished" (booked, nothing left), "recall" (asked, answer not had yet), or "hold" (half / unknown / stopped:
+    a look in CTMS first)."""
     if not e:
         return "book"
     st = e.get("state")
@@ -131,7 +134,7 @@ def verdict(e):
         return "finished" if accepted(e) else "book"
     if st == "asking":
         return "recall"
-    if st in ("half", "unknown"):
+    if st in ("half", "unknown", "stopped"):
         return "hold"
     return "book"
 
@@ -189,9 +192,10 @@ def _trip(t):
     return {x: t.get(x) for x in keep if t.get(x) not in (None, "")}
 
 
-def answered(k, ok, said, trips, carrier=None, path=None, now=None):
+def answered(k, ok, said, trips, carrier=None, path=None, now=None, pressed=False):
     """What the work PC made. Any ACCEPTED trip makes the job booked, even when the run stopped after it - its steps
-    still have to follow. A manifest left short of ACCEPTED is half made: held for him."""
+    still have to follow. A manifest left short of ACCEPTED is half made: held for him. pressed: Stop on the dashboard
+    ended it - what was made is kept but held too, with nothing set to follow it."""
     def fn(e, now):
         e["trips"] = [_trip(t) for t in trips or [] if isinstance(t, dict)]
         e["ctms_said"] = str(said or "")[:600]
@@ -199,7 +203,18 @@ def answered(k, ok, said, trips, carrier=None, path=None, now=None):
         e["answered_at"] = now
         made = accepted(e)
         short = [t for t in e["trips"] if t.get("manifest") and t.get("status") != ACCEPTED]
-        if made:
+        if pressed:
+            e["stop_pressed"] = now
+        if made and pressed:
+            # a Stop (16/11) may be for a wrong carrier or price: no row, no site email naming a manifest that may yet be
+            # abandoned, not off the map - and the rest isn't booked by a press of Book either, till CTMS is looked at
+            e["state"] = "stopped"
+            if short:
+                e["short"] = [f"{t['manifest']} {t.get('status') or '?'}" for t in short]
+            _note(e, f"Stop pressed: CTMS made {', '.join(t['manifest'] for t in made)} ACCEPTED"
+                     + (f" (left short: {', '.join(e['short'])})" if short else "")
+                     + " and stopped there - nothing follows it by itself", now)
+        elif made:
             e["state"] = "booked"
             for s in needs(carrier or e.get("carrier")):
                 e["steps"].setdefault(s, {"ok": False, "tries": 0, "said": "", "next_at": now})
@@ -214,7 +229,7 @@ def answered(k, ok, said, trips, carrier=None, path=None, now=None):
             _note(e, f"CTMS made {', '.join(e['short'])} and stopped there: {said}", now)
         else:
             e["state"] = "clear"
-            _note(e, f"CTMS booked nothing: {said}", now)
+            _note(e, ("Stop pressed: " if pressed else "") + f"CTMS booked nothing: {said}", now)
     return _change(k, fn, path, now)
 
 
@@ -269,9 +284,13 @@ def _settle(e, now):
 
 def by_hand(k, step_name=None, path=None, now=None):
     """He took it on: one step (or every step left) done by hand; an unknown / half job cleared after he looked in CTMS -
-    "clear" if CTMS has nothing, so the next press books it."""
+    "clear" if CTMS has nothing, so the next press books it. A job a Stop ended is let go of: what it made is kept or
+    undone in CTMS and finished by hand, and the next press books only what CTMS still has unbooked."""
     def fn(e, now):
-        if e.get("state") in ("unknown", "half", "asking") and not step_name:
+        if e.get("state") == "stopped" and not step_name:
+            e["state"] = "clear"
+            _note(e, "cleared after the Stop, CTMS looked at: what was made before the Stop is finished by hand", now)
+        elif e.get("state") in ("unknown", "half", "asking") and not step_name:
             e["state"] = "booked" if accepted(e) else "clear"
             _note(e, "he looked in CTMS and cleared it", now)
         for s in [step_name] if step_name else left(e):
@@ -311,7 +330,7 @@ def open_items(path=None, now=None):
     out = []
     for k, e in load(path)["jobs"].items():
         st = e.get("state")
-        if st not in ("asking", "booked", "half", "unknown"):
+        if st not in ("asking", "booked", "half", "unknown", "stopped"):
             continue
         steps = e.get("steps") or {}
         todo = [{"step": s, "label": LABEL[s], "tries": int(steps[s].get("tries") or 0), "said": steps[s].get("said") or "",
@@ -324,6 +343,16 @@ def open_items(path=None, now=None):
         elif st == "unknown":
             need = ("no answer from the work PC: look in CTMS. Booked there: finish it by hand, then Clear. Not booked: "
                     "Clear, and press Book again")
+        elif st == "stopped":
+            made = accepted(e)
+            try:
+                of = max(int(e.get("vehicles") or 1), len(made))
+            except (TypeError, ValueError):
+                of = len(made)
+            need = (f"stopped by you after {len(made)} of {of} trip{'' if of == 1 else 's'} "
+                    f"({', '.join(t['manifest'] for t in made)} ACCEPTED): the rest isn't booked, and no row, site email or "
+                    "filing was done. Look in CTMS, finish by hand what you keep, then Clear: the next press of Book books "
+                    "only what CTMS still has unbooked")
         elif any(not t["auto"] for t in todo):
             need = "needs your Retry, or Done by hand"
         else:

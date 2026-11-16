@@ -24,6 +24,11 @@ Anything not as expected stops there with what was done so far, and any box left
 on half made. dry runs it all but presses No at the last box, so a run can be tried with nothing booked - but CTMS keeps a
 trailer picked on the carrier screen as that line's Veh Type, whatever the last box is answered (seen 02/11).
 
+Stop on the dashboard stops it too (16/11: Stop pressed at 13:30:01, and all four trips were still made at 13:31). It is
+asked about only where stopping leaves nothing half made: before the lines are touched, before a split, before each trip,
+and at the Confirm Create Trip box before its Yes (answered No then). A trip once confirmed is finished - saved, its lines
+on, Accepted - and the booking stops before the next one.
+
 Every px point is on the recipes' pictures - the batch's anchor moves it to wherever CTMS sits now; a screen point is
 where the Access Bridge placed the thing.
 """
@@ -79,6 +84,11 @@ CARD_SKIP = ("Planning", "OPOKUD")
 
 class Stop(RuntimeError):
     """Not as expected: stop here. Its words are what he is told."""
+
+
+class StopPressed(Stop):
+    """Stop pressed on the dashboard while the booking ran. Raised only where nothing is left half made; its words say
+    where that was ("before trip 2")."""
 
 
 def templates():
@@ -304,12 +314,15 @@ def line_wants(refs, orders, qty):
 
 class Booking:
     """One Book press. run(steps): steps carried out in CTMS's window, raising when one fails; read(): the Access Bridge's
-    elements; seen(name, box): whether a template shows there now; t: the templates."""
+    elements; seen(name, box): whether a template shows there now; t: the templates; stopped(): whether Stop has been
+    pressed on the dashboard since the booking began (asked only at halt's points - none given, it never stops)."""
 
-    def __init__(self, run, read, seen, t, now=None, dry=False):
+    def __init__(self, run, read, seen, t, now=None, dry=False, stopped=None):
         self.run, self.read, self.seen, self.t = run, read, seen, t
         self.now = now or datetime.now()
         self.dry = dry
+        self.stopped = stopped or (lambda: False)
+        self.of = 1                # the trips this booking is to make: one a vehicle
         self.els = []
         self.sched = ""
         self.flipped = False       # the Deliver column pressed: pressed again at the end, so it's as he left it
@@ -328,6 +341,14 @@ class Booking:
         now = time.time()
         self.stages.append([name, round(now - self._t, 1)])
         self._t = now
+
+    def halt(self, where):
+        """Stop pressed on the dashboard: the booking ends here. Called only where stopping leaves nothing half made -
+        before the lines are touched, before a split, before each trip (the Confirm box asks for itself, so as to answer
+        No first) - never between the Yes and Planning's Save, nor while a confirmed trip's lines go on and it is
+        accepted."""
+        if self.stopped():
+            raise StopPressed(where)
 
     def look(self, tree=False, asking=False, card=False):
         """CTMS as it is now, through the Access Bridge. tree: Planning's manifest tree as well - only wanted around a
@@ -1229,6 +1250,13 @@ class Booking:
         if self.dry:
             self.back_out()
             return box
+        if self.stopped():               # Stop pressed: the last moment this trip can still not be made
+            where = f"at trip {len(self.trips) + 1}'s Confirm Create Trip box"
+            try:
+                self.back_out()
+            except Exception as e:       # still the Stop, whatever came of backing out: the box is never answered Yes
+                raise StopPressed(f"{where} - backing out of it stopped there ({e}), so look at CTMS") from e
+            raise StopPressed(f"{where}, answered No")
         yes = asked[1].get("yes")
         if yes is None or not placed(yes):
             self.back_out()
@@ -1297,7 +1325,9 @@ class Booking:
         raise Stop(f"{manifest} did not read back as ACCEPTED: look at it in Planning.")
 
     def trip(self, refs, carrier, trailer, haulage):
-        """One vehicle: its first line's new trip, the others applied to it, the check, Accepted."""
+        """One vehicle: its first line's new trip, the others applied to it, the check, Accepted. Once its Confirm box
+        is answered Yes it is seen through to Accepted, Stop or not: the next trip is where a Stop comes in."""
+        self.halt(f"before trip {len(self.trips) + 1}")
         self.carrier_window_away()         # the last vehicle's, if it's in front
         row, picked = self.select_lines(refs)
         when = {"collect": row.get("collect", ""), "deliver": row.get("deliver", "")}
@@ -1336,6 +1366,7 @@ class Booking:
 
     def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, region=None, strategy=None):
         """The whole booking. self.trips says what was made, however it ended."""
+        self.of = max(1, int(vehicles or 1))
         self.start()
         self.set_filters(region, strategy)
         self.set_day(sched_for_day(date))
@@ -1374,6 +1405,7 @@ class Booking:
                        "Nothing was booked.")
         self.stage("the order")
         refs = [r["cust_ref"] for r in lines]
+        self.halt("before anything was changed on the order")
         wants = line_wants(refs, orders, qty or {})
         if sum([self.prepare_line(ref, wants.get(ref)) for ref in refs]):
             self.stage("the lines put right")
@@ -1384,6 +1416,7 @@ class Booking:
                 self.said.append(f"{refs[0]} would be split into {vehicles}: rehearsing one of them")
                 self.trip(refs, carrier, trailer, haulage)
                 return self.trips
+            self.halt(f"before {refs[0]} was split")
             refs = self.split(refs[0], vehicles)
             self.stage("the split")
         if vehicles > 1:

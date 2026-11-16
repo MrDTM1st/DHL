@@ -30,6 +30,7 @@ t('amber, missing, no reply and the CTMS to-do each keep it off', () => {
 });
 t('a booking already being finished, or nobody who fits, keeps it off', () => {
   assert.match(notReady(rec(), { bookings: [{ key: '9000001@' + DAY }] })[0], /being finished/);
+  assert.match(notReady(rec(), { bookings: [{ key: '9000001@' + DAY, state: 'stopped' }] })[0], /you stopped its booking/);
   assert.match(notReady(rec(), { fits: [] })[0], /nobody on the list fits/);
 });
 t('an ad hoc comes ready on its form; a pin never is', () => {

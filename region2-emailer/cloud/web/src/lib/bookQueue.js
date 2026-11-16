@@ -64,7 +64,8 @@ export function notReady(r, { todo = [], bookings = [], fits = null } = {}) {
     && (i.orders || []).some((o) => mine.has(baseOf(o))));
   if (owed.length) why.push('on the CTMS to-do first: ' + (owed[0].what || owed[0].kind));
   const key = journalKey(r.orders, r.delivery_date);
-  if ((bookings || []).some((b) => b.key === key)) why.push('a booking of it is being finished: see Bookings');
+  const open = (bookings || []).find((b) => b.key === key);
+  if (open) why.push(open.state === 'stopped' ? 'you stopped its booking: see Bookings' : 'a booking of it is being finished: see Bookings');
   if (fits && !fits.length) why.push('nobody on the list fits it');
   return why;
 }

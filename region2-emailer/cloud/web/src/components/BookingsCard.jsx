@@ -5,7 +5,20 @@ import { ctmsBook } from '../api.js';
 // from here: Retry is a press of Book, which finishes only what's left (the DigiHaul row, the site's email...). Clear and
 // Done by hand are his word that he has looked in CTMS or done the step himself.
 
-const STATE = { asking: 'Waiting for the work PC', booked: 'Booked, finishing', half: 'Left short in CTMS', unknown: 'Not known' };
+const STATE = {
+  asking: 'Waiting for the work PC', booked: 'Booked, finishing', half: 'Left short in CTMS', unknown: 'Not known',
+  stopped: 'Stopped by you',
+};
+
+// What Clear asks first: that CTMS has been looked at. After a Stop (16/11) nothing followed what was made before it.
+function clearAsk(b) {
+  if (b.state === 'stopped') {
+    return `You stopped ${b.orders.join(' / ')}${b.manifests.length ? ` after ${b.manifests.join(', ')}` : ''}. Have you `
+      + 'looked in CTMS? Clear means what was made before the Stop is yours to finish by hand (row, site email), and the '
+      + 'next press of Book books only what CTMS still has unbooked.';
+  }
+  return `Have you looked in CTMS for ${b.orders.join(' / ')}? Clear means the next press of Book books it if CTMS has nothing.`;
+}
 
 export default function BookingsCard({ rows, onCommand }) {
   const [said, setSaid] = useState({});
@@ -24,7 +37,7 @@ export default function BookingsCard({ rows, onCommand }) {
   const clear = (b, step) => {
     const what = step ? `Mark the ${(b.todo.find((t) => t.step === step) || {}).label || step} as done by hand?`
       : b.state === 'booked' ? `Mark everything left on ${b.orders.join(' / ')} as done by hand?`
-        : `Have you looked in CTMS for ${b.orders.join(' / ')}? Clear means the next press of Book books it if CTMS has nothing.`;
+        : clearAsk(b);
     if (!window.confirm(what)) return;
     onCommand({ action: 'book_clear', data: { key: b.key, ...(step ? { step } : {}) } });
     note(b.key, 'Noted.');
@@ -91,8 +104,7 @@ export function BookingStatus({ b, onCommand }) {
   };
   const clear = (step) => {
     const label = step ? ((b.todo.find((t) => t.step === step) || {}).label || step) : '';
-    if (!window.confirm(step ? `Mark the ${label} as done by hand?`
-      : `Have you looked in CTMS for ${b.orders.join(' / ')}? Clear means the next press of Book books it if CTMS has nothing.`)) return;
+    if (!window.confirm(step ? `Mark the ${label} as done by hand?` : clearAsk(b))) return;
     onCommand({ action: 'book_clear', data: { key: b.key, ...(step ? { step } : {}) } });
     setSaid('Noted.');
   };

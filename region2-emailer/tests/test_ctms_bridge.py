@@ -3408,7 +3408,7 @@ def test_book_says_what_it_left_changed_in_ctms_and_a_missing_picture_loses_no_t
     goes = {}
 
     class Job:
-        def __init__(self, run, read, seen, t, dry=False):
+        def __init__(self, run, read, seen, t, dry=False, stopped=None):
             self.trips, self.stages, self.reads, self.veh_kept, self.said = [], [], [], "", []
 
         def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, **kw):
@@ -3446,6 +3446,103 @@ def test_book_says_what_it_left_changed_in_ctms_and_a_missing_picture_loses_no_t
         assert r["payload"]["kind"] == "ctms_book" and "another tab is selected" in r["payload"]["picture_error"]
     finally:
         W.find_windows, W.picture, B.LOG, B.ctms_book.Booking, B.book_record.keep = keep
+
+
+def test_a_book_stop_ends_says_how_many_trips_were_made_and_asks_the_dashboard_as_it_goes():
+    # 16/11: Stop pressed at 13:30:01, all four trips made at 13:31 - the bridge only heard of it after the command
+    keep = (W.find_windows, W.picture, B.LOG, B.ctms_book.Booking, B.book_record.keep)
+    W.find_windows = lambda: [dict(FAKE_WIN)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    kept = []
+    B.book_record.keep = lambda *a, **k: kept.append(k)
+
+    class Desk(_Rec):
+        stop = False                                   # what the dashboard says; None: it can't be reached
+
+        def post(self, path, body, timeout=20):
+            super().post(path, body, timeout)
+            if path == "/api/ctms/stopped":
+                assert timeout == B.STOP_ASK_SECONDS and body == {}
+                if self.stop is None:
+                    raise urllib.error.URLError("no route to the dashboard")
+                return {"stop": self.stop}
+            return {}
+
+    class Job:
+        """Four trips, asking about Stop before each after the first - as Booking does between trips."""
+        def __init__(self, run, read, seen, t, dry=False, stopped=None):
+            self.trips, self.stages, self.reads, self.veh_kept, self.said = [], [], 0, "", []
+            self.stopped, self.of, self.backed = stopped, 4, 0
+
+        def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, **kw):
+            for n in range(1, 5):
+                if n > 1 and self.stopped():
+                    raise B.ctms_book.StopPressed(f"before trip {n}")
+                self.trips.append({"manifest": f"MAN-0100010{n}", "status": "ACCEPTED", "revenue": "500", "cost": "400"})
+
+        def back_out(self):
+            self.backed += 1
+
+        def tidy(self):
+            pass
+    B.ctms_book.Booking = Job
+    try:
+        desk = Desk()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        cmd = {"action": "ctms_book", "orders": ["9100001"], "date": "10/11/2026", "carrier": "ACME_DH", "vehicles": 4}
+        desk.stop = True
+        b.handle(dict(cmd, id=1))
+        r = desk.sent[-1][1]
+        assert [p for p, _ in desk.sent] == ["/api/ctms/stopped", "/api/ctms/result"], desk.sent
+        assert r["ok"] is False and r["detail"].startswith(
+            "Stopped by you after 1 of 4 trips: MAN-01000101 ACCEPTED. The other 3 were not booked. Stop was acted on "
+            "before trip 2, after "), r["detail"]
+        assert r["payload"]["stop_pressed"] is True and r["payload"]["of"] == 4 and len(r["payload"]["trips"]) == 1
+        assert kept[-1]["pressed"] is True
+        desk.sent.clear()
+        desk.stop = None                               # the dashboard out of reach: no answer is no stop
+        b.handle(dict(cmd, id=2))
+        r = desk.sent[-1][1]
+        assert r["ok"] and "MAN-01000104 ACCEPTED" in r["detail"] and len(r["payload"]["trips"]) == 4, r["detail"]
+        assert r["payload"]["stop_pressed"] is False and kept[-1]["pressed"] is False
+        assert [p for p, _ in desk.sent].count("/api/ctms/stopped") == 2      # twice unheard: not asked again this booking
+    finally:
+        W.find_windows, W.picture, B.LOG, B.ctms_book.Booking, B.book_record.keep = keep
+
+
+def test_a_stop_before_any_trip_says_nothing_was_booked_in_words_a_batch_wont_go_on_from():
+    said = B.stopped_by_you([], 1, "at trip 1's Confirm Create Trip box, answered No", 31.0)
+    assert said == ("Stopped by you before any trip was made: nothing was booked. Stop was acted on at trip 1's Confirm "
+                    "Create Trip box, answered No, after 31s.")
+    assert "Nothing was booked" not in said            # an older home PC's batch goes on after that phrase
+    two = [{"manifest": "MAN-01000101", "status": "ACCEPTED"}, {"manifest": "MAN-01000102", "status": "ACCEPTED"}]
+    assert B.stopped_by_you(two, 3, "before trip 3", 120).startswith(
+        "Stopped by you after 2 of 3 trips: MAN-01000101 ACCEPTED, MAN-01000102 ACCEPTED. The other 1 was not booked.")
+
+
+def test_a_running_book_can_ask_whether_stop_was_pressed_without_taking_it_or_anything_else():
+    fresh()
+    for key in (DASH, AGENT, ""):
+        assert call("/api/ctms/stopped", {}, key=key)[0] == 401
+    assert call("/api/ctms/stopped", {}, key=BRIDGE) == (200, {"stop": False})
+    call("/api/ctms/control", {"on": True})
+    book = {"action": "ctms_book", "orders": ["9100001"], "date": "06/11/2026", "carrier": "DHL_NOC", "vehicles": 4}
+    cid = call("/api/ctms/command", book, key=AGENT)[1]["id"]
+    assert poll()[1]["cmd"]["id"] == cid               # handed out: the work PC is booking
+    call("/api/ctms/stop", {})
+    results = call("/api/ctms/status")[1]["results"]
+    assert any("stops before its next trip" in x["detail"] for x in results), results
+    see = call("/api/ctms/command", {"action": "see"}, key=AGENT)[1]["id"]
+    for _ in range(3):                                 # asked at each of its safe points: read only
+        assert call("/api/ctms/stopped", {}, key=BRIDGE) == (200, {"stop": True})
+    st = call("/api/ctms/status")[1]
+    assert st["running"]["id"] == cid and [c["id"] for c in S._ctms["queue"]] == [see]    # nothing handed out by it
+    r = poll()[1]
+    assert r["stop"] is True and r["cmd"]["id"] == see    # the check-in after the Book still hands the Stop over...
+    assert call("/api/ctms/stopped", {}, key=BRIDGE) == (200, {"stop": False})    # ...once
+    S._ctms["queue"].clear()
 
 
 def test_an_nn_number_customer_ref_never_finds_is_looked_for_by_its_booking_ref():

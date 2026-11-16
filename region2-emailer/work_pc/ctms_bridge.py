@@ -148,6 +148,7 @@ SCALE_SLACK = 0.05      # the bar is 30 rows at the size measured: a row off is 
                         # (110% draws 33, 125% 35-38) - and every fixed point would be that much off
 SNAPS_MAX = 8
 REACT_TIMEOUT = 20      # seconds a reacting step waits for CTMS to answer before the batch stops
+STOP_ASK_SECONDS = 4    # how long a running Book waits to hear whether Stop was pressed: no answer is no stop
 CHECK_ORDERS = 40       # orders one CTMS look-up takes (the map holds a few dozen at most)
 CHECK_SECONDS = 360     # ... and the longest it runs: what is looked up by then still goes to the map
 ADMIN = ("update", "fields_setup", "shared_folder", "folder_read", "dts_add", "dts_date")
@@ -292,6 +293,19 @@ def friendly(e):
         return (f"Lost the connection to the CTMS tab ({type(e).__name__}). It reattaches by "
                 f"itself - try again in a few seconds.")
     return f"{type(e).__name__}: {e}"
+
+
+def stopped_by_you(made, of, where, took):
+    """A Book that Stop ended, said plainly: how many of its trips were made and which, how many weren't, and where the
+    Stop was acted on. made: the trips with a manifest; of: the trips it was to make."""
+    if made:
+        left = max(0, of - len(made))
+        said = (f"Stopped by you after {len(made)} of {of} trip{'' if of == 1 else 's'}: "
+                + ", ".join(f"{x['manifest']} {x['status']}" for x in made) + "."
+                + (f" The other {left} {'was' if left == 1 else 'were'} not booked." if left else ""))
+    else:
+        said = "Stopped by you before any trip was made: nothing was booked."
+    return f"{said} Stop was acted on {where}, after {took:g}s."
 
 
 def code_label():
@@ -1128,11 +1142,30 @@ class Bridge:
                 finally:
                     times.append(round(time.time() - ts, 2))
 
+        unheard = []
+
+        def stop_pressed():
+            """Stop pressed on the dashboard since this Book was handed out. The bridge checks in only between commands,
+            so the booking asks the dashboard itself, at its safe points (16/11: Stop pressed at 13:30:01, all four trips
+            made by 13:31). No answer is no stop: the booking goes on as it would have - and after two in a row it isn't
+            asked again this booking, so a dashboard out of reach costs seconds, not a wait at every trip."""
+            if len(unheard) >= 2:
+                return False
+            try:
+                got = bool(self.desk.post("/api/ctms/stopped", {}, timeout=STOP_ASK_SECONDS).get("stop"))
+            except Exception as e:
+                unheard.append(e)
+                log("stop_asked", error=friendly(e)[:160])
+                return False
+            unheard.clear()
+            return got
+
         job = ctms_book.Booking(run, lambda tree=True, skip=(): ctms_jab.read_fields(
                                     self.win, skip=skip, skip_roles=("menu",) if tree else ("tree", "menu")
                                 ).get("elements") or [],
-                                lambda name, box: self._seen(t, name, box), t, dry=bool(cmd.get("dry")))
-        stopped = ""
+                                lambda name, box: self._seen(t, name, box), t, dry=bool(cmd.get("dry")),
+                                stopped=stop_pressed)
+        stopped, pressed = "", ""
         try:
             job.book(orders, date, carrier, str(cmd.get("trailer") or "").strip(), cmd.get("haulage"),
                      int(cmd.get("vehicles") or 1), qty=cmd.get("qty") if isinstance(cmd.get("qty"), dict) else None,
@@ -1140,6 +1173,7 @@ class Bridge:
                      strategy=str(cmd.get("strategy") or "").strip() or None)
         except Exception as e:
             stopped = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
+            pressed = stopped if isinstance(e, ctms_book.StopPressed) else ""
             try:
                 job.back_out()
             except Exception:
@@ -1152,12 +1186,15 @@ class Bridge:
         made = [x for x in job.trips if x.get("manifest")]
         fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n)
         by_hand = "; ".join(n for n in job.said if n.startswith("PUT BACK BY HAND"))
-        said = (f"{'Rehearsed' if cmd.get('dry') else 'Booked'} {' / '.join(orders)} in {took:g}s: "
-                + ", ".join(f"{x['manifest']} {x['status']}" for x in made) if made and not stopped else
-                f"Rehearsed {' / '.join(orders)} in {took:g}s with {carrier}: revenue {job.trips[0]['revenue']}, cost "
-                f"{job.trips[0]['cost']}. Nothing booked." if job.trips and not stopped else
-                f"Stopped after {took:g}s: {stopped}"
-                + (f" Already made: {', '.join(x['manifest'] + ' ' + x['status'] for x in made)}." if made else ""))
+        if pressed:
+            said = stopped_by_you(made, getattr(job, "of", 1), pressed, took)
+        else:
+            said = (f"{'Rehearsed' if cmd.get('dry') else 'Booked'} {' / '.join(orders)} in {took:g}s: "
+                    + ", ".join(f"{x['manifest']} {x['status']}" for x in made) if made and not stopped else
+                    f"Rehearsed {' / '.join(orders)} in {took:g}s with {carrier}: revenue {job.trips[0]['revenue']}, cost "
+                    f"{job.trips[0]['cost']}. Nothing booked." if job.trips and not stopped else
+                    f"Stopped after {took:g}s: {stopped}"
+                    + (f" Already made: {', '.join(x['manifest'] + ' ' + x['status'] for x in made)}." if made else ""))
         if job.veh_kept and (stopped or cmd.get("dry")) and not made:
             said += f" CTMS keeps {job.veh_kept} as the line's Veh Type from the carrier screen."
         if fixed:
@@ -1165,10 +1202,11 @@ class Bridge:
         if by_hand:
             said += f" {by_hand}."
         # written down before the answer goes, so the home PC can ask for it again if the answer never reaches it
-        book_record.keep(cmd.get("id"), orders, date, carrier, cmd.get("dry"), not stopped, said, job.trips, stopped)
+        book_record.keep(cmd.get("id"), orders, date, carrier, cmd.get("dry"), not stopped, said, job.trips, stopped,
+                         pressed=bool(pressed))
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
                                             stages=job.stages, notes=job.said, stopped=stopped, seconds=took,
-                                            reads=job.reads))
+                                            reads=job.reads, stop_pressed=bool(pressed), of=getattr(job, "of", 1)))
 
     # -- one item of the CTMS to-do, done in one go (02/11, ctms_items) --
     def todo_item(self, cmd, done):

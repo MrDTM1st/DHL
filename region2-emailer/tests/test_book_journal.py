@@ -442,6 +442,7 @@ def test_the_batch_goes_on_after_a_booking_or_a_clean_stop_and_nowhere_else():
     assert not B.go_on({"ok": False, "refused": True, "said": "Acting is switched off. Nothing was booked."})
     assert not B.go_on({"ok": False, "pending": True})
     assert not B.go_on({"ok": False, "held": True})
+    assert not B.go_on({"ok": False, "stopped": True, "said": "Stopped by you before any trip was made: Nothing was booked."})
 
 
 class BatchR(FakeR):
@@ -543,3 +544,85 @@ def test_the_dashboard_takes_only_good_jobs_for_a_batch_and_arms_for_its_length(
     assert cmd["action"] == "ctms_book_batch" and len(cmd["jobs"]) == 1     # the bad ref, the rehearsal, junk dropped
     assert S._ctms["book_run"]["batch"] and S._ctms["control_until"] > 0
     S._ctms["book_run"]["state"] = "done"
+
+
+# -- Stop on the dashboard during a Book (16/11: Stop at 13:30:01, all four trips made at 13:31, swapped by hand)
+def _stopped(trips, of=4):
+    """The work PC's answer to a Book that Stop ended (ctms_bridge.stopped_by_you)."""
+    made = ", ".join(f"{t['manifest']} {t['status']}" for t in trips)
+    detail = (f"Stopped by you after {len(trips)} of {of} trips: {made}. The other {of - len(trips)} were not booked. "
+              "Stop was acted on before trip 2, after 95s." if trips else
+              "Stopped by you before any trip was made: nothing was booked. Stop was acted on before trip 1, after 20s.")
+    return {"ok": False, "detail": detail}, {"trips": trips, "seconds": 95, "stop_pressed": True, "of": of}
+
+
+def test_a_stop_part_way_keeps_what_was_made_holds_it_and_sets_nothing_to_follow(jpath):
+    k = J.key(JOB["orders"], DATE)
+    J.asking(dict(JOB, vehicles=4))
+    e = J.answered(k, False, _stopped([TRIP])[0]["detail"], [TRIP], JOB["carrier"], pressed=True)
+    assert e["state"] == "stopped" and J.accepted(e) == [TRIP] and e["stop_pressed"]
+    assert J.left(e) == [] and J.verdict(e) == "hold" and J.due() == [] and J.unanswered() == []
+    item = next(i for i in J.open_items() if i["key"] == k)
+    assert item["state"] == "stopped" and item["manifests"] == ["MAN-01000001"] and item["todo"] == []
+    assert item["need"].startswith("stopped by you after 1 of 4 trips (MAN-01000001 ACCEPTED)") and "Clear" in item["need"]
+    e = J.by_hand(k)                                         # Clear, once CTMS has been looked at
+    assert e["state"] == "clear" and J.verdict(e) == "book" and not [i for i in J.open_items() if i["key"] == k]
+    # stopped before anything was made: nothing to hold, the next press books
+    e = J.answered(k, False, _stopped([])[0]["detail"], [], JOB["carrier"], pressed=True)
+    assert e["state"] == "clear" and e["history"][-1][1].startswith("Stop pressed: CTMS booked nothing")
+
+
+def test_a_stop_part_way_sends_nothing_and_no_press_books_the_rest_till_it_is_cleared(steps):
+    R = FakeR(_stopped([TRIP]))
+    res = B.book(dict(JOB, vehicles=4), R=R)
+    assert not res["ok"] and res["stopped"] and [t["manifest"] for t in res["trips"]] == ["MAN-01000001"]
+    assert res["said"].startswith("Stopped by you after 1 of 4 trips: MAN-01000001 ACCEPTED. The other 3 were not booked.")
+    assert "no DigiHaul row, no site email, and it stays on the map" in res["said"]
+    assert steps == []                                       # no row, no email, not filed, not off the map
+    k = J.key(JOB["orders"], DATE)
+    assert J.get(k)["state"] == "stopped"
+    R.asked.clear()
+    again = B.book(dict(JOB, vehicles=4), R=R)               # pressed again: nothing booked, nothing sent
+    assert again.get("held") and "you pressed Stop on it after MAN-01000001 ACCEPTED" in again["said"]
+    assert R.asked == [] and steps == []
+    B.retry()                                                # nor does the timer touch it
+    assert steps == [] and J.get(k)["state"] == "stopped"
+    J.by_hand(k)                                             # Clear: the next press books what CTMS still has
+    R.answer = _answer([dict(TRIP, manifest="MAN-01000002")], detail="Booked 9000001 in 40s: MAN-01000002 ACCEPTED")
+    res = B.book(dict(JOB, vehicles=3), R=R)
+    assert res["ok"] and [a for a, _ in R.asked].count("ctms_book") == 1 and ("site", "MAN-01000002") in steps
+
+
+def test_a_stop_before_any_trip_says_so_and_the_next_press_books(steps):
+    res = B.book(dict(JOB), R=FakeR(_stopped([])))
+    assert not res["ok"] and res["stopped"] and res["said"].startswith("Stopped by you before any trip was made")
+    assert J.verdict(J.get(J.key(JOB["orders"], DATE))) == "book" and steps == []
+
+
+def test_a_stopped_answer_picked_up_late_is_still_held_with_nothing_sent(steps, monkeypatch):
+    R = FakeR(timeout=True)
+    B.book(dict(JOB, vehicles=4), R=R)
+    k = J.key(JOB["orders"], DATE)
+    monkeypatch.setattr(J, "LOST_AFTER", 0)
+    monkeypatch.setattr(B, "_client", lambda: R)
+    words = _stopped([TRIP])[0]["detail"]
+    # the work PC's own record, the dashboard's copy, and the dashboard's words alone
+    for held, record in ((None, [{"id": 77, "ok": False, "said": words, "trips": [TRIP], "pressed": True}]),
+                         (_stopped([TRIP]), []), (({"ok": False, "detail": words}, None), [])):
+        J.asking(dict(JOB, vehicles=4))
+        J.asked(k, 77)
+        R.held, R.record = held, record
+        B.retry()
+        assert J.get(k)["state"] == "stopped" and steps == [], (held, record)
+
+
+def test_a_stop_during_a_batchs_booking_ends_the_batch_there(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(READY, orders=[ident.split("|")[0]]))
+    R = BatchR([_stopped([TRIP])])
+    res = B.batch(_jobs("9000001", "9000002", "9000003"), R=R)
+    assert not res["ok"] and "you pressed Stop during 9000001, 2 not started" in res["said"], res["said"]
+    assert res["trips"] == [{"manifest": "MAN-01000001", "status": "ACCEPTED"}] and steps == []
+    assert [a for a, _ in R.asked].count("ctms_book") == 1
+    R = BatchR([_stopped([])])                               # before anything was made: still the end of it
+    res = B.batch(_jobs("9000004", "9000005"), R=R)
+    assert not res["ok"] and "you pressed Stop during 9000004, 1 not started" in res["said"] and len(res["results"]) == 1

@@ -2627,6 +2627,11 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _ctms_cancel_locked("Cancelled - Stop was pressed.")
                 _ctms["stop"] = True
+                ran = _ctms["running"]
+                if ran and ran.get("action") == "ctms_book" and time.time() - ran.get("since", 0) < _CTMS_BUSY:
+                    # the Book asks between its trips (/api/ctms/stopped): a trip it has confirmed is finished first
+                    _ctms_note_locked("Stop pressed during a booking - it stops before its next trip. A trip CTMS has "
+                                      "already confirmed is seen through to ACCEPTED first; the answer says what was made.")
                 if _ctms_armed():
                     _ctms_note_locked("Stop pressed - Look mum, no hands mode switched off.")
                 _ctms["control_until"] = 0.0
@@ -2640,6 +2645,14 @@ class Handler(BaseHTTPRequestHandler):
             # the setup asking "can this PC reach the dashboard?" - nothing
             # handed out, nothing marked as running
             return self._json(200, {"ok": True})
+        if path == "/api/ctms/stopped":
+            # a Book running on the work PC asking, between its trips, whether Stop has been pressed (16/11: Stop pressed
+            # at 13:30:01, all four trips made at 13:31 - the bridge only checks in between commands). Read only: nothing
+            # handed out, the running command still running, and the Stop still goes over at the next check-in as ever
+            with _lock:
+                _ctms["seen"] = time.time()
+                stop = bool(_ctms["stop"])
+            return self._json(200, {"stop": stop})
         if path == "/api/ctms/uploads":
             # the upload CSVs and emailed rail plans for the shared folders - the work PC remembers which it has filed
             with _lock:

@@ -25,12 +25,14 @@ def _norm(o):
     return re.sub(r"\s+", "", str(o or "")).upper()
 
 
-def keep(ask_id, orders, date, carrier, dry, ok, said, trips, stopped="", path=None, now=None):
-    """One Book's outcome written down. Never raises: a full disk must not stop the answer going back."""
+def keep(ask_id, orders, date, carrier, dry, ok, said, trips, stopped="", path=None, now=None, pressed=False):
+    """One Book's outcome written down. Never raises: a full disk must not stop the answer going back. pressed: Stop on
+    the dashboard ended it - the home PC then books nothing more of it, nor follows it up, by itself."""
     p = path or PATH
     line = {"at": (now or datetime.now()).isoformat(timespec="seconds"), "id": ask_id,
             "orders": [_norm(o) for o in orders or []], "date": str(date or ""), "carrier": str(carrier or ""),
             "dry": bool(dry), "ok": bool(ok), "said": str(said or "")[:600], "stopped": str(stopped or "")[:300],
+            "pressed": bool(pressed),
             "trips": [{k: t.get(k) for k in TRIP_KEYS if t.get(k) not in (None, "")}
                       for t in trips or [] if isinstance(t, dict)]}
     try:
