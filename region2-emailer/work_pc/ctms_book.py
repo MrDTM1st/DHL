@@ -69,6 +69,7 @@ CURRENT_ROW = "#FFCC00"            # the well's current row, from its From Loc a
 
 RANK = {"STANDARD": 0, "NEXT DAY": 1, "EMERGENCY": 2}
 NOC = "DHL_NOC"
+CONFIRM_READS, CONFIRM_PAUSE = 5, 0.4   # the Confirm Create Trip box read again while its words aren't in (16/11)
 NIGHT_FROM = 20                    # a delivery starting this late sits on the next day's schedule (seen 30/10, 02/11)
 PAGES = 6                          # pages of the well looked through
 LIST_PAGES = 8                     # looks down a drop-down: a letter of the carrier list can run to dozens
@@ -229,8 +230,11 @@ def list_row(els, name):
 
 def confirm_box(els):
     """{"carrier", "revenue", "cost"} off the Confirm Create Trip box, or None when it can't be read. A Forms question comes
-    as a window of its own, its words in its name: "Confirm Create Trip Carrier  X\\nRevenue  1.00\\nCost  2.00\\n..."."""
-    m = re.search(r"Confirm Create Trip\s+Carrier\s+(\S+)\s+Revenue\s+([\d,.]+)\s+Cost\s+([\d,.]+)", " ".join(frames(els)))
+    as a window of its own, its words in its name: "Confirm Create Trip Carrier  X\\nRevenue  1.00\\nCost  2.00\\n...", and
+    in its pane and label as well - read from all of them (16/11: one read had the window named and nothing more)."""
+    q = ctms_rows.question(els)
+    m = re.search(r"Confirm Create Trip\s+Carrier\s+(\S+)\s+Revenue\s+([\d,.]+)\s+Cost\s+([\d,.]+)",
+                  " ".join(frames(els)) + " " + (q[0] if q else ""))
     if not m:
         return None
     return {"carrier": m.group(1), "revenue": m.group(2).replace(",", ""), "cost": m.group(3).replace(",", "")}
@@ -1279,6 +1283,12 @@ class Booking:
         self.run(steps + [{"action": "click", "screen": _at(make), "after": 0.1}])
         asked = self.asked("Confirm Create Trip")
         box = confirm_box(self.els)
+        for _ in range(CONFIRM_READS):   # its words can come a moment after its window (16/11: Book stopped on one so read)
+            if box is not None:
+                break
+            time.sleep(CONFIRM_PAUSE)
+            asked = self.asked("Confirm Create Trip", seconds=2) or asked
+            box = confirm_box(self.els)
         if box is None:
             raise Stop("CTMS's Confirm Create Trip box could not be read, so nothing was booked. On the screen: "
                        + " | ".join(frames(self.els))[:240])

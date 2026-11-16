@@ -66,6 +66,7 @@ class FakeCtms:
         self.carrier_behind = False
         self.leaves_carrier = False     # True: Yes puts Planning over the carrier window, which stays open (live 16/11)
         self.window_menu_open = False
+        self.confirm_late = 0           # reads that find the Confirm box's window named and its words not in yet (16/11)
         self.lists_carrier = True       # False: the Window menu doesn't list the carrier window
         self.alert = ""
         # each line's card as the Access Bridge reads it live (03/11): the Detail grid and Order Items
@@ -101,6 +102,10 @@ class FakeCtms:
         bar only when asked for."""
         self.reads += 1
         els = self._els(tree, skip)
+        if self.up == "confirm" and self.confirm_late > 0:
+            self.confirm_late -= 1
+            els = [dict(e, nm="Confirm Create Trip") if str(e.get("nm") or "").startswith("Confirm Create Trip")
+                   else dict(e, nm="") if e.get("r") == "option pane" else e for e in els]
         if menus:
             els += [{"r": "menu", "nm": "Window ALT W", "lv": 1, "at": list(WINDOW_AT)}]
             if self.window_menu_open:
@@ -1051,6 +1056,36 @@ def test_planned_orders_are_read_off_their_own_window_not_the_well_which_can_sti
            {"r": "internal frame", "nm": "Planning", "lv": 0},
            {"r": "text", "nm": "", "v": "9100001-1-1", "lv": 2, "at": [443, 583, 100, 23]}]
     assert B.planned_refs(els) == {"9100002-1-1"}
+
+
+def test_a_confirm_box_read_before_its_words_are_in_is_read_again_and_booked(monkeypatch):
+    # live 16/11: a read caught the box's window named "Confirm Create Trip" and nothing more - Book stopped with nothing
+    # booked, and the next press went through. Its words are waited for now
+    monkeypatch.setattr(B, "CONFIRM_PAUSE", 0)
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.confirm_late = 2
+    job = _book(ctms)
+    assert job.trips[0]["status"] == "ACCEPTED" and job.trips[0]["cost"] == "96.18"
+
+
+def test_a_confirm_box_that_never_shows_its_figures_still_stops_with_nothing_booked(monkeypatch):
+    monkeypatch.setattr(B, "CONFIRM_PAUSE", 0)
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.confirm_late = 99
+    try:
+        _book(ctms)
+        raise AssertionError("it went on")
+    except B.Stop as e:
+        assert "could not be read" in str(e)
+    assert not ctms.tree                                   # never answered Yes: no trip made
+
+
+def test_the_confirm_box_figures_are_read_off_its_pane_when_its_window_name_is_short():
+    els = [{"r": "internal frame", "nm": "Confirm Create Trip", "lv": 0},
+           {"r": "option pane", "nm": "Carrier  FAST-R_DH\nRevenue           0.00\nCost                225.00\n"
+                                      "Do you want to continue?", "lv": 1, "at": [900, 500, 300, 120]},
+           {"r": "push button", "nm": "Yes ALT Y", "lv": 2, "at": [980, 560, 40, 20]}]
+    assert B.confirm_box(els) == {"carrier": "FAST-R_DH", "revenue": "0.00", "cost": "225.00"}
 
 
 def test_the_confirm_box_comes_as_a_window_with_its_words_in_its_name():
