@@ -222,6 +222,16 @@ def collection_fix(ref, s, line):
     ready = _when((line or {}).get("ready_at"))
     if ready is None:
         raise Stop(f"{ref}: its collection couldn't be read to check it against the new delivery, so nothing was typed.")
+    if s.get("collect_same_day"):
+        # his 65-mile rule (16/11): collected on the delivery day - only the day moves, the time CTMS has stays
+        if ready.date() == start.date() and ready < start:
+            return {}
+        moved = start.replace(hour=ready.hour, minute=ready.minute, second=0, microsecond=0)
+        if moved >= start:
+            raise Stop(f"{ref}: a same-day collection at its {ready:%H:%M} wouldn't be before the {start:%H:%M} delivery, "
+                       "so nothing was typed. Do this one by hand.")
+        shown = moved.strftime("%d/%m/%y")
+        return {"day": shown, "storage": 0, "was": line["ready_at"], "ready_at": f"{shown} {ready:%H:%M}"}
     if ready < start and (ready.date() != start.date() or start.hour >= 12):
         return {}
     day = start.replace(hour=0, minute=0) - timedelta(days=1)

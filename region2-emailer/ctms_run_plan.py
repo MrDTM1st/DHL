@@ -544,11 +544,24 @@ def plan_update(it, rec, found):
     elif date and start:
         yard0, yard1 = _hm(colls[0].get("from")), _hm(colls[0].get("to"))
         when = answers.get("collect")
+        same = None
         if not when:
-            when = "the day before" if start < "12:00" else doubt(
-                "collect", "Collection day", "", COLLECT_DAYS,
-                f"A delivery at {start} on {date[:5]} - no rule for which day to collect: pick one")
-        if when in COLLECT_DAYS and yard0 and yard1:
+            # his 65-mile rule (16/11): near enough, and the yard opens in time to get there - collected the same day
+            import same_day
+            same, why = same_day.check(colls[0].get("pc"), rec.get("postcode"), yard0, start)
+            if why:
+                explain.append(why)
+            if same:
+                when = "the same day"
+            else:
+                when = "the day before" if start < "12:00" else doubt(
+                    "collect", "Collection day", "", COLLECT_DAYS,
+                    f"A delivery at {start} on {date[:5]} - no rule for which day to collect: pick one")
+        if same:
+            # only the day changes, never the time (his 16/11): the work PC moves the collection onto the delivery
+            # day keeping the time CTMS has (ctms_items.collection_fix)
+            s["collect_same_day"] = True
+        elif when in COLLECT_DAYS and yard0 and yard1:
             day = datetime.strptime(date, "%d/%m/%Y") - timedelta(days=1 if when == "the day before" else 0)
             storage = 0
             if day.weekday() == 6 and when == "the day before":       # a Monday delivery: Friday, STORAGE x2

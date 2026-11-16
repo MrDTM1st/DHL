@@ -649,6 +649,29 @@ def test_the_apps_card_is_searched_where_the_access_bridge_places_it():
         assert "os-card" in str(e) and o.typed == []
 
 
+
+# -- his 65-mile same-day rule (16/11): only the day moves, the time CTMS has stays
+def test_a_same_day_collection_moves_only_its_day_onto_the_delivery_day():
+    s = dict(DELIVER_ONLY, collect_same_day=True)
+    o = FakeOrder(ready="17/11/26 07:30", deliver_by="17/11/26 16:46", have=("HIAB",))
+    o.once_saved = ("18/11/26 07:30", "18/11/26 11:00")
+    said = _items(o).update(o.ref, s)
+    assert "18/11/26" in o.typed and "07:30" not in o.typed
+    assert "collection moved to 18/11/26 (it was 17/11/26 07:30)" in said
+
+
+def test_a_same_day_collection_already_that_morning_is_left_alone():
+    assert I.collection_fix("X", dict(DELIVER_ONLY, collect_same_day=True), {"ready_at": "18/11/26 07:00"}) == {}
+
+
+def test_a_same_day_collection_after_the_delivery_time_stops_with_nothing_typed():
+    try:
+        I.collection_fix("X", dict(DELIVER_ONLY, collect_same_day=True), {"ready_at": "17/11/26 10:00"})
+        raise AssertionError("should have stopped")
+    except I.Stop as e:
+        assert "same-day collection at its 10:00" in str(e)
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

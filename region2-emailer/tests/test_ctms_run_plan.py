@@ -575,6 +575,75 @@ def test_artics_ok_in_one_run_on_sentence_reads_as_yes():
         DD.recall = keep
 
 
+
+# -- his 65-mile same-day rule (16/11)
+def _near(monkeypatch, miles, minutes):
+    import same_day
+    monkeypatch.setattr(same_day, "road", lambda *a, **k: {"miles": miles, "seconds": minutes * 60})
+
+
+def _with_time(order, date, start, end):
+    rec = _rec(order, date, time={"earliest": start, "latest": end, "confidence": "high"})
+    rec["postcode"] = "TS1 1AA"
+    return rec
+
+
+def test_a_near_daytime_delivery_the_yard_can_reach_is_collected_the_same_day(monkeypatch):
+    _near(monkeypatch, 42, 65)                                          # yard opens 08:00, +1 h 05 = 09:05
+    rec = _with_time("9100201", "18/11/2026", "10:00", "12:00")
+    p = P.plan([_item("9100201")], [rec], _found("9100201", "18/11/2026"))[0]
+    assert p["status"] == "ready", p["checks"]
+    assert p["set"]["collect_same_day"] is True and "collect" not in p["set"]   # only the day moves, on the work PC
+    assert any("same day: 42 miles" in x and "1 h 05" in x for x in p["explain"]), p["explain"]
+
+
+def test_over_65_miles_is_still_collected_the_day_before(monkeypatch):
+    _near(monkeypatch, 73.4, 80)
+    rec = _with_time("9100202", "18/11/2026", "10:00", "12:00")
+    p = P.plan([_item("9100202")], [rec], _found("9100202", "18/11/2026"))[0]
+    assert "collect_same_day" not in p["set"] and p["set"]["collect"] == "17/11/26 08:00-15:45"
+    assert any("73.4 miles, over 65" in x for x in p["explain"]), p["explain"]
+
+
+def test_a_yard_that_opens_too_late_to_make_the_delivery_collects_the_day_before(monkeypatch):
+    _near(monkeypatch, 50, 75)                                          # 08:00 + 1 h 15 = 09:15, after 09:00
+    rec = _with_time("9100203", "18/11/2026", "09:00", "11:00")
+    p = P.plan([_item("9100203")], [rec], _found("9100203", "18/11/2026"))[0]
+    assert "collect_same_day" not in p["set"] and p["set"]["collect"] == "17/11/26 08:00-15:45"
+    assert any("gets there 09:15, after the 09:00 delivery" in x for x in p["explain"]), p["explain"]
+
+
+def test_a_near_afternoon_delivery_needs_no_question(monkeypatch):
+    _near(monkeypatch, 30, 45)
+    rec = _with_time("9100204", "18/11/2026", "13:00", "15:00")
+    p = P.plan([_item("9100204")], [rec], _found("9100204", "18/11/2026"))[0]
+    assert p["status"] == "ready" and p["set"]["collect_same_day"] is True
+    assert not any(c["field"] == "collect" for c in p["checks"])
+
+
+def test_a_night_delivery_keeps_the_old_rule_however_near(monkeypatch):
+    _near(monkeypatch, 10, 20)
+    rec = _with_time("9100205", "18/11/2026", "22:00", "23:59")
+    p = P.plan([_item("9100205")], [rec], _found("9100205", "18/11/2026"))[0]
+    assert "collect_same_day" not in p["set"] and any(c["field"] == "collect" for c in p["checks"])
+
+
+def test_a_near_monday_delivery_is_collected_monday_with_no_storage(monkeypatch):
+    _near(monkeypatch, 20, 30)
+    rec = _with_time("9100206", "16/11/2026", "10:00", "12:00")         # a Monday
+    p = P.plan([_item("9100206")], [rec], _found("9100206", "16/11/2026"))[0]
+    assert p["set"]["collect_same_day"] is True and "storage" not in p["set"]
+
+
+def test_no_road_answer_leaves_the_old_rule(monkeypatch):
+    import same_day
+    monkeypatch.setattr(same_day, "road", lambda *a, **k: None)
+    rec = _with_time("9100207", "18/11/2026", "10:00", "12:00")
+    p = P.plan([_item("9100207")], [rec], _found("9100207", "18/11/2026"))[0]
+    assert p["set"]["collect"] == "17/11/26 08:00-15:45"
+    assert any("couldn't be worked out" in x for x in p["explain"])
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
