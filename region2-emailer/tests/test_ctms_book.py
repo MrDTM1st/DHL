@@ -58,6 +58,7 @@ class FakeCtms:
         self.frames_extra = []
         self.status_line = ""
         self.panel = None
+        self.planning_tab = None        # a Planning tab showing, when the fake has its tabs (None: it hasn't)
         self.selection = []
         self.honours_selecting = True   # False: CTMS's Create New Trip takes the current row alone
         self.rows_a_page = 15
@@ -107,6 +108,9 @@ class FakeCtms:
                {"r": "list", "nm": "", "lv": 2, "at": [750, 369, 73, 182] if self.to_list else [-1, -1, -1, -1]}]
         if self.to_list:
             els += [{"r": "label", "nm": self.to_list, "lv": 3, "at": [750, 369, 73, 22], "st": ["selected"]}]
+        if self.planning_tab is not None:
+            els += [{"r": "page tab", "nm": name, "lv": 1, "at": at, "st": ["selected"] if self.planning_tab == name else None}
+                    for name, at in (("Stops", [520, 150, 73, 23]), ("Finance", [810, 150, 73, 23]))]
         els += [{"r": "push button", "nm": "Cust Ref", "lv": 1, "at": [X0, 560, 100, 25]},
                {"r": "push button", "nm": "Deliver From", "lv": 1, "at": [1127, 560, 66, 25]},
                {"r": "label", "nm": self.status_line or "<OSC>", "lv": 1, "at": [416, 949, 1162, 16]}]
@@ -400,6 +404,9 @@ class FakeCtms:
                 return
             if self.up == "carrier" and self.list and self.list_click(sc):
                 return
+            if self.planning_tab is not None and list(sc) == [520 + 36, 150 + 11]:
+                self.planning_tab = "Stops"
+                return
             if self.named_click(sc):
                 return
             if self.panel and not self.panel_stuck and list(sc) == [503 + 1006 - B.PLANNED_X, 513 + B.PLANNED_Y]:
@@ -421,7 +428,7 @@ class FakeCtms:
             return
         if px == B.TYPE_LIST and self.card and self.card_tab == "Add Detail":
             self.types = {"find": "%", "rows": list(self.type_list)}
-        elif px == B.ORDERS_BUTTON:
+        elif px == B.ORDERS_BUTTON and self.planning_tab in (None, "Stops"):    # only the Stops tab has it
             self.panel = list(self.trip_lines.get(self.selected) or [""])
         elif px == B.PLANNING_SAVE:
             self.saved += 1
@@ -526,6 +533,14 @@ def test_closing_planned_orders_uses_where_it_really_sits_never_the_new_order_bu
     job = _book(ctms)
     assert job.trips[0]["status"] == "ACCEPTED" and ctms.card is None and ctms.panel is None
     assert not [s for s in ctms.steps if tuple(s.get("px") or ()) == NEW_ORDER]
+
+
+def test_the_stops_tab_is_put_up_before_planned_orders_so_the_trip_reaches_accepted():
+    # live 16/11: Finance left showing - Planned Orders' button isn't on it, and the new trip stayed PLANNED
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.planning_tab = "Finance"
+    job = _book(ctms)
+    assert ctms.planning_tab == "Stops" and job.trips[0]["status"] == "ACCEPTED"
 
 
 def test_a_panel_that_wont_close_stops_before_accepted():

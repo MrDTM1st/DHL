@@ -21,9 +21,10 @@ PANEL = "Order Filters"
 REGION = "To Plan Reg"           # the delivery end's region, the panel's (his 02/11, again 09/11)
 STRATEGY = "Business Type"         # Advanced's: "Strategy 1 - Flats & Hiabs", "Strategy 6 - Ad-Hoc/Projects" ...
 ADVANCED = "Advanced Order Filters"
-# Drop-downs whose list has no blank row (16/11: Business Type lists Strategy 1 .. Strategy 10, To Plan Reg MULTI and
-# PR1 .. PR4): moved from one value to another, never emptied - so they're never "cleared", only left as they are
-NO_BLANK = ("Business Type", "To Plan Reg")
+# Drop-downs whose list has no blank row (16/11: Business Type lists Strategy 1 .. Strategy 10): moved from one value to
+# another, never emptied - so it's never "cleared", only left as it is. To Plan Reg has one, below PR4, but nameless: the
+# Access Bridge hands over MULTI .. PR4 and nothing for it, so a blank box shows no row picked (seen live 16/11)
+NO_BLANK = ("Business Type",)
 # A clean well, as seen 03/11: what each box holds when nothing is filtered
 CLEAN = {"Delivery Type": "All", "Service Type": "All", "Show All Orders": True, "Inc Nulls?": True}
 # Boxes the Access Bridge hands over with no name: told by where they sit from their window's top left (03/11)
@@ -140,11 +141,16 @@ def moves(rows, want):
     row, nothing is picked, or it is further than KEYS_MAX."""
     names = [n for n, _ in rows]
     at = next((k for k, (_, on) in enumerate(rows) if on), None)
+    if want == "" and "" not in names:
+        # the nameless blank row under the named ones (To Plan Reg, 16/11): down past the last
+        if at is None:
+            return []                  # nothing picked: it's on the blank already
+        return ["down"] * (len(names) - at) if len(names) - at <= KEYS_MAX else None
     if want not in names:
         return None
     to = names.index(want)
-    if at is None:                     # nothing picked yet: Down picks the top row, then on down (read back after)
-        return ["down"] * (to + 1) if to < KEYS_MAX else None
+    if at is None:                     # nothing picked: the box is on that blank row, under the rest - up from it
+        return ["up"] * (len(names) - to) if len(names) - to <= KEYS_MAX else None
     if abs(to - at) > KEYS_MAX:
         return None
     return ["down" if to > at else "up"] * abs(to - at)

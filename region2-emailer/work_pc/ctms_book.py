@@ -1242,8 +1242,20 @@ class Booking:
         raise Stop("The trip was confirmed and saved, but no new manifest showed on the tree - look at Planning. "
                    "Pressing Book again would not make another: the line has gone from the well.")
 
+    def stops_tab(self):
+        """Planning's Stops tab up: its Orders button opens Planned Orders, and no other tab has it (16/11: Finance left
+        showing, so Accept found no Planned Orders and the trip stayed PLANNED). A first click may only give Java the focus."""
+        for _ in range(2):
+            tab = next((e for e in ctms_rows._frame(self.els) or [] if e.get("r") == "page tab" and e.get("nm") == "Stops"),
+                       None)
+            if tab is None or not placed(tab) or "selected" in (tab.get("st") or []):
+                return
+            self.run([{"action": "click", "screen": _at(tab), "after": 0.5}])
+            self.look(tree=True)
+
     def planned(self):
         """The lines Planned Orders shows on the manifest just made."""
+        self.stops_tab()
         self.run([_click(ORDERS_BUTTON, after=0.9)])
         self.look()
         there = planned_refs(self.els)

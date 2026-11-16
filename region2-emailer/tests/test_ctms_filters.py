@@ -14,7 +14,7 @@ import ctms_filters as F  # noqa: E402
 
 PANEL_AT, ADV_AT = [30, 491, 426, 456], [378, 284, 523, 574]
 BUSINESS = ["", "Strategy 1 - Flats & Hiabs", "Strategy 2 - Bulk", "Strategy 3 - Rails", "Strategy 6 - Ad-Hoc/Projects"]
-REGIONS = ["MULTI", "PR1", "PR2", "PR3", "PR4"]
+REGIONS = ["MULTI", "PR1", "PR2", "PR3", "PR4", ""]      # live 16/11: a blank row under PR4, handed over with no name
 DELIVERY = ["All", "STANDARD", "NEXT DAY", "EMERGENCY"]
 
 
@@ -68,7 +68,7 @@ class Filters:
                     # its rows are the window's own labels, laid over the box with the picked one level with it
                     k0 = self.open_list[1]
                     els += [{"r": "label", "nm": row, "lv": 1, "at": [bat[0] - 9, bat[1] + 22 * (k - k0), 70, 22],
-                             "st": ["selected"] if k == k0 else None} for k, row in enumerate(self.lists[n])]
+                             "st": ["selected"] if k == k0 else None} for k, row in enumerate(self.lists[n]) if row]
                 elif self.open_list and self.open_list[0] == n:
                     els += [{"r": "label", "nm": row, "lv": 2, "at": [bat[0], bat[1] + 23 * (k + 1), 200, 22],
                              "st": ["selected"] if k == self.open_list[1] else None} for k, row in enumerate(self.lists[n])]
@@ -153,8 +153,10 @@ def test_an_open_list_is_moved_by_its_keys_never_a_click_on_its_row():
     rows = [("", False), ("A", True), ("B", False), ("C", False)]
     assert F.moves(rows, "C") == ["down", "down"] and F.moves(rows, "") == ["up"] and F.moves(rows, "A") == []
     assert F.moves(rows, "Z") is None
-    # nothing picked yet: Down picks the top row, then on down - read back after, like every move
-    assert F.moves([("A", False), ("B", False)], "B") == ["down", "down"] and F.moves([("A", False)], "Z") is None
+    # nothing picked: the box is on the nameless blank row under the rest (To Plan Reg, 16/11) - up from it; down to it
+    regions = [("MULTI", False), ("PR1", False), ("PR2", False), ("PR3", False), ("PR4", False)]
+    assert F.moves(regions, "PR2") == ["up"] * 3 and F.moves(regions, "") == []
+    assert F.moves([(n, n == "PR2") for n, _ in regions], "") == ["down"] * 3 and F.moves(regions, "Z") is None
 
 
 def test_his_filters_are_cleared_to_find_the_order_and_put_back_after():
@@ -198,15 +200,25 @@ def test_a_rehearsal_says_which_filters_it_would_clear_and_clears_none():
     assert "would be cleared and put back: Delivery Type 'NEXT DAY'" in job.said[-1]
 
 
-def test_business_type_and_to_plan_reg_are_never_emptied_only_left_as_they_are():
-    # live 16/11: their lists have no blank row (Strategy 1 .. 10; MULTI, PR1 .. PR4) - trying to empty them is what
-    # stopped two Books on "the well's filters wouldn't all clear (Business Type, To Plan Reg)"
+def test_business_type_is_never_emptied_but_to_plan_reg_goes_to_its_nameless_blank():
+    # live 16/11: Business Type's list has no blank row (Strategy 1 .. 10) - trying to empty it stopped two Books on "the
+    # well's filters wouldn't all clear". To Plan Reg's blank row is there, under PR4, only nameless
     f = Filters(business="Strategy 4 - Tippers", region="PR2")
     job = _job(f)
     job.look()
-    assert job.clear_filters() is False                 # nothing else to clear: not a filter of his hiding it
-    assert f.vals["Business Type"] == "Strategy 4 - Tippers" and f.vals["To Plan Reg"] == "PR2" and not f.panel
-    assert job.kept_filters == {"Business Type": "Strategy 4 - Tippers", "To Plan Reg": "PR2"}
+    assert job.clear_filters() is True
+    assert f.vals["Business Type"] == "Strategy 4 - Tippers" and f.vals["To Plan Reg"] == "" and not f.panel
+    assert job.kept_filters == {"Business Type": "Strategy 4 - Tippers"}
+    job.restore_filters()
+    assert f.vals["To Plan Reg"] == "PR2" and job.said[-1] == "the well's filters put back as they were"
+
+
+def test_a_blank_to_plan_reg_is_put_on_the_orders_region():
+    # live 16/11: a booking's tidy left To Plan Reg blank, and Book couldn't move it - no row read as picked
+    f = Filters(business="Strategy 4 - Tippers", region="")
+    job = _job(f)
+    job.set_filters("R2", "Strategy 4 - Tippers")
+    assert f.vals["To Plan Reg"] == "PR2" and f.applied == ["Refresh"] and job.said[-1] == "the well on PR2 / Strategy 4 - Tippers"
 
 
 def test_a_region_is_named_the_way_to_plan_reg_lists_it():
