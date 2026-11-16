@@ -109,6 +109,19 @@ def region_for(postcode):
         return ""
 
 
+TIPPERS = "Strategy 4 - Tippers"     # the well's Business Type for loose ballast and stoneblowers (his 16/11)
+
+
+def strategy_for(rec):
+    """The well's strategy for an order when its material says it: loose ballast and stoneblower stone are on Strategy 4,
+    the tippers (his 16/11). "" when it isn't known - the well is then filtered on the region alone."""
+    try:
+        import ctms_run_plan
+        return TIPPERS if ctms_run_plan.tipped(rec or {}) else ""
+    except Exception:
+        return ""
+
+
 def owed_first(orders, listing=None):
     """What the CTMS to-do has for these orders that has to go on before the booking."""
     import ctms_todo
@@ -971,8 +984,9 @@ def book(job, R=None, now=None):
     region = job.get("region") or region_for(rec.get("postcode"))
     if region:
         args["region"] = region
-    if job.get("strategy"):
-        args["strategy"] = job["strategy"]
+    strategy = job.get("strategy") or strategy_for(rec)
+    if strategy:
+        args["strategy"] = strategy
     wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
     numbered = []
     if not dry:

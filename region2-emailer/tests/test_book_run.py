@@ -266,3 +266,13 @@ def test_the_well_is_filtered_on_the_delivery_ends_region():
     # his 09/11: Book puts Order Filters on the order's region before it looks for the order
     import book_run as BR
     assert BR.region_for("LU2 9PW") == "R4" and BR.region_for("DN16 1BP") == "R2" and BR.region_for("") == ""
+
+
+def test_loose_ballast_and_stoneblowers_are_looked_for_on_strategy_4():
+    # his 16/11: loose ballast is on Strategy 4, the same as stoneblowers
+    import book_run as BR
+    assert BR.strategy_for({"materials": "40x loose ballast"}) == "Strategy 4 - Tippers"
+    assert BR.strategy_for({"materials": "ballast", "product_codes": ["0057/100500/001"]}) == "Strategy 4 - Tippers"
+    assert BR.strategy_for({"materials": "20x stoneblower stone"}) == "Strategy 4 - Tippers"
+    assert BR.strategy_for({"materials": "80x ballast", "product_codes": ["0057/100500/002"]}) == ""   # bags
+    assert BR.strategy_for({"materials": "37x rails"}) == "" and BR.strategy_for(None) == ""
