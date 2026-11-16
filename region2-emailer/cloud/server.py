@@ -496,6 +496,14 @@ def _ctms_args(action, data):
         out["dry"] = bool(data.get("dry"))
         num("haulage", 0, 100000)
         num("vehicles", 1, 20, int)
+        # the well's filters Book puts on before it looks (his 09/11, again 16/11): the delivery end's region and the
+        # order's strategy when known. Dropped here until 16/11, so Book looked through whatever filters were on
+        reg = str(data.get("region") or "").strip().upper()
+        if re.fullmatch(r"P?R?\d{1,2}", reg):
+            out["region"] = reg
+        strat = str(data.get("strategy") or "").strip()
+        if re.fullmatch(r"Strategy \d{1,2} - [A-Za-z0-9&/ .,'()-]{1,40}", strat):
+            out["strategy"] = strat
         q = data.get("qty") if isinstance(data.get("qty"), dict) else {}
         qty = {}
         for k, v in list(q.items())[:8]:              # the order's quantity, where the desk knows it: Book checks the lines
@@ -526,6 +534,8 @@ def _ctms_args(action, data):
             out["item"]["set"]["storage"] = int(s["storage"]) if re.fullmatch(r"[0-9]{1,6}", str(s["storage"])) else 0
         if s.get("anyway"):
             out["item"]["set"]["anyway"] = True
+        if s.get("collect_same_day"):                  # his 65-mile rule (16/11): only the collection's day moves
+            out["item"]["set"]["collect_same_day"] = True
         out["first"], out["last"], out["dry"] = bool(data.get("first")), bool(data.get("last")), bool(data.get("dry"))
     if action == "ctms_check" and isinstance(data.get("orders"), list):
         # the map's orders to look up: a customer ref, the day it is due, whether to look at its Veh Type

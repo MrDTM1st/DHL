@@ -303,6 +303,14 @@ def test_odd_input_is_dropped_never_the_connection():
     assert "seconds" not in a("wait", {"seconds": float("nan")})
     assert "at" not in a("click", {"at": [10 ** 400, 1]}) and "box" not in a("snap", {"box": [10 ** 400, 0, 1, 1]})
     assert "qty" not in a("ctms_book", {"qty": {"9100001": 10 ** 400}})
+    # Book's well filters (16/11 - they were dropped here, so Book never set them)
+    b = a("ctms_book", {"orders": ["9100001"], "region": "r2", "strategy": "Strategy 4 - Tippers"})
+    assert b["region"] == "R2" and b["strategy"] == "Strategy 4 - Tippers"
+    b = a("ctms_book", {"region": "North; DROP", "strategy": "anything at all"})
+    assert "region" not in b and "strategy" not in b
+    it = a("ctms_item", {"item": {"lines": ["9100001-1-1"], "set": {"deliver": "18/11/26 10:00-12:00",
+                                                                     "collect_same_day": True}}})["item"]
+    assert it["set"]["collect_same_day"] is True
     # and through the door: an answer, never a dropped connection
     fresh()
     try:

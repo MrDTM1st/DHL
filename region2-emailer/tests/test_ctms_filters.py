@@ -21,7 +21,8 @@ DELIVERY = ["All", "STANDARD", "NEXT DAY", "EMERGENCY"]
 class Filters:
     """Planning with Order Filters and Advanced Order Filters: drop-downs that only move by their keys."""
 
-    def __init__(self, business="", delivery="All", show_all=True, weight="", stuck=(), region=None, named_by_value=False):
+    def __init__(self, business="", delivery="All", show_all=True, weight="", stuck=(), region=None, named_by_value=False,
+                 dead_search=False):
         self.vals = {"Business Type": business, "Delivery Type": delivery, "Show All Orders": show_all, "Weight": weight}
         if region is not None:
             self.vals["To Plan Reg"] = region
@@ -32,6 +33,7 @@ class Filters:
         self.stuck = set(stuck)           # boxes CTMS won't change
         self.focus = None
         self.applied = []
+        self.dead_search = dead_search    # a Search click that only gives CTMS the focus, every time
 
     def _boxes(self):
         return {"Delivery Type": ("combo box", [506, 319, 225, 27], ADV_AT, "Delivery Type"),
@@ -99,8 +101,12 @@ class Filters:
                     self.adv = True
                 elif b == "Close":
                     self.adv = False
+                elif b == "Search" and self.dead_search:
+                    pass
                 else:
                     self.applied.append(b)
+                    if b == "Search":           # live 16/11: Search puts the filters on and closes Advanced
+                        self.adv = False
                 return
         for n, (role, bat, _w, _nm) in self._boxes().items():
             if bat[0] <= sc[0] <= bat[0] + bat[2] and bat[1] <= sc[1] <= bat[1] + bat[3]:
@@ -146,7 +152,9 @@ def test_a_clean_well_has_nothing_set():
 def test_an_open_list_is_moved_by_its_keys_never_a_click_on_its_row():
     rows = [("", False), ("A", True), ("B", False), ("C", False)]
     assert F.moves(rows, "C") == ["down", "down"] and F.moves(rows, "") == ["up"] and F.moves(rows, "A") == []
-    assert F.moves(rows, "Z") is None and F.moves([("A", False)], "A") is None
+    assert F.moves(rows, "Z") is None
+    # nothing picked yet: Down picks the top row, then on down - read back after, like every move
+    assert F.moves([("A", False), ("B", False)], "B") == ["down", "down"] and F.moves([("A", False)], "Z") is None
 
 
 def test_his_filters_are_cleared_to_find_the_order_and_put_back_after():
@@ -154,8 +162,10 @@ def test_his_filters_are_cleared_to_find_the_order_and_put_back_after():
     job = _job(f)
     job.look()
     assert job.clear_filters() is True
-    assert f.vals == {"Business Type": "", "Delivery Type": "All", "Show All Orders": True, "Weight": ""}
+    # Business Type has no blank row (16/11): left as it is, and said
+    assert f.vals == {"Business Type": "Strategy 2 - Bulk", "Delivery Type": "All", "Show All Orders": True, "Weight": ""}
     assert "Search" in f.applied and "Refresh" in f.applied and not f.panel and not f.adv
+    assert "left on Business Type 'Strategy 2 - Bulk': those can't be emptied" in job.said[-1]
     job.restore_filters()
     assert f.vals == {"Business Type": "Strategy 2 - Bulk", "Delivery Type": "NEXT DAY", "Show All Orders": False,
                       "Weight": "5000"}
@@ -170,22 +180,33 @@ def test_no_filter_on_means_nothing_touched():
 
 
 def test_a_filter_that_wont_go_back_is_said_for_him_to_put_back():
-    f = Filters(business="Strategy 2 - Bulk")
+    f = Filters(delivery="NEXT DAY")
     job = _job(f)
     job.look()
     job.clear_filters()
-    f.stuck.add("Business Type")
+    f.stuck.add("Delivery Type")
     job.restore_filters()
-    assert job.said[-1] == "PUT BACK BY HAND on the well's filters: Business Type 'Strategy 2 - Bulk'"
+    assert job.said[-1] == "PUT BACK BY HAND on the well's filters: Delivery Type 'NEXT DAY'"
 
 
 def test_a_rehearsal_says_which_filters_it_would_clear_and_clears_none():
-    f = Filters(business="Strategy 2 - Bulk")
+    f = Filters(delivery="NEXT DAY")
     job = _job(f)
     job.dry = True
     job.look()
-    assert job.clear_filters() is False and f.vals["Business Type"] == "Strategy 2 - Bulk"
-    assert "would be cleared and put back: Business Type 'Strategy 2 - Bulk'" in job.said[-1]
+    assert job.clear_filters() is False and f.vals["Delivery Type"] == "NEXT DAY"
+    assert "would be cleared and put back: Delivery Type 'NEXT DAY'" in job.said[-1]
+
+
+def test_business_type_and_to_plan_reg_are_never_emptied_only_left_as_they_are():
+    # live 16/11: their lists have no blank row (Strategy 1 .. 10; MULTI, PR1 .. PR4) - trying to empty them is what
+    # stopped two Books on "the well's filters wouldn't all clear (Business Type, To Plan Reg)"
+    f = Filters(business="Strategy 4 - Tippers", region="PR2")
+    job = _job(f)
+    job.look()
+    assert job.clear_filters() is False                 # nothing else to clear: not a filter of his hiding it
+    assert f.vals["Business Type"] == "Strategy 4 - Tippers" and f.vals["To Plan Reg"] == "PR2" and not f.panel
+    assert job.kept_filters == {"Business Type": "Strategy 4 - Tippers", "To Plan Reg": "PR2"}
 
 
 def test_a_region_is_named_the_way_to_plan_reg_lists_it():
@@ -206,6 +227,23 @@ def test_the_well_is_put_on_the_orders_region_and_strategy_before_the_order_is_l
     assert f.vals["To Plan Reg"] == "PR4" and f.vals["Business Type"] == "Strategy 6 - Ad-Hoc/Projects"
     assert "Search" in f.applied and "Refresh" in f.applied and not f.panel and not f.adv
     assert job.said[-1] == "the well on PR4 / Strategy 6 - Ad-Hoc/Projects"
+
+
+def test_a_strategy_alone_goes_on_by_advanced_search_with_no_refresh_after():
+    # his 16/11, loose ballast: the region checked, then the strategy - Advanced's Search re-queries the well itself
+    f = Filters(business="Strategy 1 - Flats & Hiabs", region="PR2", named_by_value=True)
+    job = _job(f)
+    job.set_filters("R2", "Strategy 6 - Ad-Hoc/Projects")
+    assert f.vals["Business Type"] == "Strategy 6 - Ad-Hoc/Projects" and f.applied == ["Search"]
+    assert not f.panel and not f.adv and job.said[-1] == "the well on PR2 / Strategy 6 - Ad-Hoc/Projects"
+
+
+def test_a_search_that_never_runs_stops_the_booking_rather_than_look_through_the_wrong_filters():
+    import pytest
+    f = Filters(business="Strategy 1 - Flats & Hiabs", region="PR2", dead_search=True)
+    job = _job(f)
+    with pytest.raises(B.Stop, match="Search wouldn't run"):
+        job.set_filters("R2", "Strategy 6 - Ad-Hoc/Projects")
 
 
 def test_filters_already_right_are_left_alone():

@@ -980,11 +980,19 @@ class Booking:
         return got is not None and ctms_filters.value(got) == want
 
     def apply_filters(self, window):
-        """The window's own button that puts its filters on the well: Advanced's Search, the panel's Refresh."""
-        btn = ctms_lines.button(self.els, window, "Search" if window == ctms_filters.ADVANCED else "Refresh")
-        if btn is not None:
+        """The window's own button that puts its filters on the well: Advanced's Search, the panel's Refresh. Advanced's
+        Search closes its window when it runs (seen 16/11): still up, the click only gave CTMS's Java the focus - pressed
+        again, and a Search that never runs stops the booking rather than looking through the wrong filters."""
+        name = "Search" if window == ctms_filters.ADVANCED else "Refresh"
+        for _ in range(3 if window == ctms_filters.ADVANCED else 1):
+            btn = ctms_lines.button(self.els, window, name)
+            if btn is None:
+                return
             self.run([{"action": "click", "screen": _at(btn), "after": 0.6}, {"action": "settle", "quiet": 0.6, "timeout": 20}])
             self.look()
+            if window != ctms_filters.ADVANCED or ctms_filters.boxes(self.els, window) is None:
+                return
+        raise Stop("Advanced Order Filters' Search wouldn't run, so the well isn't on the order's filters. Nothing was booked.")
 
     def close_filters(self):
         """Advanced's Close, then the panel by its own X (where it sits: it doesn't open in one place)."""
@@ -1004,6 +1012,9 @@ class Booking:
         self.filter_window(ctms_filters.PANEL)
         self.filter_window(ctms_filters.ADVANCED)
         was = {w: ctms_filters.set_ones(ctms_filters.values(self.els, w)) for w in (ctms_filters.ADVANCED, ctms_filters.PANEL)}
+        # Business Type and To Plan Reg have no blank row to go to (16/11): left as they are, and said
+        self.kept_filters = {n: v for vs in was.values() for n, v in vs.items() if n in ctms_filters.NO_BLANK}
+        was = {w: {n: v for n, v in vs.items() if n not in ctms_filters.NO_BLANK} for w, vs in was.items()}
         was = {w: v for w, v in was.items() if v}
         if not was:
             self.close_filters()
@@ -1026,7 +1037,8 @@ class Booking:
                 if w == ctms_filters.ADVANCED and ctms_filters.boxes(self.els, ctms_filters.PANEL) is None:
                     self.filter_window(ctms_filters.PANEL)
         self.close_filters()
-        self.said.append("the well's filters cleared to find it: " + "; ".join(ctms_filters.said(v) for v in was.values()))
+        self.said.append("the well's filters cleared to find it: " + "; ".join(ctms_filters.said(v) for v in was.values())
+                         + (f" (left on {ctms_filters.said(self.kept_filters)}: those can't be emptied)" if self.kept_filters else ""))
         if stuck:
             raise Stop(f"The well's filters wouldn't all clear ({', '.join(stuck)}). Nothing was booked.")
         return True
@@ -1057,7 +1069,7 @@ class Booking:
                     stuck.append(f"{ctms_filters.STRATEGY} {strategy}")
         if ctms_filters.ADVANCED in changed:
             self.apply_filters(ctms_filters.ADVANCED)
-        if changed:                        # the panel's Refresh re-queries the well, whichever was changed
+        if ctms_filters.PANEL in changed:  # a new region: the panel's Refresh (Advanced's Search re-queries the well itself)
             if ctms_filters.boxes(self.els, ctms_filters.PANEL) is None:
                 self.filter_window(ctms_filters.PANEL)
             self.apply_filters(ctms_filters.PANEL)
@@ -1335,7 +1347,11 @@ class Booking:
                 self.set_day(sched_for_day(date))
                 lines = self.lines(orders, date)
             if not lines:
-                raise Stop((f"{named} is in CTMS, unscheduled for {date}, but the order well won't show it even with its "
+                kept = getattr(self, "kept_filters", None) or {}
+                raise Stop((f"{named} is in CTMS, unscheduled for {date}, but the order well won't show it with the well on "
+                            f"{ctms_filters.said(kept)} - check the order's region and Business Type in CTMS (those two "
+                            "can't be emptied)." if why == "hidden" and kept else
+                            f"{named} is in CTMS, unscheduled for {date}, but the order well won't show it even with its "
                             "filters as a clean well has them - look at the well's layout." if why == "hidden" else why)
                            + " Nothing was booked.")
         want = sched_for_delivery(lines[0].get("deliver"))
