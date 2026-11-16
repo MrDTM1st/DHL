@@ -250,6 +250,13 @@ def _ctms_going_locked(kind):
     return bool(run and run.get("state") == "running" and time.time() < run["until"])
 
 
+def _rail_sending_locked():
+    """Whether the Rail plan card's one go is past its export and still emailing the plans (his 16/11) - CTMS is
+    free again by then, but another rail run is not started over it. One past its time is over."""
+    run = _ctms["rail_run"]
+    return bool(run and run.get("state") == "sending" and time.time() < run.get("sending_until", 0))
+
+
 def _rejection_start_locked(ids, by):
     """The CTMS page's rejection Send - or Auto's (11/11): the ready responses filled in and submitted on the work PC
     one after another by the home PC (rejections.py run), as the to-do's Run types its items. Look mum, no hands on for
@@ -560,6 +567,7 @@ _TODO_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")          # a CTMS to-do item's id
 _TODO_FIELDS = {"date", "time", "offloading", "rear_steer", "pts", "veh", "collect", "contact", "already"}
 _TODO_RUN_MAX = 12          # items in one Run - ~1-2 min each on the work PC
 _RAIL_RUN_MINUTES = 15     # the one-click rail export: Look mum, no hands on for this long at most (~3 min a run)
+_RAIL_SEND_MINUTES = 10    # ... then the plans built and emailed (the card's one go): another rail run waits this long
 _BOOK_RUN_MINUTES = 25       # the longest a Book runs: the to-do's update first, a few vehicles, the row, the email
 _BOOK_BATCH_MAX = 12         # bookings one Book approved takes: a morning's ready orders
 _REJECTION_RUN_MINUTES = 3   # a rejection form's share of a Send run: Look mum, no hands on for that a form (~40 s)
@@ -1988,7 +1996,8 @@ class Handler(BaseHTTPRequestHandler):
                     "looked_up": _ctms["looked_up"],          # the map's orders, last looked up in CTMS
                     "todo_run": ({k: v for k, v in _ctms["todo_run"].items() if k not in ("before", "until")}
                                  if _ctms["todo_run"] else None),
-                    "rail_run": ({k: v for k, v in _ctms["rail_run"].items() if k not in ("before", "until")}
+                    "rail_run": ({k: v for k, v in _ctms["rail_run"].items()
+                                  if k not in ("before", "until", "export")}     # a held export stays here
                                  if _ctms["rail_run"] else None),
                     "book_run": ({k: v for k, v in _ctms["book_run"].items() if k not in ("before", "until")}
                                  if _ctms["book_run"] else None),
@@ -2518,16 +2527,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         if path == "/api/ctms/rail":
             # the Rail plan card's Export from CTMS (his "where is the execute rail plan button on the dashboard",
-            # 01/11): the week's Short Rail Report exported by the home PC driving CTMS (ctms_rail_export.py), the
-            # plan previewed from it - nothing sent. Look mum, no hands on for the run, back as it was when it ends
+            # 01/11): the week's Short Rail Report exported by the home PC driving CTMS (ctms_rail_export.py). With
+            # "send" - his 16/11 "do it all in one go from one button" - the home PC then builds the plans from that
+            # export and emails them; without it (a page from before) the plan is only previewed. Look mum, no hands
+            # on for the export, back as it was when it ends
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
             week = str(data.get("week") or "").strip().lower()
+            send = data.get("send") is True
             with _lock:
                 if week not in ("next", "current"):
                     out = (400, {"error": "Which week - next or current?"})
                 elif _ctms_going_locked("rail_run"):
                     out = (409, {"error": "The rail plan is being exported from CTMS already."})
+                elif _rail_sending_locked():
+                    out = (409, {"error": "The rail plan is being sent - it'll be a moment."})
                 elif _ctms_going_locked("todo_run"):
                     out = (409, {"error": "A CTMS to-do run is going - export when it's done."})
                 elif _ctms_going_locked("book_run"):
@@ -2541,27 +2555,46 @@ class Handler(BaseHTTPRequestHandler):
                     before = _ctms["control_until"]
                     until = max(before, time.time() + _RAIL_RUN_MINUTES * 60)
                     _ctms["control_until"], _ctms["armed_for"] = until, None
-                    _ctms["rail_run"] = {"id": rid, "week": week, "before": before, "until": until, "state": "running",
-                                         "at": datetime.now().strftime("%H:%M"), "said": ""}
+                    _ctms["rail_run"] = {"id": rid, "week": week, "send": send, "before": before, "until": until,
+                                         "state": "running", "at": datetime.now().strftime("%H:%M"), "said": ""}
                     _ctms_note_locked(f"Look mum, no hands mode switched on for the rail plan's CTMS export ({week} "
                                       "week) - back as it was when it ends.")
-                    _queue.append({"action": "ctms_rail", "week": week, "run": rid, "queued_at": time.time()})
+                    _queue.append({"action": "ctms_rail", "week": week, "send": send, "run": rid,
+                                   "queued_at": time.time()})
                     _ctms_cv.notify_all()
                     out = (200, {"ok": True, "run": rid, "agent": _agent_online()})
             return self._json(*out)
         if path == "/api/ctms/rail/ran":
-            # the home PC says the export ended: what it did - and the switch back as it was before it
+            # the home PC says the export ended: what it did - and the switch back as it was before it. "phase":
+            # "sending" = the card's one go, past its export and now emailing the plans: CTMS is done with, the run
+            # is not (a last ran says how the send-off went)
             if not self._is_agent():
                 return self._json(401, {"error": "auth"})
             with _lock:
                 run = _ctms["rail_run"]
                 if run and run["id"] == data.get("run"):
-                    run.update(state="done", ok=bool(data.get("ok")), said=str(data.get("said") or "")[:600],
-                               file=str(data.get("file") or "")[:80], ended=datetime.now().strftime("%H:%M"))
+                    said = str(data.get("said") or "")[:1200]
+                    if data.get("phase") == "sending":
+                        run.update(state="sending", said=said, sending_until=time.time() + _RAIL_SEND_MINUTES * 60)
+                    else:
+                        run.update(state="done", ok=bool(data.get("ok")), said=said,
+                                   file=str(data.get("file") or "")[:80], ended=datetime.now().strftime("%H:%M"))
+                        run.pop("export", None)
                     if _ctms["control_until"] == run["until"]:
                         _ctms["control_until"] = run["before"] if run["before"] > time.time() else 0.0
                         _ctms_note_locked("Rail plan's CTMS export ended - Look mum, no hands mode back as it was.")
             return self._json(200, {"ok": True})
+        if path == "/api/ctms/rail/file":
+            # the export the card's one go took, held here for its run (/api/ctms/export) - the home PC builds and
+            # sends the plans from this very file once the export has checked out
+            if not self._is_agent():
+                return self._json(401, {"error": "auth"})
+            with _lock:
+                run = _ctms["rail_run"]
+                got = dict(run["export"]) if run and run["id"] == data.get("run") and run.get("export") else None
+            if got is None:
+                return self._json(404, {"error": "No export is held for that run."})
+            return self._json(200, got)
         if path == "/api/ctms/stop":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
@@ -2588,18 +2621,26 @@ class Handler(BaseHTTPRequestHandler):
                        for n, f in _to_file.items()]
             return self._json(200, {"files": lst})
         if path == "/api/ctms/export":
-            # a Short Rail Report the bridge took from CTMS: the home PC builds the rail plan, as a preview
+            # a Short Rail Report the bridge took from CTMS. While the Rail plan card's one go is exporting (a run
+            # that sends, 16/11) it is held for that run: its home PC takes it once the export has checked out and
+            # builds and sends the plans. Any other - an export taken by hand - the home PC builds as a preview
             name, b64 = str(data.get("name") or ""), data.get("data")
             if not (_RAIL_EXPORT.fullmatch(name) and isinstance(b64, str) and 0 < len(b64) <= _RAIL_EXPORT_MAX):
                 return self._json(400, {"error": "not a Short Rail Report export"})
             with _lock:
-                _queue.append({"action": "rail_plan", "mode": "preview", "export": {"name": name, "data": b64},
-                               "queued_at": time.time()})
-                det = f"Rail plan from the CTMS export {name} queued"
-                if not _agent_online():
-                    det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
-                _status.update(state="queued", detail=det, at=datetime.now().strftime("%H:%M:%S"), output="",
-                               email=None)
+                run = _ctms["rail_run"]
+                held = bool(run and run.get("send") and _ctms_going_locked("rail_run") and not run.get("export"))
+                if held:
+                    run["export"] = {"name": name, "data": b64}
+                    det = f"Rail plan export {name} in - the plans are built and sent once the export checks out"
+                else:
+                    _queue.append({"action": "rail_plan", "mode": "preview", "export": {"name": name, "data": b64},
+                                   "queued_at": time.time()})
+                    det = f"Rail plan from the CTMS export {name} queued"
+                    if not _agent_online():
+                        det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"
+                _status.update(state="running" if held else "queued", detail=det,
+                               at=datetime.now().strftime("%H:%M:%S"), output="", email=None)
             return self._json(200, {"ok": True})
         if path == "/api/ctms/orders":
             # what the look-up found in CTMS: the home PC takes booked orders off the map, moves dates, marks a filled

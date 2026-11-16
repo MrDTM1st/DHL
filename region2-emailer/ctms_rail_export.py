@@ -1,9 +1,10 @@
 """
 The rail plan's CTMS export in one go - his "where is the execute rail plan button on the dashboard" (01/11): the
 Short Rail Report for a week exported from CTMS by the home PC driving it on the work PC (as ctms_run does), the file
-taken from its tab by the bridge, which sends it on - the home PC then builds the plan from it as a PREVIEW in Files,
-as it does every export. Sending stays his Build & send. The week: "next" is next Monday to Sunday, "current" this
-one - the Rail plan card's choice.
+taken from its tab by the bridge, which sends it on. Then - his 16/11 "do it all in one go from one button, which is
+export from CTMS" - the home PC builds the plans from that very file and emails them to each chain once this says
+the export checked out (agent.py ctms_rail_job); this script only ever exports. The week: "next" is next Monday to
+Sunday, "current" this one - the Rail plan card's two buttons.
 
   card      Administration > File Interfaces > Exports - or the Export card already up, taken as it is
   name      the Short Rail Report, picked from its list by its picture, unless the card shows it already
@@ -232,11 +233,10 @@ def export(R, which, today=None, state=None):
         closed = close_card(R)
     except Exception:
         closed = False
-    return {"week": f"{monday:%d/%m/%Y}-{sunday:%d/%m/%Y}", "file": name, "rows": rows,
+    return {"week": f"{monday:%d/%m/%Y}-{sunday:%d/%m/%Y}", "file": name, "rows": rows, "closed": closed,
             "said": (f"Exported the Short Rail Report for {monday:%d/%m} to {sunday:%d/%m} from CTMS - {name}, "
-                     f"{rows} row(s); its plan is being previewed into Files (nothing sent). "
-                     + "; ".join(said) + ". " + ("Export card closed." if closed else
-                                                 "The Export card did not close - close it yourself."))}
+                     f"{rows} row(s). " + "; ".join(said) + ". " + ("Export card closed." if closed else
+                                                                     "The Export card did not close - close it yourself."))}
 
 
 def run(which, today=None):

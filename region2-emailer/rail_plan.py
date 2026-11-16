@@ -341,7 +341,10 @@ def _mark_sent(path, name, now=None):
         print(f"   (not noted for the shared folder: {e})")
 
 
-def build(path, out_dir=None, update=False):
+def build(path, out_dir=None, update=False, info=None):
+    """The plans from a raw Short Rail Report -> (week commencing, [plan made], [mis-dated row]). `info`, a dict,
+    is filled with what a send-off checks before anything goes out (hold_reason): the rows kept, their days, whether
+    this week's earlier issues could be read from the mailbox, and the new manifests on an update."""
     hdr, data = load_raw(path)
     idx = {h.lower(): i for i, h in enumerate(hdr)}
     fl_i, fpc_i, dd_i, sch_i = idx["from location"], idx["from post code"], idx["delivery date"], idx["schedule"]
@@ -485,6 +488,11 @@ def build(path, out_dir=None, update=False):
             metrics.log("date_corrected", n=len(mism))   # CTMS mis-planned dates fixed
     except Exception:
         pass
+    if info is not None:
+        refs = {str(r[ordref_i]).strip() for r, _, _, _ in kept if ordref_i < len(r) and str(r[ordref_i]).strip()}
+        info.update(kept=len(kept), days=sorted({sch for _, _, sch, _ in kept if sch}),
+                    undated=sum(1 for _, _, sch, _ in kept if not sch), mail_read=found is not None,
+                    new=sorted(refs - prev_refs) if update and prev_refs is not None else None)
     return wc, made, mism
 
 
@@ -499,20 +507,52 @@ def recipients_for(m):
     return list(dict.fromkeys(x for x in to if x)), unmatched
 
 
-def sendoff(path, send=False, update=False):
+def hold_reason(info, wc, week=None):
+    """Why plans built from this export must not go out by themselves - '' when they may. The Rail plan card's
+    one go sends with no preview (his 16/11), so what a look at the preview used to catch is checked here: no rows
+    to send, another week's rows, a row with no day, or this week's earlier issues unreadable (every plan would go
+    out as v1, whatever has gone round)."""
+    if not info.get("kept"):
+        return "the export has no rail-supplier rows"
+    if info.get("undated"):
+        return f"{info['undated']} row(s) have no schedule day"
+    days = info.get("days") or []
+    if week is not None and (wc != week or not days or days[-1] > week + timedelta(days=6)):
+        return (f"the export runs {days[0]:%d/%m} to {days[-1]:%d/%m}, not the week of {week:%d/%m}" if days
+                else f"the export is not for the week of {week:%d/%m}")
+    if not info.get("mail_read"):
+        return "the mailbox could not be read for this week's earlier issues, so the versions could be wrong"
+    return ""
+
+
+def sendoff(path, send=False, update=False, week=None, out_dir=None):
     """Build the plans then draft/send one email per plan to its recipients.
     Plans are written to the outbox so they're downloadable from the dashboard.
-    update=True (current-week) greens the new manifests vs the previous plan."""
-    wc, made, mism = build(path, update=update)
+    update=True (current-week) greens the new manifests vs the previous plan. week (its Monday): the week the
+    plans must be for - nothing goes out when they are not, or when hold_reason finds another reason. -> what
+    happened: {wc, send, held, sent: [{name, rows, to, chain}], failed: [{name, why}], new, unmatched}."""
+    info = {}
+    wc, made, mism = build(path, out_dir=out_dir, update=update, info=info)
     wcs = wc.strftime("%d.%m") if wc else "TBC"
+    result = {"wc": wcs, "send": bool(send), "held": "", "sent": [], "failed": [], "new": info.get("new"),
+              "unmatched": []}
+    held = hold_reason(info, wc, week) if send else ""
     outlook = acct = ns = None
-    if send:
-        import win32com.client, build_drafts as bd, send_order as so
-        ns = bd.get_ns(); acct = so.dhl_account(ns)
-        outlook = win32com.client.Dispatch("Outlook.Application")
+    if send and not held:
+        try:
+            import win32com.client, build_drafts as bd, send_order as so
+            ns = bd.get_ns(); acct = so.dhl_account(ns)
+            outlook = win32com.client.Dispatch("Outlook.Application")
+        except Exception as e:
+            held = f"Outlook could not be opened ({str(e)[:120]})"
+    if held:
+        result["held"], send = held, False
     print(f"\n=== RAIL PLAN SEND-OFF wc {wcs}  ({'SENDING' if send else 'PREVIEW - nothing sent'}) ===")
+    if held:
+        print(f"   NOT SENT - {held}.")
     for m in made:
         to, unmatched = recipients_for(m)
+        result["unmatched"] += [u for u in unmatched if u not in result["unmatched"]]
         label = m["chain"] or "MASTER"
         subj = f"Rail Plan wc {wcs}" + (f" - {m['chain']}" if m["chain"] else "")
         print(f"\n[{label}]  attach: {m['name']}  ->  {len(to)} recipients")
@@ -521,39 +561,61 @@ def sendoff(path, send=False, update=False):
             print("   !! carrier(s) not matched to a haulier email: " + ", ".join(unmatched))
         if send:
             import build_drafts as bd, send_order as so
-            mail = outlook.CreateItem(0)
-            to_str, _cc, _rm = bd.clean_to_cc("; ".join(to))
-            mail.To = to_str
-            mail.Subject = subj
-            message = (f"Hi all,\n\nPlease find attached the rail plan for week commencing "
-                       f"{wc.strftime('%d/%m/%Y')}"
-                       + (f" - {m['chain']}." if m["chain"] else ".")
-                       + "\n\nMany thanks.")
-            bd._attach_qr(mail)                          # inline QR for the signature
-            mail.HTMLBody = bd.html_from_message(message)  # message + your signature
-            mail.Attachments.Add(m["path"])
-            if not so.bind_account(mail, acct):
-                print("   ABORT: could not bind DHL account - NOT sent"); continue
-            mail.Send()
+            if not to:
+                print("   NOT SENT - nobody to send it to")
+                result["failed"].append({"name": m["name"], "why": "nobody to send it to"})
+                continue
+            try:
+                mail = outlook.CreateItem(0)
+                to_str, _cc, _rm = bd.clean_to_cc("; ".join(to))
+                mail.To = to_str
+                mail.Subject = subj
+                message = (f"Hi all,\n\nPlease find attached the rail plan for week commencing "
+                           f"{wc.strftime('%d/%m/%Y')}"
+                           + (f" - {m['chain']}." if m["chain"] else ".")
+                           + "\n\nMany thanks.")
+                bd._attach_qr(mail)                          # inline QR for the signature
+                mail.HTMLBody = bd.html_from_message(message)  # message + your signature
+                mail.Attachments.Add(m["path"])
+                if not so.bind_account(mail, acct):
+                    print("   ABORT: could not bind DHL account - NOT sent")
+                    result["failed"].append({"name": m["name"], "why": "the DHL account could not be bound"})
+                    continue
+                mail.Send()
+            except Exception as e:
+                print(f"   NOT SENT - Outlook: {e}")
+                result["failed"].append({"name": m["name"], "why": f"Outlook: {str(e)[:120]}"})
+                continue
             print("   SENT")
+            result["sent"].append({"name": m["name"], "rows": m["count"], "to": len(to), "chain": label})
             _mark_sent(m["path"], m["name"])         # gone out: the work PC files it in the Rail Plans folder
     if send and ns is not None:
         try:
             ns.SendAndReceive(False)
         except Exception:
             pass
+    return result
 
 
 if __name__ == "__main__":
     a = sys.argv[1:]
     update = "--update" in a                      # current-week update: green the new manifests
     a = [x for x in a if x != "--update"]
+    week = None                                   # --week YYYY-MM-DD: the Monday the plans must be for
+    if "--week" in a:
+        i = a.index("--week")
+        try:
+            week = datetime.strptime(a[i + 1], "%Y-%m-%d").date()
+        except (IndexError, ValueError):
+            print("--week wants that week's Monday as YYYY-MM-DD"); sys.exit(1)
+        del a[i:i + 2]
     if a and a[0] == "send":
         if len(a) < 2 or not os.path.exists(a[1]):
-            print("Usage: python rail_plan.py send <raw csv> [go] [--update]"); sys.exit(1)
-        sendoff(a[1], send=(len(a) > 2 and a[2].lower() == "go"), update=update)
+            print("Usage: python rail_plan.py send <raw csv> [go] [--update] [--week YYYY-MM-DD]"); sys.exit(1)
+        res = sendoff(a[1], send=(len(a) > 2 and a[2].lower() == "go"), update=update, week=week)
+        print("RAIL_RESULT " + json.dumps(res))       # what agent.py reads back (the card's one go)
     elif a and os.path.exists(a[0]):
         build(a[0], update=update)
     else:
         print("Usage: python rail_plan.py <raw csv> [--update]   |   "
-              "python rail_plan.py send <raw csv> [go] [--update]")
+              "python rail_plan.py send <raw csv> [go] [--update] [--week YYYY-MM-DD]")

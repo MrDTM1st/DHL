@@ -230,6 +230,157 @@ def test_a_rail_plan_is_built_from_the_ctms_export_the_upload_or_the_one_last_pr
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ---- the Rail plan card's one go (his 16/11: "do it all in one go from one button, which is export from CTMS") ----
+def test_the_one_go_holds_back_what_a_look_at_the_preview_would_have_caught():
+    from datetime import date
+    tmp = tempfile.mkdtemp(prefix="rp-test-")
+    keep = R._plan_mail
+    try:
+        ok_csv = raw(tmp, ("T0001", "BRITISH STEEL", "DN16 1BP"))          # delivering Tue 03/11
+        R._plan_mail = lambda wc: []                                       # read: nothing gone round yet
+        info = {}
+        wc, _, _ = R.build(ok_csv, out_dir=tmp, update=True, info=info)
+        assert (info["kept"], info["days"], info["undated"], info["mail_read"], info["new"]) == (
+            1, [date(2026, 11, 3)], 0, True, None), info
+        assert R.hold_reason(info, wc, date(2026, 11, 2)) == ""
+        assert R.hold_reason(info, wc, date(2026, 11, 9)) == "the export runs 03/11 to 03/11, not the week of 09/11"
+        R._plan_mail = lambda wc: None                                     # the mailbox could not be read
+        info = {}
+        wc, _, _ = R.build(ok_csv, out_dir=tmp, update=True, info=info)
+        assert "versions could be wrong" in R.hold_reason(info, wc, date(2026, 11, 2))
+        R._plan_mail = lambda wc: []
+        info = {}
+        none_csv = raw(tmp, ("AH12/11/26XX", "BRITISH STEEL", "DN16 1BP"), ("T0009", "SOMEWHERE", "AB1 2CD"))
+        wc, _, _ = R.build(none_csv, out_dir=tmp, update=True, info=info)
+        assert info["kept"] == 0 and R.hold_reason(info, wc, date(2026, 11, 2)) == "the export has no rail-supplier rows"
+    finally:
+        R._plan_mail = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _Mail:
+    """An Outlook mail being made: what it was given, and the box it lands in once sent."""
+
+    def __init__(self, box):
+        self.box, self.To, self.Subject, self.HTMLBody, self.files = box, "", "", "", []
+        self.Attachments = types.SimpleNamespace(Add=self.files.append)
+
+    def Send(self):
+        self.box.append(self)
+
+
+def test_the_one_go_sends_each_plan_to_its_chain_and_says_what_went_and_what_did_not():
+    from datetime import date
+    tmp = tempfile.mkdtemp(prefix="rp-test-")
+    box, opened = [], []
+    client = types.SimpleNamespace(Dispatch=lambda what: opened.append(what) or types.SimpleNamespace(
+        CreateItem=lambda kind: _Mail(box)))
+    pkg = types.ModuleType("win32com")
+    pkg.client = client
+    fakes = {"win32com": pkg, "win32com.client": client,
+             "build_drafts": types.SimpleNamespace(get_ns=lambda: None, clean_to_cc=lambda s: (s, "", []),
+                                                   _attach_qr=lambda m: None, html_from_message=lambda t: t),
+             "send_order": types.SimpleNamespace(dhl_account=lambda ns: "dhl", bind_account=lambda m, a: True)}
+    keep = R._plan_mail, R.RECIP, R.SENT, {k: sys.modules.get(k) for k in fakes}
+    try:
+        sys.modules.update(fakes)
+        R.SENT = os.path.join(tmp, "_rail_sent.json")
+        R.RECIP = {"chains": {"British Steel": ["bs@example.com"]}, "_plan_to_chain": {"BS": "British Steel"},
+                   "dhl_always": ["team@example.com"], "hauliers": {}}
+        R._plan_mail = lambda wc: went_round("Rail Plan wc 02.11 v1 BS.xlsx")
+        csv_path = raw(tmp, ("T0001", "BRITISH STEEL", "DN16 1BP"))
+        res = R.sendoff(csv_path, send=True, update=True, week=date(2026, 11, 2), out_dir=tmp)
+        assert res["held"] == "" and not res["failed"], res
+        assert [(p["name"], p["rows"], p["to"]) for p in res["sent"]] == [
+            ("Rail Plan wc 02.11 v1.xlsx", 1, 1), ("Rail Plan wc 02.11 v2 BS.xlsx", 1, 2)], res["sent"]
+        assert [(m.Subject, m.To) for m in box] == [("Rail Plan wc 02.11", "team@example.com"),
+                                                     ("Rail Plan wc 02.11 - British Steel",
+                                                      "bs@example.com; team@example.com")]
+        assert res["unmatched"] == ["Test Haulage"]                        # no address for it: said, not guessed
+        with open(R.SENT, encoding="utf-8") as f:
+            assert sorted(json.load(f)) == ["Rail Plan wc 02.11 v1.xlsx", "Rail Plan wc 02.11 v2 BS.xlsx"]
+        # another week's export: nothing goes out, and Outlook is never opened
+        box.clear()
+        opened.clear()
+        res = R.sendoff(csv_path, send=True, update=True, week=date(2026, 11, 9), out_dir=tmp)
+        assert "not the week of 09/11" in res["held"] and not box and not opened and not res["sent"], res
+        # a plan Outlook won't send from the DHL account: said, and the others still go
+        sys.modules["send_order"] = types.SimpleNamespace(dhl_account=lambda ns: "dhl",
+                                                          bind_account=lambda m, a: "British Steel" not in m.Subject)
+        res = R.sendoff(csv_path, send=True, update=True, week=date(2026, 11, 2), out_dir=tmp)
+        assert [p["name"] for p in res["sent"]] == ["Rail Plan wc 02.11 v1.xlsx"], res
+        assert res["failed"] == [{"name": "Rail Plan wc 02.11 v2 BS.xlsx", "why": "the DHL account could not be bound"}]
+    finally:
+        R._plan_mail, R.RECIP, R.SENT = keep[0], keep[1], keep[2]
+        for k, v in keep[3].items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_cards_one_go_sends_only_the_export_it_took_once_that_checked_out():
+    import base64
+    tmp = tempfile.mkdtemp(prefix="rp-test-")
+    exp = {"name": "short_rail_rep_2026-11-16_101500.csv", "data": base64.b64encode(b"Schedule\r\n").decode()}
+    export_ok = {"ok": True, "said": "Exported the Short Rail Report ... Export card closed.", "file": exp["name"],
+                 "rows": 12, "closed": True, "week": "16/11/2026-22/11/2026"}
+    sent = {"wc": "16.11", "send": True, "held": "", "failed": [], "new": ["T0003"], "unmatched": [],
+            "sent": [{"name": "Rail Plan wc 16.11 v3.xlsx", "rows": 12, "to": 19, "chain": "MASTER"}]}
+    state = {"export": export_ok, "send": sent, "held": exp}
+    ran, posts = [], []
+
+    def fake_run(args, timeout=600):
+        ran.append(args)
+        if args[0] == "ctms_rail_export.py":
+            return "a trace line\n" + json.dumps(state["export"])
+        return "built\nRAIL_RESULT " + json.dumps(state["send"])
+
+    def fake_req(path, data=None, timeout=15):
+        posts.append((path, data))
+        return dict(state["held"]) if path == "/api/ctms/rail/file" else {}
+
+    keep = A.run, A._req, A.report, A.snap_outbox, A.push_new_files, A.RAIL_RAW, A.RAIL_LAST
+    job = {"action": "ctms_rail", "week": "current", "send": True, "run": 7}
+
+    def go():
+        ran.clear()
+        posts.clear()
+        A.ctms_rail_job(job)
+        return [d for p, d in posts if p == "/api/ctms/rail/ran"]
+
+    try:
+        A.run, A._req, A.report = fake_run, fake_req, (lambda *a, **k: None)
+        A.snap_outbox, A.push_new_files = (lambda: {}), (lambda before: None)
+        A.RAIL_RAW, A.RAIL_LAST = os.path.join(tmp, "_rail_raw.csv"), os.path.join(tmp, "_rail_last.json")
+        said = go()
+        assert ran[0] == ["ctms_rail_export.py", "run", "current"]
+        assert ran[1] == ["rail_plan.py", "send", A.RAIL_RAW, "go", "--update", "--week", "2026-11-16"], ran
+        assert open(A.RAIL_RAW, "rb").read() == b"Schedule\r\n"              # the very file the export took
+        assert said[0]["phase"] == "sending" and said[-1]["ok"] is True and said[-1]["run"] == 7
+        assert "Sent Rail Plan wc 16.11 v3 (12 rows, 19 people). 1 new manifest(s) green." in said[-1]["said"]
+        state["held"] = dict(exp, name="short_rail_rep_2026-11-16_090000.csv")    # the cloud holds another file
+        said = go()
+        assert len(ran) == 1 and said[-1]["ok"] is False and "not the export just made" in said[-1]["said"]
+        state["held"] = exp
+        state["send"] = dict(sent, held="the export has no rail-supplier rows", sent=[])   # rail_plan.py held it
+        said = go()
+        assert said[-1]["ok"] is False and "Nothing sent - the export has no rail-supplier rows" in said[-1]["said"]
+        state["export"] = {"ok": False, "said": "Not exported - stopped at name: x. Nothing was emailed.",
+                           "week": "16/11/2026-22/11/2026"}
+        said = go()                                                              # the export failed: nothing built
+        assert len(ran) == 1 and len(said) == 1 and said[0]["ok"] is False and "Nothing was emailed" in said[0]["said"]
+        state["export"] = export_ok
+        job["send"] = False                                                      # a page from before: preview only
+        said = go()
+        assert len(ran) == 1 and len(said) == 1 and said[0]["ok"]
+        assert "previewed into Files (nothing sent)" in said[0]["said"]
+    finally:
+        A.run, A._req, A.report, A.snap_outbox, A.push_new_files, A.RAIL_RAW, A.RAIL_LAST = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

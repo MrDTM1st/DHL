@@ -188,6 +188,48 @@ def test_a_to_do_run_or_a_rail_export_waits_for_a_booking():
         S._queue.clear()
 
 
+# ---- the Rail plan card's one go (his 16/11) ------------------------------------------------------
+def test_the_rail_cards_one_go_holds_its_export_for_the_send_and_a_page_from_before_only_previews():
+    fresh()
+    S._queue.clear()
+    exp = {"name": "short_rail_rep_2026-11-16_101500.csv", "data": base64.b64encode(b"Schedule\r\n").decode()}
+    try:
+        code, r = call("/api/ctms/rail", {"week": "current", "send": True})
+        assert code == 200, r
+        rid = r["run"]
+        job = S._queue.pop()
+        assert (job["action"], job["week"], job["send"], job["run"]) == ("ctms_rail", "current", True, rid)
+        assert S._ctms_armed()
+        # the bridge hands the export in mid-run: held for the run, never queued as a preview
+        assert call("/api/ctms/export", exp, key=BRIDGE)[0] == 200
+        assert not S._queue and S._ctms["rail_run"]["export"]["name"] == exp["name"]
+        assert "export" not in call("/api/ctms/status?visible=0")[1]["rail_run"]     # its data stays in the cloud
+        # only the home PC takes it, and only for this run
+        assert call("/api/ctms/rail/file", {"run": rid}, key=DASH)[0] == 401
+        assert call("/api/ctms/rail/file", {"run": rid + 1}, key=AGENT)[0] == 404
+        code, got = call("/api/ctms/rail/file", {"run": rid}, key=AGENT)
+        assert code == 200 and got == exp
+        # past the export, the plans being sent: CTMS is free again, but no second rail run starts over it
+        assert call("/api/ctms/rail/ran", {"run": rid, "phase": "sending", "said": "Exported."}, key=AGENT)[0] == 200
+        assert S._ctms["rail_run"]["state"] == "sending" and not S._ctms_armed()
+        code, r = call("/api/ctms/rail", {"week": "next", "send": True})
+        assert code == 409 and "being sent" in r["error"] and not S._queue
+        assert call("/api/ctms/rail/ran", {"run": rid, "ok": True, "said": "Sent 3 plans."}, key=AGENT)[0] == 200
+        run = S._ctms["rail_run"]
+        assert run["state"] == "done" and run["ok"] and run["said"] == "Sent 3 plans." and "export" not in run
+        assert call("/api/ctms/rail/file", {"run": rid}, key=AGENT)[0] == 404
+        # a page from before the change (no send): its export is previewed, as it always was
+        code, r = call("/api/ctms/rail", {"week": "next"})
+        assert code == 200 and S._queue.pop()["send"] is False
+        assert call("/api/ctms/export", exp, key=BRIDGE)[0] == 200
+        job = S._queue.pop()
+        assert (job["action"], job["mode"], job["export"]["name"]) == ("rail_plan", "preview", exp["name"])
+        assert "export" not in S._ctms["rail_run"]
+    finally:
+        fresh()
+        S._queue.clear()
+
+
 # ---- the map's Upload ---------------------------------------------------------------------------
 def test_an_upload_never_answered_stops_blocking_its_csv_and_the_taken_list_is_bounded():
     up = "NR_heavy_AH31-10-2026-ONE_31102026230000.csv"

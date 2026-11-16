@@ -165,6 +165,106 @@ def rail_plan_input(cmd):
     return RAIL_RAW, update, what
 
 
+def _rail_result(out):
+    """The RAIL_RESULT line rail_plan.py send prints last -> its dict, or None."""
+    for line in reversed((out or "").splitlines()):
+        if line.startswith("RAIL_RESULT "):
+            try:
+                got = json.loads(line[len("RAIL_RESULT "):])
+            except ValueError:
+                return None
+            return got if isinstance(got, dict) else None
+    return None
+
+
+def rail_send_export(rid, res):
+    """The second half of the Rail plan card's one go (his 16/11: "do it all in one go from one button, which is
+    export from CTMS"), once ctms_rail_export.py says the export checked out: the file this run took - the cloud
+    holds it for the run - built into the plans and emailed to each chain, as a current-week update would be (green
+    = new since the latest issue; a week nothing has gone round for yet greens nothing). rail_plan.py sends nothing
+    when the export has no rows, is for another week or this week's issues can't be read. -> (ok, said, output)."""
+    try:
+        got = _req("/api/ctms/rail/file", {"run": rid}, timeout=60) or {}
+    except Exception:
+        got = {}
+    name = str(got.get("name") or "")
+    if not got.get("data"):
+        return False, ("The export's file did not reach the home PC - nothing sent. It is in the work PC's "
+                       "Downloads."), ""
+    if name != str(res.get("file") or ""):
+        return False, f"The file the cloud holds ({name}) is not the export just made - nothing sent.", ""
+    m = re.match(r"\s*(\d{2})/(\d{2})/(\d{4})", str(res.get("week") or ""))
+    if not m:
+        return False, "Which week the export was for could not be read - nothing sent.", ""
+    raw, _, _ = rail_plan_input({"export": {"name": name, "data": got["data"]}})
+    before = snap_outbox()
+    try:
+        out = run(["rail_plan.py", "send", raw, "go", "--update", "--week", f"{m[3]}-{m[2]}-{m[1]}"], timeout=600)
+    except subprocess.TimeoutExpired:
+        out = ""
+    push_new_files(before)
+    r = _rail_result(out)
+    if r is None:
+        return False, ("The plans were built, but the send-off did not say how it went - look in Sent Items before "
+                       "pressing again."), out
+    if r.get("held"):
+        return False, f"Nothing sent - {r['held']}. The plans are in Files to look at.", out
+    sent = [f"{str(p.get('name') or '')[:-5]} ({p.get('rows')} rows, {p.get('to')} people)" for p in r.get("sent") or []]
+    said = ("Sent " + ", ".join(sent) + ".") if sent else "Nothing was sent."
+    if r.get("new") is not None:
+        said += f" {len(r['new'])} new manifest(s) green."
+    if r.get("unmatched"):
+        said += " No haulier email for " + ", ".join(str(u) for u in r["unmatched"][:6]) + "."
+    if r.get("failed"):
+        said += " NOT sent: " + "; ".join(f"{str(f.get('name') or '')[:-5]} ({f.get('why')})"
+                                          for f in r["failed"]) + "."
+    return bool(sent) and not r.get("failed"), said, out
+
+
+def ctms_rail_job(cmd):
+    """The Rail plan card's Export from CTMS: the week's Short Rail Report exported by driving CTMS on the work PC
+    (ctms_rail_export.py) - and, for a run the card sent with "send" (each of its two buttons, 16/11), the plans
+    built from that very file and emailed (rail_send_export). A run without it - a page from before the change -
+    leaves the export to be previewed, as it always was. The dashboard switched Look mum, no hands on for the run;
+    the cloud puts it back as it was once the export is over, before the send-off."""
+    week = "current" if cmd.get("week") == "current" else "next"
+    send, rid = cmd.get("send") is True, cmd.get("run")
+    report("running", f"Exporting the rail plan ({week} week) from CTMS on the work PC…")
+    try:
+        out = run(["ctms_rail_export.py", "run", week], timeout=900)
+    except subprocess.TimeoutExpired:
+        out = ""
+    res = None
+    for line in reversed(out.splitlines()):
+        if line.startswith("{"):
+            try:
+                res = json.loads(line)
+            except ValueError:
+                pass
+            break
+    if not isinstance(res, dict):
+        res = {"ok": False, "said": "The export did not finish - CTMS is left as it stopped; see the output. "
+                                    "Nothing was emailed."}
+    ok, said, more = bool(res.get("ok")), str(res.get("said") or ""), ""
+    if ok and send:
+        try:
+            _req("/api/ctms/rail/ran", {"run": rid, "phase": "sending", "said": said})
+        except Exception:
+            pass
+        report("running", "Rail plan exported from CTMS - building and sending the plans…")
+        ok, sent, more = rail_send_export(rid, res)
+        said = (f"Exported {res.get('file') or 'the Short Rail Report'} ({res.get('rows')} rows) from CTMS."
+                + ("" if res.get("closed", True) else " The Export card did not close - close it yourself.")
+                + " " + sent)
+    elif ok:
+        said += " Its plan is being previewed into Files (nothing sent)."
+    try:
+        _req("/api/ctms/rail/ran", {"run": rid, "ok": ok, "said": said, "file": res.get("file") or ""})
+    except Exception:
+        pass
+    report("done" if ok else "error", "Rail plan: " + said, tail(more or out, 34 if more else 8))
+
+
 def push_new_files(before):
     """Upload outbox files created/changed since `before` to the control
     plane, so they can be downloaded from the dashboard at work. A rail plan
@@ -1178,7 +1278,8 @@ def main():
                 push_tracker()
                 report("done", f"Noted — {fld} = {val}. I'll remember that wording.", tail(out, 6))
             elif action == "rail_plan":
-                # the work PC's CTMS export is only ever previewed - sending is Build & send, his click
+                # a CTMS export arriving here on its own (one taken by hand) is only ever previewed - the card's
+                # Export from CTMS sends its own export itself (ctms_rail_job), and the cloud holds that one for it
                 mode = "preview" if cmd.get("export") else (cmd.get("mode") or "preview").lower()
                 report("running", f"Rail plan — {mode}…")
                 try:
@@ -1938,32 +2039,8 @@ def main():
                        ("Booking: noted - " + (step.replace("_", " ") if step else "cleared") + ".") if '"ok": true' in out
                        else "That booking is no longer on file.", tail(out, 4))
             elif action == "ctms_rail":
-                # the Rail plan card's Export from CTMS: the week's Short Rail Report exported by driving CTMS on the
-                # work PC (ctms_rail_export.py). The bridge sends the file on, and the rail_plan preview that queues
-                # runs next - nothing is sent. The dashboard switched Look mum, no hands on for this run
-                week = "current" if cmd.get("week") == "current" else "next"
-                report("running", f"Exporting the rail plan ({week} week) from CTMS on the work PC…")
-                try:
-                    out = run(["ctms_rail_export.py", "run", week], timeout=900)
-                except subprocess.TimeoutExpired:
-                    out = ""
-                res = None
-                for line in reversed(out.splitlines()):
-                    if line.startswith("{"):
-                        try:
-                            res = json.loads(line)
-                        except ValueError:
-                            pass
-                        break
-                if res is None:
-                    res = {"ok": False, "said": "The export did not finish - CTMS is left as it stopped; see the "
-                                                "output."}
-                try:
-                    _req("/api/ctms/rail/ran", {"run": cmd.get("run"), "ok": res["ok"], "said": res["said"],
-                                                "file": res.get("file") or ""})
-                except Exception:
-                    pass
-                report("done" if res["ok"] else "error", "Rail plan CTMS export: " + res["said"], tail(out, 8))
+                # the Rail plan card's Export from CTMS - with "send", its one go: exported, built and emailed
+                ctms_rail_job(cmd)
             elif action == "ask_note":
                 # a Teams message to DHL NOC has gone (his 03/11: "you don't note down that I've sent ... a message"):
                 # on the brief with the emails Sent Items shows, which it can never see

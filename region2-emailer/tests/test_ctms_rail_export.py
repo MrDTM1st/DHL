@@ -279,7 +279,7 @@ def test_from_a_closed_card_the_week_is_set_by_reading_the_lists_and_only_then_e
     assert out["week"] == "02/11/2026-08/11/2026" and out["rows"] == 57 and out["file"].startswith("short_rail_rep_")
     assert fake.since and fake.since < datetime.now().strftime("%Y-%m-%d_%H%M%S")    # only a file made since
     assert "Start Schedule 02/11/2026 (from 22/05/2026, clicked in its list)" in out["said"], out["said"]
-    assert "nothing sent" in out["said"] and "Export card closed" in out["said"]
+    assert "Export card closed" in out["said"] and out["closed"] is True
 
 
 def test_keys_ctms_missed_are_made_up_from_what_the_list_shows():
