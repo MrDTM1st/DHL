@@ -385,6 +385,7 @@ def product_type_of(record):
 
 # who answered an order's email, and with what (his 02/11) - reply_kind
 from reply_kind import materials_team, message_pictures, said_line, sort_out, typed_contacts  # noqa: E402
+from todo_dismiss import after_dismissed  # noqa: E402  (his X on the CTMS to-do, 16/11)
 
 
 def _received(item):
@@ -499,6 +500,7 @@ def check(ns=None):
         if r.get("reply_at"):
             continue
         found = finder(r) if finder else [x for x in [find_reply(ns, r)] if x]
+        found = after_dismissed(r, found)       # his X said the email it took wasn't their details: only newer mail
         people = [it for it in found if not is_auto_reply(it)]
         if not people:
             # An out-of-office used to end the search for good - the real reply that

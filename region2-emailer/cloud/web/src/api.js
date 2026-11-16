@@ -229,6 +229,19 @@ export async function ctmsTodoAnswer(id, field, value) {
   return d;
 }
 
+// His X on a CTMS to-do item (16/11): taken off the list by the home PC - one from a site's reply also puts its order
+// back to waiting for the details, so the real email is read when it comes.
+export async function ctmsTodoDismiss(id) {
+  const r = await req('/api/ctms/todo/dismiss', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+
 export async function ctmsStop() {
   await req('/api/ctms/stop', { method: 'POST' });
 }

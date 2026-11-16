@@ -98,6 +98,29 @@ def test_a_note_the_run_wrote_by_itself_drops_off_the_list():
     assert T.listing(tracker, store, notes_done) == []
 
 
+def test_his_x_takes_an_item_off_and_a_reply_takes_its_services_reminder_with_it():
+    store, tracker, notes_done = _paths()
+    rec = {"orders": ["1234567-1-1"], "name": "Sam Example", "reply_at": "2026-10-30 11:00", "kind": "delivery",
+           "details": {"date": {"value": "05/11/2026"}, "time": {"earliest": "23:30", "latest": "01:30"}}}
+    upd = T.replied(rec, path=store, when="2026-10-30 11:00")
+    other = T.add("booking", ["2222222"], "Book with Sam's Haulage at 500", path=store, when="2026-10-30 12:00")
+    assert len(T.listing(tracker, store, notes_done)) == 3              # the update, its NIGHT reminder, the booking
+    gone = T.dismiss(upd["id"], store, tracker, notes_done, when="2026-11-16 09:00")
+    assert [g["source"] for g in gone] == ["reply", "services"] and all(g["dismissed"] for g in gone), gone
+    assert [i["id"] for i in T.listing(tracker, store, notes_done)] == [other["id"]]
+    assert T.dismiss(upd["id"], store, tracker, notes_done) == []       # taken off already
+    # the real answer, when it comes, goes on the list afresh
+    again = T.replied(dict(rec, reply_at="2026-11-17 10:00"), path=store, when="2026-11-17 10:00")
+    assert again["id"] != upd["id"] and again["id"] in [i["id"] for i in T.listing(tracker, store, notes_done)]
+    # a note worked out of the tracker counts as written: it never comes back
+    with open(tracker, "w", encoding="utf-8") as f:
+        json.dump({"records": [{"orders": ["1111111"], "status": "sent", "kind": "delivery",
+                                "emailed_at": "2026-10-28 15:06"}]}, f)
+    note = next(i for i in T.listing(tracker, store, notes_done) if i["kind"] == "note")
+    assert T.dismiss(note["id"], store, tracker, notes_done)[0]["id"] == note["id"]
+    assert not [i for i in T.listing(tracker, store, notes_done) if i["kind"] == "note"]
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

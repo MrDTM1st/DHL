@@ -113,9 +113,15 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
   const [answering, setAnswering] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [rjBusy, setRjBusy] = useState(false);
+  // his X (16/11): an item taken off is hidden at once - back after two minutes if the home PC never took it off
+  const [gone, setGone] = useState({});
+  const hidden = (id) => !!gone[id] && Date.now() - gone[id] < 120000;
+  const itemOf = (t) => todo.find((x) => x.id === t.id) || t;
+  const fromReply = (t) => { const it = itemOf(t); return it.kind === 'update' && it.source === 'reply'; };
   const lastRun = st && st.todo_run;
   const running = !!(lastRun && lastRun.state === 'running');
-  const runnable = plan.filter((p) => p.status === 'ready' || p.status === 'done');
+  const runnable = plan.filter((p) => (p.status === 'ready' || p.status === 'done') && !hidden(p.id));
+  const shownTodo = todo.filter((t) => !hidden(t.id));
 
   async function answer(item, c, value) {
     setAnswering(true);
@@ -127,6 +133,29 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
       else pushToast('Not saved', String((e && e.message) || e), 'warn');
     } finally {
       setAnswering(false);
+    }
+  }
+
+  // his X (16/11: "... isn't actually an email for details, but you don't know that. I do. So I want to take it off the
+  // list"): the item off the list, nothing typed into CTMS. One from a site's reply also puts its order back to
+  // waiting for the details, so the real email is read when it comes
+  async function dismiss(t) {
+    const it = itemOf(t);
+    const reply = fromReply(t);
+    const what = `${(it.orders || []).join(' / ')}: ${it.what}`;
+    if (!window.confirm(reply
+      ? `Take "${what}" off the list? That email wasn't their details - nothing is typed into CTMS, and the order goes `
+        + 'back to waiting for them: the next email from the site is read as usual.'
+      : `Take "${what}" off the list? Nothing is typed into CTMS for it.`)) return;
+    setGone((g) => ({ ...g, [t.id]: Date.now() }));
+    try {
+      await api.ctmsTodoDismiss(t.id);
+      pushToast('Taken off the list', reply ? 'The order waits for its details again - the next email from the site '
+        + 'is read as usual.' : 'Nothing is typed into CTMS for it.', 'go');
+    } catch (e) {
+      setGone((g) => { const n = { ...g }; delete n[t.id]; return n; });
+      if (e instanceof api.AuthError) onAuthFail();
+      else pushToast('Not taken off', String((e && e.message) || e), 'warn');
     }
   }
 
@@ -299,9 +328,9 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
     <div className="card statuscard">
       <div className="statushd">
         <span className="lbl">To do on CTMS</span>
-        <span className={'ctms-todo-n' + (todo.length ? ' some' : '')}>{todo.length}</span>
+        <span className={'ctms-todo-n' + (shownTodo.length ? ' some' : '')}>{shownTodo.length}</span>
       </div>
-      {(plan.length ? plan : todo).slice(0, 30).map((t) => {
+      {(plan.length ? plan : todo).filter((t) => !hidden(t.id)).slice(0, 30).map((t) => {
         const p = plan.length ? t : null;
         return (
           <div className="ctms-act ctms-todo" key={t.id}>
@@ -314,10 +343,13 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
             </span>
             {p ? <span className={'ctms-plan-st ' + p.status}>{PLAN_STATUS[p.status] || p.status}</span>
               : <span className="t mono">{ddmm(t.added)}</span>}
+            <button className="ctms-todo-x" disabled={running} onClick={() => dismiss(t)} aria-label="Take it off the list"
+              title={fromReply(t) ? 'Not their details - take it off the list; the order waits for the real email'
+                : 'Not needed - take it off the list'}>×</button>
           </div>
         );
       })}
-      {todo.length > 30 && <div className="ctms-muted">… and {todo.length - 30} more.</div>}
+      {shownTodo.length > 30 && <div className="ctms-muted">… and {shownTodo.length - 30} more.</div>}
       {runnable.length > 0 && (
         <div className="ctms-run">
           <button className="btn primary" disabled={running || runBusy} onClick={runTodo}>
@@ -342,8 +374,8 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
             <div key={r.id} className={r.ok ? 'ok' : 'bad'}>{r.ok ? '✓' : (r.held ? '–' : '✗')} {r.said}</div>))}
         </div>
       )}
-      <div className="ctms-muted" style={{ marginTop: todo.length ? 8 : 0 }}>
-        {!todo.length ? 'Nothing owed - CTMS is up to date with every email, chase and reply.'
+      <div className="ctms-muted" style={{ marginTop: shownTodo.length ? 8 : 0 }}>
+        {!shownTodo.length ? 'Nothing owed - CTMS is up to date with every email, chase and reply.'
           : plan.some((p) => p.status === 'held') ? 'Held items need your pick above before the button runs them.'
             : ''}
       </div>

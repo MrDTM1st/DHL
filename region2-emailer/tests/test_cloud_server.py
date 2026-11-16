@@ -230,6 +230,25 @@ def test_the_rail_cards_one_go_holds_its_export_for_the_send_and_a_page_from_bef
         S._queue.clear()
 
 
+# ---- his X on the CTMS to-do (16/11) -------------------------------------------------------------
+def test_his_x_on_a_to_do_item_goes_to_the_home_pc_but_never_one_in_a_run():
+    fresh()
+    S._queue.clear()
+    try:
+        assert call("/api/ctms/todo/dismiss", {"id": "t1234abcd"}, key=AGENT)[0] == 401
+        assert call("/api/ctms/todo/dismiss", {"id": "not an id!"})[0] == 400 and not S._queue
+        code, r = call("/api/ctms/todo/dismiss", {"id": "t1234abcd"})
+        job = S._queue.pop()
+        assert code == 200 and (job["action"], job["item"]) == ("ctms_todo_dismiss", "t1234abcd")
+        S._ctms["todo_run"] = {"id": 3, "ids": ["t1234abcd"], "state": "running", "until": time.time() + 600}
+        code, r = call("/api/ctms/todo/dismiss", {"id": "t1234abcd"})
+        assert code == 409 and "run" in r["error"] and not S._queue
+        assert call("/api/ctms/todo/dismiss", {"id": "t9999abcd"})[0] == 200         # one not in the run
+    finally:
+        fresh()
+        S._queue.clear()
+
+
 # ---- the map's Upload ---------------------------------------------------------------------------
 def test_an_upload_never_answered_stops_blocking_its_csv_and_the_taken_list_is_bounded():
     up = "NR_heavy_AH31-10-2026-ONE_31102026230000.csv"

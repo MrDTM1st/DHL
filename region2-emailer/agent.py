@@ -1865,6 +1865,28 @@ def main():
                 report("done" if it else "error",
                        f"Noted: {cmd.get('field')} = {cmd.get('value')}." if it else
                        "That to-do item is no longer open - nothing noted.")
+            elif action == "ctms_todo_dismiss":
+                # his X on a CTMS to-do item (16/11): off the list, never typed in - one from a site's reply also puts
+                # its order back to waiting for the details. todo_dismiss.py takes the tracker's lock, so it runs on
+                # its own and lets go when it ends
+                try:
+                    out = run(["todo_dismiss.py", str(cmd.get("item") or "")], timeout=90)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                res = None
+                for line in reversed(out.splitlines()):
+                    if line.startswith("{"):
+                        try:
+                            res = json.loads(line)
+                        except ValueError:
+                            pass
+                        break
+                if not isinstance(res, dict):
+                    res = {"ok": False, "said": "The to-do item could not be taken off - see the output."}
+                if res.get("tracker"):
+                    push_tracker()
+                push_panel()
+                report("done" if res.get("ok") else "error", str(res.get("said") or ""), tail(out, 4))
             elif action == "ctms_todo_run":
                 # the Run button: the ready items typed into CTMS one at a time, each read back (ctms_run.py);
                 # the dashboard switched Look mum, no hands on for this run, and switches it off when told it ended

@@ -290,6 +290,38 @@ def done(item_id, path=None, tracker_path=None, notes_done=None):
     return None
 
 
+def _close(a, b, minutes=5):
+    """Two of the list's times ("YYYY-MM-DD HH:MM") within a few minutes of each other."""
+    try:
+        x, y = (datetime.strptime(str(v)[:16], "%Y-%m-%d %H:%M") for v in (a, b))
+    except ValueError:
+        return False
+    return abs((x - y).total_seconds()) <= minutes * 60
+
+
+def dismiss(item_id, path=None, tracker_path=None, notes_done=None, when=None):
+    """His X on the CTMS page (16/11): the item off the list, never typed into CTMS. A note counts as written, so it
+    never comes back; one from a site's reply takes with it the Night / Saturday / Sunday reminder that same reply
+    left. Kept in the file, marked as his. -> [what was taken off] - [] when there is no such open item.
+    (todo_dismiss also puts the order back to waiting for its details.)"""
+    when = when or _now()
+    d = load(path)
+    it = next((i for i in d["items"] if i["id"] == item_id and not i.get("done_at")), None)
+    if it is None:
+        got = done(item_id, path, tracker_path, notes_done)        # a note worked out of the tracker: written
+        return [got] if got else []
+    gone = [it]
+    if it["kind"] == "update" and it.get("source") == "reply":
+        gone += [i for i in d["items"] if i is not it and not i.get("done_at") and i.get("source") == "services"
+                 and i["orders"] == it["orders"] and _close(i.get("added"), it.get("added"))]
+    for i in gone:
+        i["done_at"], i["dismissed"] = when, True
+    _save(d, path)
+    if it["kind"] == "note":
+        ctms_notes.mark_done(it["ref"], it["note"], notes_done)
+    return gone
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="What CTMS still owes.")
     sub = ap.add_subparsers(dest="cmd")

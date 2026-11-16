@@ -2288,6 +2288,22 @@ class Handler(BaseHTTPRequestHandler):
                 _queue.append({"action": "ctms_todo_answer", "item": iid, "field": field, "value": value,
                                "queued_at": time.time()})
             return self._json(200, {"ok": True})
+        if path == "/api/ctms/todo/dismiss":
+            # his X on a to-do item (16/11: "... isn't actually an email for details, but you don't know that. I do.
+            # So I want to take it off the list") - the home PC takes it off (todo_dismiss.py). Not one in a Run that
+            # is going: that one is being typed into CTMS now
+            if not self._is_dash():
+                return self._json(401, {"error": "auth"})
+            iid = str(data.get("id") or "").strip()
+            if not _TODO_ID.fullmatch(iid):
+                return self._json(400, {"error": "not a to-do item"})
+            with _lock:
+                if _ctms_going_locked("todo_run") and iid in (_ctms["todo_run"].get("ids") or []):
+                    out = (409, {"error": "That one is in the CTMS run going now - take it off when the run is done."})
+                else:
+                    _queue.append({"action": "ctms_todo_dismiss", "item": iid, "queued_at": time.time()})
+                    out = (200, {"ok": True, "agent": _agent_online()})
+            return self._json(*out)
         if path == "/api/ctms/todo/run":
             # the CTMS page's Run (his ask 01/11: "turn execute CTMS into a button"): the ready to-do items typed
             # into CTMS by the home PC (ctms_run.py), each read back. Look mum, no hands is switched on for the run

@@ -687,6 +687,11 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
   border-radius:6px; padding:2px 6px; background:var(--seg); color:var(--ink2); }
 .ctms-plan-st.ready{ background:var(--go); color:#fff; }
 .ctms-plan-st.held{ background:var(--yellow-t); color:var(--yellow-d); }
+/* his X on a to-do item (16/11): off the list */
+.ctms-todo-x{ flex:none; align-self:center; border:0; background:transparent; color:var(--faint); cursor:pointer;
+  font-size:15px; line-height:1; padding:2px 5px; border-radius:6px; }
+.ctms-todo-x:hover:not(:disabled){ background:var(--seg); color:var(--red); }
+.ctms-todo-x:disabled{ opacity:.35; cursor:default; }
 .ctms-held{ margin-top:6px; padding:7px 9px; border-radius:8px; background:var(--yellow-t); color:var(--ink2); font-size:12px; }
 .ctms-held q{ font-style:italic; }
 .ctms-held-pick{ display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; }
