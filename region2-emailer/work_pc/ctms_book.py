@@ -461,14 +461,54 @@ class Booking:
         self.carrier_window_away()
 
     def carrier_window_away(self):
-        """A carrier window up in front is closed by its own Exit, which changes nothing. One behind Planning stays there:
-        CTMS's Window menu is never opened for it (his call 04/11)."""
+        """A carrier window up in front is closed by its own Exit, which changes nothing. One behind Planning is left for
+        the end of the booking (carrier_window_behind): the Window menu is never opened before or during one."""
         if not any(f.startswith(CARRIER_FRAME) for f in frames(self.els)):
             return
         leave = ctms_lines.button(self.els, CARRIER_FRAME, "Exit")       # enabled only with the screen in front (11/11)
         if leave is not None:
             self.run([{"action": "click", "screen": _at(leave), "after": 0.8}])
             self.look()
+
+    def menu_bar(self):
+        """CTMS read with its menus in - Book's reads leave them out to be quick. [] from a reader that can't."""
+        try:
+            return self.read(False, PLANNING_SKIP, menus=True)
+        except TypeError:
+            return []
+
+    def carrier_window_behind(self):
+        """A carrier window CTMS left BEHIND Planning: it puts Planning over it once a trip is confirmed (every real
+        booking 16/11), and there its Exit can't be pressed. Brought forward by CTMS's Window menu and closed by its own
+        Exit, which changes nothing. His call 16/11: only here, at the end of a booking that made a trip, and only when
+        one is there - never at the start of a Run or a Book (his 04/11 still stands). What can't be done is said, for
+        him to close by hand; the booking stands either way."""
+        for _ in range(2):                                   # a second one, should CTMS have stacked them
+            self.look()
+            if not any(f.startswith(CARRIER_FRAME) for f in frames(self.els)):
+                return
+            self.carrier_window_away()                       # up in front after all: its own Exit
+            if not any(f.startswith(CARRIER_FRAME) for f in frames(self.els)):
+                return
+            menu = next((e for e in self.menu_bar() if e.get("r") == "menu" and str(e.get("nm") or "").startswith("Window")
+                         and placed(e)), None)
+            if menu is None:
+                break
+            self.run([{"action": "click", "screen": _at(menu), "after": 0.5}])
+            item = next((e for e in self.menu_bar() if e.get("r") in ("radio button", "menu item")
+                         and CARRIER_FRAME in str(e.get("nm") or "") and placed(e)), None)
+            if item is None:
+                self.run([_click(MENU_BAR, after=0.3)])      # the menu shut again, nothing picked
+                break
+            self.run([{"action": "click", "screen": _at(item), "after": 0.8}])
+            self.look()
+            leave = ctms_lines.button(self.els, CARRIER_FRAME, "Exit")
+            if leave is None:
+                break
+            self.run([{"action": "click", "screen": _at(leave), "after": 0.8}])
+        self.look()
+        if any(f.startswith(CARRIER_FRAME) for f in frames(self.els)):
+            self.said.append("CLOSE BY HAND: a carrier window is left behind Planning (Window > Select a Carrier > Exit)")
 
     def set_sched(self, want):
         """The tree on that schedule: its list runs newest first, a day a row, so Up once per day ahead, Enter, read
@@ -696,8 +736,9 @@ class Booking:
             self.run([{"action": "click", "screen": _at(leave), "after": 0.8}])
 
     def tidy(self):
-        """As he left it: the Deliver column back, the well's To back, no carrier window left in front. A trip not saved
-        keeps the well as it is: a new To re-queries it."""
+        """As he left it: the Deliver column back, the well's To back, no carrier window left - one CTMS put behind
+        Planning when a trip was confirmed goes last (his 16/11). A trip not saved keeps the well as it is: a new To
+        re-queries it."""
         self.run([ANCHOR])
         self.look()
         self.carrier_window_away()
@@ -709,6 +750,8 @@ class Booking:
         if self.flipped and (len(days) < 2 or days[0] >= days[-1]):
             self.press_deliver()
         self.flipped = False
+        if not self.dry and any(t.get("manifest") for t in self.trips):
+            self.carrier_window_behind()
 
     def unsaved(self):
         """Whether Planning's Save is lit."""

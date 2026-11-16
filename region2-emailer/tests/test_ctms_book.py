@@ -64,6 +64,9 @@ class FakeCtms:
         self.rows_a_page = 15
         self.panel_stuck = False
         self.carrier_behind = False
+        self.leaves_carrier = False     # True: Yes puts Planning over the carrier window, which stays open (live 16/11)
+        self.window_menu_open = False
+        self.lists_carrier = True       # False: the Window menu doesn't list the carrier window
         self.alert = ""
         # each line's card as the Access Bridge reads it live (03/11): the Detail grid and Order Items
         self.line_info = {}             # ref: {"product", "qty", "items": [{"id", "ordered"}]}
@@ -93,10 +96,21 @@ class FakeCtms:
         rows = list(reversed(self.upto())) if self.reversed else self.upto()
         return rows[self.page * self.rows_a_page:self.page * self.rows_a_page + self.rows_a_page]
 
-    def read(self, tree=True, skip=()):
-        """As the Access Bridge hands it over: without tree, the manifest tree's own box but none of its rows."""
+    def read(self, tree=True, skip=(), menus=False):
+        """As the Access Bridge hands it over: without tree, the manifest tree's own box but none of its rows; the menu
+        bar only when asked for."""
         self.reads += 1
-        return self._els(tree, skip)
+        els = self._els(tree, skip)
+        if menus:
+            els += [{"r": "menu", "nm": "Window ALT W", "lv": 1, "at": list(WINDOW_AT)}]
+            if self.window_menu_open:
+                els += [{"r": "menu item", "nm": "Cascade mnemonic C", "lv": 2, "at": [343, 59, 189, 24]},
+                        {"r": "radio button", "nm": "2 Planning mnemonic 2", "lv": 2, "at": [343, 166, 189, 24],
+                         "st": ["checked"]}]
+                if self.carrier_behind and self.lists_carrier:
+                    els += [{"r": "radio button", "nm": f"3 {B.CARRIER_FRAME} mnemonic 3", "lv": 2,
+                             "at": list(CARRIER_ITEM_AT)}]
+        return els
 
     def _els(self, tree=True, skip=()):
         els = [{"r": "internal frame", "nm": "Planning", "lv": 0, "at": [20, 130, 1648, 807]},
@@ -389,6 +403,14 @@ class FakeCtms:
         if sc:
             if s.get("right"):
                 return
+            if list(sc) == _middle(WINDOW_AT):
+                self.window_menu_open = True
+                return
+            if self.window_menu_open:            # an open menu takes the click, whatever it picks
+                self.window_menu_open = False
+                if self.carrier_behind and self.lists_carrier and list(sc) == _middle(CARRIER_ITEM_AT):
+                    self.carrier_behind, self.up = False, "carrier"
+                return
             if self.up == "confirm" and list(sc) == [YES_AT[0] + 20, YES_AT[1] + 10]:
                 self.confirm_yes()
                 return
@@ -433,6 +455,8 @@ class FakeCtms:
         elif px == B.PLANNING_SAVE:
             self.saved += 1
             self.status_line = ""
+        elif px == B.MENU_BAR:
+            self.window_menu_open = False
         elif px == B.ORDER_SAVE:
             self.typed.append("<order saved>")
             if self.card_dirty:
@@ -445,6 +469,8 @@ class FakeCtms:
 
     def confirm_yes(self):
         self.up = None
+        if self.leaves_carrier:
+            self.carrier_behind = True
         man = f"MAN-0{self.next_man}"
         self.next_man += 1
         self.tree[man] = "PLANNED"
@@ -496,6 +522,11 @@ TYPE_CODES = ("EMERGENCY", "Emergency", "NEXT DAY", "STANDARD")      # as CTMS s
 TRAILER_AT, ALT_AT = (1088, 387, 290, 23), (853, 463, 254, 29)        # the carrier screen's drop-downs, as first read
 LIST_X, LIST_Y, LIST_W = 853, 309, 239                                # where an opened one's list sits
 SELECT_AT, EXIT_AT = (700, 470, 129, 31), (834, 470, 120, 31)         # nowhere the old fixed points were
+WINDOW_AT, CARRIER_ITEM_AT = (340, 29, 63, 30), (343, 190, 189, 24)    # the Window menu and its carrier row, as read 16/11
+
+
+def _middle(at):
+    return [at[0] + at[2] // 2, at[1] + at[3] // 2]
 CREATE_AT, CANCEL_AT = (600, 700, 146, 30), (600, 731, 146, 30)
 ALT_CARRIERS = ("DAWN_HAULAGE", "DELTA_DH", "DOVER FREIGHT")
 
@@ -554,13 +585,62 @@ def test_a_panel_that_wont_close_stops_before_accepted():
     assert ctms.tree["MAN-01000100"] == "PLANNED"
 
 
-def test_a_carrier_window_left_behind_is_left_there_and_the_window_menu_never_opened():
+def _window_menu(ctms):
+    return [k for k, s in enumerate(ctms.steps) if s.get("screen") == _middle(WINDOW_AT)]
+
+
+def test_the_carrier_window_ctms_leaves_behind_planning_is_closed_through_the_window_menu_at_the_end():
+    # live 16/11: after every real booking the carrier screen stayed open behind Planning. His call: close it, the
+    # Window menu only at the end of a booking and only when one is there
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.leaves_carrier = True
+    job = _book(ctms)
+    assert job.trips[0]["status"] == "ACCEPTED" and ctms.carrier_behind and not _window_menu(ctms)
+    job.tidy()
+    assert not ctms.carrier_behind and ctms.up is None and not ctms.window_menu_open
+    assert len(_window_menu(ctms)) == 1 and not [n for n in job.said if n.startswith("CLOSE BY HAND")]
+
+
+def test_one_left_from_before_waits_for_the_end_of_the_booking_too():
     ctms = FakeCtms([_row("9100001-1-1")])
     ctms.carrier_behind = True
     job = _book(ctms)
-    assert job.trips[0]["status"] == "ACCEPTED"
-    assert not [s for s in ctms.steps if s.get("name") == "wn-carrier" or s.get("px") == [386, 37]]
-    assert ctms.carrier_behind
+    assert job.trips[0]["status"] == "ACCEPTED" and not _window_menu(ctms)      # not at the start, not during
+    job.tidy()
+    assert not ctms.carrier_behind and len(_window_menu(ctms)) == 1
+
+
+def test_a_rehearsal_never_opens_the_window_menu():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.carrier_behind = True
+    job = _book(ctms, dry=True)
+    job.tidy()
+    assert ctms.carrier_behind and not _window_menu(ctms)
+
+
+def test_a_booking_with_no_window_left_never_opens_the_window_menu():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    job = _book(ctms)
+    job.tidy()
+    assert not _window_menu(ctms) and not ctms.carrier_behind
+
+
+def test_a_carrier_window_the_window_menu_doesnt_list_is_left_for_him_said():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.leaves_carrier, ctms.lists_carrier = True, False
+    job = _book(ctms)
+    job.tidy()
+    assert ctms.carrier_behind and not ctms.window_menu_open                    # the menu shut again, nothing picked
+    assert job.said[-1] == "CLOSE BY HAND: a carrier window is left behind Planning (Window > Select a Carrier > Exit)"
+
+
+def test_a_reader_without_the_menus_leaves_it_said_not_stopped():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.leaves_carrier = True
+    job = _book(ctms)
+    job.read = lambda tree=True, skip=(): ctms._els(tree, skip)                  # an older reader: no menus to ask for
+    job.tidy()
+    assert ctms.carrier_behind and job.said[-1].startswith("CLOSE BY HAND")
 
 
 def test_a_plain_booking_goes_from_the_date_to_accepted():

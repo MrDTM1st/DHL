@@ -1160,8 +1160,8 @@ class Bridge:
             unheard.clear()
             return got
 
-        job = ctms_book.Booking(run, lambda tree=True, skip=(): ctms_jab.read_fields(
-                                    self.win, skip=skip, skip_roles=("menu",) if tree else ("tree", "menu")
+        job = ctms_book.Booking(run, lambda tree=True, skip=(), menus=False: ctms_jab.read_fields(
+                                    self.win, skip=skip, skip_roles=(() if menus else ("menu",)) + (() if tree else ("tree",))
                                 ).get("elements") or [],
                                 lambda name, box: self._seen(t, name, box), t, dry=bool(cmd.get("dry")),
                                 stopped=stop_pressed)
@@ -1185,7 +1185,7 @@ class Bridge:
         took = round(time.time() - t0, 1)
         made = [x for x in job.trips if x.get("manifest")]
         fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n)
-        by_hand = "; ".join(n for n in job.said if n.startswith("PUT BACK BY HAND"))
+        by_hand = "; ".join(n for n in job.said if n.startswith(("PUT BACK BY HAND", "CLOSE BY HAND")))
         if pressed:
             said = stopped_by_you(made, getattr(job, "of", 1), pressed, took)
         else:
