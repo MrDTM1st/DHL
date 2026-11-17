@@ -155,6 +155,15 @@ def test_a_monday_delivery_collects_on_friday_with_storage_x2():
     assert p["set"]["collect"] == "06/11/26 08:00-15:45" and p["set"]["storage"] == 2, p
 
 
+def test_a_sunday_delivery_collects_on_friday_with_storage_x1():
+    # the day before is a Saturday: back to the Friday ("move it to Friday and add storage, same for sunday too", 17/11)
+    rec = _rec("9100078", "08/11/2026")                                 # a Sunday
+    p = P.plan([_item("9100078")], [rec], _found("9100078", "08/11/2026"))[0]
+    assert p["set"]["collect"] == "06/11/26 08:00-15:45" and p["set"]["storage"] == 1, p
+    assert not any(c["field"].startswith("collect") for c in p["checks"]), p["checks"]
+    assert any("Sunday delivery - collected Friday with STORAGE x1" in x for x in p["explain"]), p["explain"]
+
+
 def test_an_uncertain_answer_is_held_with_their_words_and_choices_then_settled_by_his_pick():
     rec = _rec("9100075", "05/11/2026", offloading={"value": "MOFFETT", "confidence": "amber", "raw": "yes we need it"})
     item = _item("9100075")
@@ -633,6 +642,18 @@ def test_a_near_monday_delivery_is_collected_monday_with_no_storage(monkeypatch)
     rec = _with_time("9100206", "16/11/2026", "10:00", "12:00")         # a Monday
     p = P.plan([_item("9100206")], [rec], _found("9100206", "16/11/2026"))[0]
     assert p["set"]["collect_same_day"] is True and "storage" not in p["set"]
+
+
+def test_a_near_weekend_delivery_is_still_collected_on_the_friday(monkeypatch):
+    _near(monkeypatch, 20, 30)
+    rec = _with_time("9100208", "15/11/2026", "10:00", "12:00")         # a Sunday
+    p = P.plan([_item("9100208")], [rec], _found("9100208", "15/11/2026"))[0]
+    assert "collect_same_day" not in p["set"]
+    assert p["set"]["collect"] == "13/11/26 08:00-15:45" and p["set"]["storage"] == 1, p
+    rec = _with_time("9100209", "14/11/2026", "10:00", "12:00")         # a Saturday: the Friday, no storage
+    p = P.plan([_item("9100209")], [rec], _found("9100209", "14/11/2026"))[0]
+    assert "collect_same_day" not in p["set"] and "storage" not in p["set"]
+    assert p["set"]["collect"] == "13/11/26 08:00-15:45", p
 
 
 def test_no_road_answer_leaves_the_old_rule(monkeypatch):

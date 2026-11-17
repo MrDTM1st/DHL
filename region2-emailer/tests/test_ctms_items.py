@@ -437,15 +437,30 @@ def test_a_monday_delivery_pulled_forward_collects_friday_with_storage():
     assert "13/11/26" in o.typed and "STORAGE" in o.typed and "2" in [str(t) for t in o.typed]
 
 
-def test_a_collection_that_cant_move_by_the_rule_stops_with_nothing_typed():
-    s = dict(DELIVER_ONLY, deliver="15/11/26 09:00-11:00")               # a Sunday's: the day before is a Saturday
-    o = FakeOrder(ready="16/11/26 08:00", deliver_by="16/11/26 16:00", have=("HIAB",))
-    try:
-        _items(o).update(o.ref, s)
-        raise AssertionError("should have stopped")
-    except I.Stop as e:
-        assert "Saturday" in str(e)
-    assert o.typed == [o.ref]                                            # only its search
+def test_a_sunday_delivery_collects_friday_with_storage_x1():
+    # the day before is a Saturday: back to the Friday, one day's STORAGE ("move it to Friday and add storage", 17/11)
+    s = dict(DELIVER_ONLY, deliver="15/11/26 01:00-03:00", comments="15/11/26 01:00 - Sam")
+    o = FakeOrder(ready="15/11/26 08:00", deliver_by="15/11/26 16:00", have=("HIAB",))
+    o.once_saved = ("13/11/26 08:00", "15/11/26 03:00")
+    said = _items(o).update(o.ref, s)
+    assert "13/11/26" in o.typed and "STORAGE" in o.typed and "1" in [str(t) for t in o.typed]
+    assert "14/11/26" not in o.typed
+    assert "collection moved to 13/11/26 (it was 15/11/26 08:00)" in said
+
+
+def test_a_collection_never_lands_on_a_weekend():
+    def fix(deliver, ready, **k):
+        return I.collection_fix("X", dict(DELIVER_ONLY, deliver=deliver, **k), {"ready_at": ready})
+    got = fix("16/11/26 09:00-11:00", "16/11/26 08:00")                                  # a Monday's: Friday, x2
+    assert (got["day"], got["storage"]) == ("13/11/26", 2)
+    got = fix("15/11/26 09:00-11:00", "16/11/26 08:00")                                  # a Sunday's: Friday, x1
+    assert (got["day"], got["storage"]) == ("13/11/26", 1)
+    got = fix("14/11/26 09:00-11:00", "16/11/26 08:00")                                  # a Saturday's: Friday
+    assert (got["day"], got["storage"]) == ("13/11/26", 0)
+    got = fix("18/11/26 09:00-11:00", "19/11/26 08:00")                                  # a weekday's: the day before
+    assert (got["day"], got["storage"]) == ("17/11/26", 0)
+    got = fix("15/11/26 10:00-12:00", "16/11/26 07:30", collect_same_day=True)           # near, but a Sunday
+    assert (got["day"], got["storage"], got["ready_at"]) == ("13/11/26", 1, "13/11/26 07:30")
 
 
 def test_a_morning_delivery_isnt_collected_that_same_morning():

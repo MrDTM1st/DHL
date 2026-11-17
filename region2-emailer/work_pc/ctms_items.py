@@ -206,12 +206,23 @@ def _when(text):
         return None
 
 
+def off_weekend(day, drop):
+    """(day, storage) for a collection on `day` before a delivery on `drop`: never on a weekend (30/10). A Saturday's or a
+    Sunday's goes back to the Friday, with STORAGE for each day it waits past the usual night: x2 for a Monday delivery,
+    x1 for a Sunday's, none for a Saturday's ("move it to Friday and add storage, same for sunday too", 17/11).
+    ctms_run_plan keeps the same rule; the work PC has only this folder."""
+    if day.weekday() < 5:
+        return day, 0
+    friday = day - timedelta(days=day.weekday() - 4)
+    return friday, max((drop.date() - friday.date()).days - 1, 0)
+
+
 def collection_fix(ref, s, line):
     """The collection has to come before the delivery, or CTMS doesn't keep the dates (his 03/11, 6055827: delivery pulled
     forward a day past a collection nobody touched), and a morning delivery isn't collected that same morning (his 03/11).
-    {} when it does as it stands; else what the collection's dates move to, by his rule: the day before, a Monday's on the
-    Friday with STORAGE x2. A collection the plan itself has wrong, or one that can't be told or can't be moved by the rule,
-    stops the line with nothing typed."""
+    {} when it does as it stands; else what the collection's dates move to, by the rule: the day before, never on a
+    weekend - a Saturday's or a Sunday's on the Friday with STORAGE (off_weekend). A collection the plan itself has wrong,
+    or one that can't be told or can't be moved by the rule, stops the line with nothing typed."""
     if not s.get("deliver"):
         return {}
     start = _when(ends(s["deliver"])[0])
@@ -222,8 +233,9 @@ def collection_fix(ref, s, line):
     ready = _when((line or {}).get("ready_at"))
     if ready is None:
         raise Stop(f"{ref}: its collection couldn't be read to check it against the new delivery, so nothing was typed.")
-    if s.get("collect_same_day"):
-        # his 65-mile rule (16/11): collected on the delivery day - only the day moves, the time CTMS has stays
+    if s.get("collect_same_day") and start.weekday() < 5:
+        # his 65-mile rule (16/11): collected on the delivery day - only the day moves, the time CTMS has stays. A
+        # weekend's delivery isn't collected that day: the day before, off the weekend, below
         if ready.date() == start.date() and ready < start:
             return {}
         moved = start.replace(hour=ready.hour, minute=ready.minute, second=0, microsecond=0)
@@ -234,14 +246,7 @@ def collection_fix(ref, s, line):
         return {"day": shown, "storage": 0, "was": line["ready_at"], "ready_at": f"{shown} {ready:%H:%M}"}
     if ready < start and (ready.date() != start.date() or start.hour >= 12):
         return {}
-    day = start.replace(hour=0, minute=0) - timedelta(days=1)
-    storage = 0
-    if day.weekday() == 6:
-        day -= timedelta(days=2)
-        storage = 2
-    elif day.weekday() == 5:
-        raise Stop(f"{ref}: its collection ({line['ready_at']}) has to move for the new delivery, and the day before is a Saturday - "
-                   "no rule for that, so nothing was typed. Do this one by hand.")
+    day, storage = off_weekend(start.replace(hour=0, minute=0) - timedelta(days=1), start)
     shown = day.strftime("%d/%m/%y")
     return {"day": shown, "storage": storage, "was": line["ready_at"], "ready_at": f"{shown} {ready:%H:%M}"}
 

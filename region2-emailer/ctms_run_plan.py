@@ -7,7 +7,8 @@ type into CTMS, worked out by his rules, and what it can't be sure of.
              deliver   the day and window the site gave - a single time is time..time+2h. Staged over several days
                        on the one line, the window runs from the first to the last: split only at booking (his 31/10)
              collect   a morning delivery is collected the day before, in the supplier's yard hours; never on a
-                       weekend - a Monday delivery collects on Friday, with STORAGE x2
+                       weekend - a Saturday's or Sunday's collection goes back to the Friday, with STORAGE for each
+                       day it waits past the usual night: x2 for a Monday delivery, x1 for a Sunday's (17/11)
              comment   LOC Detail, deliver side: date time - contact phone - HIAB required (or Moffett required) -
                        Rear steer required - W3W, no commas
              services  HIAB or MOFFETT when the site needs ours - always in Services, never a vehicle type ("whenever
@@ -94,6 +95,17 @@ def _window(day, start, end, last=""):
     if t1.date() == d0.date():
         return f"{d0:%d/%m/%y} {start}-{end}"
     return f"{d0:%d/%m/%y} {start}-{t1:%d/%m/%y} {end}"
+
+
+def off_weekend(day, drop):
+    """(day, storage) for a collection on `day` before a delivery on `drop`: never on a weekend (30/10). A Saturday's or a
+    Sunday's goes back to the Friday, with STORAGE for each day it waits past the usual night: x2 for a Monday delivery,
+    x1 for a Sunday's, none for a Saturday's ("move it to Friday and add storage, same for sunday too", 17/11).
+    work_pc/ctms_items.off_weekend is the same rule on the work PC."""
+    if day.weekday() < 5:
+        return day, 0
+    friday = day - timedelta(days=day.weekday() - 4)
+    return friday, max((drop.date() - friday.date()).days - 1, 0)
 
 
 def _orders(order):
@@ -551,7 +563,11 @@ def plan_update(it, rec, found):
             same, why = same_day.check(colls[0].get("pc"), rec.get("postcode"), yard0, start)
             if why:
                 explain.append(why)
-            if same:
+            if same and datetime.strptime(date, "%d/%m/%Y").weekday() >= 5:
+                same = None                # a weekend's delivery isn't collected that day: the Friday, below (17/11)
+                when = "the same day"
+                explain.append("Not the same day though: never collected at the weekend (your rule)")
+            elif same:
                 when = "the same day"
             else:
                 when = "the day before" if start < "12:00" else doubt(
@@ -562,16 +578,12 @@ def plan_update(it, rec, found):
             # day keeping the time CTMS has (ctms_items.collection_fix)
             s["collect_same_day"] = True
         elif when in COLLECT_DAYS and yard0 and yard1:
-            day = datetime.strptime(date, "%d/%m/%Y") - timedelta(days=1 if when == "the day before" else 0)
-            storage = 0
-            if day.weekday() == 6 and when == "the day before":       # a Monday delivery: Friday, STORAGE x2
-                day -= timedelta(days=2)
-                storage = 2
-                explain.append("Monday delivery - collected Friday with STORAGE x2 (your rule)")
-            elif day.weekday() >= 5:
-                checks.append({"field": "collect_weekend", "label": "Collection day", "quote": "", "options": [],
-                               "text": False, "why": f"The collection would be {day:%a %d/%m}, a weekend - no rule "
-                                                     "for that: do it by hand"})
+            drop = datetime.strptime(date, "%d/%m/%Y")
+            first = drop - timedelta(days=1 if when == "the day before" else 0)
+            day, storage = off_weekend(first, drop)     # never on a weekend: the Friday, STORAGE per day it waits
+            if day != first:
+                explain.append(f"{drop:%A} delivery - collected Friday"
+                               + (f" with STORAGE x{storage}" if storage else "") + " (your rule)")
             upto = datetime.strptime(last, "%d/%m/%Y") - timedelta(days=1 if when == "the day before" else 0)
             while upto.weekday() >= 5:         # the last load's collection, off the weekend like the first's
                 upto -= timedelta(days=1)
