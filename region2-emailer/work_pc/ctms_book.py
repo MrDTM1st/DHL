@@ -47,10 +47,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "ctms_book_templates.json")
 
 CARRIER_FRAME = "Select a Carrier"
-ROW_MENU = (430, 25, 810, 880)     # a well row's menu: beside the row, as far up as it has to go
-TREE_MENU = (190, 25, 430, 880)    # a manifest's menu, likewise
-STATUS_MENU = (400, 25, 520, 880)  # its Set Status list
-SUMMARY_MENU = (150, 200, 345, 760)  # an Order Summary line's menu
+# A right-click menu opens beside where it was asked for: upwards on the 1910 x 915 window the recipes were measured
+# on, DOWNWARDS on his 1720 x 1380 one at work, where Create New Trip sat at y 924 - under these boxes' old foot of
+# 880 - and Book stopped at 'wm-create-trip' with nothing made (17/11). So a menu is looked for down to the foot of
+# whatever window CTMS has: find clips a box to the picture.
+FOOT = 10000
+ROW_MENU = (430, 25, 810, FOOT)     # a well row's menu: beside the row, up or down as far as it has to go
+TREE_MENU = (190, 25, 430, FOOT)    # a manifest's menu, likewise
+STATUS_MENU = (400, 25, 520, FOOT)  # its Set Status list
+SUMMARY_MENU = (150, 200, 345, FOOT)  # an Order Summary line's menu
 PAYMENT_FRAME = "Confirm Payment"
 TYPES_FRAME = "Delivery Types"
 SPLIT_WORD = "split"               # in the Split window's name (not seen on the CTMS app yet, 11/11)

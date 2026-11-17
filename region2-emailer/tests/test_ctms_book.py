@@ -668,6 +668,28 @@ def test_the_row_is_shown_current_by_its_colour_before_its_menu_is_used():
     assert ctms.steps[i + 1].get("right") and ctms.steps[i + 2]["name"] == "wm-create-trip"
 
 
+def test_a_menu_that_opens_downwards_in_a_tall_window_is_still_found():
+    # his work window, 1720 x 1380 (17/11): a well row's menu opened downwards and its Create New Trip sat at y 924,
+    # below where Book looked (to y 880), so the booking stopped with nothing made
+    import ctms_fast
+    w, h, tw, th = 1720, 1380, 6, 3
+    tpl = bytes(v for i in range(tw * th) for v in (10 + i, 200 - i, 7 * i % 256, 255))
+    pic = bytearray(w * h * 4)
+    for r in range(th):
+        at = ((924 + r) * w + 480) * 4
+        pic[at:at + tw * 4] = tpl[r * tw * 4:(r + 1) * tw * 4]
+    pic = bytes(pic)
+    assert ctms_fast.find(pic, w, h, (430, 25, 810, 880), tpl, tw, th) is None       # the old box missed it
+    for box in (B.ROW_MENU, ctms_fast.shift_box(B.ROW_MENU, (-14, 17))):             # wherever CTMS sits
+        assert ctms_fast.find(pic, w, h, box, tpl, tw, th) == (480, 924)
+    ctms = FakeCtms([_row("9100001-1-1")])
+    _book(ctms)
+    menus = [s for s in ctms.steps if s.get("action") == "find"
+             and s["name"] in ("wm-create-trip", "mt-set-status", "st-accepted")]
+    assert len({s["name"] for s in menus}) == 3 and all(s["box"][3] >= h for s in menus)
+    assert all(box[3] >= h for box in (B.ROW_MENU, B.TREE_MENU, B.STATUS_MENU, B.SUMMARY_MENU))
+
+
 def test_a_dry_run_says_no_at_the_last_box_and_books_nothing():
     ctms = FakeCtms([_row("9100001-1-1")])
     job = _book(ctms, dry=True)
