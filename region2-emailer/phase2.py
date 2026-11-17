@@ -601,7 +601,9 @@ def check(ns=None):
         return bool(v and v.get("booked"))
     keep = []
     for r in d["records"]:
-        if _slot_booked(r):
+        # his call beats the slot guess: an order he says is NOT on the booked one (a second order to the same
+        # contact, postcode and day, its own load) is kept - 17/11, a booked-in mail for one order dropped the other
+        if _slot_booked(r) and not r.get("own_load"):
             dropped_orders.extend(r.get("orders", []))
         else:
             keep.append(r)
