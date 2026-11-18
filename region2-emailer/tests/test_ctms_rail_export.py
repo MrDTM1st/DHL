@@ -48,14 +48,17 @@ class FakeCTMS:
     DOWN_Y = {"start": 495, "end": 528}
 
     def __init__(self, card=False, name=False, start=None, end=None, cc=False, pt=False, land=LAND, drop_every=0,
-                 enter_off=0, pt_ups_needed=X.PT_UPS, stale=False):
+                 enter_off=0, pt_ups_needed=X.PT_UPS, stale=False, late=0, none_said=None):
         self.card, self.name, self.cc, self.pt = card, name, cc, pt
         self.box = {"start": start, "end": end}
         self.open, self.up, self.first, self.sel = None, False, None, None
         self.land, self.drop_every, self.enter_off, self.stale = land, drop_every, enter_off, stale
         self.pt_ups, self.pt_ups_needed, self.keys = 0, pt_ups_needed, 0
         self.asking, self.exported, self.since, self.tabs_closed = False, False, None, 0
-        self.log, self.sent = [], []
+        self.late = late                # how many asks after Export find no file yet (Edge still saving it)
+        self.none_said = none_said or ("No CTMS export is open in an Edge tab or saved in Downloads made since "
+                                       "Export was pressed - press Export in CTMS first.")
+        self.log, self.sent, self.fetches = [], [], 0
 
     # ---- the client's calls ----
     def parse_steps(self, items):
@@ -81,6 +84,9 @@ class FakeCTMS:
             self.since = args.get("since")
             if not self.exported:
                 return {"ok": False, "detail": "No CTMS export is open in an Edge tab - press Export in CTMS first."}, None
+            self.fetches += 1
+            if self.fetches <= self.late:
+                return {"ok": False, "detail": self.none_said}, None
             made = datetime.now() - (timedelta(days=1) if self.stale else timedelta(seconds=3))
             name = f"short_rail_rep_{made:%Y-%m-%d_%H%M%S}.csv"
             return {"ok": True, "detail": f"Took {name}"}, {"kind": "export", "name": name, "rows": 57}
@@ -217,13 +223,16 @@ class FakeCTMS:
             self.box[self.open], self.open = self.sel + timedelta(days=self.enter_off), None
 
 
+SLEPT = []
+
+
 def _run(fake, which="next"):
-    keep = X._client
-    X._client = lambda: fake
+    keep = X._client, X._sleep
+    X._client, X._sleep = (lambda: fake), SLEPT.append      # the waits between asks for the file: counted, not slept
     try:
         return X.run(which, today=SUNDAY)
     finally:
-        X._client = keep
+        X._client, X._sleep = keep
 
 
 # ---- the digit reader ----
@@ -332,6 +341,38 @@ def test_a_file_that_is_not_this_export_stops_it_and_its_tab_is_closed():
     out = _run(fake)
     assert not out["ok"] and "is not the export just made" in out["said"], out
     assert fake.tabs_closed == 1 and "After Export:" in out["said"]
+
+
+def test_a_file_edge_is_still_saving_is_asked_for_again_until_it_shows():
+    # 18/11: asked once, 3 s after Export, there was no file yet - the run stopped, the file was in Downloads soon after
+    SLEPT.clear()
+    fake = FakeCTMS(late=3)
+    out = _run(fake)
+    assert out["ok"], out
+    assert fake.fetches == 4 and SLEPT == [X.FETCH_EVERY] * 3 and fake.tabs_closed == 0
+    assert out["file"].startswith("short_rail_rep_") and "Export card closed" in out["said"]
+
+
+def test_a_file_that_never_shows_stops_it_after_the_wait_and_says_why():
+    SLEPT.clear()
+    fake = FakeCTMS(late=10 ** 6)
+    out = _run(fake)
+    assert not out["ok"] and fake.fetches == X.FETCH_TRIES and len(SLEPT) == X.FETCH_TRIES - 1, out
+    assert f"none showed in the {X.FETCH_TRIES * X.FETCH_EVERY} s after Export" in out["said"], out["said"]
+    assert "needs its update" not in out["said"]                 # this bridge looked in Downloads too
+    assert fake.tabs_closed == 1 and "Nothing was emailed" in out["said"]
+    # a bridge from before (tabs only) is told to be updated: Edge saves the file into Downloads now
+    fake = FakeCTMS(late=10 ** 6, none_said="No CTMS export is open in an Edge tab made since Export was pressed - "
+                                             "press Export in CTMS first.")
+    out = _run(fake)
+    assert not out["ok"] and "needs its update to take the file from Downloads" in out["said"], out["said"]
+
+
+def test_anything_else_the_bridge_says_about_the_file_stops_it_at_once():
+    SLEPT.clear()
+    fake = FakeCTMS(late=10 ** 6, none_said="Could not take the file from CTMS's server - HTTP 403.")
+    out = _run(fake)
+    assert not out["ok"] and fake.fetches == 1 and SLEPT == [] and "HTTP 403" in out["said"], out
 
 
 def test_every_step_it_sends_is_one_the_real_client_takes():

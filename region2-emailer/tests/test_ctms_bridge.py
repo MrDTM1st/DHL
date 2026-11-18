@@ -2773,14 +2773,20 @@ def test_the_export_goes_into_downloads_only_ever_adding_and_a_sign_in_page_is_n
         X._openers = lambda: iter([("straight from CTMS's server", opener(csv + b"261104,T3,A3\r\n"))])
         assert X.take([EXP])["saved_as"] == "short_rail_rep_2026-10-31_221330 (2).csv"   # never replaced
         assert X.take([OLD, EXP], want="short_rail_rep_2026-10-31_214116.csv")["name"].endswith("214116.csv")
+
+        def empty():                                          # what is in Downloads is taken too, with no tab (18/11)
+            for n in os.listdir(tmp):
+                os.remove(os.path.join(tmp, n))
+        empty()
         try:
             X.take(["Oracle Fusion Middleware Forms Services"])
             assert False
         except RuntimeError as e:
-            assert "press Export" in str(e)
+            assert "press Export" in str(e) and "saved in Downloads in the last half hour" in str(e), e
         # the one-click rail export's own file only: one made since its Export press, never an older tab left open
         X._openers = lambda: iter([("straight from CTMS's server", opener(csv))])
         assert X.take([OLD, EXP], since="2026-10-31_221000")["name"].endswith("221330.csv")
+        empty()
         try:
             X.take([OLD], since="2026-10-31_221000")
             assert False, "an older export was taken"
@@ -2789,6 +2795,100 @@ def test_the_export_goes_into_downloads_only_ever_adding_and_a_sign_in_page_is_n
     finally:
         X.DOWNLOADS, X._openers, X.fetch = keep
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_an_export_edge_saved_into_downloads_by_itself_is_taken_from_there():
+    # 18/11: CTMS is its own program now; its export opens in Edge proper, which saves the file into Downloads at once
+    # and leaves no tab - the bridge looked only at tabs, said there was no export, and nothing was built or sent
+    tmp = tempfile.mkdtemp(prefix="exp-dl-test-")
+    keep = X.DOWNLOADS, X.fetch
+    X.DOWNLOADS = tmp
+    X.fetch = lambda url: (_ for _ in ()).throw(AssertionError("nothing is fetched for a file already in Downloads"))
+    csv = b"Schedule,Trip Number,Order Reference\r\n261116,T1,A1\r\n261117,T2,A2\r\n261118,T3,A3\r\n"
+    now = time.time()
+
+    def put(name, data=csv, age=0):
+        p = os.path.join(tmp, name)
+        with open(p, "wb") as f:
+            f.write(data)
+        os.utime(p, (now - age, now - age))
+    try:
+        put("short_rail_rep_2026-11-18_082621.csv")
+        put("short_rail_rep_2026-11-18_082621.csv.crdownload")          # Edge still saving: never taken
+        put("short_rail_rep_2026-11-11_090000.csv", age=7 * 86400)      # last week's
+        put("Rail Plan wc 16.11 v2.xlsx")
+        put("NR_heavy_17112026175232.csv")                              # an upload CSV: not an export's name
+        got = X.take(["Oracle Fusion Middleware Forms Services"], since="2026-11-18_081621")
+        assert got["name"] == "short_rail_rep_2026-11-18_082621.csv" and got["url"] == "" and got["written"] is False
+        assert got["rows"] == 3 and got["data"] == csv and got["how"] == "from Downloads, where Edge saved it"
+        assert got["header"] == "Schedule,Trip Number,Order Reference"
+        # made before the press: never this run's file, whatever else is there
+        try:
+            X.take([], since="2026-11-18_090000")
+            assert False, "an export made before the press was taken"
+        except RuntimeError as e:
+            assert "No CTMS export is open in an Edge tab or saved in Downloads made since Export was pressed" in str(e)
+        # Edge's own second copy, " (1)": taken under CTMS's name, said where it is
+        put("short_rail_rep_2026-11-18_101500 (1).csv")
+        got = X.take([], since="2026-11-18_100000")
+        assert got["name"] == "short_rail_rep_2026-11-18_101500.csv"
+        assert got["saved_as"] == "short_rail_rep_2026-11-18_101500 (1).csv"
+        # asked without since (by hand): only one saved in the last half hour - the newest by CTMS's time
+        assert X.take([])["name"] == "short_rail_rep_2026-11-18_101500.csv"
+        assert X.take([], want="short_rail_rep_2026-11-18_082621.csv")["name"].endswith("082621.csv")
+        for n in os.listdir(tmp):
+            os.utime(os.path.join(tmp, n), (now - 3600, now - 3600))
+        try:
+            X.take([])
+            assert False, "an hour-old export was taken with no since"
+        except RuntimeError as e:
+            assert "in the last half hour" in str(e)
+        # a sign-in page saved under an export's name is passed over, never taken as the file
+        put("short_rail_rep_2026-11-18_110000.csv", b"<!DOCTYPE html><html><title>Sign in</title></html>")
+        assert X.take([], since="2026-11-18_100000")["name"] == "short_rail_rep_2026-11-18_101500.csv"
+        # an export open in a tab still comes first - the address, as before
+        X.fetch = lambda url: (csv, "straight from CTMS's server")
+        assert X.take([EXP])["url"] == EXP
+    finally:
+        X.DOWNLOADS, X.fetch = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_bridge_sends_on_an_export_from_downloads_with_no_tab_to_close():
+    keep = (W.find_windows, W.picture, W.prompts, B.LOG, TB.names, TB.close, TB.select, X.take)
+    W.find_windows = lambda: [dict(FAKE_WIN, kind="java", process="javaw.exe", title="OPOKUD on INDTPRD: MTS",
+                                   content=None, ie_showing=False)]
+    W.picture = lambda win: (_bgra([[0xFF2A4A7F] * 4] * 3), 4, 3, "from the window")
+    W.prompts = lambda: []
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    TB.names = lambda want, timeout=10.0: []
+    closed, selected = [], []
+    TB.close = lambda want, timeout=10.0: closed.append(want) or 0
+    TB.select = lambda target, timeout=10.0: selected.append(target) or (False, "CTMS is not open in any Edge tab")
+    data = b"Schedule,Trip Number\r\n261116,T1\r\n"
+    X.take = lambda names, want="", since="": {"name": "short_rail_rep_2026-11-18_082621.csv", "url": "",
+                                               "saved_as": "short_rail_rep_2026-11-18_082621 (1).csv", "written": False,
+                                               "bytes": len(data), "rows": 1, "header": "Schedule,Trip Number",
+                                               "how": "from Downloads, where Edge saved it", "data": data}
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        b.armed = True
+        b.handle({"id": 1, "action": "export_fetch", "since": "2026-11-18_081621"})
+        r = desk.sent[-1][1]
+        assert r["ok"], r
+        assert r["detail"].startswith("Took short_rail_rep_2026-11-18_082621.csv from Downloads, where Edge saved it "
+                                      "(as short_rail_rep_2026-11-18_082621 (1).csv): 1 row(s)"), r["detail"]
+        assert "No tab to close." in r["detail"] and "builds the rail plan from it" in r["detail"]
+        assert closed == [] and selected == [] and "data" not in r["payload"]
+        assert [body for path, body in desk.sent if path == "/api/ctms/export"] == [
+            {"name": "short_rail_rep_2026-11-18_082621.csv", "data": base64.b64encode(data).decode()}]
+        # leftovers asked to close with CTMS as its own program: no talk of CTMS's tab in Edge, no tab selected
+        b.handle({"id": 2, "action": "export_close"})
+        r = desk.sent[-1][1]
+        assert r["ok"] and r["detail"] == "No export tab to close." and selected == [], r
+    finally:
+        (W.find_windows, W.picture, W.prompts, B.LOG, TB.names, TB.close, TB.select, X.take) = keep
 
 
 def test_the_bridge_takes_the_export_only_with_the_switch_closes_its_tab_and_brings_ctms_back():

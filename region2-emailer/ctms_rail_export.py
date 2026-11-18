@@ -15,7 +15,9 @@ Sunday, "current" this one - the Rail plan card's two buttons.
   product   SHORT_RAIL, found in its list by its picture - the box must show it
   check     both schedule boxes read back as the week, before Export is pressed
   export    Export; the bridge takes the file from the tab it opened (export-fetch, only a file made since the
-            press) and closes the tab; then the card is closed
+            press) and closes the tab - or, CTMS being its own program now, from Downloads, where Edge saves it by
+            itself; asked again every few seconds until it shows (18/11: asked once, 3 s after Export, it had not
+            yet); then the card is closed
 
 The first thing not as expected stops it, CTMS left as it is - nothing is ever saved by an export. Only after Export
 does a stop tidy up: the export's tab closed (export-close), so CTMS shows again.
@@ -28,6 +30,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta
 
 import ctms_digits
@@ -60,6 +63,11 @@ KEY_PAUSE = 0.1                 # between a list's key presses - the read-back c
 KEYS_A_BATCH = 100
 SETTLE = "settle quiet=0.8 timeout=20"
 FETCH_SLACK = 600               # seconds the export file's name may be behind the press (CTMS's clock)
+# The export's file is asked for again while the bridge has none yet - every FETCH_EVERY seconds, FETCH_TRIES times:
+# Edge takes a moment to save it (18/11: asked once, 3 s after Export, there was nothing; it was there soon after).
+FETCH_TRIES, FETCH_EVERY = 18, 5
+NONE_YET = "No CTMS export"     # how the bridge says it has found no export file (yet)
+_sleep = time.sleep
 
 
 class Failed(Exception):
@@ -183,6 +191,19 @@ def close_card(R):
     return not R._on_screen(CARD, CARD_BOX)
 
 
+def fetch(R, since):
+    """The export's file from the bridge -> (result, payload) of the last ask: asked again while it says there is
+    none yet, up to FETCH_TRIES times."""
+    for i in range(FETCH_TRIES):
+        if i:
+            _sleep(FETCH_EVERY)
+        result, payload = R.ask("export_fetch", wait_total=180, since=since)
+        R.trace("rail-export-fetch", {"since": since, "try": i + 1}, result, payload)
+        if result.get("ok") or NONE_YET not in str(result.get("detail") or ""):
+            break
+    return result, payload
+
+
 def export(R, which, today=None, state=None):
     """The week's Short Rail Report exported and sent on for the preview -> what was done. Failed says where it
     stopped; state["exported"] is True from Export's press until its file is in hand."""
@@ -219,10 +240,15 @@ def export(R, which, today=None, state=None):
     state["exported"] = True
     _steps(R, "export", [f"click {EXPORT} after=2.0"])
     since = (pressed - timedelta(seconds=FETCH_SLACK)).strftime("%Y-%m-%d_%H%M%S")
-    result, payload = R.ask("export_fetch", wait_total=180, since=since)
-    R.trace("rail-export-fetch", {"since": since}, result, payload)
+    result, payload = fetch(R, since)
     if not result.get("ok"):
-        raise Failed(f"the export's file: {result.get('detail')}")
+        detail = str(result.get("detail") or "")
+        if NONE_YET in detail:
+            raise Failed(f"the export's file - none showed in the {FETCH_TRIES * FETCH_EVERY} s after Export ({detail})"
+                         + ("" if "Downloads" in detail else
+                            " - this bridge looks only at Edge's tabs and needs its update to take the file from "
+                            "Downloads, where Edge saves it now"))
+        raise Failed(f"the export's file: {detail}")
     name, rows = str((payload or {}).get("name") or ""), (payload or {}).get("rows")
     stamp = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{6})", name)
     made = datetime.strptime("".join(stamp.groups()), "%Y-%m-%d%H%M%S") if stamp else None

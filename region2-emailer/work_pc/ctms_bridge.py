@@ -1309,7 +1309,8 @@ class Bridge:
         left = len(ctms_tabs.names(want)) if before else 0
         n = before - left
         said = ""
-        if not ctms_tabs.is_ctms((self.scan_window(force=True) or {}).get("title")):
+        own = (self.scan_window(force=True) or {}).get("kind") == "java"   # CTMS as its own program: no tab in Edge
+        if not own and not ctms_tabs.is_ctms((self.win or {}).get("title")):
             ok, said = ctms_tabs.select("ctms")
             if ok:
                 self.click_first = True             # where Edge's keyboard focus lands is Edge's choice
@@ -1321,7 +1322,7 @@ class Bridge:
         return ((f"Closed {n} export tab{'' if n == 1 else 's'}" if n else
                  "No export tab to close" if not before else "The export tab did not close")
                 + (f" ({left} still open - close {'it' if left == 1 else 'them'} yourself)" if left and n else "")
-                + ("; CTMS's tab is the one showing again." if back
+                + ("." if own else "; CTMS's tab is the one showing again." if back
                    else f"; CTMS's tab is not showing - {said or 'select it yourself'}."))
 
     def front_said(self):
@@ -1747,11 +1748,21 @@ class Bridge:
                 return done(True, *self.prompt_look())
             if action == "export_fetch":
                 # the file CTMS's export opened in a tab, taken from its address into Downloads (ctms_export) -
-                # then that tab closed and CTMS's brought back, so the bridge sees CTMS again
+                # then that tab closed and CTMS's brought back, so the bridge sees CTMS again. With CTMS as its own
+                # program (18/11) Edge saves the file into Downloads by itself and leaves no tab: taken from there,
+                # nothing to close
                 names = ([self.win["title"]] if self.win else []) + ctms_tabs.names(ctms_export.is_export)
                 got = ctms_export.take(names, cmd.get("option") or "", cmd.get("since") or "")
                 data = got.pop("data")
-                back = self.export_tabs_away(lambda n: got["url"] in (n or ""))
+                if got["url"]:
+                    took = (f"Took {got['name']} {got['how']} into Downloads"
+                            + ("" if got["saved_as"] == got["name"] else f" as {got['saved_as']}")
+                            + ("" if got["written"] else " - it was there already, left as it was"))
+                    back = self.export_tabs_away(lambda n: got["url"] in (n or ""))
+                else:
+                    took = (f"Took {got['name']} {got['how']}"
+                            + ("" if got["saved_as"] == got["name"] else f" (as {got['saved_as']})"))
+                    back = "No tab to close."
                 onward = ""
                 if ctms_export.RAIL_EXPORT.fullmatch(got["name"]):     # the rail plan's own report: home builds it
                     try:
@@ -1760,10 +1771,7 @@ class Bridge:
                         onward = " Sent to the home PC, which builds the rail plan from it as a preview."
                     except Exception as e:
                         onward = f" Not sent to the home PC ({friendly(e)}) - it is in Downloads."
-                return done(True, (f"Took {got['name']} {got['how']} into Downloads"
-                                   + ("" if got["saved_as"] == got["name"] else f" as {got['saved_as']}")
-                                   + ("" if got["written"] else " - it was there already, left as it was")
-                                   + f": {got['rows']} row(s), {got['bytes']:,} bytes. Header: {got['header']}. "
+                return done(True, (took + f": {got['rows']} row(s), {got['bytes']:,} bytes. Header: {got['header']}. "
                                    + back + onward),
                             dict(got, kind="export"))
             if action == "export_close":

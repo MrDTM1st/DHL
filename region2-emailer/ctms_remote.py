@@ -34,7 +34,8 @@ CTMS on the work PC, from the home PC - how Claude sees it and works it.
     python ctms_remote.py prompt-click --at X,Y   ...or a point on its picture, when it has no buttons to name
     python ctms_remote.py export-fetch [NAME]     the file an export opened in a tab, taken from its address
                                                   into the work PC's Downloads (newest, or the one called NAME);
-                                                  then its tab closed and CTMS's brought back
+                                                  then its tab closed and CTMS's brought back - or, with no such
+                                                  tab, the export Edge saved into Downloads by itself (18/11)
     python ctms_remote.py export-close            close export tabs left open (they blank CTMS's window)
 
 The CTMS note run (CTMS's own window; each answers with a picture to check):
@@ -1028,7 +1029,7 @@ def main(argv=None):
     p = sub.add_parser("import-csv", help="an upload CSV into CTMS in one go (the map's Upload)")
     p.add_argument("name")
     p.add_argument("--commit", action="store_true", help="really import - without it, a dry run up to Import")
-    p = sub.add_parser("export-fetch", help="the export's file, from its tab's address, into Downloads")
+    p = sub.add_parser("export-fetch", help="the export's file, from its tab's address or from Downloads")
     p.add_argument("name", nargs="?", default="")
     sub.add_parser("export-close", help="close export tabs left open, bring CTMS's tab back")
     p = sub.add_parser("see")
