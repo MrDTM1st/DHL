@@ -257,6 +257,30 @@ def _rail_sending_locked():
     return bool(run and run.get("state") == "sending" and time.time() < run.get("sending_until", 0))
 
 
+# The Toolkit switch on the Dashboard (asked for 21/11, when Outlook would not even open on the home PC). The home PC
+# keeps it - toolkit.off, toolkit_switch.py - and says how it is with every panel push, so it lasts through a redeploy
+# here. While it is off the buttons that start work are refused here with why (the home PC would only turn them down)
+# and this server starts nothing by itself: the set-time CTMS look-ups, the escalation look-ups and the rejection
+# card's Auto wait. The switch itself, Update the home PC, Look mum's switch, Stop, the work PC's own commands and
+# every read still go.
+_TOOLKIT_OFF_SAID = ("The toolkit is switched off, so nothing is being started - turn it on with the Toolkit switch "
+                     "on the Dashboard first.")
+_TOOLKIT_ALWAYS = frozenset(("set_toolkit", "home_update"))
+_TOOLKIT_GATED = frozenset(("/api/ctms/import", "/api/ctms/check", "/api/ctms/teams", "/api/ctms/todo/answer",
+                            "/api/ctms/todo/dismiss", "/api/ctms/todo/run", "/api/ctms/book", "/api/ctms/book_batch",
+                            "/api/ctms/rejection", "/api/ctms/rail", "/api/mail/command", "/api/mail/approve"))
+
+
+def _toolkit_off_locked():
+    t = _panel.get("toolkit") if isinstance(_panel, dict) else None
+    return isinstance(t, dict) and t.get("on") is False
+
+
+def _toolkit_off():
+    with _lock:
+        return _toolkit_off_locked()
+
+
 def _rejection_start_locked(ids, by):
     """The CTMS page's rejection Send - or Auto's (11/11): the ready responses filled in and submitted on the work PC
     one after another by the home PC (rejections.py run), as the to-do's Run types its items. Look mum, no hands on for
@@ -292,6 +316,8 @@ def _rejection_auto_locked():
     before, never across a run of the dashboard's own. -> the response started, or None."""
     rj = _panel.get("rejections") if isinstance(_panel, dict) else None
     if not (isinstance(rj, dict) and rj.get("auto")) or not _ctms_online() or not _agent_online():
+        return None
+    if _toolkit_off_locked():                   # the Toolkit switch is off: nothing goes by itself
         return None
     idle = (_ctms["state"] or {}).get("idle")
     if not isinstance(idle, (int, float)) or idle < _REJECTION_IDLE:
@@ -695,6 +721,8 @@ def _ctms_due_check_locked(uk=None, now=None):
     """Queue the set-time look-up when one is due - the bridge online, nothing of the kind waiting or running, the
     work PC not set to look only, the try before given its CHECK_RETRY. Returns the command queued, or None."""
     now = time.time() if now is None else now
+    if _toolkit_off_locked():                   # the Toolkit switch is off: no look-up by itself
+        return None
     slot = _check_slot_now(uk or _uk_now())
     pend = _check_slot["pending"]
     if pend and not (any(c["id"] == pend[1] for c in _ctms["queue"])
@@ -753,6 +781,8 @@ def _ctms_want_check_locked(now=None):
     only, no other look-up waiting or running, the try before given its CHECK_WANT_RETRY. Returns the command queued,
     or None."""
     now = time.time() if now is None else now
+    if _toolkit_off_locked():                   # the Toolkit switch is off: no look-up by itself
+        return None
     want, pend = _check_want, _check_want["pending"]
     if pend is not None and not (any(c["id"] == pend for c in _ctms["queue"])
                                  or (_ctms["running"] and _ctms["running"]["id"] == pend)):
@@ -2118,6 +2148,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.partition("?")[0]
         if not isinstance(data, dict):
             data = {}
+        if path in _TOOLKIT_GATED and self._is_dash() and _toolkit_off():
+            return self._json(409, {"error": _TOOLKIT_OFF_SAID, "need": "toolkit"})
         # ---- from the dashboard, or from Claude on the home PC ----
         if path == "/api/ctms/command":
             dash = self._is_dash()
@@ -2905,6 +2937,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.partition("?")[0]
         if not isinstance(data, dict):
             data = {}
+        if path in _TOOLKIT_GATED and (self._is_dash() or self._agent_key_ok()) and _toolkit_off():
+            return self._json(409, {"error": _TOOLKIT_OFF_SAID, "need": "toolkit"})
         if path == "/api/mail/command":
             dash = self._is_dash()
             if not (dash or self._agent_key_ok()):
@@ -3122,6 +3156,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/command":
             if not self._is_dash():
                 return self._json(401, {"error": "auth"})
+            if data.get("action") not in _TOOLKIT_ALWAYS and _toolkit_off():
+                return self._json(409, {"error": _TOOLKIT_OFF_SAID, "need": "toolkit"})
             with _lock:
                 _queue.append({"action": data.get("action", "preview"), "order": data.get("order", ""),
                                "email": data.get("email"), "sel": data.get("sel"),

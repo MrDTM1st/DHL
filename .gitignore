@@ -30,6 +30,8 @@ region2-emailer/config/team.json
 region2-emailer/order_index.json
 region2-emailer/waitlist.json
 region2-emailer/*.enabled
+region2-emailer/toolkit.off
+region2-emailer/toolkit.off.tmp
 region2-emailer/_*.jsonl
 region2-emailer/supervisor.log
 

@@ -25,6 +25,7 @@ HEARTBEAT_SECONDS = 5
 
 sys.path.insert(0, HERE)   # local modules importable no matter the cwd
 from modules import site_matching, profiles, handover   # pure-python, no COM
+import toolkit_switch      # the dashboard's Toolkit switch: off = nothing here starts on Outlook (pure python)
 STARTED = time.time()       # an update asked for the agents to start again after this: home_update.restart_due
 CONFIG_DIR = os.path.join(HERE, "config")
 HANDOVER_PATH = os.path.join(HERE, "_handover.json")
@@ -655,6 +656,7 @@ def push_panel():
             "inbox": _inbox(),
             "update_reply": _update_reply(),
             "home_code": _home_code(),
+            "toolkit": _toolkit(),
         })
     except Exception:
         pass
@@ -977,6 +979,8 @@ class BackgroundJobs:
             self.running = None
             self._done(key, p.returncode, launched, offset, now)
             return
+        if toolkit_switch.is_off():                     # the dashboard's Toolkit switch: nothing new on Outlook
+            return
         for key, args, every, timeout, enabled in self.jobs:
             if not self._due(key, every, now) or not enabled():
                 continue
@@ -1120,6 +1124,20 @@ def _mail_answer(cmd):
     return False, {"error": "mail_ops.py gave no answer: " + tail((out or "") + (proc.stderr or ""), 4)}
 
 
+_mail_job = {"on": ""}      # the work-mail ask mail_worker is answering now: the Toolkit switch's "still finishing"
+
+
+def _mail_reply(cmd):
+    """One work-mail ask answered - or, while the Toolkit switch is off, turned down with Outlook left alone."""
+    if toolkit_switch.is_off():
+        return False, {"error": toolkit_switch.OFF_SAID}
+    _mail_job["on"] = "a work-mail " + str(cmd.get("action") or "ask").replace("_", " ")
+    try:
+        return _mail_answer(cmd)
+    finally:
+        _mail_job["on"] = ""
+
+
 def mail_worker():
     """The cloud's work-mail channel (/api/mail/*): Claude's searches, reads and
     drafts, and the sends Delali approved on the dashboard. A thread of its own
@@ -1138,7 +1156,7 @@ def mail_worker():
             continue
         if not cmd or not cmd.get("id"):
             continue
-        ok, res = _mail_answer(cmd)
+        ok, res = _mail_reply(cmd)
         print(f"mail: {cmd.get('action')} #{cmd.get('id')} -> {'ok' if ok else res.get('error', 'failed')}")
         for _ in range(3):
             try:
@@ -1172,13 +1190,60 @@ def _home_code():
     return _code["v"]
 
 
+def _toolkit():
+    """The Toolkit switch for the dashboard's panel - and while it is off, what is still finishing on Outlook."""
+    try:
+        return toolkit_switch.state([(key, args) for key, args, *_ in _bg_jobs()],
+                                    [_mail_job["on"]] if _mail_job["on"] else [])
+    except Exception:
+        return {"on": not toolkit_switch.is_off()}
+
+
+# the dashboard follows these as runs of its own: told the run is over, or its card says "running" till its time is up
+_RUN_ENDS = {"ctms_todo_run": "/api/ctms/todo/ran", "ctms_book": "/api/ctms/book/ran",
+             "ctms_book_batch": "/api/ctms/book/ran", "rejection_run": "/api/ctms/rejection/ran",
+             "ctms_rail": "/api/ctms/rail/ran"}
+
+
+def _toolkit_command(cmd):
+    """The Toolkit switch itself - and while it is off, every other command but Update the home PC, turned down and
+    said, never left to look like a dead button. -> True when the command was dealt with here."""
+    action = (cmd or {}).get("action")
+    if action == "set_toolkit":
+        if cmd.get("on") is None:
+            report("error", "The Toolkit switch's on/off didn't arrive - nothing changed.")
+            return True
+        try:
+            on = toolkit_switch.switch(bool(cmd.get("on")))
+        except OSError as e:
+            report("error", f"The Toolkit switch could not be changed on the home PC: {e}")
+            return True
+        push_panel()
+        report("done", "Toolkit ON - the home PC is working with Outlook again: replies, chasers, the wait list "
+                       "and the live monitor carry on where they left off." if on else
+               "Toolkit OFF - nothing on the home PC will touch Outlook until it is turned back on. Anything "
+               "already running finishes by itself; the banner says when it has.")
+        return True
+    if not action or action in toolkit_switch.ALWAYS or not toolkit_switch.is_off():
+        return False
+    end = _RUN_ENDS.get(action)
+    if end and cmd.get("run") is not None:
+        try:
+            _req(end, {"run": cmd.get("run"), "ok": False, "said": toolkit_switch.OFF_SAID})
+        except Exception:
+            pass
+    report("error", f"Not done ({action}): {toolkit_switch.OFF_SAID}")
+    return True
+
+
 def main():
     _lock = single_instance()   # noqa: F841 - held for process lifetime
     print(f"Agent polling {BASE} every {POLL_SECONDS}s. Ctrl+C to stop.")
     threading.Thread(target=heartbeat, daemon=True).start()
     if not IS_LOCAL:                # work mail rides on the cloud dashboard only
         threading.Thread(target=mail_worker, daemon=True).start()
-    report("idle", "Agent connected.")
+    report("idle", "Agent connected." + (" The toolkit is switched off - turn it on with the Toolkit switch on "
+                                         "the Dashboard." if toolkit_switch.is_off() else ""))
     push_tracker()
     push_waitlist()
     push_panel()
@@ -1215,7 +1280,9 @@ def main():
         action = cmd.get("action") if cmd else None
         order = (cmd.get("order") or "").strip() if cmd else ""
         try:
-            if action in ("preview", "commit"):
+            if _toolkit_command(cmd):
+                pass                    # the Toolkit switch, or a command it turned down while it is off
+            elif action in ("preview", "commit"):
                 report("running", f"Running {action}…")
                 out = run(["build_drafts.py", action])
                 report("done", f"{action} finished.", tail(out))

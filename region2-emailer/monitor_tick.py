@@ -233,6 +233,9 @@ def main():
     # syncing. One tick at a time; none while Outlook is Not Responding; and
     # the tick plus the batch build it may start counts as the ONE background
     # Outlook job (agent.py's timer jobs take turns with it through the slot).
+    import toolkit_switch
+    if toolkit_switch.is_off():           # the dashboard's Toolkit switch is off: Outlook is left alone
+        return
     import outlook_gate as gate
     if not gate.single_instance("monitor_tick"):
         return

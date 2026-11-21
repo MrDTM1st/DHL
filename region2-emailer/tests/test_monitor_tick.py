@@ -27,6 +27,8 @@ def M(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "outlook_gate", types.SimpleNamespace(
         single_instance=lambda name: True, self_destruct=lambda s: None, outlook_hung=lambda: False,
         background_slot=lambda wait: object()))
+    import toolkit_switch
+    monkeypatch.setattr(toolkit_switch, "FLAG", str(tmp_path / "toolkit.off"))   # on, whatever this PC's switch says
     monkeypatch.delitem(sys.modules, "monitor_tick", raising=False)
     import monitor_tick
     for name in ("SEEN", "PHASE2_DUE", "PUSH_DUE"):
@@ -67,3 +69,16 @@ def test_the_ids_seen_are_kept_in_the_order_they_came_and_the_oldest_let_go(M, m
     seen = M._load()
     assert seen["ext_ids"] == old[1:] + ["new-extract"]
     assert seen["adhoc_ids"] == old[1:] + ["new-form"]
+
+
+def test_nothing_is_looked_at_while_the_toolkit_is_switched_off(M, monkeypatch):
+    import toolkit_switch
+    asked = []
+    monkeypatch.setitem(sys.modules, "outlook_gate", types.SimpleNamespace(
+        single_instance=lambda name: asked.append(name) or False))
+    M.main()                                                  # on: as far as its single-instance lock
+    assert asked == ["monitor_tick"]
+    asked.clear()
+    toolkit_switch.switch(False, by="a test")
+    M.main()
+    assert asked == []                                        # off: gone before the lock, the slot or Outlook

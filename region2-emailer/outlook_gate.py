@@ -25,8 +25,9 @@ silent failure. At most one background job runs alongside it.
 
 is the launcher for background jobs fired from timers (agent.py): it takes
 the slot (waiting up to SECS, default 0), runs the script, and frees the slot
-when it exits. Busy or hung -> prints SKIP and exits SKIPPED (75) without
-running, so the caller can tell "did not run, try again soon" from "ran".
+when it exits. Busy, hung or the dashboard's Toolkit switch off (toolkit_switch)
+-> prints SKIP and exits SKIPPED (75) without running, so the caller can tell
+"did not run, try again soon" from "ran".
 
 The names are Local\\ (this logon session). That is deliberate: a process in
 another session cannot drive this session's Outlook over COM anyway.
@@ -143,6 +144,20 @@ def _std(stream):
         return None
 
 
+def job_lock(argv):
+    """The single-instance name of the timer job `argv` (["phase2.py", "check"] -> "job_phase2_py_check"): it
+    never runs twice, and toolkit_switch looks at it to say the job is still going."""
+    return "job_" + "_".join(os.path.basename(a) for a in argv).replace(".", "_")
+
+
+def _toolkit_off():
+    try:
+        import toolkit_switch
+        return toolkit_switch.is_off()
+    except Exception:
+        return False
+
+
 def _run(argv):
     wait, timeout = 0.0, JOB_TIMEOUT
     while argv[:1] and argv[0] in ("--wait", "--timeout"):
@@ -155,8 +170,10 @@ def _run(argv):
         print("usage: outlook_gate.py run [--wait SECS] [--timeout SECS] <script.py> [args...]")
         return 2
     job = " ".join(argv)
-    key = "_".join(os.path.basename(a) for a in argv).replace(".", "_")
-    if not single_instance("job_" + key):
+    if _toolkit_off():                  # the dashboard's Toolkit switch is off: Outlook is left alone
+        print(f"SKIP {job}: the toolkit is switched off")
+        return SKIPPED
+    if not single_instance(job_lock(argv)):
         print(f"SKIP {job}: already running")
         return SKIPPED
     if outlook_hung():

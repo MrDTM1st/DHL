@@ -10,6 +10,7 @@ import TrackerPage from './pages/TrackerPage.jsx';
 import Notifications from './pages/Notifications.jsx';
 import CtmsPage from './pages/CtmsPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+import { ToolkitStrip } from './components/Toolkit.jsx';
 import { useStatus, useTracker } from './hooks.js';
 import { isUrgent, within3, ordLabel, dueText, stamp, answerText, emailedBack } from './lib/orders.js';
 import * as api from './api.js';
@@ -59,7 +60,10 @@ export default function App() {
   const ttlText = status && status.queue_ttl
     ? (status.queue_ttl >= 60 ? Math.floor(status.queue_ttl / 60) + ' minutes' : status.queue_ttl + ' seconds')
     : '10 minutes';
-  const agentText = 'Home PC ' + (agentOnline ? 'online' : 'offline');
+  // the Toolkit switch (21/11): the home PC keeps it and says how it is on its panel - off, it leaves Outlook alone
+  const toolkit = panel.toolkit || null;
+  const toolkitOff = !!(toolkit && toolkit.on === false);
+  const agentText = 'Home PC ' + (agentOnline ? 'online' : 'offline') + (toolkitOff ? ' · toolkit off' : '');
   // the work PC's CTMS bridge - a separate machine on its own channel
   const ctmsOnline = !!(status && status.ctms_online);
 
@@ -285,6 +289,20 @@ export default function App() {
     }
   }, [refreshStatus, onAuthFail, pushToast]);
 
+  // the Toolkit switch pressed: {on, at} until the home PC's panel says it is so, or a minute and a half has gone
+  // (the home PC offline, say - the command then waits in the queue like any other)
+  const [toolkitAsk, setToolkitAsk] = useState(null);
+  const toolkitOn = toolkit ? toolkit.on !== false : null;
+  useEffect(() => {
+    if (!toolkitAsk) return undefined;
+    if (toolkitOn === toolkitAsk.on) { setToolkitAsk(null); return undefined; }
+    const t = setTimeout(() => setToolkitAsk(null), Math.max(0, toolkitAsk.at + 90000 - Date.now()));
+    return () => clearTimeout(t);
+  }, [toolkitOn, toolkitAsk]);
+  const onToolkit = useCallback(async (on) => {
+    if (await onCommand({ action: 'set_toolkit', on })) setToolkitAsk({ on, at: Date.now() });
+  }, [onCommand]);
+
   // Returns TRUE only if the file actually reached the control plane.
   //
   // It used to swallow the failure and return undefined either way, and every
@@ -494,7 +512,9 @@ export default function App() {
         ctmsOnline={ctmsOnline}
         bellOpen={bellOpen}
         onBell={(e) => { e.stopPropagation(); setBellOpen((v) => !v); }}
+        paused={agentOnline && toolkitOff}
       />
+      <ToolkitStrip toolkit={toolkit} asked={toolkitAsk} onSet={onToolkit} />
       {bellOpen && (
         <NotifPop notes={shownNotes} onOpen={openNote} markAll={markAll}
           seeAll={() => { setPage('notifications'); setBellOpen(false); }} />
@@ -505,6 +525,7 @@ export default function App() {
             records={records} status={status} panel={panel} setPage={setPage}
             onCommand={onCommand} onUpload={onUpload} currentOrder={currentOrder} setCurrentOrder={setCurrentOrder}
             agentOnline={agentOnline} ttlText={ttlText} onClearDropped={onClearDropped} uploadBusy={uploadBusy}
+            toolkit={toolkit} toolkitAsk={toolkitAsk} onToolkit={onToolkit}
           />
         )}
         {page === 'map' && (

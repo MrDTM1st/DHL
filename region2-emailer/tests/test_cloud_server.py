@@ -437,6 +437,86 @@ def test_auto_sends_a_complete_response_only_while_the_work_pc_is_left_alone_and
         S._rejection_tried.clear()
 
 
+
+# ---- the Toolkit switch on the Dashboard (21/11) -------------------------------------------------------------
+TOOLKIT_OFF = {"on": False, "since": "21/11 18:40", "busy": [], "outlook": "open"}
+
+
+def test_while_the_toolkit_is_off_buttons_that_start_work_are_refused_and_the_switch_still_goes():
+    fresh()
+    S._queue.clear()
+    keep = S._panel
+    try:
+        S._panel = {"toolkit": dict(TOOLKIT_OFF)}
+        code, r = call("/api/command", {"action": "extract_preview"})
+        assert code == 409 and r["need"] == "toolkit" and "switched off" in r["error"], r
+        for path, body in (("/api/ctms/book", {"orders": ["9100001"]}), ("/api/ctms/rail", {"week": "next"}),
+                           ("/api/ctms/todo/run", {"ids": ["a1"]}), ("/api/ctms/check", {}),
+                           ("/api/ctms/rejection", {"ids": ["r1111111111"]}),
+                           ("/api/mail/command", {"action": "search", "args": {}})):
+            code, r = call(path, body)
+            assert code == 409 and r.get("need") == "toolkit", (path, code, r)
+        assert not S._queue and S._ctms["book_run"] is None and S._ctms["rail_run"] is None and not S._ctms_armed()
+        # the switch itself, and Update the home PC (git only), still go to the home PC
+        assert call("/api/command", {"action": "set_toolkit", "on": True})[0] == 200
+        assert call("/api/command", {"action": "home_update"})[0] == 200
+        assert [q["action"] for q in S._queue] == ["set_toolkit", "home_update"] and S._queue[0]["on"] is True
+        # a wrong key is still refused as one
+        assert call("/api/ctms/book", {"orders": ["9100001"]}, key="nope")[0] == 401
+        # on again - the home PC says so on its panel - or a home PC on older code that says nothing: as ever
+        for panel in ({"toolkit": {"on": True}}, {}):
+            S._queue.clear()
+            S._panel = panel
+            assert call("/api/command", {"action": "extract_preview"})[0] == 200 and len(S._queue) == 1
+    finally:
+        S._panel = keep
+        fresh()
+        S._queue.clear()
+        with S._lock:
+            S._status.update(state="idle", detail="", at="", output="", email=None)
+
+
+def test_while_the_toolkit_is_off_nothing_is_started_by_itself():
+    from datetime import datetime
+    fresh()
+    S._queue.clear()
+    S._ctms["rejection_run"] = None
+    S._rejection_tried.clear()
+    keep = (S._panel, S._ctms_online, S._agent_online, dict(S._check_want), dict(S._check_slot), S._tracker)
+    ready = {"id": "r2222222222", "status": "ready", "gaps": []}
+    monday9 = datetime(2026, 11, 23, 9, 1)
+    try:
+        S._ctms_online = S._agent_online = lambda: True
+        S._ctms["state"] = {"idle": 120}
+        S._tracker = {"records": []}
+        S._check_want.update(orders=[{"ref": "9100070", "date": "", "veh": True}], why="an escalation",
+                             until=time.time() + 3600, next_try=0.0, pending=None)
+        S._check_slot.update(done=[], next_try=0.0, pending=None)
+        call("/api/panel", {"rejections": {"auto": True, "open": [ready]}, "toolkit": dict(TOOLKIT_OFF)}, key=AGENT)
+        with S._lock:
+            assert S._ctms_want_check_locked() is None
+            assert S._ctms_due_check_locked(uk=monday9) is None and S._check_slot["done"] == []
+        assert not S._queue and not S._ctms["queue"] and not S._ctms_armed()       # Auto and both look-ups wait
+        # on again: Auto and the escalation look-up go, and the set time is dealt with
+        call("/api/panel", {"rejections": {"auto": True, "open": [ready]}, "toolkit": {"on": True}}, key=AGENT)
+        assert [i for q in S._queue if q["action"] == "rejection_run" for i in q["ids"]] == ["r2222222222"]
+        with S._lock:
+            S._ctms_due_check_locked(uk=monday9)            # nothing on the map: that time is done with
+            assert S._check_slot["done"]
+            assert S._ctms_want_check_locked() is not None
+    finally:
+        S._panel, S._ctms_online, S._agent_online = keep[:3]
+        S._check_want.clear()
+        S._check_want.update(keep[3])
+        S._check_slot.clear()
+        S._check_slot.update(keep[4])
+        S._tracker = keep[5]
+        fresh()
+        S._queue.clear()
+        S._ctms["rejection_run"] = None
+        S._rejection_tried.clear()
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

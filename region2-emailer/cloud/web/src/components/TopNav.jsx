@@ -4,7 +4,7 @@ import { useClock } from '../hooks.js';
 // Red/yellow DHL top nav: brand, page links, home-PC status pill, clock, bell.
 // The CTMS link carries its own small dot for the work PC's bridge - a second
 // machine, so it does not share the home PC's pill.
-export default function TopNav({ page, setPage, unread, agentOnline, agentText, ctmsOnline, onBell, bellOpen }) {
+export default function TopNav({ page, setPage, unread, agentOnline, agentText, ctmsOnline, onBell, bellOpen, paused }) {
   const clock = useClock();
   const nav = [
     ['dash', 'Dashboard', I.dash],
@@ -34,7 +34,8 @@ export default function TopNav({ page, setPage, unread, agentOnline, agentText, 
         </button>
       </nav>
       <div className="topright">
-        <div className={'statuspill' + (agentOnline ? '' : ' off')} title={agentText}>
+        {/* amber while the Toolkit switch is off: online, and choosing to leave Outlook alone */}
+        <div className={'statuspill' + (agentOnline ? (paused ? ' paused' : '') : ' off')} title={agentText}>
           <span className="pdot" /><span className="ptext">{agentText}</span>
         </div>
         <div className="clock mono">{clock}</div>

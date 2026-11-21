@@ -459,6 +459,20 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .switch.on .knob::after{ transform:translateX(13px); }
 .switch:hover{ border-color:var(--muted); }
 
+/* the Toolkit switch (21/11): off is amber - a state chosen, not a fault - on the Dashboard's switch, the home-PC pill
+   and the strip under the top bar on every page, which also says what is still finishing and how Outlook is */
+.dashhead-btns{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.switch.toolkit:not(.on){ background:var(--yellow-t); border-color:var(--amber-line3); color:var(--amber-ink2); }
+.statuspill.paused{ color:var(--amber-ink2); background:var(--yellow-t); }
+.statuspill.paused .pdot{ background:var(--yellow-d); box-shadow:0 0 0 3px rgba(235,183,0,.25); }
+.tkoff{ display:flex; align-items:center; justify-content:space-between; gap:10px 16px; flex-wrap:wrap; flex:none;
+      padding:9px 26px; background:var(--yellow-t); border-bottom:1px solid var(--amber-line2); color:var(--amber-ink2);
+      font-size:13px; line-height:1.45; }
+.tkoff b{ font-weight:800; }
+.tkoff .tkoff-more{ display:block; font-size:12px; opacity:.9; }
+.tkoff .btn{ padding:6px 13px; flex:none; }
+@media (max-width:680px){ .tkoff{ padding:9px 16px; } }
+
 /* generated-files rows on the dashboard */
 .filerow{ display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--line); font-size:12.5px; }
 .filerow:last-child{ border-bottom:none; }

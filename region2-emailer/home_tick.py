@@ -131,6 +131,9 @@ def main():
     # fires every 60s whether or not the last tick finished. One copy at a
     # time, nothing while Outlook is Not Responding, and it takes its turn in
     # the one background-Outlook slot (see outlook_gate).
+    import toolkit_switch
+    if toolkit_switch.is_off():           # the dashboard's Toolkit switch is off: Outlook is left alone
+        return
     import outlook_gate as gate
     if not gate.single_instance("home_tick"):
         return

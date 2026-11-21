@@ -63,6 +63,7 @@ def cloud_config():
 
 
 TICK_MAX_AGE = 25 * 60     # a tick still alive after this is stuck on a COM call
+TICKS = ("home_tick.py", "monitor_tick.py")   # self-update + handover, and the live Outlook monitor (COM)
 
 
 def tick(job, running):
@@ -88,6 +89,26 @@ def tick(job, running):
                          creationflags=CREATE_NO_WINDOW)
     p.started = time.time()
     running[job] = p
+
+
+def toolkit_off():
+    """The dashboard's Toolkit switch (toolkit_switch.py). Off, the minute's ticks - both on Outlook - are not
+    started; the control plane and the agents are kept up regardless, as the dashboard turns it back on through
+    them."""
+    try:
+        import toolkit_switch
+        return toolkit_switch.is_off()
+    except Exception:
+        return False
+
+
+def fire_ticks(running):
+    """The minute's ticks - none while the toolkit is switched off. -> whether they were started."""
+    if toolkit_off():
+        return False
+    for job in TICKS:
+        tick(job, running)
+    return True
 
 
 def main():
@@ -117,8 +138,7 @@ def main():
                 cloud_agent = spawn("agent.py", [cc["url"], cc["agent_key"]], "cloud_agent.log")
                 log(f"started cloud agent -> {cc['url']}")
             if time.time() - last_tick > 60:   # self-update + handover + live Outlook monitor (COM)
-                for job in ("home_tick.py", "monitor_tick.py"):
-                    tick(job, ticks)
+                fire_ticks(ticks)
                 last_tick = time.time()
         except Exception as e:
             log(f"error: {e}")
