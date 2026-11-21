@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import * as api from '../api.js';
 import * as theme from '../lib/theme.js';
 import { SetupPanel, SetupSteps, CODE_ZIP, BRIDGE_FOLDER } from '../components/WorkPcSetup.jsx';
+import { ToolkitSwitch } from '../components/Toolkit.jsx';
 
 // Settings (his ask 03/11): kept out of the way behind the gear - updating the two PCs' code, and the work PC's setup
 // with its by-hand way. "Update the home PC" pulls main from GitHub on the home PC (home_update.py: fast-forward only,
@@ -172,6 +173,37 @@ function WorkPc({ onAuthFail, pushToast }) {
   );
 }
 
+// The Toolkit switch (21/11), here rather than on the Dashboard (asked for 21/11: "Throw that into settings"). Off,
+// nothing on the home PC uses Outlook; the strip under the top bar says so on every page until it is on again.
+function Toolkit({ toolkit, asked, onSet }) {
+  const off = !!(toolkit && toolkit.on === false);
+  const busy = (toolkit && toolkit.busy) || [];
+  return (
+    <div className="card settings-card">
+      <div className="settings-head">
+        <h3>Toolkit</h3>
+        <span className={'settings-dot' + (!toolkit ? '' : off ? ' paused' : ' on')}>
+          {!toolkit ? 'not known yet' : off ? 'off' + (toolkit.since ? ' since ' + toolkit.since : '') : 'on'}
+        </span>
+      </div>
+      <div className="settings-row">
+        <div className="settings-what">
+          <div className="settings-label">Everything the home PC does with Outlook</div>
+          <div className="settings-muted">
+            {off ? 'Off: nothing on the home PC uses Outlook, nothing runs by itself, and buttons that start work '
+              + 'wait until it is on again.'
+              : 'Replies, chasers, the wait list, the live monitor and work mail. Turn it off while Outlook needs '
+                + 'sorting out - the dashboard stays connected, so it can be turned back on from here.'}
+          </div>
+          {off && toolkit.outlook && <div className="settings-muted">Outlook on the home PC: {toolkit.outlook}.</div>}
+          {off && busy.length > 0 && <div className="settings-muted">Still finishing: {busy.join(', ')}.</div>}
+        </div>
+        <ToolkitSwitch toolkit={toolkit} asked={asked} onSet={onSet} />
+      </div>
+    </div>
+  );
+}
+
 // Light or dark (04/11), for this browser only
 function Appearance() {
   const [picked, setPicked] = useState(theme.choice());
@@ -195,7 +227,8 @@ function Appearance() {
   );
 }
 
-export default function SettingsPage({ panel, status, agentOnline, onCommand, onAuthFail, pushToast }) {
+export default function SettingsPage({ panel, status, agentOnline, onCommand, onAuthFail, pushToast, toolkit, toolkitAsk,
+  onToolkit }) {
   return (
     <div className="scroll"><div className="container page-anim settings">
       <div className="pagehead">
@@ -204,6 +237,7 @@ export default function SettingsPage({ panel, status, agentOnline, onCommand, on
           <h1 className="h1">Settings</h1>
         </div>
       </div>
+      <Toolkit toolkit={toolkit} asked={toolkitAsk} onSet={onToolkit} />
       <Appearance />
       <HomePc code={panel && panel.home_code} status={status} agentOnline={agentOnline} onCommand={onCommand} />
       <WorkPc onAuthFail={onAuthFail} pushToast={pushToast} />

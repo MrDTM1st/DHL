@@ -17,7 +17,7 @@ function press(on, onSet) {
   if (window.confirm(on ? ON_ASK : OFF_ASK)) onSet(on);
 }
 
-// on the Dashboard's head, beside Scan today's extract
+// in Settings, on its Toolkit card (on the Dashboard's head till 21/11's "Throw that into settings")
 export function ToolkitSwitch({ toolkit, asked, onSet }) {
   const known = !!toolkit;                     // a home PC on older code says nothing about it
   const on = !known || toolkit.on !== false;

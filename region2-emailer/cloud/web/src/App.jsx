@@ -63,7 +63,8 @@ export default function App() {
   // the Toolkit switch (21/11): the home PC keeps it and says how it is on its panel - off, it leaves Outlook alone
   const toolkit = panel.toolkit || null;
   const toolkitOff = !!(toolkit && toolkit.on === false);
-  const agentText = 'Home PC ' + (agentOnline ? 'online' : 'offline') + (toolkitOff ? ' · toolkit off' : '');
+  // short, or the top bar runs off a laptop's screen: the amber dot says the home PC is there, the strip says the rest
+  const agentText = agentOnline && toolkitOff ? 'Toolkit off' : 'Home PC ' + (agentOnline ? 'online' : 'offline');
   // the work PC's CTMS bridge - a separate machine on its own channel
   const ctmsOnline = !!(status && status.ctms_online);
 
@@ -525,7 +526,6 @@ export default function App() {
             records={records} status={status} panel={panel} setPage={setPage}
             onCommand={onCommand} onUpload={onUpload} currentOrder={currentOrder} setCurrentOrder={setCurrentOrder}
             agentOnline={agentOnline} ttlText={ttlText} onClearDropped={onClearDropped} uploadBusy={uploadBusy}
-            toolkit={toolkit} toolkitAsk={toolkitAsk} onToolkit={onToolkit}
           />
         )}
         {page === 'map' && (
@@ -544,7 +544,8 @@ export default function App() {
           plan={panel.ctms_plan || []} onSettings={() => setPage('settings')}
           rejections={panel.rejections} onCommand={onCommand} />}
         {page === 'settings' && <SettingsPage panel={panel} status={status} agentOnline={agentOnline}
-          onCommand={onCommand} onAuthFail={onAuthFail} pushToast={pushToast} />}
+          onCommand={onCommand} onAuthFail={onAuthFail} pushToast={pushToast}
+          toolkit={toolkit} toolkitAsk={toolkitAsk} onToolkit={onToolkit} />}
         {selectedRecord && (
           <Drawer key={selectedId} record={selectedRecord} hauliers={hauliers}
             onClose={() => { setSelectedId(null); setPickedHaulier(null); setPhoneFor(null); }}

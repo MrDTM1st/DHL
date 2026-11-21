@@ -459,9 +459,10 @@ input[type=file]{ padding:7px 10px; font-size:12px; }
 .switch.on .knob::after{ transform:translateX(13px); }
 .switch:hover{ border-color:var(--muted); }
 
-/* the Toolkit switch (21/11): off is amber - a state chosen, not a fault - on the Dashboard's switch, the home-PC pill
+/* the Toolkit switch (21/11): off is amber - a state chosen, not a fault - on its switch in Settings, the home-PC pill
    and the strip under the top bar on every page, which also says what is still finishing and how Outlook is */
-.dashhead-btns{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.settings-dot.paused{ color:var(--amber-ink2); }
+.settings-dot.paused::before{ background:var(--yellow-d); }
 .switch.toolkit:not(.on){ background:var(--yellow-t); border-color:var(--amber-line3); color:var(--amber-ink2); }
 .statuspill.paused{ color:var(--amber-ink2); background:var(--yellow-t); }
 .statuspill.paused .pdot{ background:var(--yellow-d); box-shadow:0 0 0 3px rgba(235,183,0,.25); }

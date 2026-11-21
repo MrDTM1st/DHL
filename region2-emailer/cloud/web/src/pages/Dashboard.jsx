@@ -6,7 +6,6 @@ import FlowPanels from '../components/FlowPanels.jsx';
 import { NrDateCard } from '../components/NrDateBox.jsx';
 import InboxCard from '../components/InboxCard.jsx';
 import UpdateReplyCard from '../components/UpdateReplyCard.jsx';
-import { ToolkitSwitch } from '../components/Toolkit.jsx';
 
 // ---- Holiday cover / handover card ----
 function HolidayCard({ panel, onCommand }) {
@@ -466,7 +465,7 @@ function NoAddress({ rows, onCommand }) {
 
 export default function Dashboard({
   records, status, panel, setPage, onCommand, onUpload, currentOrder, setCurrentOrder,
-  agentOnline, ttlText, onClearDropped, uploadBusy, toolkit, toolkitAsk, onToolkit,
+  agentOnline, ttlText, onClearDropped, uploadBusy,
 }) {
   const tracked = records.length;
   const urgent = records.filter(isUrgent).length;
@@ -500,10 +499,7 @@ export default function Dashboard({
           <div className="kicker">Region 2 · {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
           <h1 className="h1">Haulage Desk</h1>
         </div>
-        <div className="dashhead-btns">
-          <ToolkitSwitch toolkit={toolkit} asked={toolkitAsk} onSet={onToolkit} />
-          <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
-        </div>
+        <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
 
       <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
