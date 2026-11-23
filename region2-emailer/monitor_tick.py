@@ -35,37 +35,64 @@ TICK_MAX_AGE = 25 * 60    # a tick alive this long is stuck on a COM call
 FORM_HINTS = ("haulage request", "transport request", "request form", "dts")
 AUTO_FORMS = os.path.join(HERE, "_adhoc_forms", "from_mail")   # gitignored: forms saved off the mail
 PUSH_DUE = os.path.join(HERE, "_push_due")   # touched when the map has something new: the agents push it now
+FORM_MAILS_A_TICK = 5     # emails with forms taken in one tick; any more wait, unseen, for the next tick
 
 
-def _auto_adhoc(ns, eid, fn):
-    """A new Haulage Request form, processed exactly as the dashboard's Ad hoc box does, the email it came in kept on
-    the job (to forward on the same chain once it is booked). -> (on the map?, its order or why not, who sent it)"""
+def _auto_adhoc(ns, eid, fns):
+    """The Haulage Request forms of one new email, processed exactly as the dashboard's Ad hoc box does, the email they
+    came in kept on the job (to forward on the same chain once it is booked).
+
+    EVERY form in the email. Only the first used to be taken, so a second form never reached the map (16/11: a rails
+    form and a switch half set form for one lorry came in one email, and only the rails went on). One form goes through
+    process_form.py as before; several go through mail_forms.py, which also makes forms sharing an order number ONE
+    order. -> ([(on the map?, its order or why not, the form)], who sent it)"""
+    if isinstance(fns, str):
+        fns = [fns]
     try:
         it = ns.GetItemFromID(eid)
-        att = next(a for a in (it.Attachments.Item(i) for i in range(1, it.Attachments.Count + 1))
-                   if str(a.FileName) == fn)
-        os.makedirs(AUTO_FORMS, exist_ok=True)
-        path = os.path.join(AUTO_FORMS, datetime.now().strftime("%Y%m%d%H%M%S_")
-                            + re.sub(r"[^A-Za-z0-9._ -]+", "-", fn))
-        att.SaveAsFile(path)
         sender = str(getattr(it, "SenderName", "") or "")
-        mail = {"entryid": eid, "store": str(it.Parent.StoreID), "from": sender, "file": fn,
+        mail = {"entryid": eid, "store": str(it.Parent.StoreID), "from": sender,
                 "conversation": str(getattr(it, "ConversationID", "") or ""),
                 "subject": str(getattr(it, "Subject", "") or ""),
                 "received": it.ReceivedTime.strftime("%Y-%m-%d %H:%M")}
-        with open(path + ".mail.json", "w", encoding="utf-8") as f:
-            json.dump(mail, f)
+        atts = [it.Attachments.Item(i) for i in range(1, it.Attachments.Count + 1)]
     except Exception as e:
-        return False, f"the form could not be saved off the email ({type(e).__name__})", ""
-    rc, out = run(["process_form.py", path, "--mail", path + ".mail.json"])
-    import process_form
-    ok, what = process_form.outcome(out)
-    if ok:
+        return [(False, f"the form could not be saved off the email ({type(e).__name__})", ", ".join(fns))], ""
+    os.makedirs(AUTO_FORMS, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S_")
+    want, saved, failed = list(fns), [], []
+    for a in atts:                  # by position, not by name: two attachments can have the same name
+        fn = str(a.FileName)
+        if fn not in want:
+            continue
+        want.remove(fn)
+        lead = stamp + (f"{len(saved) + len(failed) + 1}_" if len(fns) > 1 else "")
+        path = os.path.join(AUTO_FORMS, lead + re.sub(r"[^A-Za-z0-9._ -]+", "-", fn))
+        try:
+            a.SaveAsFile(path)
+            with open(path + ".mail.json", "w", encoding="utf-8") as f:
+                json.dump(dict(mail, file=fn), f)
+            saved.append((fn, path))
+        except Exception as e:
+            failed.append((False, f"the form could not be saved off the email ({type(e).__name__})", fn))
+    failed += [(False, "the form could not be saved off the email (it was not found on it)", fn) for fn in want]
+    results = []
+    if len(saved) == 1:
+        fn, path = saved[0]
+        rc, out = run(["process_form.py", path, "--mail", path + ".mail.json"])
+        import process_form
+        ok, what = process_form.outcome(out)
+        results = [(ok, what, fn)]
+    elif saved:
+        rc, out = run(["mail_forms.py"] + [p for _, p in saved])
+        import mail_forms
+        results = mail_forms.outcomes(out, [fn for fn, _ in saved])
+    if any(ok for ok, _, _ in results):
         try:
             open(PUSH_DUE, "w").close()
         except OSError:
             pass
-    return ok, what, sender
+    return results + failed, sender
 
 
 def _load():
@@ -274,6 +301,7 @@ def main():
                     new_inbox_hwm = riso
                 if inbox_hwm and riso > inbox_hwm:
                     new_mail = True
+            forms = []
             for fn in atts:
                 low = fn.lower()
                 if bd.is_wanted_extract(fn, subj):
@@ -281,10 +309,14 @@ def main():
                         ext_ids[eid] = None
                         new_extracts.append((eid, fn))
                 elif (low.endswith((".xlsx", ".xlsm", ".pdf"))
-                      and any(h in low or h in subj.lower() for h in FORM_HINTS)
-                      and eid not in adhoc_ids):
-                    adhoc_ids[eid] = None
-                    new_adhocs.append((eid, fn, subj))
+                      and any(h in low or h in subj.lower() for h in FORM_HINTS)):
+                    forms.append(fn)
+            # Every form in the email goes together - one per email used to be taken, the rest never seen again. And
+            # an email past what one tick takes is left unseen for the next tick: it used to be marked seen and
+            # dropped, unprocessed (the seeding pass still marks everything, as ever).
+            if forms and eid not in adhoc_ids and (seed or len(new_adhocs) < FORM_MAILS_A_TICK):
+                adhoc_ids[eid] = None
+                new_adhocs.append((eid, forms, subj))
     # slow full-tree sweep for BS files filed outside the watched folders
     if time.time() - state.get("last_tree", 0) > TREE_EVERY:
         try:
@@ -332,17 +364,21 @@ def main():
         _build(state, new_extracts)
     if new_adhocs:
         mapped, flagged = [], []
-        for eid, fn, subj in new_adhocs[:5]:
-            low = fn.lower()
-            if low.endswith((".xlsx", ".xlsm")) and "dts" not in low and "dts" not in subj.lower():
-                try:                            # nothing here may take the tick (extracts, replies) down with it
-                    ok, what, sender = _auto_adhoc(ns, eid, fn)
-                except Exception as e:
-                    ok, what, sender = False, f"{type(e).__name__}: {e}", ""
+        for eid, fns, subj in new_adhocs:
+            forms = [fn for fn in fns if fn.lower().endswith((".xlsx", ".xlsm"))
+                     and "dts" not in fn.lower() and "dts" not in subj.lower()]
+            flagged += [fn for fn in fns if fn not in forms]
+            if not forms:
+                continue
+            try:                            # nothing here may take the tick (extracts, replies) down with it
+                results, sender = _auto_adhoc(ns, eid, forms)
+            except Exception as e:
+                results, sender = [(False, f"{type(e).__name__}: {e}", ", ".join(forms))], ""
+            for ok, what, fn in results:
+                if ok and not what:             # a form folded into the order named before it
+                    continue
                 (mapped if ok else flagged).append(
                     f"{what} from {sender or 'the email'}" if ok else f"{fn} ({what})")
-            else:
-                flagged.append(fn)
         if mapped:
             report("done", "New ad hoc on the map: " + "; ".join(mapped)
                    + " - its brief has the Upload button." + (f" Not processed: {'; '.join(flagged)}"

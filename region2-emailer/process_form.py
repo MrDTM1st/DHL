@@ -476,6 +476,21 @@ def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc", mail=None):
         ref = re.sub(r"[^A-Za-z0-9._-]", "-", str(rows[0].get("Customer Order No") or "form"))
         form_file = "Haulage Request Form " + ref + os.path.splitext(form_path)[1]
         shutil.copyfile(form_path, os.path.join(FORMS_DIR, form_file))
+    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file, kind=kind, mail=mail)
+            for d, ret in _pair_return(rows)]
+    return store_adhocs(recs, keep=keep)
+
+
+def _supersedes(new, old):
+    """A record being saved takes the place of an old one with the same order numbers. One that carries SEVERAL orders
+    (one lorry's drops, see mail_forms.py) also takes the place of an old one holding only some of them: on 16/11 the
+    first form of a two-form email sat on the map by itself, and the combined order had to replace it, not sit beside
+    it. A record with one order never swallows a bigger one."""
+    return bool(old) and (old == new or (len(new) > 1 and old < new))
+
+
+def store_adhocs(recs, keep=8):
+    """Put these map records on the map: booked-off jobs refused, same orders replaced, newest first, capped."""
     # An unreadable store must NOT become an empty one. This used to be
     # `except: old = []`, so a single failed read replaced the whole map with
     # just the job being processed - it silently binned five live records
@@ -497,8 +512,6 @@ def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc", mail=None):
             except Exception:
                 pass
             old = []
-    recs = [_adhoc_record(d, csv_name, ret=ret, form_file=form_file, kind=kind, mail=mail)
-            for d, ret in _pair_return(rows)]
     # A job you have already booked off must not come back just because the form
     # was reprocessed. _booked_drops.json guarded the TRACKER only; nothing on
     # this path ever read it, so the same order was booked off three times in
@@ -521,9 +534,9 @@ def save_adhocs(rows, csv_name, form_path="", keep=8, kind="adhoc", mail=None):
     # timestamp, so it is different on every run and never matched anything.
     # Reprocessing one form five times left five pins on the same spot, and the
     # stale ones kept whatever dates the form had at the time.
-    fresh = {frozenset(str(o).strip() for o in r.get("orders", [])) for r in recs}
+    fresh = [frozenset(str(o).strip() for o in r.get("orders", [])) for r in recs]
     old = [r for r in old
-           if frozenset(str(o).strip() for o in r.get("orders", [])) not in fresh]
+           if not any(_supersedes(f, frozenset(str(o).strip() for o in r.get("orders", []))) for f in fresh)]
     tmp = ADHOCS + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump((recs + old)[:keep], f, indent=1)
