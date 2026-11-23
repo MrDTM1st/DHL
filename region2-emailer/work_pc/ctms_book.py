@@ -128,7 +128,15 @@ def placed(element):
     return len(at) == 4 and at[2] > 0 and at[3] > 0
 
 
+COPY_SUFFIX = re.compile(r"_(?:C\d+|RB|R)(?=$|_)", re.I)    # a Copy Orders copy, a re-book or a return
+
+
 def belongs(ref, orders):
+    """A well line is one of these orders'. A copy (_C1, Copy Orders), a re-book (_RB) or a return (_R) of an order is a
+    job of its own: Book takes it only when it is one of the orders asked for - on 17/11 the tandem's copy
+    AH18/11/26UB_C1 was picked up with AH18/11/26UB by the prefix alone."""
+    if COPY_SUFFIX.search(str(ref or "")) and not any(COPY_SUFFIX.search(str(o or "")) for o in orders):
+        return False
     return any(ctms_orders.belongs(ref, o) for o in orders)
 
 
@@ -598,8 +606,12 @@ class Booking:
         got, rows = {}, self.well()
         for _ in range(PAGES):
             got.update((r["cust_ref"], r) for r in lines_of(rows, orders, date))
-            if not rows or (not got and not hunt) or (got and not belongs(rows[-1]["cust_ref"], orders)):
+            if not rows or (not got and not hunt):
+                break
+            if got and not belongs(rows[-1]["cust_ref"], orders) and not self.ends_on(rows, date):
                 break                          # the last of them is above the page's end: there are no more under it
+            # (a page that still ends on their day reads on: on a busy day other orders' lines sit between this one's -
+            # the scan stopped at the first of them, and the rest of the order was "missing", 13/11)
             if not got and date and self.all_before(rows, date):
                 break                          # latest first and this page is already before that day
             top = rows[0]["cust_ref"]
@@ -619,11 +631,23 @@ class Booking:
         days = self.well_days(rows)
         return bool(days) and days[0] >= days[-1] and days[0] < datetime.strptime(date, "%d/%m/%Y")
 
-    def latest_first(self):
+    def ends_on(self, rows, date):
+        """Whether the page's last row delivers on that dd/mm/yyyy (no date given: no)."""
+        last = self.well_days(rows[-1:])
+        return bool(date and last and last[0].strftime("%d/%m/%Y") == date)
+
+    def latest_first(self, date=""):
         """His way to an order in the well: "put the schedule to date on the delivery date, and then you press the deliver
-        column, it reverses the sort order" - the latest first, so with To on its day the order is on top."""
+        column, it reverses the sort order" - the latest first, so with To on its day the order is on top. Pressed only
+        when the page runs earliest first: a page all on one day can't show which way it runs, so it is turned round
+        only when that day is before the one wanted - one already on the day was turned the wrong way, and the day's
+        lines went to the bottom past the hunt (seen in main at 8863347)."""
         days = self.well_days(self.well())
-        if len(days) < 2 or days[0] <= days[-1]:
+        if not days:
+            return
+        if days[0] < days[-1]:
+            self.press_deliver()
+        elif days[0] == days[-1] and date and days[0] < datetime.strptime(date, "%d/%m/%Y"):
             self.press_deliver()
 
     def press_deliver(self):
@@ -652,7 +676,7 @@ class Booking:
         them."""
         got = self.scan(orders, date, hunt=False)
         if not got:
-            self.latest_first()
+            self.latest_first(date)
             got = self.scan(orders, date)
         if not got:
             self.refresh_well()
@@ -825,12 +849,14 @@ class Booking:
             self.type_into(ctms_lines.field(self.look(card=True), ctms_lines.ITEM_WINDOW, "Ordered"), f"{ordered:g}")
             self.run([_key("tab", 0.2)])
             # his rule (03/11, forgotten on 7116293 06/11): a new quantity means the weight is cleared, so the Save fills it
-            # back in from the quantity - a split copies the old weight into every part otherwise. A Delivered 0 goes too
-            for name in ("Weight", "Delivered"):
+            # back in from the quantity - a split copies the old weight into every part otherwise. A Delivered 0 goes too,
+            # and FIRST, each box left with Tab: Weight first was refused at the item Save - "You must enter To Deliver
+            # before the Delivered quantity" - the order that works is Ordered, Delivered, Weight (09/11)
+            for name in ("Delivered", "Weight"):
                 box = ctms_lines.field(self.look(card=True), ctms_lines.ITEM_WINDOW, name)
                 if box is not None and (name == "Weight" or str(box.get("v") or "").strip() in ("0", "0.0", ".0")):
                     self.run([{"action": "click", "screen": ctms_lines.point(box), "after": 0.15}, _key("home"),
-                              _key("shift+end"), _key("delete", 0.2)])
+                              _key("shift+end"), _key("delete", 0.2), _key("tab", 0.2)])
         win = ctms_lines.item_window(self.look(card=True))
         if (identifier and win["identifier"].upper() != identifier.upper()) or (
                 ordered is not None and not ctms_lines.same(win["ordered"], ordered)):
@@ -1176,9 +1202,21 @@ class Booking:
         else:
             self.said.append("the well's filters put back as they were")
 
-    def split(self, ref, parts):
+    def split_parts(self, orders, date, ref, parts):
+        """The parts a split made, as the refreshed well shows the order's lines on that day. CTMS numbers them on from
+        the order's last part, not from _S1 (S1 in two made S4 and S5; 7116293 ran to S135-S184), so they are read,
+        never worked out - Book "lost" them on 09/11 and 13/11 looking for _S1.._Sn."""
+        got = [r["cust_ref"] for r in self.lines(orders, date) if r["cust_ref"] != ref]
+        if len(got) != parts:
+            raise Stop(f"{ref} was split, but the order well shows {len(got)} of its lines on {date} "
+                       f"({', '.join(got) or 'none'}), not {parts}: look at Order Summary before anything else. "
+                       "Nothing was booked.")
+        return got
+
+    def split(self, ref, parts, orders=None, date=""):
         """One line into equal parts, through Order Summary: its menu's Split Orders, the number, Process, OK, Exit, and
-        back to Planning with the well refreshed. CTMS names them _S1, _S2 ... and halves the weight itself."""
+        back to Planning with the well refreshed - then the parts as CTMS made them (split_parts). CTMS halves the
+        weight itself."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t))
         card = self.search_card()
         far = ctms_orders.upto(card, self.now)
@@ -1203,6 +1241,10 @@ class Booking:
         self.look()
         self.refresh_well()
         self.said.append(f"{ref} split into {parts}")
+        if orders and date:
+            got = self.split_parts(orders, date, ref, parts)
+            self.said[-1] += f": {', '.join(got)}"
+            return got
         return [f"{ref}_S{i}" for i in range(1, parts + 1)]
 
     def split_into(self, ref, parts):
@@ -1475,7 +1517,7 @@ class Booking:
                 self.trip(refs, carrier, trailer, haulage)
                 return self.trips
             self.halt(f"before {refs[0]} was split")
-            refs = self.split(refs[0], vehicles)
+            refs = self.split(refs[0], vehicles, orders, date)
             self.stage("the split")
         if vehicles > 1:
             for ref in refs:

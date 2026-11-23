@@ -1372,3 +1372,72 @@ def test_a_booking_asks_about_stop_only_at_its_safe_points_and_never_once_a_trip
     job = _job(FakeCtms(_split(2)), stopped=stop)
     job.book(["AH5/11/YO"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 2)
     assert [t["status"] for t in job.trips] == ["ACCEPTED", "ACCEPTED"] and stop.asked == 5
+
+
+# ---------- the faults that sent bookings back to being done by hand (fixed 23/11) ----------
+def test_a_copy_a_rebook_or_a_return_is_never_taken_as_the_orders_own_line():
+    # 17/11: AH18/11/26UB_C1, the tandem's copy, went with AH18/11/26UB by the prefix alone
+    assert not B.belongs("AH18/11/26UB_C1", ["AH18/11/26UB"])
+    assert not B.belongs("9100001-1-1_C2", ["9100001"]) and not B.belongs("9100001-1-1_RB", ["9100001"])
+    assert B.belongs("AH18/11/26UB_C1", ["AH18/11/26UB_C1"])            # asked for by name: it is the job
+    assert B.belongs("AH5/11/YO_S4", ["AH5/11/YO"]) and B.belongs("9100001-1-1_S12", ["9100001"])
+    assert B.belongs("AH18/11/26UB_1", ["AH18/11/26UB"])                 # a second drop of one ad hoc stays its own
+
+
+def test_a_page_all_on_the_wanted_day_is_never_turned_round():
+    # in main at 8863347: a one-day page already latest first was flipped, sending the day's lines to the bottom
+    ctms = FakeCtms([_row(f"90000{i:02d}-1-1") for i in range(20)])     # all 06/11
+    job = _job(ctms)
+    job.look()
+    job.latest_first("06/11/2026")
+    assert ctms.reversed is False
+    earlier = FakeCtms([_row(f"90000{i:02d}-1-1", "05/11/26 08:00") for i in range(20)] + [_row("9100001-1-1")])
+    job = _job(earlier)
+    job.look()
+    job.latest_first("06/11/2026")                                       # all on an earlier day: turned round
+    assert earlier.reversed is True
+
+
+def test_an_orders_lines_with_other_orders_between_them_are_all_found():
+    # 13/11: on a busy day other orders' lines sit between one order's - the scan stopped at the first of them
+    well = ([_row("9100001-1-1")] + [_row(f"92000{i:02d}-1-1") for i in range(14)]
+            + [_row("9100001-2-1")] + [_row(f"93000{i:02d}-1-1") for i in range(5)])
+    ctms = FakeCtms(well)
+    job = _job(ctms)
+    job.look()
+    got = job.scan(["9100001"], "06/11/2026", hunt=False)
+    assert [r["cust_ref"] for r in got] == ["9100001-1-1", "9100001-2-1"]
+
+
+def test_a_new_quantity_clears_delivered_before_weight_each_left_with_tab():
+    # 09/11: Weight cleared first was refused at the item Save ("You must enter To Deliver before the Delivered quantity")
+    ctms = FakeCtms([_row("9100001-1-1")])
+    ctms.line_info["9100001-1-1"] = {"product": "S&C", "qty": 15, "items": [{"id": "S&C", "ordered": 14}]}
+    cleared = []
+    real = ctms.key
+
+    def key(k):
+        if k == "delete":
+            cleared.append(ctms.focus)
+        return real(k)
+    ctms.key = key
+    job = _job(ctms)
+    job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1, qty={"9100001": 16})
+    assert cleared == ["delivered", "weight"]
+    keys = [s.get("key") for s in ctms.steps if s.get("action") == "key"]
+    after = [keys[i + 1] for i, k in enumerate(keys[:-1]) if k == "delete"]
+    assert after == ["tab", "tab"]
+
+
+def test_the_parts_of_a_split_are_read_off_the_well_whatever_ctms_numbered_them():
+    # 09/11 and 13/11: CTMS numbers parts on from the order's last one (S1 in two made S4 and S5); Book looked for
+    # _S1.._Sn, found none, and the booking was finished by hand
+    ctms = FakeCtms([_row("AH5/11/YO_S4"), _row("AH5/11/YO_S5"), _row("9200001-1-1")])
+    job = _job(ctms)
+    job.look()
+    assert job.split_parts(["AH5/11/YO"], "06/11/2026", "AH5/11/YO_S1", 2) == ["AH5/11/YO_S4", "AH5/11/YO_S5"]
+    try:
+        job.split_parts(["AH5/11/YO"], "06/11/2026", "AH5/11/YO_S1", 3)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "shows 2 of its lines" in str(e) and "Nothing was booked" in str(e)
