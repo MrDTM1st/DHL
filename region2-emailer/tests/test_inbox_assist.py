@@ -305,6 +305,25 @@ def test_judge_stores_claudes_verdicts_and_stops_on_a_sign_in_problem(monkeypatc
     assert next(it for it in d["items"].values() if it["subject"] == "Three")["kind"] == "pending"
 
 
+def test_a_save_waits_while_windows_holds_the_file(monkeypatch, tmp_path):
+    path = str(tmp_path / "x.json")
+    real, tries = os.replace, []
+
+    def busy(src, dst):
+        tries.append(1)
+        if len(tries) < 3:
+            raise PermissionError(5, "Access is denied")
+        return real(src, dst)
+    monkeypatch.setattr(A.os, "replace", busy)
+    monkeypatch.setattr(A.time, "sleep", lambda s: None)
+    A._write(path, {"a": 1})
+    assert json.load(open(path)) == {"a": 1} and len(tries) == 3
+    monkeypatch.setattr(A.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(5, "denied")))
+    A._write(path, {"a": 2})                                 # never freed: written in place instead
+    assert json.load(open(path)) == {"a": 2} and not os.path.exists(path + ".tmp")
+    assert A._json(str(tmp_path / "none.json"), "default") == "default"
+
+
 def test_keep_and_dealt_commands(monkeypatch, tmp_path, capsys):
     _wire(monkeypatch, tmp_path, [])
     A.save({"mode": "shadow", "items": {"a": _item("a", kind="file", dest="DHL"), "b": _item("b", kind="needs")}})

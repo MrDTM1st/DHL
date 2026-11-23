@@ -140,19 +140,41 @@ SCHEMA = {
 
 
 # ---------- small helpers ----------
-def _json(path, default):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
+def _json(path, default, tries=8):
+    """Read a JSON file. Windows can refuse it for a moment while another process swaps it in: try again."""
+    for i in range(tries):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
+        except (PermissionError, ValueError):
+            if i == tries - 1:
+                return default
+            time.sleep(0.1)
+        except OSError:
+            return default
+    return default
 
 
 def _write(path, data):
+    """Write it whole, then swap it in. Windows refuses the swap while another process (the agent pushing the card,
+    say) has the file open, so wait a moment and try again; as a last resort, write it in place."""
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1, default=str)
-    os.replace(tmp, path)
+    for _ in range(50):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.1)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1, default=str)
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
 
 
 def _touch(path):
