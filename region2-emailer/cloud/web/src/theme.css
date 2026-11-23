@@ -964,6 +964,12 @@ a.callbtn:hover{ color:var(--red-ink); }
   border-radius: 6px; padding: 2px 6px; margin-right: 8px; vertical-align: 1px; background: var(--seg); color: var(--ink2); }
 .inbox-pri.urgent { background: var(--red); color: #fff; }
 .inbox-pri.high { background: var(--yellow-d); color: #1a1a1a; }
+/* the inbox assistant (inbox_assist, 23/11): the suggested reply, the mode switch */
+.assist-reply { white-space: pre-wrap; margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: var(--seg);
+  font-size: 12.5px; line-height: 1.45; color: var(--ink); }
+.assist-modes { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.assist-modes .btn.mini { padding: 2px 8px; font-size: 11px; }
+.assist-file .noaddress-said { margin: 0; }
 
 /* his reply to the day's Region 2 Updates (daily_update, 11/11) */
 .upd-card { border-left-color: var(--yellow-d); }

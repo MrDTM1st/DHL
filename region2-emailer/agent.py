@@ -664,6 +664,7 @@ def push_panel():
             "bookings": _bookings(),
             "rejections": _rejections(),
             "inbox": _inbox(),
+            "assist": _assist(),
             "update_reply": _update_reply(),
             "home_code": _home_code(),
             "toolkit": _toolkit(),
@@ -688,6 +689,35 @@ def _inbox():
         return inbox_watch.panel()
     except Exception:
         return {}
+
+
+def _assist():
+    """The inbox assistant (inbox_assist) - the Dashboard's "Needs you" card, what it would file, and its bell."""
+    try:
+        import inbox_assist
+        return inbox_assist.panel()
+    except Exception:
+        return {}
+
+
+def _judge_tick(proc):
+    """Claude reads the emails the inbox assistant's sweep queued (inbox_assist.py judge). It never touches Outlook,
+    so it runs outside the Outlook gate - one run at a time, whenever the sweep says there is something to read."""
+    if proc is not None and proc.poll() is None:
+        return proc
+    if not os.path.exists(ASSIST_JUDGE_DUE):
+        return None
+    try:
+        os.remove(ASSIST_JUDGE_DUE)
+        with open(os.path.join(HERE, "_assist_judge.txt"), "a", encoding="utf-8", errors="replace") as log:
+            log.write(f"\n=== {time.strftime('%d/%m %H:%M:%S')} judge\n")
+            log.flush()
+            return subprocess.Popen([sys.executable, "inbox_assist.py", "judge"], cwd=HERE, stdout=log,
+                                    stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                                    creationflags=0x08000000)
+    except Exception as e:
+        print(f"inbox assistant: Claude's read could not start: {e}")
+        return None
 
 
 def _rejections():
@@ -876,6 +906,8 @@ BG_GATE_WAIT = 30       # seconds a job queues for the slot before giving way
 GATE_SKIPPED = 75       # outlook_gate / phase2 "did not run" exit code
 PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # monitor_tick: new mail, check replies
 PUSH_DUE = os.path.join(HERE, "_push_due")       # monitor_tick: an ad hoc went on the map - push its CSV and pin now
+ASSIST_PUSH_DUE = os.path.join(HERE, "_assist_push_due")    # inbox_assist: the Needs-you card changed - push it now
+ASSIST_JUDGE_DUE = os.path.join(HERE, "_assist_judge_due")  # inbox_assist: emails queued for Claude to read
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
 SEND_JOBS = ("waitlist_release", "chase")
 _said_today = {}        # a job's failure said once a day, not every run
@@ -906,6 +938,10 @@ def _bg_jobs():
         # the Haulier Rejection Form: Tier 1 no's read from their replies onto the rejection card (rejections.py,
         # read-only in the mailbox). Nothing is sent from here - the card's Send does that, or the dashboard's Auto
         ("rejections", ["rejections.py", "refresh"], 1800, 600, lambda: True),
+        # the inbox assistant (inbox_assist.py, his 23/11 "sit in my inbox and notify me when things need to be
+        # actioned"): each new email sorted - needs him (the Needs-you card), filed (live mode only), or the desk's -
+        # and the rest queued for Claude, which the agent runs outside the gate (_judge_tick)
+        ("inbox_assist", ["inbox_assist.py", "sweep"], 120, 240, lambda: True),
         # emails nobody has answered yet - the Dashboard's "Emails waiting for you" and its bell (inbox_watch.py, his
         # managers' 11/11 "make sure ... urgent emails and queries are not missed"). Read-only; ~10 s a look
         ("inbox_watch", ["inbox_watch.py", "scan"], 300, 240, lambda: True),
@@ -1271,6 +1307,11 @@ def main():
         pushed_due = os.path.getmtime(PUSH_DUE)
     except OSError:
         pushed_due = 0.0
+    try:
+        assist_pushed = os.path.getmtime(ASSIST_PUSH_DUE)
+    except OSError:
+        assist_pushed = 0.0
+    judge_proc = None
     bg = None
     if IS_LOCAL:                    # the cloud agent runs no timer jobs
         try:
@@ -2082,6 +2123,22 @@ def main():
                                                                 "before trying again."}
                 push_panel()
                 report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
+            elif action in ("assist_file", "assist_fileall", "assist_putback", "assist_keep", "assist_dealt",
+                            "assist_mode"):
+                # the Needs-you card (inbox_assist.py): file one or all it would file, put one back, keep one in the
+                # Inbox, dealt with, the off / shadow / live switch. Moves take turns with the other Outlook jobs
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                sub = action[len("assist_"):]
+                arg = str((d.get("mode") if sub == "mode" else d.get("id")) or "")[:20]
+                args = ["inbox_assist.py", sub] + ([arg] if arg else [])
+                if sub in ("file", "fileall", "putback"):
+                    out = run(["outlook_gate.py", "run", "--wait", "90"] + args, timeout=400)
+                else:
+                    out = run(args, timeout=60)
+                res = _last_json(out) or {"ok": False, "said": "Outlook is busy - try again in a minute." if "SKIP " in out
+                                          else "The inbox assistant didn't answer - try again."}
+                push_panel()
+                report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
             elif action == "inbox_dealt":
                 # the inbox card's Dealt with: answered another way (a call, Teams) - it stays off unless they write again
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
@@ -2366,6 +2423,19 @@ def main():
             push_new_files({})
             push_panel()
             last_panel = time.time()
+        try:                                   # the Needs-you card changed: up it goes now, not in 30 s
+            adue = os.path.getmtime(ASSIST_PUSH_DUE)
+        except OSError:
+            adue = 0.0
+        if adue > assist_pushed:
+            assist_pushed = adue
+            push_panel()
+            last_panel = time.time()
+        if IS_LOCAL:                           # Claude reads what the inbox assistant queued (one run at a time)
+            try:
+                judge_proc = _judge_tick(judge_proc)
+            except Exception as e:
+                print(f"inbox assistant: {e}")
         if not IS_LOCAL and time.time() - last_ctms > 60:   # CTMS captures come home
             pull_ctms_captures()
             last_ctms = time.time()

@@ -175,8 +175,48 @@ export default function App() {
     }, ...ns]));
   }, [panel]);
 
+  // ---- the inbox assistant (inbox_assist, 23/11): an email that needs him rings when it's due - "now" at once, with a
+  // toast; today's after an hour, the week's after four. While it's on, the older "Emails waiting" bell below is quiet ----
+  const knownAssist = useRef(null);
+  useEffect(() => {
+    const a = panel && panel.assist;
+    if (!a || !a.mode || a.mode === 'off') return;
+    const ring = (a.needs || []).filter((i) => i.alarm);
+    const first = knownAssist.current === null;       // a page load: notes, but no burst of toasts
+    if (first) knownAssist.current = new Set();
+    const fresh = ring.filter((i) => !knownAssist.current.has(i.id));
+    fresh.forEach((i) => knownAssist.current.add(i.id));
+    if (!fresh.length) return;
+    const created = Date.now();
+    const made = fresh.length > 3 ? [{
+      id: 'a-' + fresh.map((i) => i.id).join('-').slice(0, 60),
+      kind: fresh.some((i) => i.urgency === 'now') ? 'urgent' : 'info',
+      title: fresh.length + ' emails need you',
+      msg: fresh.slice(0, 3).map((i) => i.from + ': ' + i.ask).join(' · ')
+        + ' - and ' + (fresh.length - 3) + ' more on the Dashboard.',
+      createdAt: created,
+      read: false,
+    }] : fresh.map((i) => ({
+      id: 'a-' + i.id,
+      kind: i.urgency === 'now' ? 'urgent' : 'info',
+      title: (i.urgency === 'now' ? 'Needs you now: ' : 'Needs you: ') + i.from,
+      msg: i.ask + (i.by_when ? ' (by ' + i.by_when + ')' : '') + '.',
+      createdAt: created,
+      read: false,
+    }));
+    setNotes((ns) => {
+      const have = new Set(ns.map((n) => n.id));
+      return [...made.filter((n) => !have.has(n.id)), ...ns];
+    });
+    if (!first) {
+      fresh.filter((i) => i.urgency === 'now').slice(0, 2)
+        .forEach((i) => pushToast('Needs you now: ' + i.from, i.ask, 'urgent'));
+    }
+  }, [panel, pushToast]);
+
   const knownInbox = useRef(new Set());
   useEffect(() => {
+    if (panel && panel.assist && panel.assist.mode && panel.assist.mode !== 'off') return;
     const late = ((panel && panel.inbox && panel.inbox.items) || []).filter((i) => i.alarm);
     const fresh = late.filter((i) => !knownInbox.current.has(i.id));
     fresh.forEach((i) => knownInbox.current.add(i.id));

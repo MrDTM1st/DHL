@@ -5,6 +5,7 @@ import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus } from '../api.
 import FlowPanels from '../components/FlowPanels.jsx';
 import { NrDateCard } from '../components/NrDateBox.jsx';
 import InboxCard from '../components/InboxCard.jsx';
+import AssistCard from '../components/AssistCard.jsx';
 import UpdateReplyCard from '../components/UpdateReplyCard.jsx';
 
 // ---- Holiday cover / handover card ----
@@ -502,7 +503,10 @@ export default function Dashboard({
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
 
-      <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
+      <AssistCard data={panel && panel.assist} onCommand={onCommand} />
+      {!(panel && panel.assist && panel.assist.mode && panel.assist.mode !== 'off') && (
+        <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
+      )}
 
       <UpdateReplyCard data={panel && panel.update_reply} onCommand={onCommand} />
 

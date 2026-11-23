@@ -64,5 +64,8 @@ region2-emailer/_ctms_todo.json
 
 # monitor_tick -> agent: "new mail, run the reply check"
 region2-emailer/_phase2_due
+# inbox_assist -> agent: "push the Needs-you card now" / "emails queued for Claude"
+region2-emailer/_assist_push_due
+region2-emailer/_assist_judge_due
 region2-emailer/work_pc/_book_journal.jsonl
 region2-emailer/_restart_agents.flag
