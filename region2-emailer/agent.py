@@ -214,6 +214,16 @@ def rail_send_export(rid, res):
     said = ("Sent " + ", ".join(sent) + ".") if sent else "Nothing was sent."
     if r.get("new") is not None:
         said += f" {len(r['new'])} new manifest(s) green."
+    if r.get("cancelled"):
+        said += f" {len(r['cancelled'])} cancelled (red): " + ", ".join(str(c) for c in r["cancelled"][:6]) + "."
+    if r.get("regs"):
+        said += f" {len(r['regs'])} vehicle reg update(s) orange."
+    if r.get("no_plan"):
+        said += (" On the master only, its depot in no supplier's plan: "
+                 + "; ".join(str(x) for x in r["no_plan"][:4]) + ".")
+    if r.get("check"):
+        said += (" Commas split the text of " + ", ".join(str(x) for x in r["check"][:4])
+                 + " - check its contact and notes on the plan.")
     if r.get("unmatched"):
         said += " No haulier email for " + ", ".join(str(u) for u in r["unmatched"][:6]) + "."
     if r.get("failed"):
