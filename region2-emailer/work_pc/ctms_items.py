@@ -435,11 +435,12 @@ class Items:
     # -- the items
     def do(self, item, dry=False):
         """One item. dry: an update's first line typed and thrown away, for trying the run with nothing kept - not the deliver
-        comment, whose box saves by itself."""
+        comment, whose box saves by itself. A note's dry run is typed, read back and thrown away too (23/11: a dry-run note
+        used to be saved, and had to be taken back by hand)."""
         s = item.get("set") or {}
         self.refs = list(item.get("lines") or [])
         if item.get("kind") == "note":
-            return self.note(item["lines"][0], s.get("note") or "")
+            return self.note(item["lines"][0], s.get("note") or "", dry=dry)
         if dry:
             return self.update(item["lines"][0], s, dry=True)
         lines, saved = list(item.get("lines") or []), []
@@ -456,7 +457,7 @@ class Items:
                 raise (type(e) if isinstance(e, (Stop, Held)) else Stop)(said) from e
         return "; ".join(saved)
 
-    def note(self, ref, note):
+    def note(self, ref, note, dry=False):
         self.open(ref)
         self.stage("opened")
         before = special_instructions(self.els)
@@ -480,6 +481,10 @@ class Items:
         if not (special_instructions(self.els) or "").rstrip().endswith(note.strip()) or other_fields(self.els) != fields:
             raise Stop(f"{ref}: the note did not read back, so it was not saved.")
         self.stage("typed")
+        if dry:
+            if not self.clear_up():
+                raise Stop(f"{ref}: rehearsed, but CTMS wouldn't let it go - look at it.")
+            return f"{ref}: rehearsed '{note.strip()}', nothing kept"
         self.save_close(ref)
         self.stage("saved")
         return f"{ref}: '{note.strip()}' added"

@@ -182,6 +182,15 @@ def test_a_note_goes_in_at_the_end_of_special_instructions_and_is_saved():
     assert "ctrl+end" in keys
 
 
+def test_a_dry_run_note_is_typed_read_back_and_thrown_away_never_saved():
+    # 23/11: the dry flag never reached a note, so a rehearsal saved it - here it is typed, checked, then discarded
+    o = FakeOrder()
+    job = _items(o)
+    said = job.do({"kind": "note", "lines": [o.ref], "set": {"note": NOTE}}, dry=True)
+    assert "nothing kept" in said and NOTE in o.typed
+    assert o.saved == 0 and o.discarded == 1 and not o.open_card         # backed out of: CTMS keeps nothing
+
+
 def test_a_note_already_there_is_not_typed_again():
     o = FakeOrder(si="BPA ref" + NOTE + "  ")
     said = _items(o).note(o.ref, NOTE)
