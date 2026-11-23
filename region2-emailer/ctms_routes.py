@@ -984,15 +984,64 @@ def payment_lines(s):
     return rows, total
 
 
+HAULAGE = re.compile(r"\s*trip haul", re.I)   # "Trip Haulage" - or "Trip Haul Ma" on a trip Book made (23/11)
+
+
+def haulage_lines(rows):
+    """The carrier's haulage line(s) among a trip's payment rows, by their type: "Trip Haulage", or "Trip Haul Ma" as both
+    the grid and its Edit box show it on a trip Book made (MAN of 23/11: the route took only "Trip Haulage" and refused)."""
+    return [r for r in rows if any(HAULAGE.match(str(c or "")) for c in r["cells"])]
+
+
+def price_plan(rows, want):
+    """How a trip's carrier lines come to want: (the haulage row, the other lines' sum, the haulage's new amount). The
+    other lines - a carrier's HIAB, NIGHT, SAT, SUN, escort - stay; only the haulage moves (his rule: a quote is the
+    trip's TOTAL). Fail unless there is exactly one haulage line and the others leave it something."""
+    haul = haulage_lines(rows)
+    if len(haul) != 1:
+        raise Fail(f"{len(haul)} haulage lines - a price change needs exactly one (lines: "
+                   + "; ".join(" ".join(c for c in r["cells"][2:4] if c) or "?" for r in rows) + ")")
+    others = round(sum(r["amount"] or 0 for r in rows if r is not haul[0]), 2)
+    new = round(want - others, 2)
+    if new <= 0:
+        raise Fail(f"the other lines already come to {others:.2f} - more than {want:.2f}")
+    return haul[0], others, new
+
+
+def cut_short(name, tab_name):
+    """Whether a name is only what is left of "<tab> tab page" once the Access Bridge cut it off. Late on 23/11 the
+    carrier's Payments on Planning's Finance tab read "Finance tab page Finance tab page ... Finance tab p": the name
+    gains a prefix as the tab is used, and in time ends before its own word."""
+    n = str(name or "").strip()
+    return bool(n) and f"{tab_name} tab page".startswith(n)
+
+
+def carrier_payments(s, t):
+    """The carrier's Payments on Planning's Finance tab, or None: the button on the revenue figure's row, left of it - the
+    one right of it is the revenue's Payments, and Calc Costs (never pressed) sits under that. Its name reads "Payments"
+    or is cut short (23/11, when the old by-name pick opened Order Revenue instead)."""
+    pays = [e for e in s.find(role="push button", within=t)
+            if clean(e.get("nm")) == "Payments" or cut_short(clean(e.get("nm")), "Finance")]
+    rev = s.first(name="Trip Revenue", within=t)
+    if rev is not None:
+        mid = rev["at"][1] + rev["at"][3] / 2
+        row = [e for e in pays if abs(e["at"][1] + e["at"][3] / 2 - mid) <= 10 and e["at"][0] + e["at"][2] <= rev["at"][0]]
+        return row[0] if len(row) == 1 else None
+    named = sorted((e for e in pays if clean(e.get("nm")) == "Payments"), key=lambda e: e["at"][0])
+    return named[0] if len(named) == 2 else None
+
+
 def open_payments():
     """Planning's Finance tab, then the carrier's Payments (the left-hand one: the right one is revenue).
     -> (rows, total, screen)."""
     t, s = tab("Finance", "Planning")
-    pays = sorted(s.find(name="Payments", role="push button", within=t), key=lambda e: e["at"][0])
-    if not pays:
-        raise Fail("no Payments button on Planning's Finance tab")
-    clear_to(pays[0], s, "the carrier's Payments")
-    act([click(pays[0], after=2.0)], "carrier Payments")
+    pay = carrier_payments(s, t)
+    if pay is None:
+        raise Fail("couldn't tell the carrier's Payments on Planning's Finance tab (buttons: "
+                   + "; ".join(f"{clean(e.get('nm'))!r} at {e['at'][:2]}" for e in s.find(role="push button", within=t))
+                   + ")")
+    clear_to(pay, s, "the carrier's Payments")
+    act([click(pay, after=2.0)], "carrier Payments")
     _, s = until(lambda sc: sc.frame(PAYMENTS), "the Payments window", tries=6, pause=0.8)
     rows, total = payment_lines(s)
     return rows, total, s
@@ -1283,6 +1332,68 @@ def exit_item_box(s=None):
     q = s.question()
     if q is not None:
         raise Fail(f"Exit asked: {q['words'][:150]} - left up, nothing answered")
+
+
+# ---------- an order line's item: created, or put right (order-item) ----------
+LIST_BOX = "Product Items"                                  # Ctrl+L's list on an item's Identifier
+LIST_ROW = re.compile(r"Item_Id:(.*?)\s+Item_Description:(.*)", re.S)
+ZEROS = ("0", "0.0", "0.00", "0.000", ".0")
+
+
+def product_name(text):
+    """A product as the item box's drop-down and the Detail tab both read, compared: PARCEL = Parcel, CABLE_DRUMS = Cable
+    Drums. The drop-down shows Maintenance > Products' NAME, the Detail tab the CODE; where those differ in more than case
+    and "_" (STEE_SLEEPER is STEEL SLEEPERS), --product gives the name."""
+    return re.sub(r"[\s_]+", " ", str(text or "")).strip().upper()
+
+
+def product_items(s):
+    """Ctrl+L's Product Items list, top row first: [(item id, description)]. Its rows come as labels with no place of their
+    own (23/11); the top one is the one taken (his rule 03/11)."""
+    f = s.frame(LIST_BOX)
+    out = []
+    for e in s.children(f):
+        m = LIST_ROW.fullmatch(str(e.get("nm") or "").strip()) if e.get("r") == "label" else None
+        if m:
+            out.append((m.group(1).strip(), m.group(2).strip()))
+    return out
+
+
+def item_plan(now, product, qty=None, weight=None, ident=False):
+    """What one item box needs, from what it holds now (his rules 03/11, 09/11, 16/11) -> [(box, value)] in the order they
+    go in: Product (the Detail tab's), Identifier (always from Ctrl+L's list, never typed text - when the product is new,
+    the box is empty, or ident), Ordered, a Delivered 0 cleared, Weight. Fail when the item has no weight and none was
+    given: an ad hoc's weight only lives in its Special Instructions."""
+    todo = []
+    if product_name(now.get("Product")) != product_name(product):
+        todo.append(("Product", product_name(product)))
+    have_id = str(now.get("Identifier") or "").strip()
+    if todo or ident or not have_id or have_id.lower() == "please select":
+        todo.append(("Identifier", "Ctrl+L"))
+    if qty is not None and abs((_amount(now.get("Ordered")) or 0) - qty) > 0.0005:
+        todo.append(("Ordered", f"{qty:g}"))
+    if str(now.get("Delivered") or "").strip() in ZEROS:
+        todo.append(("Delivered", ""))
+    have = _amount(now.get("Weight")) or 0
+    if weight is not None and abs(have - weight) > 0.005:
+        todo.append(("Weight", f"{weight:g}"))
+    elif weight is None and not have:
+        raise Fail("the item has no weight: give --weight KG, the line's total (an ad hoc's is in its Special "
+                   "Instructions, e.g. 2 x 600 kg = 1200)")
+    return todo
+
+
+def read_patiently(seconds=45):
+    """A read once CTMS answers again: while it saves an item, its Java stops answering the Access Bridge for a few
+    seconds, which the bridge words as "CTMS's Java has not picked it up" (23/11) - a wait, not a fault."""
+    end = time.time() + seconds
+    while True:
+        try:
+            return read()
+        except Fail:
+            if time.time() >= end:
+                raise
+            time.sleep(3)
 
 
 # ---------- services ----------
@@ -1598,7 +1709,8 @@ def r_trip_payments(a):
     return dict(found, lines=[r["cells"] for r in rows], total=total)
 
 
-@route("trip-price", "set a manifest's carrier total: works out the Trip Haulage line so all its lines add up to "
+@route("trip-price", "set a manifest's carrier total: works out the haulage line (Trip Haulage, or Trip Haul Ma on a "
+                     "trip Book made) so all its lines add up to "
                      "TOTAL (escort, night, HIAB lines stay). Shows the sum unless --commit; resend it after")
 def r_trip_price(a):
     want = _amount(a.total)
@@ -1608,20 +1720,16 @@ def r_trip_price(a):
     if found.get("found") != "selected":
         return found
     rows, total, s = open_payments()
-    haul = [r for r in rows if "Trip Haulage" in r["cells"]]
-    if len(haul) != 1:
+    try:
+        line, others, new = price_plan(rows, want)
+    except Fail:
         close_payments(s)
-        raise Fail(f"{len(haul)} Trip Haulage lines - a price change needs exactly one (lines: "
-                   + "; ".join(r["cells"][2] if len(r["cells"]) > 2 else "?" for r in rows) + ")")
-    others = round(sum(r["amount"] or 0 for r in rows if r is not haul[0]), 2)
-    new = round(want - others, 2)
-    plan = (f"Trip Haulage {haul[0]['amount']:.2f} -> {new:.2f}: with the other lines ({others:.2f}) the total is "
-            f"{want:.2f} (now {total})")
+        raise
+    kind = next(c for c in line["cells"] if HAULAGE.match(str(c or "")))
+    plan = (f"{kind} {line['amount']:.2f} -> {new:.2f}: with the other lines ({others:.2f}) the total is {want:.2f} "
+            f"(now {total})")
     print(plan)
-    if new <= 0:
-        close_payments(s)
-        raise Fail(f"the other lines already come to {others:.2f} - more than {want:.2f}")
-    if abs(new - (haul[0]["amount"] or 0)) < 0.005:
+    if abs(new - (line["amount"] or 0)) < 0.005:
         close_payments(s)
         return dict(found, said="already that total", plan=plan)
     if not a.commit:
@@ -1629,20 +1737,20 @@ def r_trip_price(a):
         print("NOT CHANGED (no --commit). Run again with --commit to set it, then trip-resend to send the manifest.")
         return dict(found, plan=plan, changed=False)
     f = s.frame(PAYMENTS)
-    act([click(haul[0]["el"], after=0.6), click(s.one("Payments' Edit", role="push button", name="Edit", within=f),
-                                                after=1.5)], "edit Trip Haulage")
+    act([click(line["el"], after=0.6), click(s.one("Payments' Edit", role="push button", name="Edit", within=f),
+                                              after=1.5)], "edit the haulage line")
     _, s = until(lambda sc: next((x for x in sc.frames() if clean(x.get("nm")).startswith("Payment ")
                                   and not clean(x.get("nm")).startswith(PAYMENTS)), None), "the payment's box", tries=5)
     box_win = next(x for x in s.frames() if clean(x.get("nm")).startswith("Payment ") and not
                    clean(x.get("nm")).startswith(PAYMENTS))
     typ = next((e for e in s.children(box_win) if e.get("r") == "combo box" and clean(e.get("nm")) == "Type"), None)
-    if typ is None or str(typ.get("v") or "").strip() != "Trip Haulage":
-        raise Fail(f"the box that opened isn't the Trip Haulage payment ({describe(typ)}) - left up for a look")
+    if typ is None or not HAULAGE.match(str(typ.get("v") or "")):
+        raise Fail(f"the box that opened isn't the haulage payment ({describe(typ)}) - left up for a look")
     amt = [e for e in s.children(box_win) if e.get("r") == "text" and on_screen(e)
            and "read-only" not in (e.get("st") or []) and _amount(e.get("v")) is not None
-           and abs((_amount(e.get("v")) or 0) - (haul[0]["amount"] or 0)) < 0.005]
+           and abs((_amount(e.get("v")) or 0) - (line["amount"] or 0)) < 0.005]
     if len(amt) != 1:
-        raise Fail(f"couldn't tell the amount box ({len(amt)} hold {haul[0]['amount']}) - left up for a look")
+        raise Fail(f"couldn't tell the amount box ({len(amt)} hold {line['amount']}) - left up for a look")
     act(fill(amt[0], f"{new:.2f}") + [key("tab", after=0.5)], "the new amount")
     s = read()
     box_win = s.frame(clean(box_win.get("nm")))
@@ -1945,6 +2053,126 @@ def r_order_qty(a):
     line = (d["items"] or [{}])[0]
     print(f"SET {a.ref}: qty {line.get('Qty', '?').strip()}, weight {line.get('Weight', '?').strip()} (CTMS's)")
     return {"ref": a.ref, "changed": True, "after": line}
+
+
+@route("order-item", "put a line's Order Items right, or create its item when it has none (an ad hoc upload can come "
+                     "with none, and Book stops on it): Product = the Detail tab's, Identifier from Ctrl+L's list, "
+                     "Ordered, Weight, item Save, order Save. Shows the plan unless --commit")
+def r_order_item(a):
+    close_orders()
+    f, s, row = open_order(a.ref, modify_scheduled=a.modify)
+    name = clean(f.get("nm"))
+    d = read_detail(s, f)
+    if len(d["items"]) != 1:
+        close_window(name)
+        raise Fail(f"{a.ref} has {len(d['items'])} product rows on its Detail tab - this route does a line with one")
+    line = d["items"][0]
+    product = (a.product or line.get("Product Type") or "").strip()
+    print(f"{a.ref}: Detail {line.get('Product Type') or '?'} / {line.get('DU Type') or '?'}, qty {line.get('Qty') or '?'}, "
+          f"weight {line.get('Weight') or '(blank)'}. Special Instructions: {_short(d['special_instructions'], 220)}")
+    t, s = tab("Order Items", name, s)
+    items = [e for e in s.children(t) if on_screen(e) and clean(e.get("nm")) == "Identifier"
+             and str(e.get("v") or "").strip()]
+    if len(items) > 1:
+        close_window(name)
+        raise Fail(f"{len(items)} items on {a.ref} - this route does a line with one item, or none")
+    how = "Edit/Delete" if items else "Create"
+    # creating, Ordered is the Detail tab's quantity; an item there already keeps its own (order-qty changes that)
+    qty = (a.qty if a.qty is not None else _amount(line.get("Qty"))) if not items else None
+    if not product or (not items and not qty):
+        close_window(name)
+        raise Fail(f"{a.ref}'s Detail tab gives no product or quantity - give --product / --qty")
+    btn = sorted(s.find(name=how, role="push button", within=t, enabled=True), key=lambda e: e["at"][1])
+    if not btn:
+        close_window(name)
+        raise Fail(f"Order Items has no {how} to press ({s.summary()})")
+    clear_to(btn[0], s, f"Order Items' {how}")
+    act(([click(items[0], after=0.5)] if items else []) + [click(btn[0], after=1.5)], f"item {how}")
+    _, s = until(lambda sc: sc.frame(ITEM_BOX), "the item box", tries=5)
+    box, now = item_box_values(s)
+    print(f"item box ({how}): product {now.get('Product') or '(none)'}, identifier {now.get('Identifier') or '(none)'}, "
+          f"ordered {now.get('Ordered') or '(blank)'}, delivered {now.get('Delivered') or '(blank)'}, weight "
+          f"{now.get('Weight') or '(blank)'}")
+    try:
+        todo = item_plan(now, product, qty, a.weight, a.ident)
+    except Fail:
+        exit_item_box(s)
+        close_window(name)
+        raise
+    print("TO DO: " + ("; ".join(f"{k} {v}".strip() for k, v in todo) or "nothing - it is right"))
+    if not todo or not a.commit:
+        exit_item_box(s)
+        close_window(name)
+        if todo:
+            print("NOT CHANGED (no --commit): run again with --commit to type it in and save it")
+        return {"ref": a.ref, "how": how, "before": now, "todo": todo, "changed": False}
+
+    def boxes(sc):
+        return {clean(e.get("nm")): e for e in sc.children(sc.frame(ITEM_BOX)) if on_screen(e)
+                and e.get("r") in ("text", "combo box") and clean(e.get("nm"))}
+
+    for what, value in todo:                              # anything unexpected: the box is left up, nothing saved
+        k = boxes(s)
+        if what == "Product":                             # its list jumps to what is typed fast (his 09/11)
+            act([click(k["Product"], after=0.8), typed(value, after=0.6), key("enter", after=0.8)], "Product")
+            s = read()
+            _, now = item_box_values(s)
+            if product_name(now.get("Product")) != value:
+                raise Fail(f"the Product list gave {now.get('Product')!r} for {value} - give --product with the list's own "
+                           "name; the item box is left up, nothing saved")
+        elif what == "Identifier":
+            act([click(k["Identifier"], after=0.4), key("ctrl+l", after=1.5)], "Identifier Ctrl+L")
+            lst, s = until(lambda sc: sc.frame(LIST_BOX), "Ctrl+L's Product Items list", tries=5)
+            rows = product_items(s)
+            if not rows:
+                cancel_box(LIST_BOX, s)
+                raise Fail(f"Ctrl+L lists no item for {product} - the item box is left up, nothing saved")
+            act([click(s.one("the list's OK", role="push button", name="OK", within=lst), after=1.2)], "list OK")
+            s = read()
+            _, now = item_box_values(s)
+            if s.frame(LIST_BOX) is not None or str(now.get("Identifier") or "").upper() != rows[0][0].upper():
+                raise Fail(f"the Identifier reads {now.get('Identifier')!r}, not {rows[0][0]} - the item box is left up, "
+                           "nothing saved")
+            print(f"Identifier {rows[0][0]} ({rows[0][1]}): the list's top row of {len(rows)}")
+        elif what == "Delivered":
+            act(clear_box(k["Delivered"]) + [key("tab", after=0.4)], "Delivered 0 cleared")
+            s = read()
+        else:                                             # Ordered, then Weight - each left by Tab (09/11)
+            act(fill(k[what], value) + [key("tab", after=0.5)], what)
+            s = read()
+    box, now = item_box_values(s)
+    off = [w for w, v in todo if w in ("Ordered", "Weight") and abs((_amount(now.get(w)) or 0) - float(v)) > 0.005]
+    if off:
+        raise Fail(f"{' and '.join(off)} didn't read back as typed ({now}) - the item box is left up, nothing saved")
+    act([click(s.one("the item box's Save", role="push button", name="Save", within=box), after=2.0)], "item Save")
+    s = read_patiently()
+    q = s.question()
+    if q is not None:
+        raise Fail(f"item Save asked: {q['words'][:150]} - left up, nothing answered")
+    exit_item_box(s)
+    t, s = tab("Order Items", name)
+    got = named_grid(s, t, ("Identifier", "Product", "Ordered", "Weight"))
+    if not got:
+        raise Fail(f"the item box closed, but Order Items shows no item - look at {a.ref} (left open)")
+    print("Order Items now: " + "; ".join(", ".join(f"{k} {v}" for k, v in r.items()) for r in got))
+    t, s = tab("Detail", name)
+    act([click(s.one("the order's Save", role="push button", name="Save", within=s.frame(name)), after=2.0)],
+        "order Save")
+    for _ in range(4):
+        s = read_patiently()
+        q = s.question()
+        if q is None:
+            break
+        if "schedule" in q["words"].lower() and "ok" in q["buttons"]:
+            act([click(q["buttons"]["ok"], after=1.2)], "schedule OK")
+            continue
+        raise Fail(f"order Save asked: {q['words'][:150]} - left up, nothing answered")
+    d = read_detail(s, s.frame(name))
+    close_window(name)
+    after = (d["items"] or [{}])[0]
+    print(f"SET {a.ref}: Detail {after.get('Product Type', '?')} qty {after.get('Qty', '?')}, weight "
+          f"{after.get('Weight') or '(blank)'}")
+    return {"ref": a.ref, "how": how, "todo": todo, "items": got, "detail": after, "changed": True}
 
 
 @route("order-cancel", "cancel an order line (or --restore one) with Order Summary's Cancel/Restore: CTMS's question "
@@ -2536,6 +2764,16 @@ def _args(name):
         p.add_argument("--item", help="the item's Identifier, when the line has several")
         p.add_argument("--modify", action="store_true", help="the line is scheduled: open it anyway (CTMS asks)")
         p.add_argument("--commit", action="store_true", help="set it (his go-ahead)")
+    elif name == "order-item":
+        p.add_argument("ref", help="the line, e.g. AH24/11/26ABC or 1234567-1-1")
+        p.add_argument("--weight", type=float, help="the line's total weight in kg (an ad hoc's is in its Special "
+                                                    "Instructions) - needed when the item has none")
+        p.add_argument("--product", help="the item drop-down's own name when it isn't the Detail tab's code with spaces "
+                                         "for _ (default: the Detail tab's Product Type)")
+        p.add_argument("--qty", type=float, help="Ordered, when creating the item (default: the Detail tab's Qty)")
+        p.add_argument("--ident", action="store_true", help="take the Identifier from Ctrl+L's list again")
+        p.add_argument("--modify", action="store_true", help="the line is scheduled: open it anyway (CTMS asks)")
+        p.add_argument("--commit", action="store_true", help="type it in and save it (his go-ahead)")
     elif name == "order-split":
         p.add_argument("ref", help="the unscheduled line, e.g. 1234567-1-1")
         p.add_argument("parts", type=int, help="how many equal parts")

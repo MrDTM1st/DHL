@@ -55,7 +55,8 @@ HEAD_Y, HEAD_A, HEAD_B, HEAD_C = 295, 100, 150, 360
 CELL_B = (140, 320)
 CELLS = {"C": (332, 544), "D": (556, 669), "E": (682, 835), "F": (848, 1595), "G": (1608, 1890)}
 SCROLLBAR, SHEET_FOOT = 20, 83     # what the page keeps on its right and under the rows, whatever the window's size (03-04/11)
-INTO_GRID = [230, 390]             # a cell of the sheet, whichever row it is: the sheet can be left scrolled sideways
+NAME_BOX = [80, 250]               # Excel's Name Box, over column A's heading (seen 23/11)
+SHEET_END = "B1048576"             # column B's last row: Ctrl+Up from it stops on the last manifest, wherever the view was
 PASS_CARRIER = "PASS_DH"
 PASS_DOMAIN = "passlogistics"
 
@@ -251,19 +252,23 @@ def tracker_rows(R, trips, carrier, now=None, look_only=False):
     latest = os.path.join(R.OUT, "latest.png")
     try:
         for trip in trips:
-            steps = [{"action": "click", "px": INTO_GRID}, {"action": "wait", "seconds": 0.5},
-                     {"action": "key", "key": "home"}, {"action": "wait", "seconds": 0.5},     # column A, the sheet back in place
-                     {"action": "key", "key": "right"}, {"action": "wait", "seconds": 0.5},    # column B
-                     {"action": "key", "key": "ctrl+down"}, {"action": "wait", "seconds": 0.9},
+            # The Name Box to column B's last row, Ctrl+Up to the last manifest, Down: wherever the sheet was left. A click
+            # into the view and Ctrl+Down ran off to row 1048576 when the clicked row was the last one filled (23/11).
+            steps = [{"action": "click", "px": NAME_BOX}, {"action": "wait", "seconds": 0.4},
+                     {"action": "key", "key": "ctrl+a"}, {"action": "type", "text": SHEET_END},
+                     {"action": "key", "key": "enter"}, {"action": "wait", "seconds": 0.9},
+                     {"action": "key", "key": "ctrl+up"}, {"action": "wait", "seconds": 0.9},
                      {"action": "key", "key": "down"}, {"action": "wait", "seconds": 0.9}]
+            past = False                   # stepped over a colleague's half-typed row: no manifest above is then expected
             for _ in range(4):
                 if _quiet(R.send_batch, "tracker-row", steps):
                     return done, "the tracker didn't take the keys"
                 state = row_state(Image.open(latest).convert("RGB"))
-                if state is None or not state["above"]:
+                if state is None or not (state["above"] or past):
                     return done, "couldn't be sure of the cursor on the tracker"
                 if state["blank"]:
                     break
+                past = True
                 steps = [{"action": "key", "key": "down"}, {"action": "wait", "seconds": 0.7}]   # half typed by a colleague
             else:
                 return done, "no empty row where one should be"

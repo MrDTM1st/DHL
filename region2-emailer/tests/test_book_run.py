@@ -109,6 +109,44 @@ def test_a_row_pasted_is_counted_even_when_the_look_after_it_fails(tmp_path):
     assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (1, "") and len(R.pasted) == 1
 
 
+class _Walk(_Tracker):
+    """The tracker step by step: each move's picture in turn, every batch kept."""
+
+    def __init__(self, out, sheets):
+        super().__init__(out)
+        self.sheets, self.batches = list(sheets), []
+
+    def send_batch(self, name, steps):
+        self.batches.append((name, steps))
+        im = self.sheets.pop(0) if name == "tracker-row" else _sheet(filled="BCDEG")
+        im.save(os.path.join(self.OUT, "latest.png"))
+        return 0
+
+
+def test_the_row_is_found_from_column_bs_end_whatever_row_the_view_was_left_on(tmp_path):
+    # 23/11: the view opened on the last filled row, the old click + Ctrl+Down ran off to row 1048576 and the row went on
+    # by hand. Now: the Name Box to B's last row, Ctrl+Up to the last manifest, Down - no Ctrl+Down at all.
+    R = _Walk(str(tmp_path), [_sheet()])
+    assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (1, "") and len(R.pasted) == 1
+    name, steps = R.batches[0]
+    assert name == "tracker-row" and steps[0] == {"action": "click", "px": B.NAME_BOX}
+    assert [s["text"] for s in steps if s["action"] == "type"] == [B.SHEET_END]
+    assert [s["key"] for s in steps if s["action"] == "key"] == ["ctrl+a", "enter", "ctrl+up", "down"]
+
+
+def test_a_colleagues_half_typed_rows_under_the_last_manifest_are_stepped_over(tmp_path):
+    # under the last manifest: two rows a colleague started (no manifest yet), then the empty one - no manifest above it
+    R = _Walk(str(tmp_path), [_sheet(filled="CDE"), _sheet(filled="CDE", above=False), _sheet(above=False)])
+    assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (1, "") and len(R.pasted) == 1
+    assert [n for n, _ in R.batches].count("tracker-row") == 3
+
+
+def test_an_empty_row_straight_under_no_manifest_is_never_pasted_on(tmp_path):
+    R = _Walk(str(tmp_path), [_sheet(above=False)])
+    assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (0, "couldn't be sure of the cursor on the tracker")
+    assert R.pasted == []
+
+
 def test_urgent_is_collecting_today_or_tomorrow_morning():
     assert B.is_urgent("02/11/26 16:00", NOW) is True
     assert B.is_urgent("03/11/26 11:59", NOW) is True

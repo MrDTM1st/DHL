@@ -117,6 +117,85 @@ def test_payments_count_each_line_once_and_take_the_left_amount():
     assert total == "905.62"
 
 
+def _payments(*lines):
+    f = el("internal frame", "Payments for Trip 261201-MAN-01000002", at=(10, 100, 900, 500), lv=1)
+    kids = []
+    for i, (kind, amt) in enumerate(lines):
+        y = 300 + 23 * i
+        kids += [el("text", "", "01/12/2026", at=(20, y, 80, 23)), el("text", "", kind, at=(120, y, 120, 23)),
+                 el("text", "", "261201-MAN-01000002" if kind.startswith("Trip") else "SERVICE", at=(250, y, 140, 23)),
+                 el("text", "Enter value for : AMOUNT", amt, at=(400, y, 90, 23)),
+                 el("text", "Enter value for : VAT_AMOUNT", "0.00", at=(500, y, 90, 23))]
+    return C.payment_lines(screen(f, *kids))[0]
+
+
+def test_a_price_moves_only_the_haulage_line_and_book_names_it_trip_haul_ma():
+    # Book's trips (23/11) show their haulage as "Trip Haul Ma", grid and Edit box alike: the route took only
+    # "Trip Haulage" and refused one. The services' own lines stay; the haulage makes up the rest of the quote.
+    rows = _payments(("HIAB", "50.00"), ("NIGHT", "80.00"), ("Trip Haul Ma", "700.00"))
+    line, others, new = C.price_plan(rows, 700)
+    assert line["amount"] == 700.0 and others == 130.0 and new == 570.0
+    rows = _payments(("ESCORTS", "324.00"), ("Trip Haulage", "581.62"))
+    assert C.price_plan(rows, 1000)[2] == 676.0
+    for rows, want in ((_payments(("Trip Haul Ma", "1.00"), ("Trip Haulage", "2.00")), 500),   # which one?
+                       (_payments(("NIGHT", "80.00")), 500),                                      # none
+                       (_payments(("NIGHT", "600.00"), ("Trip Haul Ma", "100.00")), 500)):        # nothing left for it
+        try:
+            C.price_plan(rows, want)
+            raise AssertionError("should refuse")
+        except C.Fail:
+            pass
+
+
+def test_the_carriers_payments_is_found_by_its_place_when_its_name_is_cut_off():
+    # Planning's Finance tab late on 23/11: the carrier's Payments named "Finance tab page" over and over, cut off before
+    # "Payments" - the old pick by name found only the revenue's and opened Order Revenue
+    t = el("page tab", "Finance", at=(810, 132, 81, 23), lv=2, st=["selected"])
+    cut = "Finance tab page " * 11 + "Finance tab p"
+    kids = [el("push button", "Adjustment", at=(678, 171, 100, 30), lv=3),
+            el("push button", cut, at=(678, 215, 100, 30), lv=3),
+            el("text", "Enter value for : TRIP_STATUS", "750.00", at=(563, 215, 102, 23), lv=3),
+            el("text", "Trip Revenue", "600.00", at=(928, 215, 113, 23), lv=3),
+            el("push button", "Finance tab page Payments", at=(1065, 215, 113, 30), lv=3),
+            el("push button", "Calc Costs", at=(1065, 245, 113, 30), lv=3)]
+    s = screen(t, *kids)
+    assert C.carrier_payments(s, t) is kids[1]
+    kids[1]["nm"] = "Finance tab page Payments"                             # early in the day: both read Payments
+    assert C.carrier_payments(screen(t, *kids), t) is kids[1]
+    assert C.cut_short("Finance tab p", "Finance") and not C.cut_short("Calc Costs", "Finance")
+    no_rev = [k for k in kids if k["nm"] != "Trip Revenue"]
+    no_rev[1]["nm"] = cut                                                   # no revenue figure and one cut name: no guess
+    assert C.carrier_payments(screen(t, *no_rev), t) is None
+
+
+def test_an_item_box_plan_creates_what_an_ad_hoc_upload_left_out():
+    # Create's box as it opened on 23/11: nothing but the Oms Ref and "Please Select" (blank boxes aren't read)
+    fresh = {"Oms Ref": "11111111", "Identifier": "Please Select"}
+    assert C.item_plan(fresh, "PARCEL", 2.0, 1200.0) == [("Product", "PARCEL"), ("Identifier", "Ctrl+L"),
+                                                         ("Ordered", "2"), ("Weight", "1200")]
+    right = {"Product": "Cable Drums", "Identifier": "Cable Drums", "Ordered": "2", "Weight": "1,200.00"}
+    assert C.item_plan(right, "CABLE_DRUMS") == []                        # the drop-down's name, the Detail's code
+    typed_text = {"Identifier": "2 x Cable drums", "Ordered": "2", "Delivered": "0"}
+    assert C.item_plan(typed_text, "CABLE_DRUMS", None, 1200) == [("Product", "CABLE DRUMS"), ("Identifier", "Ctrl+L"),
+                                                                   ("Delivered", ""), ("Weight", "1200")]
+    assert C.item_plan(right, "CABLE_DRUMS", ident=True) == [("Identifier", "Ctrl+L")]
+    try:
+        C.item_plan(fresh, "PARCEL", 2.0)                                   # no weight anywhere: never guessed
+        raise AssertionError("should refuse")
+    except C.Fail as e:
+        assert "--weight" in str(e)
+    assert C.product_name("STEE_SLEEPER") != C.product_name("STEEL SLEEPERS")    # a name that differs needs --product
+
+
+def test_ctrl_l_lists_its_rows_as_labels_top_first():
+    box = el("internal frame", "Product Items", at=(113, 254, 456, 456), lv=1)
+    kids = [el("text", "Find", "BOX%", at=(149, 304, 412, 26), lv=2), el("list", "", at=(123, 342, 436, 303), lv=2),
+            el("label", "Item_Id:Box.\tItem_Description:BOX", at=(-1, -1, -1, -1), lv=3, st=["selected"]),
+            el("label", "Item_Id:BOX2\tItem_Description:Box two", at=(-1, -1, -1, -1), lv=3),
+            el("push button", "OK", at=(343, 671, 61, 31), lv=2)]
+    assert C.product_items(screen(box, *kids)) == [("Box.", "BOX"), ("BOX2", "Box two")]
+
+
 def test_named_and_header_grids():
     tab = el("page tab", "Services", at=(697, 182, 76, 23), lv=2)
     heads = [el("push button", n, at=(x, 268, w, 23), lv=3) for n, x, w in (("Service Id", 83, 152), ("Name", 235, 270),
