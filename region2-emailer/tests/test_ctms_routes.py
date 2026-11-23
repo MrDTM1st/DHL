@@ -179,12 +179,37 @@ def test_nc_rows_find_the_first_empty_row():
                                                                         ("", "", "")]
 
 
-def test_notes_and_comments_are_never_sent_without_commit(capsys):
-    got = C.run_item({"kind": "note", "lines": ["1234567-1-1"], "set": {"note": " - Emailed DO 24/11"}}, commit=False)
-    assert got["done"] is False and "not sent" in got["said"]
+def test_a_delivery_comment_is_never_sent_without_commit(capsys):
+    # its box saves by itself, so there is no dry run for it (a note's dry run is honoured since main 88c132c)
     got = C.run_item({"kind": "update", "lines": ["1234567-1-1"], "set": {"comments": "Jo 07000 000000"}}, commit=False)
-    assert got["done"] is False
+    assert got["done"] is False and "not sent" in got["said"]
     assert "NOT SENT" in capsys.readouterr().out
+
+
+def test_window_ends_and_delivery_type_rows():
+    assert C.window_ends("10/02/27 08:00 - 16:00", "x") == (("10/02/27", "08:00"), ("10/02/27", "16:00"))
+    assert C.window_ends("10/02/27 22:00 - 11/02/27 6:00", "x") == (("10/02/27", "22:00"), ("11/02/27", "06:00"))
+    try:
+        C.window_ends("tomorrow", "--deliver")
+        raise AssertionError("should refuse")
+    except C.Fail:
+        pass
+    win = el("internal frame", "Delivery Types", at=(760, 328, 423, 506), lv=1)
+    rows = [el("label", "Delivery Type:NEXT DAY\tDescription:Next day", lv=2),
+            el("label", "Delivery Type:Next Day\tDescription:old", lv=2)]
+    assert C.type_rows(screen(win, *rows)) == ["NEXT DAY", "Next Day"]
+
+
+def test_service_rules():
+    rails = {"items": [{"Product Type": "SHORT_RAIL"}], "veh_type": "NR_40ft Artic Flatbed"}
+    ballast = {"items": [{"Product Type": "LOOSE_BALLAST"}], "veh_type": "NR_Rigid (Up to 40ft)"}
+    C.service_rails(["PTS", "REAR STEER"], rails)                         # fine on rails and an artic
+    for adds, d in ((["PTS"], ballast), (["REAR STEER"], ballast)):
+        try:
+            C.service_rails(adds, d)
+            raise AssertionError("should refuse")
+        except C.Fail:
+            pass
 
 
 def test_every_route_has_its_arguments():

@@ -743,6 +743,7 @@ def man_number(text):
 
 
 SAFE_TO_CLOSE = ("Order Search", "Order Summary", "FIND", "Find Trip")   # windows that hold no typing of anyone's
+CANCEL_BOXES = ("Trailer Type", "Delivery Types")         # small boxes whose Cancel takes nothing
 OWN_BOXES = {"Planning": ("FIND", "Find Trip", "Planned Orders", "Payments for Trip", "Order Revenue for trip"),
              "Order Summary": ("Order Search", "Split Order")}   # a window's own boxes, which sit on top of it
 
@@ -774,7 +775,10 @@ def bring_forward(name, s=None):
             if gx <= cx < gx + gw and gy <= cy < gy + gh:
                 over = g
                 break
-        if over is None:
+        top = s.frames()[0] if s.frames() else None
+        if top is not None and clean(top.get("nm")).startswith(CANCEL_BOXES):
+            cancel_box(clean(top.get("nm")), s)           # a small box left up: its Cancel takes nothing
+        elif over is None:
             act([click(strip, after=0.6)], f"bring {name} forward")
         elif clean(over.get("nm")).startswith(SAFE_TO_CLOSE):
             close_window(clean(over.get("nm")), s)
@@ -1137,10 +1141,40 @@ def planned_orders():
     return out, s
 
 
-def _menu_box(el, below=300):
-    """Where a right-click menu opens round a clicked element, generously, in the picture's pixels."""
+def _menu_box(el, below=600, above=700):
+    """Where a right-click menu opens round a clicked element, generously, in the picture's pixels: below it, or above
+    it when the row is low on the screen (the well's menu opened upward, 23/11)."""
     x, y = centre(el)
-    return (max(0, x - 200), max(0, y - 60), x + 320, y + below)
+    return (max(0, x - 300), max(0, y - above), x + 520, y + below)
+
+
+TRAILER_BOX = "Trailer Type"
+
+
+def cancel_box(name, s=None):
+    """A small CTMS box shut by its own Cancel, nothing taken."""
+    s = s or read()
+    f = s.frame(name)
+    if f is None:
+        return
+    btn = s.find(name="Cancel", role="push button", within=f)
+    if btn:
+        act([click(btn[0], after=0.8)], f"Cancel {name}")
+
+
+def well_row(s, ref):
+    """Planning's order well: the Cust Ref cell of ref, found under the well's own Cust Ref header (not the Order
+    Summary's), or None when the well doesn't show it (its Sched From/To or Order Filters keep it out)."""
+    pl = s.frame("Planning")
+    heads = [e for e in s.children(pl) if e.get("r") == "push button" and clean(e.get("nm")) == "Cust Ref"]
+    if not heads:
+        return None
+    h = max(heads, key=lambda e: e["at"][1])
+    for e in s.children(pl):
+        if (e.get("r") == "text" and on_screen(e) and str(e.get("v") or "").strip().upper() == ref.upper()
+                and h["at"][0] <= e["at"][0] + e["at"][2] // 2 < h["at"][0] + h["at"][2] and e["at"][1] > h["at"][1]):
+            return e
+    return None
 
 
 # ---------- Order Summary's right-click menu: split ----------
@@ -1165,43 +1199,61 @@ def summary_menu(row, item, s):
          tpl_find(item, SUMMARY_MENU, click=True, after=1.5)], f"{row['ref']}: {item}")
 
 
-def exit_split(s=None):
-    """The Split Order window shut with nothing split. Learnt live 23/11: Exit with No of Orders filled asks "Information
-    has been entered - continue to split the order?", and that question's Cancel empties the box (OK would carry on
-    splitting - never pressed); the window's own Cancel empties it too; Exit on an empty box just closes it."""
-    for _ in range(4):
+def exit_box(name, s=None):
+    """Split Order / Copy Order shut with nothing done. Learnt live 23/11: Exit with No of Orders filled asks
+    "Information has been entered - continue to split the order?", and that question's Cancel empties the box (OK would
+    carry on - never pressed); the window's own Cancel empties it too; Exit on an empty box just closes it."""
+    for _ in range(5):
         s = s or read()
         q = s.question()
-        if q is not None and "split" in q["words"].lower():
+        if q is not None and ("continue" in q["words"].lower() or "information has been entered" in q["words"].lower()):
             if set(q["buttons"]) != {"ok", "cancel"}:
-                raise Fail(f"the split question has buttons {sorted(q['buttons'])} - left up for a look")
-            act([click(q["buttons"]["cancel"], after=1.0)], "don't continue the split")
+                raise Fail(f"the question has buttons {sorted(q['buttons'])} - left up for a look")
+            act([click(q["buttons"]["cancel"], after=1.0)], "don't carry on")
             s = None
             continue
-        if s.frame(SPLIT_BOX) is None:
+        if s.frame(name) is None:
             return
-        box = s.frame(SPLIT_BOX)
-        n = s.first(name="No of Orders", role="text", within=box)
-        if n is not None and str(n.get("v") or "").strip():
+        box = s.frame(name)
+        filled = [e for e in s.children(box) if e.get("r") == "text" and "read-only" not in (e.get("st") or [])
+                  and str(e.get("v") or "").strip()]
+        if filled:
             own_cancel = s.find(name="Cancel", role="push button", within=box)
             if own_cancel and s.covered(own_cancel[0]) is None:
-                act([click(own_cancel[0], after=0.8)], "empty the Split box")
+                act([click(own_cancel[0], after=0.8)], f"empty {name}")
                 s = None
                 continue
         try:
-            s = bring_forward(SPLIT_BOX, s)
+            s = bring_forward(name, s)
         except Fail:
-            if read().frame(SPLIT_BOX) is None:
+            if read().frame(name) is None:
                 return                                    # it went with Order Summary (closing that shuts it too)
             raise
-        if s.frame(SPLIT_BOX) is None:
+        if s.frame(name) is None:
             return
-        btn = s.find(name="Exit", role="push button", within=s.frame(SPLIT_BOX))
+        btn = s.find(name="Exit", role="push button", within=s.frame(name))
         if not btn:
-            raise Fail("the Split Order window has no Exit showing")
-        act([click(btn[0], after=1.0)], "Exit Split Order")
+            raise Fail(f"the {name} window has no Exit showing")
+        act([click(btn[0], after=1.0)], f"Exit {name}")
         s = None
-    raise Fail("the Split Order window won't close - look at it")
+    raise Fail(f"the {name} window won't close - look at it")
+
+
+def exit_split(s=None):
+    exit_box(SPLIT_BOX, s)
+
+
+COPY_BOX = "Copy Order"
+WINDOW_TEXT = re.compile(r"^\s*(\d{2}/\d{2}/\d{2})\s+(\d{1,2}:\d{2})\s*-\s*(?:(\d{2}/\d{2}/\d{2})\s+)?(\d{1,2}:\d{2})\s*$")
+
+
+def window_ends(text, what):
+    """'DD/MM/YY HH:MM - [DD/MM/YY] HH:MM' -> ((day, time), (day, time))."""
+    m = WINDOW_TEXT.match(str(text or ""))
+    if not m:
+        raise Fail(f"{what} should read 'DD/MM/YY HH:MM - HH:MM' (or with a second date), not {text!r}")
+    d1, t1, d2, t2 = m.groups()
+    return (d1, t1.zfill(5)), (d2 or d1, t2.zfill(5))
 
 
 # ---------- an order line's quantity ----------
@@ -1231,6 +1283,80 @@ def exit_item_box(s=None):
     q = s.question()
     if q is not None:
         raise Fail(f"Exit asked: {q['words'][:150]} - left up, nothing answered")
+
+
+# ---------- services ----------
+SERVICE_HEADS = ("Service Id", "Name", "Qty", "Value", "Inherited")
+
+
+def service_rows(s, t):
+    """A Services tab's lines (an order's or a trip's): [{"id", "name", "qty", "cell"}] - the Service Id cell kept for
+    selecting the line."""
+    heads = [e for e in s.children(t) if e.get("r") == "push button" and clean(e.get("nm")) == "Service Id"]
+    if not heads:
+        return []
+    h = heads[0]
+    cells = sorted((e for e in s.children(t) if e.get("r") == "text" and on_screen(e) and e["at"][1] > h["at"][1]
+                    and h["at"][0] <= e["at"][0] + e["at"][2] // 2 < h["at"][0] + h["at"][2]
+                    and str(e.get("v") or "").strip()), key=lambda e: e["at"][1])
+    grid = header_grid(s, t, SERVICE_HEADS)
+    out = []
+    for c in cells:
+        line = next((g for g in grid if g.get("Service Id") == str(c.get("v")).strip()), {})
+        out.append({"id": str(c.get("v")).strip(), "name": line.get("Name", ""), "qty": line.get("Qty", ""),
+                    "cell": c})
+    return out
+
+
+def service_rails(adds, d):
+    """His rules on services, before anything is typed: PTS only on rails and S&C, never on ballast; rear steer only on
+    an artic, never a rigid."""
+    products = " ".join(str(i.get("Product Type", "")) for i in d.get("items") or []).upper()
+    veh = str(d.get("veh_type") or "").upper()
+    for code in adds:
+        if code == "PTS" and ("BALLAST" in products or not any(w in products for w in ("RAIL", "S&C", "SWITCH"))):
+            raise Fail(f"PTS is only for rails and S&C (this line carries {products or 'nothing read'}) - his rule")
+        if code == "REAR STEER" and "RIGID" in veh:
+            raise Fail(f"rear steer never goes on a rigid ({d.get('veh_type')}) - his rule")
+
+
+# ---------- delivery type ----------
+TYPES_BOX = "Delivery Types"
+DEL_TYPES = ("STANDARD", "NEXT DAY", "EMERGENCY")       # his bands: under 24 h, 24-72 h, the rest
+TYPE_ROW = re.compile(r"[^:\t]+:([^\t]*)")              # a list row as the Access Bridge names it: "Column:value"
+
+
+def type_rows(s):
+    """The Delivery Types list's rows, top first, as their first column reads (Book's way, live 03/11)."""
+    win = s.frame(TYPES_BOX)
+    if win is None:
+        return None
+    rows = (TYPE_ROW.match(str(e.get("nm") or "")) for e in s.children(win) if e.get("r") == "label")
+    return [m.group(1).strip() for m in rows if m]
+
+
+def pick_type(code, commit):
+    """With the Delivery Types list up: Find CODE%, and the top row must read CODE exactly ("EMERGENCY", never the
+    "Emergency" beside it). commit: its OK; else its Cancel - nothing picked."""
+    s = read()
+    win = s.frame(TYPES_BOX)
+    box = next((e for e in s.children(win) if e.get("r") == "text" and clean(e.get("nm")) == "Find"
+                and "read-only" not in (e.get("st") or [])), None)
+    find = next((e for e in s.children(win) if e.get("r") == "push button" and clean(e.get("nm")) == "Find"), None)
+    if box is None or find is None:
+        raise Fail("the Delivery Types list's Find isn't there by name - left up for a look")
+    act(fill(box, code + "%") + [click(find, after=0.6), {"action": "settle", "quiet": 0.3, "timeout": 8}],
+        f"Find {code}%")
+    s = read()
+    rows = type_rows(s) or []
+    win = s.frame(TYPES_BOX)
+    btn = {clean(e.get("nm")).lower(): e for e in s.children(win) if e.get("r") == "push button"}
+    if not rows or rows[0] != code or "ok" not in btn:
+        if "cancel" in btn:
+            act([click(btn["cancel"], after=0.6)], "Cancel the list")
+        raise Fail(f"the Delivery Types list gave {rows[0] if rows else 'no row'} for {code} - nothing picked")
+    act([click(btn["ok" if commit else "cancel"], after=0.8)], "OK" if commit else "Cancel (no --commit)")
+    return rows
 
 
 # ---------- non-conformance ----------
@@ -1318,9 +1444,9 @@ def run_item(item, commit):
     be taken back) nor the delivery comment (its box saves by itself), so without commit those are not sent at all:
     the route only says what it would do."""
     s = item.get("set") or {}
-    if not commit and (item["kind"] == "note" or s.get("comments")):
-        what = (f"add '{s['note']}' to {item['lines'][0]}" if item["kind"] == "note"
-                else f"set the delivery comment '{s['comments']}' on {', '.join(item['lines'])}")
+    # a note's dry run is honoured by the work PC since main 88c132c (23/11); the LOC comment box still saves by itself
+    if not commit and s.get("comments"):
+        what = f"set the delivery comment '{s['comments']}' on {', '.join(item['lines'])}"
         print(f"NOT SENT: this would {what} and save it straight away (CTMS has no dry run for that). "
               "Run again with --commit to do it.")
         return {"done": False, "dry": True, "said": f"not sent - would {what}"}
@@ -1347,7 +1473,43 @@ def r_order_note(a):
     note = a.note if a.note.startswith((" - ", "- ")) else " - " + a.note.strip()
     if note.startswith("- "):
         note = " " + note
-    return run_item({"kind": "note", "lines": [a.ref], "set": {"note": note}}, a.commit)
+    if not a.modify:
+        return run_item({"kind": "note", "lines": [a.ref], "set": {"note": note}}, a.commit)
+    # a booked line: the work PC's note job won't open it, so it's done here - the 23/11 way (si_add.py)
+    close_orders()
+    f, s, row = open_order(a.ref, modify_scheduled=True)
+    name = clean(f.get("nm"))
+    si = next((e for e in s.children(f) if clean(e.get("nm")) == "Special Instructions" and on_screen(e)), None)
+    if si is None:
+        close_window(name, s)
+        raise Fail("no Special Instructions box on the order's Detail tab")
+    before = str(si.get("v") or "").rstrip()
+    if before.endswith(note.strip()):
+        close_window(name, s)
+        return {"ref": a.ref, "changed": False, "said": f"'{note.strip()}' is there already"}
+    if not a.commit:
+        close_window(name, s)
+        print(f"WOULD ADD '{note}' to the end of {a.ref}'s Special Instructions (now ending ...{before[-50:]!r}), "
+              "then Save - nothing typed (no --commit)")
+        return {"ref": a.ref, "changed": False}
+    x, y, w, h = si["at"]
+    act([{"action": "click", "screen": [x + w - 40, y + h - 8], "after": 0.4}], "into Special Instructions")
+    s = read()
+    f = s.frame(name)
+    si = next(e for e in s.children(f) if clean(e.get("nm")) == "Special Instructions" and on_screen(e))
+    if s.focus is None or s.focus.get("n") != si.get("n"):
+        raise Fail(f"the cursor isn't in Special Instructions ({describe(s.focus)}) - nothing typed, left open")
+    act([key("ctrl+end", after=0.1), typed(note, after=0.3)], "the note")
+    s = read()
+    f = s.frame(name)
+    after = str(next(e for e in s.children(f) if clean(e.get("nm")) == "Special Instructions").get("v") or "")
+    if not after.rstrip().endswith(note.strip()) or not after.startswith(before[:40]):
+        raise Fail(f"Special Instructions read ...{after[-60:]!r} - not saved, left open for a look")
+    act([click(s.one("the order's Save", role="push button", name="Save", within=f), after=2.0)], "order Save")
+    s = ok_known_questions()
+    close_window(name, s)
+    print(f"ADDED to {a.ref}: '{note}'")
+    return {"ref": a.ref, "changed": True}
 
 
 @route("order-update", "set times, LOC comment, vehicle and services on one or more lines in one go "
@@ -1785,6 +1947,423 @@ def r_order_qty(a):
     return {"ref": a.ref, "changed": True, "after": line}
 
 
+@route("order-cancel", "cancel an order line (or --restore one) with Order Summary's Cancel/Restore: CTMS's question "
+                       "read each time (the button toggles); answered Cancel unless --commit")
+def r_order_cancel(a):
+    rows, s = order_search(a.ref)
+    row = next((r for r in rows if r["ref"].upper() == a.ref.upper()), None)
+    if row is None:
+        raise Fail(f"no line {a.ref} in Order Summary (lines: {', '.join(r['ref'] for r in rows) or 'none'})")
+    was = row["status"]
+    if a.restore and was != "CANCELLED":
+        raise Fail(f"{a.ref} is {was}, not cancelled - nothing to restore")
+    if not a.restore and was == "CANCELLED":
+        return {"ref": a.ref, "status": was, "changed": False, "said": f"{a.ref} is already CANCELLED"}
+    if not a.restore and was not in ("UNSCHEDULED", "NEW"):
+        raise Fail(f"{a.ref} is {was} - take it off its trip first (trip-unschedule), then cancel it")
+    card = s.frame("Order Search")
+    if card is not None:
+        act([click(s.one("the search card's Close", role="push button", name="Close", within=card), after=0.8)],
+            "close the card")
+        s = read()
+        row = next(r for r in summary_rows(s) if r["ref"].upper() == a.ref.upper())
+    summ = s.frame("Order Summary")
+    btn = s.one("Cancel/Restore", role="push button", name="Cancel/Restore", within=summ)
+    clear_to(row["cells"]["ref"], s, f"{a.ref}'s row")
+    clear_to(btn, s, "Cancel/Restore")
+    act([click(row["cells"]["ref"], after=0.6), click(btn, after=1.2)], "Cancel/Restore")
+    q = None
+    for _ in range(4):
+        s = read()
+        q = s.question()
+        if q is not None:
+            break
+    if q is None:
+        raise Fail("Cancel/Restore asked nothing - look at the line")
+    verb = "restore" if a.restore else "cancel"
+    if verb not in q["words"].lower() or set(q["buttons"]) != {"ok", "cancel"}:
+        if "cancel" in q["buttons"]:
+            act([click(q["buttons"]["cancel"], after=0.8)], "not that")
+        raise Fail(f"CTMS asked '{q['words'][:120]}' - not the {verb} expected; answered Cancel")
+    if not a.commit:
+        act([click(q["buttons"]["cancel"], after=0.8)], "Cancel: changes nothing")
+        print(f"CTMS asked '{q['words'][:100]}' - answered Cancel, {a.ref} still {was} (no --commit)")
+        return {"ref": a.ref, "status": was, "changed": False}
+    act([click(q["buttons"]["ok"], after=1.5)], f"OK: {verb}")
+    rows, s = order_search(a.ref)
+    now = next((r["status"] for r in rows if r["ref"].upper() == a.ref.upper()), "?")
+    ok = (now == "CANCELLED") != bool(a.restore)
+    print(f"{a.ref}: {was} -> {now}")
+    if not ok:
+        raise Fail(f"{a.ref} reads {now} after OK - look at it (not retried)")
+    return {"ref": a.ref, "status": now, "changed": True}
+
+
+@route("order-copy", "copy a line to new dates (Order Summary > Copy Orders): No of Orders = copies + 1, early/late "
+                     "collection and delivery typed and read back; exits unless --commit, then lists the new _C line(s)")
+def r_order_copy(a):
+    (c1, c2) = window_ends(a.collect, "--collect")
+    (d1, d2) = window_ends(a.deliver, "--deliver")
+    exit_box(COPY_BOX)                                    # one left from before
+    rows, s = order_search(a.ref)
+    row = next((r for r in rows if r["ref"].upper() == a.ref.upper()), None)
+    if row is None:
+        raise Fail(f"no line {a.ref} in Order Summary (lines: {', '.join(r['ref'] for r in rows) or 'none'})")
+    before = {r["ref"] for r in rows}
+    summary_menu(row, "os-copy-orders", s)
+    _, s = until(lambda sc: sc.frame(COPY_BOX), "the Copy Order window", tries=5)
+    box = s.frame(COPY_BOX)
+    want = {"No of Orders": str(a.copies + 1)}
+    steps = []
+    n = s.one("No of Orders", role="text", name="No of Orders", within=box)
+    steps += fill(n, want["No of Orders"]) + [key("tab", after=0.3)]
+    for label, (day, hhmm) in (("Early Collection", c1), ("Late Collection", c2), ("Early Delivery", d1),
+                               ("Late Delivery", d2)):
+        d_el = s.one(label, role="text", name=label, within=box)
+        t_el = _after(s, d_el)
+        if t_el.get("r") != "text" or clean(t_el.get("nm")):
+            raise Fail(f"no time box after {label} - left up for a look")
+        steps += fill(d_el, day) + [key("tab", after=0.3)] + fill(t_el, hhmm) + [key("tab", after=0.3)]
+        want[label] = (day, hhmm)
+    act(steps, "the copy's dates")
+    s = read()
+    box = s.frame(COPY_BOX)
+    got = {"No of Orders": str(s.one(name="No of Orders", role="text", within=box).get("v") or "").strip()}
+    for label in ("Early Collection", "Late Collection", "Early Delivery", "Late Delivery"):
+        d_el = s.one(name=label, role="text", within=box)
+        got[label] = (str(d_el.get("v") or "").strip(), str(_after(s, d_el).get("v") or "").strip())
+    if got != want:
+        exit_box(COPY_BOX, s)
+        raise Fail(f"the box reads {got}, not {want} - nothing copied")
+    plan = (f"{a.ref} x{a.copies}: collect {c1[0]} {c1[1]}-{c2[0]} {c2[1]}, deliver {d1[0]} {d1[1]}-{d2[0]} {d2[1]}")
+    if not a.commit:
+        exit_box(COPY_BOX, s)
+        print(f"WOULD COPY {plan} - exited, nothing copied (no --commit)")
+        return {"ref": a.ref, "plan": plan, "changed": False}
+    act([click(s.one("Process", role="push button", name="Process", within=box), after=2.5)], "Process")
+    s = ok_known_questions()
+    exit_box(COPY_BOX, s)
+    rows, s = order_search(a.ref)
+    new = [r for r in rows if r["ref"] not in before]
+    print(f"COPIED {plan}: new " + ", ".join(f"{r['ref']} ({r['status']}, ready {r.get('ready', '')})" for r in new)
+          + " - check its Order Items (product, weight) and the delivery time (it once came across as 00:00)")
+    return {"ref": a.ref, "plan": plan, "changed": True, "new": [r["ref"] for r in new]}
+
+
+@route("order-deltype", "set an UNSCHEDULED line's delivery type (STANDARD / NEXT DAY / EMERGENCY) from Add Detail's "
+                         "list, the capitals row only; checks the list and cancels unless --commit")
+def r_order_deltype(a):
+    code = a.type.upper()
+    if code not in DEL_TYPES:
+        raise Fail(f"delivery type is one of {', '.join(DEL_TYPES)}")
+    close_orders()
+    f, s, row = open_order(a.ref)
+    name = clean(f.get("nm"))
+    if row.get("status") != "UNSCHEDULED":
+        close_window(name)
+        raise Fail(f"{a.ref} is {row.get('status')}: the type is read-only on a booked line. His way: trip-unschedule "
+                   f"--line {a.ref}, order-deltype, trip-apply, trip-trailer, trip-deltype, then trip-resend")
+    t, s = tab("Add Detail", name, s)
+    box = next((e for e in s.children(t) if clean(e.get("nm")) == "Delivery Type"), None)
+    if box is None:
+        raise Fail("Add Detail has no Delivery Type box")
+    now = str(box.get("v") or "").strip()
+    if now == code:
+        tab("Detail", name)
+        close_window(name)
+        return {"ref": a.ref, "type": now, "changed": False, "said": f"{a.ref} is already {now}"}
+    lov = _after(s, box)
+    if lov.get("r") != "push button":
+        raise Fail("no list button beside Delivery Type")
+    act([click(lov, after=1.5)], "Delivery Types list")
+    until(lambda sc: sc.frame(TYPES_BOX), "the Delivery Types list", tries=5)
+    pick_type(code, a.commit)
+    if not a.commit:
+        tab("Detail", name)
+        close_window(name)
+        print(f"WOULD SET {a.ref} {now} -> {code} (the list gives {code}) - cancelled, nothing changed (no --commit)")
+        return {"ref": a.ref, "type": now, "changed": False}
+    s = read()
+    t = next(e for e in s.children(s.frame(name)) if e.get("r") == "page tab" and clean(e.get("nm")) == "Add Detail")
+    got = next((str(e.get("v") or "").strip() for e in s.children(t) if clean(e.get("nm")) == "Delivery Type"), "")
+    if got != code:
+        raise Fail(f"Delivery Type reads {got!r}, not {code} - not saved, left open for a look")
+    save = s.one("the order's Save", role="push button", name="Save", within=s.frame(name))
+    act([click(save, after=2.0)], "order Save")
+    for _ in range(4):
+        s = read()
+        q = s.question()
+        if q is None:
+            break
+        if "schedule" in q["words"].lower() and "ok" in q["buttons"]:
+            act([click(q["buttons"]["ok"], after=1.2)], "schedule OK")
+            continue
+        raise Fail(f"order Save asked: {q['words'][:150]} - left up, nothing answered")
+    close_window(name)
+    rows, _ = order_search(a.ref)
+    after = next((r.get("type") for r in rows if r["ref"].upper() == a.ref.upper()), "?")
+    print(f"{a.ref}: {now} -> {after}")
+    return {"ref": a.ref, "type": after, "changed": True}
+
+
+@route("trip-deltype", "set a manifest's own delivery type on Planning's Trip Detail (after its orders' types are set);"
+                       " shows it unless --commit")
+def r_trip_deltype(a):
+    code = a.type.upper()
+    if code not in DEL_TYPES:
+        raise Fail(f"delivery type is one of {', '.join(DEL_TYPES)}")
+    found = r_trip_find(a)
+    if found.get("found") != "selected":
+        return found
+    t, s = tab("Trip Detail", "Planning")
+    box = next((e for e in s.children(t) if "Delivery Type" in str(e.get("nm") or "") and e.get("r") == "text"), None)
+    if box is None:
+        raise Fail("Trip Detail has no Delivery Type box")
+    now = str(box.get("v") or "").strip()
+    if now == code:
+        return dict(found, type=now, changed=False, said=f"{found['man']} is already {now}")
+    if not a.commit:
+        print(f"WOULD SET {found['man']}'s delivery type {now} -> {code} - nothing typed (no --commit)")
+        return dict(found, type=now, changed=False)
+    mins = _starts_in({"day": found["day"], "time": found["time"]})
+    if mins is not None and 0 <= mins <= NEAR_START and not a.near_start:
+        raise Fail(f"{found['man']} starts in {mins:.0f} min - ask him first (--near-start once he has)")
+    act(fill(box, code) + [key("tab", after=1.0)], "trip delivery type")
+    s = read()
+    if s.frame(TYPES_BOX) is not None:                    # CTMS asks which: the capitals one
+        pick_type(code, True)
+        s = read()
+    q = s.question()
+    if q is not None and "lov" in q["words"].lower() and set(q["buttons"]) <= {"ok"}:
+        act([click(q["buttons"]["ok"], after=0.8)], "OK the FRM-41091 notice (harmless, 10/11)")
+        s = read()
+    t, s = tab("Trip Detail", "Planning", s)
+    got = next((str(e.get("v") or "").strip() for e in s.children(t) if "Delivery Type" in str(e.get("nm") or "")), "")
+    if got != code:
+        raise Fail(f"Trip Detail's Delivery Type reads {got!r}, not {code} - not saved, look at it")
+    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    if save:
+        act([click(save[0], after=1.2)], "Planning Save")
+    refresh = s.find(name="Refresh Trip", role="push button", within=s.frame("Planning"), enabled=True)
+    if refresh:
+        act([click(refresh[0], after=2.0)], "Refresh Trip")
+    print(f"{found['man']}: delivery type {now} -> {code}; resend it if it was accepted (trip-resend)")
+    return dict(found, type=code, changed=True)
+
+
+@route("trip-trailer", "set a manifest's trailer type (Stops: right-click stop 1, Assign Trailer Type - it sets every "
+                       "stop), e.g. NR_TROM_80FT; opens the box and cancels unless --commit")
+def r_trip_trailer(a):
+    found = r_trip_find(a)
+    if found.get("found") != "selected":
+        return found
+    cancel_box(TRAILER_BOX)
+    t, s = tab("Stops", "Planning")
+    stops = sorted((e for e in s.children(t) if on_screen(e) and clean(e.get("nm")) == "Location"
+                    and str(e.get("v") or "").strip()), key=lambda e: e["at"][1])
+    if not stops:
+        raise Fail(f"{found['man']} shows no stops")
+    now = sorted((e for e in s.children(t) if on_screen(e) and clean(e.get("nm")) == "Trailer Type"
+                  and e.get("r") == "text"), key=lambda e: e["at"][1])
+    was = str(now[0].get("v") or "").strip() if now else ""
+    if was == a.code and not a.commit:
+        return dict(found, trailer=was, changed=False, said=f"{found['man']} already has {was}")
+    clear_to(stops[0], s, "stop 1")
+    act([click(stops[0], after=0.5), click(stops[0], right=True, after=0.7),
+         tpl_find("stop-assign-trailer-type", _menu_box(stops[0]), click=True, after=1.5)], "Assign Trailer Type")
+    _, s = until(lambda sc: sc.frame(TRAILER_BOX), "the Trailer Type box", tries=4)
+    box = s.frame(TRAILER_BOX)
+    trip = str((s.first(name="Trip", role="text", within=box) or {}).get("v") or "")
+    if man_number(trip or "x00000000") != man_number(found["man"]):
+        cancel_box(TRAILER_BOX, s)
+        raise Fail(f"the Trailer Type box is for {trip}, not {found['man']} - cancelled")
+    if not a.commit:
+        cancel_box(TRAILER_BOX, s)
+        tab("Trip Detail", "Planning")
+        print(f"WOULD SET {found['man']}'s trailer {was or '(none)'} -> {a.code} - box opened and cancelled (no --commit)")
+        return dict(found, trailer=was, changed=False)
+    mins = _starts_in({"day": found["day"], "time": found["time"]})
+    if mins is not None and 0 <= mins <= NEAR_START and not a.near_start:
+        cancel_box(TRAILER_BOX, s)
+        raise Fail(f"{found['man']} starts in {mins:.0f} min - ask him first (--near-start once he has)")
+    field = s.one("the Trailer Type box", role="text", name="Trailer Type", within=box)
+    act(fill(field, a.code) + [key("tab", after=0.6)], "the trailer code")
+    s = read()
+    box = s.frame(TRAILER_BOX)
+    if box is None or str((s.first(name="Trailer Type", role="text", within=box) or {}).get("v") or "").strip() != a.code:
+        raise Fail(f"the Trailer Type box doesn't read {a.code} - not OK'd, left up for a look")
+    act([click(s.one("its OK", role="push button", name="OK", within=box), after=1.5)], "OK")
+    s = read()
+    q = s.question()
+    if q is not None:
+        raise Fail(f"CTMS asks after OK: {q['words'][:150]} - left up for a look")
+    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    if save:
+        act([click(save[0], after=1.2)], "Planning Save")
+    t, s = tab("Stops", "Planning")
+    got = [str(e.get("v") or "").strip() for e in sorted((e for e in s.children(t) if on_screen(e)
+           and clean(e.get("nm")) == "Trailer Type" and e.get("r") == "text"), key=lambda e: e["at"][1])]
+    got = [g for g in got if g]
+    tab("Trip Detail", "Planning")
+    print(f"{found['man']}: trailer now {', '.join(got) or '?'}; resend it if it was accepted (trip-resend)")
+    if not got or any(g != a.code for g in got):
+        raise Fail(f"the stops read {got}, not all {a.code} - look at it")
+    return dict(found, trailer=a.code, changed=True)
+
+
+@route("trip-apply", "put an unscheduled line onto an existing manifest (Planning: the trip selected, the line's well "
+                     "row right-clicked, Apply to Trip, Save); checks the menu only unless --commit")
+def r_trip_apply(a):
+    found = r_trip_find(argparse.Namespace(man=a.man, order=None))
+    if found.get("found") != "selected":
+        return found
+    s = read()
+    cell = well_row(s, a.ref)
+    if cell is None:
+        raise Fail(f"{a.ref} isn't in Planning's order well - its Sched From/To or Order Filters keep it out; set them "
+                   "so the line shows (it must be UNSCHEDULED), then run this again")
+    clear_to(cell, s, f"{a.ref}'s well row")
+    mins = _starts_in({"day": found["day"], "time": found["time"]})
+    if a.commit and mins is not None and 0 <= mins <= NEAR_START and not a.near_start:
+        raise Fail(f"{found['man']} starts in {mins:.0f} min - ask him first (--near-start once he has)")
+    if not a.commit:
+        act([click(cell, after=0.5), click(cell, right=True, after=0.7),
+             tpl_find("well-apply-trip", _menu_box(cell)), key("escape", after=0.4)], "check Apply to Trip")
+        print(f"WOULD APPLY {a.ref} to {found['man']} ({found['status']}), then Save - menu checked, nothing chosen "
+              "(no --commit). After: trip-trailer, and trip-resend if it was accepted")
+        return dict(found, ref=a.ref, changed=False)
+    act([click(cell, after=0.5), click(cell, right=True, after=0.7),
+         tpl_find("well-apply-trip", _menu_box(cell), click=True, after=1.5),
+         {"action": "settle", "quiet": 0.5, "timeout": 15}], f"Apply {a.ref} to Trip")
+    s = read()
+    q = s.question()
+    if q is not None:
+        raise Fail(f"CTMS asks after Apply to Trip: {q['words'][:150]} - left up for a look")
+    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    if save:
+        act([click(save[0], after=1.2)], "Planning Save")
+    rows, s = planned_orders()
+    on = [r["ref"] for r in rows]
+    close_x(PLANNED, s)
+    tab("Trip Detail", "Planning")
+    if a.ref.upper() not in (r.upper() for r in on):
+        raise Fail(f"{found['man']}'s Planned Orders show {', '.join(on) or 'nothing'}, not {a.ref} - look at it")
+    print(f"APPLIED {a.ref} to {found['man']}: it now carries {', '.join(on)}. Next: trip-trailer {found['man']} CODE, "
+          "and trip-resend if it was accepted")
+    return dict(found, ref=a.ref, on=on, changed=True)
+
+
+@route("order-services", "add or take off services on a line, booked or not (Services tab: New + the code, or Delete), "
+                         "his rules checked, order Save; shows the plan unless --commit (a booked line then needs a resend)")
+def r_order_services(a):
+    adds = [x.upper() for x in a.add or []]
+    removes = [x.upper() for x in a.remove or []]
+    if not adds and not removes:
+        raise Fail("nothing to do - give --add CODE and/or --remove CODE")
+    close_orders()
+    f, s, row = open_order(a.ref, modify_scheduled=a.modify)
+    name = clean(f.get("nm"))
+    d = read_detail(s, f)
+    try:
+        service_rails(adds, d)
+    except Fail:
+        close_window(name, s)                             # refused before anything was typed: nothing to keep
+        raise
+    t, s = tab("Services", name, s)
+    have = service_rows(s, t)
+    ids = [x["id"] for x in have]
+    todo_add = [c for c in adds if c not in ids]
+    todo_rm = [c for c in removes if c in ids]
+    print(f"{a.ref} ({row.get('status')}) has: {', '.join(ids) or 'no services'}")
+    if not todo_add and not todo_rm:
+        tab("Detail", name)
+        close_window(name)
+        return {"ref": a.ref, "services": ids, "changed": False, "said": "nothing to change"}
+    if not a.commit:
+        tab("Detail", name)
+        close_window(name)
+        print(f"WOULD ADD {', '.join(todo_add) or '-'}, TAKE OFF {', '.join(todo_rm) or '-'}, then Save"
+              + (" and resend its trip" if row.get("status") == "SCHEDULED" else "") + " - nothing typed (no --commit)")
+        return {"ref": a.ref, "services": ids, "changed": False}
+    for code in todo_rm:
+        line = next(x for x in service_rows(read(), t) if x["id"] == code)
+        s = read()
+        t = next(e for e in s.children(s.frame(name)) if e.get("r") == "page tab" and clean(e.get("nm")) == "Services")
+        delete = s.one("the Services tab's Delete", role="push button", name="Delete", within=t)
+        act([click(line["cell"], after=0.5), click(delete, after=1.0)], f"take {code} off")
+    for code in todo_add:
+        s = read()
+        t = next(e for e in s.children(s.frame(name)) if e.get("r") == "page tab" and clean(e.get("nm")) == "Services")
+        new = s.one("the Services tab's New", role="push button", name="New", within=t)
+        act([click(new, after=1.0), typed(code, after=0.3), key("tab", after=1.0)], f"add {code}")
+        s = read()
+        t = next(e for e in s.children(s.frame(name)) if e.get("r") == "page tab" and clean(e.get("nm")) == "Services")
+        line = next((x for x in service_rows(s, t) if x["id"] == code), None)
+        if line is None:
+            raise Fail(f"{code} didn't take in the Services list - not saved, the order left open for a look")
+        grid_qty = [e for e in s.children(t) if e.get("r") == "text" and on_screen(e)
+                    and abs(e["at"][1] - line["cell"]["at"][1]) <= 3 and str(e.get("v") or "").strip() in ("", "0")
+                    and "read-only" not in (e.get("st") or [])]
+        if grid_qty:
+            act(fill(grid_qty[0], "1") + [key("tab", after=0.5)], f"{code} qty 1")
+    s = read()
+    t = next(e for e in s.children(s.frame(name)) if e.get("r") == "page tab" and clean(e.get("nm")) == "Services")
+    now = [x["id"] for x in service_rows(s, t)]
+    want = [c for c in ids if c not in todo_rm] + todo_add
+    if sorted(now) != sorted(want):
+        raise Fail(f"the Services list reads {now}, not {want} - not saved, the order left open for a look")
+    act([click(s.one("the order's Save", role="push button", name="Save", within=s.frame(name)), after=2.0)],
+        "order Save")
+    s = ok_known_questions()
+    close_window(name)
+    print(f"{a.ref}: services now {', '.join(now) or 'none'}"
+          + (" - its trip needs a resend (trip-resend)" if row.get("status") == "SCHEDULED" else ""))
+    return {"ref": a.ref, "services": now, "changed": True}
+
+
+@route("trip-services", "a manifest's own services (Planning's Services tab): list them, or take some off (--remove; "
+                        "do the trip before its orders - they pass on both ways); shows unless --commit")
+def r_trip_services(a):
+    found = r_trip_find(a)
+    if found.get("found") != "selected":
+        return found
+    t, s = tab("Services", "Planning")
+    have = service_rows(s, t)
+    ids = [x["id"] for x in have]
+    print(f"{found['man']} services: " + "; ".join(f"{x['id']} x{x['qty']}" for x in have) if have
+          else f"{found['man']} has no services")
+    removes = [x.upper() for x in a.remove or []]
+    todo = [c for c in removes if c in ids]
+    if not todo:
+        tab("Trip Detail", "Planning")
+        return dict(found, services=ids, changed=False)
+    if not a.commit:
+        tab("Trip Detail", "Planning")
+        print(f"WOULD TAKE OFF {', '.join(todo)}, Save, Refresh Trip - nothing changed (no --commit)")
+        return dict(found, services=ids, changed=False)
+    for code in todo:
+        t, s = tab("Services", "Planning")
+        line = next(x for x in service_rows(s, t) if x["id"] == code)
+        delete = s.one("the Services tab's Delete", role="push button", name="Delete", within=t)
+        act([click(line["cell"], after=0.5), click(delete, after=1.0)], f"take {code} off the trip")
+    t, s = tab("Services", "Planning")
+    panel_save = s.find(name="Save", role="push button", within=t, enabled=True)
+    if panel_save:
+        act([click(panel_save[0], after=1.5)], "the Services tab's Save")
+    s = ok_known_questions()
+    refresh = s.find(name="Refresh Trip", role="push button", within=s.frame("Planning"), enabled=True)
+    if refresh:
+        act([click(refresh[0], after=2.0)], "Refresh Trip")
+    t, s = tab("Services", "Planning")
+    now = [x["id"] for x in service_rows(s, t)]
+    tab("Trip Detail", "Planning")
+    left = [c for c in todo if c in now]
+    print(f"{found['man']}: services now {', '.join(now) or 'none'}")
+    if left:
+        raise Fail(f"{', '.join(left)} still on {found['man']} after Save - look at it")
+    return dict(found, services=now, changed=True)
+
+
 @route("order-close", "close the open order window(s); stops, keeping the changes, if any are unsaved")
 def r_order_close(a):
     n = close_orders()
@@ -1895,8 +2474,12 @@ def _args(name):
     elif name == "menu":
         p.add_argument("path")
     elif name in ("trip-find", "trip-read", "trip-payments", "trip-price", "trip-status", "trip-resend",
-                  "trip-unschedule", "trip-payments-clear"):
+                  "trip-unschedule", "trip-payments-clear", "trip-deltype"):
         p.add_argument("man", nargs="?", default="", help="the manifest, e.g. MAN-01000001")
+        if name == "trip-deltype":
+            p.add_argument("type", help="STANDARD, NEXT DAY or EMERGENCY")
+            p.add_argument("--commit", action="store_true", help="set it (his go-ahead)")
+            p.add_argument("--near-start", action="store_true", help="he has said yes inside 80 min of its start")
         if name == "trip-unschedule":
             p.add_argument("--line", help="only this order line (default: every one on the trip)")
         if name in ("trip-unschedule", "trip-payments-clear"):
@@ -1911,6 +2494,42 @@ def _args(name):
             p.add_argument("--near-start", action="store_true",
                            help=f"he has said yes although it starts within {NEAR_START} min")
         p.add_argument("--order", help="find it by an order line's Customer Ref instead")
+    elif name == "order-services":
+        p.add_argument("ref", help="the line")
+        p.add_argument("--add", action="append", help="a service code to add, e.g. NIGHT, SAT, SUN, HIAB (repeatable)")
+        p.add_argument("--remove", action="append", help="a service code to take off (repeatable)")
+        p.add_argument("--modify", action="store_true", help="the line is scheduled: open it anyway (CTMS asks)")
+        p.add_argument("--commit", action="store_true", help="change and save it (his go-ahead)")
+    elif name == "trip-services":
+        p.add_argument("man", nargs="?", default="", help="the manifest")
+        p.add_argument("--order", help="find the manifest by an order line instead")
+        p.add_argument("--remove", action="append", help="a service code to take off the trip (repeatable)")
+        p.add_argument("--commit", action="store_true", help="take them off (his go-ahead)")
+    elif name == "trip-trailer":
+        p.add_argument("man", help="the manifest, e.g. MAN-01000001")
+        p.add_argument("code", help="the trailer type code, e.g. NR_TROM_80FT")
+        p.add_argument("--order", help="find the manifest by an order line instead")
+        p.add_argument("--commit", action="store_true", help="set it (his go-ahead)")
+        p.add_argument("--near-start", action="store_true", help="he has said yes inside 80 min of its start")
+    elif name == "trip-apply":
+        p.add_argument("ref", help="the UNSCHEDULED line, showing in Planning's order well")
+        p.add_argument("man", help="the manifest to put it on")
+        p.add_argument("--commit", action="store_true", help="apply it (his go-ahead)")
+        p.add_argument("--near-start", action="store_true", help="he has said yes inside 80 min of its start")
+    elif name == "order-deltype":
+        p.add_argument("ref", help="an UNSCHEDULED line")
+        p.add_argument("type", help="STANDARD, NEXT DAY or EMERGENCY")
+        p.add_argument("--commit", action="store_true", help="set and save it (his go-ahead)")
+    elif name == "order-copy":
+        p.add_argument("ref", help="the line to copy, e.g. 1234567-1-1_S2")
+        p.add_argument("--collect", required=True, help='"DD/MM/YY HH:MM - HH:MM" (or with a second date)')
+        p.add_argument("--deliver", required=True, help='"DD/MM/YY HH:MM - HH:MM"')
+        p.add_argument("--copies", type=int, default=1, help="how many copies (CTMS's No of Orders is this + 1)")
+        p.add_argument("--commit", action="store_true", help="make the copy (his go-ahead)")
+    elif name == "order-cancel":
+        p.add_argument("ref", help="one line, e.g. 1234567-2-1 (every line is its own order)")
+        p.add_argument("--restore", action="store_true", help="restore a cancelled line instead")
+        p.add_argument("--commit", action="store_true", help="really cancel / restore it (his go-ahead)")
     elif name == "order-qty":
         p.add_argument("ref", help="the line, e.g. 1234567-1-1_S4")
         p.add_argument("qty", type=int, help="the line's new quantity")
@@ -1932,6 +2551,8 @@ def _args(name):
         p.add_argument("ref", help="the line, e.g. 1234567-1-1")
         p.add_argument("note", help='e.g. "Emailed DO 24/11" (" - " is put in front if missing)')
         p.add_argument("--commit", action="store_true", help="save it (his go-ahead: contact notes always have it)")
+        p.add_argument("--modify", action="store_true", help="a booked line (the Run won't open one): done here, "
+                                                             "the Ctrl+End way")
     elif name == "order-update":
         p.add_argument("refs", nargs="+", help="the lines, e.g. 1234567-1-1 1234567-2-1")
         p.add_argument("--collect", help='"DD/MM/YY HH:MM - HH:MM" (or with a second date)')
