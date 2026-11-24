@@ -29,6 +29,19 @@
     // the vite dev server - a SW pinning dev assets makes HMR hell.
     if ('serviceWorker' in navigator && location.port !== '5173') {
       addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+      // A phone's home-screen app is resumed, not reloaded (24/11: an iPhone kept the old desk after a deploy, with no
+      // Phone alerts in it). Brought back to the front, it asks for a newer worker; when one takes over - the worker
+      // skips waiting and claims every page - the desk reloads once onto the new version.
+      const had = !!navigator.serviceWorker.controller;
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (had && !reloaded) { reloaded = true; location.reload(); }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+        }
+      });
     }
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />

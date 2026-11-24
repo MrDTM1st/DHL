@@ -530,3 +530,12 @@ if __name__ == "__main__":
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     _httpd.shutdown()
     sys.exit(1 if failed else 0)
+
+
+def test_the_desk_and_its_service_worker_are_never_kept_stale_by_a_phone():
+    """24/11: an iPhone kept the old desk after a deploy (no Phone alerts in it). The page and the worker both say
+    no-cache, so a phone asks again each time it opens the desk."""
+    for path in ("/", "/sw.js"):
+        with _op.open(BASE + path, timeout=5) as r:
+            assert r.status == 200 or path == "/sw.js"
+            assert r.headers.get("Cache-Control") == "no-cache", (path, dict(r.headers))
