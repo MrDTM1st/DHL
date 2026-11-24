@@ -1761,6 +1761,16 @@ class Booking:
         self.stage("the date")
         lines = self.lines(orders, date)
         if not lines:
+            # a night delivery pressed by the day it ENDS (his 24/11: 30/11 23:30 - 01/12 01:30, pressed for 01/12, went
+            # looking on 01/12 and blamed the filters): it is on this day's schedule, its Deliver column on the evening
+            # before - booked as that day, the one it starts on, as the rule book has it
+            before = (datetime.strptime(date, "%d/%m/%Y") - timedelta(days=1)).strftime("%d/%m/%Y")
+            lines = self.lines(orders, before)
+            if lines:
+                self.said.append(f"{' / '.join(orders)} delivers overnight from the evening of {before}: booked as "
+                                 f"{before}, the day it starts")
+                date = before
+        if not lines:
             ahead = (datetime.strptime(date, "%d/%m/%Y") + timedelta(days=1)).strftime("%y%m%d")
             self.set_day(ahead)            # a night delivery sits on the next day's schedule, past the well's To
             lines = self.lines(orders, date)

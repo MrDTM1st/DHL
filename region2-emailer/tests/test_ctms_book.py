@@ -1383,6 +1383,15 @@ def test_a_list_row_only_counts_on_the_screen():
     assert B.list_row(els, "nr_artic_fl")["at"][1] == 233
 
 
+def test_a_night_delivery_pressed_by_the_day_it_ends_is_booked_by_the_day_it_starts():
+    """His 24/11: 23:30 on the 30th to 01:30 on the 1st, pressed for the 1st - it went looking on the 1st, found nothing
+    and blamed the filters. It is booked as the 30th, the day it starts, and says so."""
+    ctms = FakeCtms([_row("9100001-1-1", deliver="30/11/26 23:30")], sched="261201", to="261201")
+    job = _book(ctms, date="01/12/2026")
+    assert job.trips and job.trips[0]["status"] == "ACCEPTED", job.said
+    assert any("delivers overnight from the evening of 30/11/2026" in s for s in job.said), job.said
+
+
 def test_a_night_delivery_sits_on_the_next_days_schedule():
     assert B.sched_for_delivery("06/11/26 08:30") == "261106"
     assert B.sched_for_delivery("07/11/26 23:30") == "261108"
