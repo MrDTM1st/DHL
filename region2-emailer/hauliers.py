@@ -121,6 +121,13 @@ _OVERRIDES = {
     # do_not_use takes them out of recommend() and off the dashboard, and
     # stand_down skips them, so they are not even told a job went elsewhere.
     "a. rhodes": {"do_not_use": True},
+    # ARS: "stop contacting [their contact] about Rails because [they] only
+    # do log grabs so that's more of recycling not new Rails" - the planner,
+    # 05/10/2026. ARS said the same on 02/10 ("We only have a log grab hiab
+    # for scrap"). The contact sheet lists HIABs, bags and 60ft flats, so they
+    # kept being picked for new rails and sleepers. Recycling / scrap only.
+    "ars (sot)": {"caps": ["Recycling", "Log Grab", "Bulker"],
+                  "note": "Log grab for scrap / recycling only - not new rails, sleepers or bags"},
     # "We rarely use AHT logistics. So although they're a tier one, put them
     # below all the other tier ones, because, you know, we just don't really
     # use them" - Delali, 01/11/2026. Still tier 1 - above every tier 2 - but

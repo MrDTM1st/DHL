@@ -189,7 +189,7 @@ def test_an_afternoon_delivery_asks_which_day_to_collect():
 def test_what_cannot_be_typed_safely_is_left_for_him():
     two = dict(_rec("9100077", "05/11/2026"), collections=[{"pc": "A"}, {"pc": "B"}])
     p = P.plan([_item("9100077")], [two], _found("9100077", "05/11/2026"))[0]
-    assert p["status"] == "held" and any(c["field"] == "collect" and "2 pick-ups" in c["why"] for c in p["checks"])
+    assert p["status"] == "ready" and "collect" not in p["set"] and any("2 separate pick-ups" in x for x in p["explain"])   # his 02/11: left for the split
     p = P.plan([_item("9100079")], [_rec("9100079", "05/11/2026")],
                _found("9100079", "05/11/2026", "SCHEDULED"))[0]
     assert p["status"] == "done"                                        # CTMS has nothing left to update
@@ -466,6 +466,18 @@ def test_no_site_contact_in_the_reply_means_the_sender_on_the_sheets_name_and_nu
     p = P.plan([_item("9100086")], [rec], _found("9100086", "05/11/2026"))[0]
     c = next(c for c in p["checks"] if c["field"] == "contact")
     assert p["status"] == "held" and "No number for Jo Colleague" in c["why"] and c["text"]
+
+
+def test_a_line_split_off_an_order_is_planned_from_its_own_record_and_line():
+    """One order, two records on two days (part of an order went to another site): the item for the second goes
+    by its own reply's day, and a ref on it keeps the update to that one line (his 06/11)."""
+    doncaster = _rec("9100200", "20/11/2026", offloading={"value": "SITE/NONE", "confidence": "high"})
+    split = _rec("9100200", "12/11/2026", offloading={"value": "HIAB", "confidence": "high", "raw": "yes"})
+    found = {"9100200|20/11/2026": {"lines": [{"ref": "9100200-1-1", "status": "UNSCHEDULED", "deliver_by": "20/11/26 12:00"},
+                                              {"ref": "9100200-2-1", "status": "UNSCHEDULED", "deliver_by": "20/11/26 12:00"}]}}
+    item = _item("9100200", ref="9100200-1-1", details={"details": split["details"]})
+    p = P.plan([item], [doncaster, split], found)[0]
+    assert p["lines"] == ["9100200-1-1"] and p["set"]["deliver"].startswith("12/11/26"), p
 
 
 # ---- his 10/11: each line on what fits its own load; 45 ft short rails on a 40ft artic -----------------------------------

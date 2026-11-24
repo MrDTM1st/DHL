@@ -321,6 +321,8 @@ def plan_update(it, rec, found):
     # -- its lines in CTMS, from the last look-up
     every = it.get("orders") or [order]
     lines = _lines_for(found, every, date or _day(rec.get("delivery_date")))
+    if lines is not None and it.get("ref"):     # an item for ONE line of an order (his 06/11: a -1-1 line split off)
+        lines = [ln for ln in lines if ln.get("ref") == it["ref"]]
     look_up = lines is None            # what only CTMS can say is read when the run starts, never asked for
     if lines is not None and not lines:
         return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
@@ -330,6 +332,8 @@ def plan_update(it, rec, found):
     # details are in) - a reply seen again, or a later one, is held for him rather than typed over what CTMS has
     # (his 02/11 "yeah, fix it": the 01/11 repeats of 7116527/8 would have lost a second contact from the comment)
     already = _veh_set(found, every)
+    if it.get("ref"):                    # an item for one line looks at that line alone
+        already = [r for r in already if r == it["ref"]]
     if already:
         pick = answers.get("already")
         if pick == TICK_OFF:
@@ -549,10 +553,14 @@ def plan_update(it, rec, found):
             explain.append("The 80ft artic needs an escort (your rule) - ESCORTS added")
     # -- the collection: a morning delivery the day before in yard hours, never on a weekend
     colls = rec.get("collections") or []
-    if len(colls) != 1:
+    if len(colls) > 1:     # several pick-ups (his 02/11): the order is updated on its earliest day, the collection left
+        #                    for the booking split - each pick-up on the record keeps its own date for it
+        dates = sorted({c.get("date") for c in colls if c.get("date")})
+        explain.append(f"{len(colls)} separate pick-ups" + (f" ({', '.join(dates)})" if dates else "") +
+                       " - delivery on the earliest day, the collection left for the booking, which splits it (your rule)")
+    elif len(colls) != 1:
         checks.append({"field": "collect", "label": "Collection", "quote": "", "options": [], "text": False,
-                       "why": f"{len(colls)} pick-ups - do the collection by hand" if colls else
-                              "No collection on the record - do it by hand"})
+                       "why": "No collection on the record - do it by hand"})
     elif date and start:
         yard0, yard1 = _hm(colls[0].get("from")), _hm(colls[0].get("to"))
         when = answers.get("collect")
@@ -688,18 +696,21 @@ def plan_services(it, found):
 
 def plan(items, records, found):
     """The run plan for every open to-do item, oldest first."""
-    by_order = {}
+    by_order, by_day = {}, {}
     for r in records:
         if r.get("kind", "delivery") == "delivery":
             for o in r.get("orders") or []:
                 by_order.setdefault(str(o), r)
+                by_day.setdefault((str(o), str(r.get("delivery_date") or "")), r)
     out = []
     for it in items:
         if it.get("kind") == "note":
             out.append(plan_note(it))
         elif it.get("kind") == "update":
             order = str((it.get("orders") or [""])[0])
-            out.append(plan_update(it, by_order.get(order), found))
+            said = (((it.get("details") or {}).get("details") or {}).get("date") or {}).get("value")
+            # one order can have two records on two days (a line split off): the one the item's own reply is for
+            out.append(plan_update(it, by_day.get((order, str(said or ""))) or by_order.get(order), found))
         elif it.get("source") == "services" and it.get("orders") and SERVICES_ASK.match(str(it.get("what") or "")):
             out.append(plan_services(it, found))
         else:

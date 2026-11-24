@@ -13,7 +13,14 @@ sys.path.insert(0, os.path.dirname(HERE))
 import reply_kind as K  # noqa: E402
 import delivery_details as D  # noqa: E402
 
+_REAL_TODAY = D._today
 D._today = lambda: date(2026, 11, 2)                 # the day these made-up replies are written
+
+
+def teardown_module(module):
+    """Put the real day back once this file is done. Left fixed, every test file after this one (in a full pytest run)
+    saw 02/11/2026 as today - test_tracker_dates' "a day already gone never moves the order" failed only in full runs."""
+    D._today = _REAL_TODAY
 
 QUOTED = ("\r\nFrom: Delali Opoku (DHL Supply Chain) <delali.opoku@dhl.com>\r\nSent: 30 October 2026 19:41\r\n"
           "Subject: 9100200 Exampletown EX1 1AA - alternative contact needed\r\n\r\nHi,\r\n\r\nCould you point me to an "

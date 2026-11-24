@@ -216,30 +216,73 @@ def test_timing_every_two_business_days_until_they_reply():
     # a chase on Monday resets the clock - never chased on consecutive days
     mails.append(out("2026-07-13 10:00", "david.lloyd3@networkrail.co.uk", "5032847 Site", "D2"))
     assert run(r, mails, "2026-07-14 10:00")["action"] == cr.WAIT
-    assert run(r, mails, "2026-07-15 10:00")["action"] == cr.SEND      # chase #2
-    mails.append(out("2026-07-15 10:00", "david.lloyd3@networkrail.co.uk", "5032847 Site", "D3"))
-    # no limit (his rule 01/11): every 2 business days until they reply...
+    # his rule 10/11: the ask and one chase have gone unanswered - the next contact is the escalation, not chase #2
+    d = run(r, mails, "2026-07-15 10:00")
+    assert d["action"] == cr.WAIT and (d["evidence"] or {}).get("escalate") and "escalation" in d["reason"], d
+    # a supplier's collection request has no escalation to wait for: chased on as before
+    assert run(dict(r, kind="collection"), mails, "2026-07-15 10:00")["action"] == cr.SEND
+    # once escalated, no limit (his rule 01/11): every 2 business days until they reply, counted from the escalation...
+    r = dict(r, escalated_at="2026-07-15 12:05")
     assert run(r, mails, "2026-07-16 10:00")["action"] == cr.WAIT
-    assert run(r, mails, "2026-07-17 10:00")["action"] == cr.SEND      # chase #3
-    for day, eid in (("2026-07-17 10:00", "D4"), ("2026-07-21 10:00", "D5")):
+    assert run(r, mails, "2026-07-17 10:00")["action"] == cr.SEND      # chase #2
+    for day, eid in (("2026-07-17 10:00", "D3"), ("2026-07-21 10:00", "D4")):
         mails.append(out(day, "david.lloyd3@networkrail.co.uk", "5032847 Site", eid))
-    assert run(r, mails, "2026-07-23 10:00")["action"] == cr.SEND      # chase #5
+    assert run(r, mails, "2026-07-23 10:00")["action"] == cr.SEND      # chase #4
     # ...and never once the delivery day comes
     assert run(r, mails, "2026-07-24 10:00")["action"] == cr.STOP
 
 
-def test_an_order_unanswered_four_working_days_after_the_ask_is_due_escalating():
+def test_after_the_ask_and_one_chase_the_next_contact_is_the_escalation_however_far_off():
+    # his rule 10/11: "the third chase would have to be an escalation, no matter how long, no matter how far the order is"
+    r = rec(["5999849"], "someone@networkrail.co.uk", "2026-08-03 10:00", delivery="30/09/2026",    # weeks away
+            chases=1, last_emailed_at="2026-08-05 10:00", last_chased_at="2026-08-05")             # chased Wed
+    assert not cr.escalate_due(r, T("2026-08-06 10:00"))                # Thu: 1 business day since the chase
+    assert cr.escalate_due(r, T("2026-08-07 10:00"))                    # Fri: the next contact - so the escalation
+    not_chased = dict(r, chases=0, last_emailed_at="2026-08-03 10:00", last_chased_at=None)
+    assert not cr.escalate_due(not_chased, T("2026-08-07 10:00"))       # only asked: the chase comes first
+    assert cr.escalate_due(dict(r, delivery_date=""), T("2026-08-07 10:00"))         # no date needed for this one
+    assert not cr.escalate_due(dict(r, escalated_at="2026-08-07 12:05"), T("2026-08-10 10:00"))
+    assert not cr.escalate_due(dict(r, reply_at="2026-08-06 09:00"), T("2026-08-07 10:00"))
+    assert not cr.escalate_due(dict(r, kind="collection"), T("2026-08-07 10:00"))
+    assert not cr.escalate_due(dict(r, status="drafted"), T("2026-08-07 10:00"))
+    assert not cr.escalate_due(dict(r, delivery_date="06/08/2026"), T("2026-08-07 10:00"))  # its day has gone
+    # a chase sent by hand: the chase run counts it from the mailbox and leaves that on the record
+    by_hand = dict(not_chased, chase_status={"action": "WAIT", "escalate": True, "at": "2026-08-07 09:05"})
+    assert cr.escalate_due(by_hand, T("2026-08-07 10:00"))
+
+
+def test_a_chase_sent_by_hand_counts_towards_the_escalation():
+    r = rec(["5999850"], "someone@networkrail.co.uk", "2026-08-03 10:00", delivery="30/09/2026")
+    mails = [out("2026-08-03 10:00", "someone@networkrail.co.uk", "5999850 Site", "H1"),
+             out("2026-08-05 11:00", "someone@networkrail.co.uk", "RE: 5999850 Site", "H1")]    # his own chase
+    assert run(r, mails, "2026-08-06 11:30")["action"] == cr.WAIT       # 1 business day since it
+    d = run(r, mails, "2026-08-07 11:30")
+    assert d["action"] == cr.WAIT and d["evidence"] == {"escalate": True}, d
+
+
+def test_an_unanswered_order_is_due_escalating_with_four_working_days_left():
     hol = {T("2026-08-31 00:00").date()}                                # a bank holiday Monday
-    r = rec(["5032848"], "someone@networkrail.co.uk", "2026-08-26 10:00", delivery="15/09/2026")   # a Wednesday
-    assert not cr.escalate_due(r, T("2026-08-28 15:00"), hol)          # Thu, Fri: 2
-    assert not cr.escalate_due(r, T("2026-08-31 15:00"), hol)          # the holiday: still 2
-    assert not cr.escalate_due(r, T("2026-09-01 15:00"), hol)          # Tue: 3
-    assert cr.escalate_due(r, T("2026-09-02 09:00"), hol)              # Wed: 4 working days
+    r = rec(["5999848"], "someone@networkrail.co.uk", "2026-08-10 10:00", delivery="03/09/2026")   # a Thursday
+    # however long ago it was asked, it is not due until the delivery is close
+    assert not cr.escalate_due(r, T("2026-08-26 15:00"), hol)          # Thu, Fri, Tue, Wed, Thu: 5 left
+    assert cr.escalate_due(r, T("2026-08-27 09:00"), hol)              # Fri, Tue, Wed, Thu: 4 left, the holiday out
+    assert cr.escalate_due(r, T("2026-09-01 15:00"), hol)              # still due until it is dealt with
     assert not cr.escalate_due(dict(r, reply_at="2026-09-01 11:00"), T("2026-09-02 09:00"), hol)
     assert not cr.escalate_due(dict(r, escalated_at="2026-09-02 08:30"), T("2026-09-02 09:00"), hol)
     assert not cr.escalate_due(dict(r, status="drafted"), T("2026-09-02 09:00"), hol)      # never asked
     assert not cr.escalate_due(dict(r, kind="collection"), T("2026-09-02 09:00"), hol)
-    assert not cr.escalate_due(dict(r, delivery_date="02/09/2026"), T("2026-09-02 09:00"), hol)   # its day
+    assert not cr.escalate_due(r, T("2026-09-03 09:00"), hol)          # its day
+    assert not cr.escalate_due(r, T("2026-09-04 09:00"), hol)          # gone
+    assert not cr.escalate_due(dict(r, delivery_date=""), T("2026-09-01 15:00"), hol)      # no date to count from
+
+
+def test_a_short_notice_ask_gets_a_working_day_before_it_is_escalated():
+    r = rec(["5999848"], "someone@networkrail.co.uk", "2026-08-24 10:00", delivery="27/08/2026")   # Mon for Thu
+    assert not cr.escalate_due(r, T("2026-08-24 15:00"))               # the day it went
+    assert cr.escalate_due(r, T("2026-08-25 09:00"))                   # the next working day
+    fri = rec(["5999848"], "someone@networkrail.co.uk", "2026-08-21 15:00", delivery="27/08/2026")
+    assert not cr.escalate_due(fri, T("2026-08-22 10:00"))             # a Saturday is no working day
+    assert cr.escalate_due(fri, T("2026-08-24 09:00"))
 
 
 def test_remembered_reply_blocks_a_duplicate_record_and_rearm_reopens():

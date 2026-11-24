@@ -204,7 +204,7 @@ def ports():
     section("PORTS (the supervisor's single-instance locks)")
     names = {8785: "watchdog", 8786: "supervisor", 8787: "control plane",
              8788: "local agent", 8789: "cloud agent", 8790: "chase run",
-             8791: "wait-list release"}
+             8791: "wait-list release", 8793: "escalation run"}
     clash = []
     for p, what in sorted(names.items()):
         s = socket.socket()
@@ -287,6 +287,8 @@ STATE_GROUPS = [
             ("cloud.json", "Railway URL + agent key (phone access)"),
             ("qr.png", "feedback QR in the signature"),
             ("auto_chase.enabled", "switch: chasers send by themselves"),
+            ("auto_escalate.enabled", "switch: escalations send by themselves"),
+            ("_auto_escalations.json", "escalations already sent, so none goes twice"),
             ("auto_recover.enabled", "switch: daily untracked-order sweep"),
             # Not cosmetic: self_update skips any R2 UPDATE email whose id is
             # already in this ledger. Arrive without it and every update email

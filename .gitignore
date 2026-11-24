@@ -69,3 +69,12 @@ region2-emailer/_assist_push_due
 region2-emailer/_assist_judge_due
 region2-emailer/work_pc/_book_journal.jsonl
 region2-emailer/_restart_agents.flag
+
+# the desk's own runtime files and Windows/tool litter (24/11 clean-up: they sat untracked in the home checkout)
+region2-emailer/_push_due
+region2-emailer/_handover_att/
+region2-emailer/*.url
+region2-emailer/*.bak
+*.stackdump
+desktop.ini
+*.mp4

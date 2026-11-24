@@ -55,6 +55,12 @@ WEIGHT_KG = 50
 CONFIRMATION_EMAILS = ("Sophie.Robinson@networkrail.co.uk; "
                        "David.Whiston@networkrail.co.uk; "
                        "Richard.Wilkinson-Ford@networkrail.co.uk")
+# The October 2026 form fixes the delivery end: every media set goes to EMCC
+# Derby, so RHPC Admin P (D Contact Name) is now "Security Hut" on every row
+# instead of the collection contact, and AT carries the gate's What3Words. The
+# form types it with a trailing space; the value is the three words, not that.
+DELIVERY_CONTACT = "Security Hut"
+DELIVERY_NOTES = "What3Words: cars.envy.years"
 
 # The Input Sheet has 25 numbered rows but RHPC Admin only carries formulas for
 # 23 of them (rows 3..25 <- input rows 5..27). Orders 24 and 25 would be typed
@@ -74,6 +80,11 @@ EXPECTED = [
     "postcode", "delivery date", "collection time start", "collection time end",
     "product qty",
 ]
+# The October 2026 courier sheet renamed K to "Site Name - Delivery Point /
+# Contact" when the delivery end became EMCC's reception / security hut. Same
+# column, same position - only the name moved, so the new name is accepted
+# there and nowhere else.
+ALSO_ACCEPTED = {10: ("site name - delivery point / contact",)}
 
 
 def _norm(h):
@@ -142,10 +153,12 @@ def read_courier(path):
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[wb.sheetnames[0]]
     hdr = [_norm(ws.cell(row=1, column=c).value) for c in range(1, 20)]
-    if hdr != EXPECTED:
+    bad = [i for i in range(len(EXPECTED))
+           if hdr[i] != EXPECTED[i] and hdr[i] not in ALSO_ACCEPTED.get(i, ())]
+    if bad:
         wb.close()
         diff = [f"col {chr(64 + i + 1)}: expected {EXPECTED[i]!r}, found {hdr[i]!r}"
-                for i in range(min(len(hdr), len(EXPECTED))) if hdr[i] != EXPECTED[i]]
+                for i in bad]
         raise SystemExit("The courier sheet's columns are not what Media Sets expects.\n  "
                          + "\n  ".join(diff or ["column count differs"])
                          + "\nNothing written - the columns repeat names, so guessing "
@@ -214,7 +227,7 @@ def to_orders(rows, week):
             "Address 1": a1, "Address 2": a2, "Address 3": a3, "Postcode": pc,
             "Collection Date": cd,
             "collection time": ct, "collection time end": cte,
-            "Delivery Point": dsite, "D Contact Name": contact,
+            "Delivery Point": dsite, "D Contact Name": DELIVERY_CONTACT,
             "D Address 1": d1, "D Address 2": d2, "D Address 3": d3,
             "D Postcode": dpc, "D Telephone No": phone,
             "Delivery Date": dd,
@@ -229,6 +242,9 @@ def to_orders(rows, week):
             "Raised by": CONFIRMATION_EMAILS,
             "Account": ACCOUNT, "Order Type": "C",
             "Vehicle Escort": "N", "PTS": "N", "Banksman": "N", "Log Grab": "N",
+            # blank on the old form, an explicit N on the new one
+            "HIAB": "N", "Moffett": "N", "Rear Steer": "N",
+            "Notes for Delivery Location Comments": DELIVERY_NOTES,
             "Cost Centre": COST_CENTRE,
         })
     return out, problems

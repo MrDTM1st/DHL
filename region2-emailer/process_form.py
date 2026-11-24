@@ -66,6 +66,36 @@ def find_form(query):
     return None, None, None
 
 
+# The first two headers of the 47-column contract. The admin sheet is found
+# by NAME first, because every form in the corpus calls it "RHPC Admin"
+# something and that stays the fast path - then by this header, because the
+# name is not dependable. The Heavy Material Order Request Form puts the same
+# 47 columns on a tab called "DHL Upload"; the name test returned None, that
+# None was handed to Excel as a sheet index, and the run died on the first
+# form of a template nobody had seen before. A header cannot be renamed
+# without breaking the upload itself, so it is the safer thing to match.
+_ADMIN_HEAD = ("customer order no", "shipment no")
+# How far down the admin tab is read. The block ends at its first blank row,
+# so this only has to clear the longest: a Project Shoot Load's row per line.
+_ADMIN_ROWS = 60
+
+
+def _pick_admin_sheet(names, row1_of):
+    """The name of the tab holding the RHPC admin row, or None."""
+    for n in names:
+        if str(n).strip().lower().startswith("rhpc admin"):
+            return n
+    for n in names:
+        try:
+            got = [str(v).strip().lower() for v in (row1_of(n) or [])[:2]
+                   if v is not None]
+        except Exception:
+            continue
+        if tuple(got) == _ADMIN_HEAD:
+            return n
+    return None
+
+
 def read_rhpc_rows(path):
     """Open the form in Excel (invisible) so its formulas evaluate, and read
     the RHPC Admin rows. Falls back to cached values if Excel is unavailable."""
@@ -78,9 +108,12 @@ def read_rhpc_rows(path):
         wb = xl.Workbooks.Open(os.path.abspath(path), ReadOnly=True, UpdateLinks=0)
         try:
             names = [s.Name for s in wb.Worksheets]
-            target = next((n for n in names if n.strip().lower().startswith("rhpc admin")), None)
+            target = _pick_admin_sheet(
+                names, lambda n: wb.Worksheets(n).Range("A1:B1").Value[0])
+            if target is None:
+                raise ValueError("no admin sheet by name or header")
             sh = wb.Worksheets(target)
-            rows = sh.Range(sh.Cells(1, 1), sh.Cells(4, 60)).Value
+            rows = sh.Range(sh.Cells(1, 1), sh.Cells(_ADMIN_ROWS, 60)).Value
         finally:
             wb.Close(False)
             xl.Quit()
@@ -88,17 +121,42 @@ def read_rhpc_rows(path):
         import openpyxl, warnings
         warnings.filterwarnings("ignore")
         wbo = openpyxl.load_workbook(path, data_only=True)
-        target = next((n for n in wbo.sheetnames if n.strip().lower().startswith("rhpc admin")), None)
+        target = _pick_admin_sheet(
+            wbo.sheetnames,
+            lambda n: [c.value for c in next(
+                wbo[n].iter_rows(min_row=1, max_row=1, max_col=2))])
+        if target is None:
+            raise ValueError(
+                "No admin sheet in %s: no tab is named 'RHPC Admin*' and none "
+                "carries the 47-column header row." % os.path.basename(path))
         sho = wbo[target]
-        rows = [[c.value for c in r] for r in sho.iter_rows(min_row=1, max_row=4, max_col=60)]
+        rows = [[c.value for c in r] for r in sho.iter_rows(min_row=1, max_row=_ADMIN_ROWS, max_col=60)]
     headers = [str(h).strip() if h is not None else "" for h in rows[0]]
     out = []
-    for r in rows[2:4]:   # data rows 3 and 4 (4 = return leg, if present)
+    # The RHPC Admin templates put a spacer on row 2 and the data from row 3
+    # (row 4 being the return leg). Newer single-sheet exports put the data
+    # straight under the header, some carry more than two rows, and a PROJECT
+    # SHOOT LOAD form has a row per material LINE - twelve on a two-order load -
+    # so a fixed two-row slice dropped rows without a word. The block is read
+    # from row 2 down to its first blank row, which also keeps a stray error
+    # cell below a gap out of the upload; merge_shoot_lines then folds a shoot
+    # load's lines into one record per order. Rows are NOT filtered by order
+    # number here: a "_R" return leg has its own ref and must stay, and main()
+    # drops exact-duplicate refs.
+    for r in rows[1:]:
         d = {headers[i]: r[i] for i in range(len(headers)) if headers[i]}
-        if d.get("Customer Order No") not in (None, ""):
-            out.append(d)
+        if d.get("Customer Order No") in (None, ""):
+            if out:
+                break          # end of the block
+            continue           # the RHPC templates' spacer row
+        out.append(d)
+    out = merge_shoot_lines(out, path)
     repair_quantities(out, path)
+    repair_products(out, path)
     repair_weights(out, path)
+    repair_times(out, path)
+    repair_postcodes(out)
+    repair_phones(out)
     return out
 
 
@@ -136,12 +194,30 @@ def _leading_number(v):
     return int(n) if n == int(n) else n
 
 
+def _pallet_box(ws):
+    """(count, text) typed in this sheet's "Total Pallet QTY" box, or (None, "")
+    when it has none - left empty, the next thing along is the "Total Pallet FP"
+    label, which has no number."""
+    for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 80)):
+        for i, cell in enumerate(row):
+            if not re.search(r"total\s*pallet\s*qty", str(cell.value or ""), re.I):
+                continue
+            for nxt in row[i + 1:]:
+                if nxt.value in (None, ""):
+                    continue
+                n = _leading_number(nxt.value)
+                return (n, str(nxt.value).strip()) if n is not None else (None, "")
+    return None, ""
+
+
 def shoot_load_qty(path):
     """(count, unit_text) recovered from the input sheet, or (None, "").
 
     Read straight off the "Total Pallet QTY" box the requester typed into,
     which is the only place the real figure survives - the RHPC tab holds
-    the result of arithmetic on it, and that arithmetic is what failed.
+    the result of arithmetic on it, and that arithmetic is what failed. The
+    template's "Example" tab has a box of its own, filled with 5: an empty
+    box on the real sheet must not borrow it.
     """
     try:
         import openpyxl, warnings
@@ -150,21 +226,103 @@ def shoot_load_qty(path):
     except Exception:
         return None, ""
     for ws in wb.worksheets:
+        if ws.max_row > 200 or ws.title.strip().lower() == "example":
+            continue                      # address/reference tabs, the worked example
+        n, text = _pallet_box(ws)
+        if n is not None:
+            return n, text
+    return None, ""
+
+
+def _note_unit(d, unit):
+    """Keep the words of a typed quantity ("1 Box") in the instructions.
+
+    "1 Box" only ever existed to be multiplied, so the words are lost once the
+    number is taken. Against a Pallet_NDC line a bare 1 reads as a pallet; a
+    10kg box is a different vehicle.
+    """
+    if unit and re.search(r"[a-z]", unit, re.I):
+        instr = str(d.get("Delivery Instructions") or "").strip()
+        if unit.lower() not in instr.lower():
+            d["Delivery Instructions"] = (instr + " / " + unit).strip(" /")
+
+
+def shoot_load_lines(path, refs):
+    """A PROJECT SHOOT LOAD form's materials table, if this is one:
+    ({sales order: its number of lines}, pallets, pallets_text) - else None.
+
+    That form gives every material line its own RHPC row, and each row's
+    Product Qty is the line's "Part Pallet Count": the Total Pallet QTY box
+    shared evenly over ALL the lines (=$D$28/COUNT(...)). So an order's
+    quantity is the sum over its own lines, and every line together is the
+    box. Only a table holding this form's orders counts - the template's
+    "Example" tab carries the same table with made-up ones.
+    """
+    try:
+        import openpyxl, warnings
+        warnings.filterwarnings("ignore")
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None
+    want = {_norm_order(r) for r in refs}
+    for ws in wb.worksheets:
         if ws.max_row > 200:
             continue                      # address/reference tabs
         for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 80)):
-            for i, cell in enumerate(row):
-                if not re.search(r"total\s*pallet\s*qty",
-                                 str(cell.value or ""), re.I):
-                    continue
-                for nxt in row[i + 1:]:
-                    if nxt.value in (None, ""):
-                        continue
-                    n = _leading_number(nxt.value)
-                    if n is not None:
-                        return n, str(nxt.value).strip()
+            heads = {str(c.value or "").strip().lower(): c.column for c in row}
+            if "sales order" not in heads or "part pallet count" not in heads:
+                continue
+            lines = {}
+            for r in range(row[0].row + 1, ws.max_row + 1):
+                ref = _norm_order(ws.cell(row=r, column=heads["sales order"]).value)
+                if not ref or ref.lower() == "total":
                     break
-    return None, ""
+                lines[ref] = lines.get(ref, 0) + 1
+            if want & set(lines):
+                n, text = _pallet_box(ws)
+                return lines, n, text
+            break                         # this tab's table holds other orders
+    return None
+
+
+def merge_shoot_lines(rows, path):
+    """One record per order on a PROJECT SHOOT LOAD form, carrying its share of the pallets.
+
+    Each of the form's RHPC rows is one material line. Taken as they came,
+    an order's second and later lines were dropped as duplicate rows and the
+    order went out with ONE line's share: a two-order load of four pallets
+    over twelve lines uploaded as 0.333 of a pallet per order instead of 2.
+    The first row of each order is kept and given the order's share; the
+    rest are its other lines. With the box left empty there is nothing to
+    share, and the quantity is left BLANK - visibly missing - rather than
+    the 0 the form computes from it.
+    """
+    found = shoot_load_lines(path, [d.get("Customer Order No") for d in rows])
+    if not found:
+        return rows
+    lines, pallets, text = found
+    every = sum(lines.values())
+    out, kept = [], set()
+    for d in rows:
+        ref = _norm_order(d.get("Customer Order No"))
+        if ref not in lines:
+            out.append(d)                 # not one of the table's orders - as it was
+            continue
+        if ref in kept:
+            continue                      # another of this order's lines: in its share
+        kept.add(ref)
+        out.append(d)
+        if pallets is None:
+            d["Product Qty"] = ""
+            print(f"!! {ref}: the Project Shoot Load form's Total Pallet QTY box is empty, so "
+                  f"it gives no quantity - left BLANK, fill it in by hand.")
+            continue
+        share = round(pallets * lines[ref] / every, 3)
+        d["Product Qty"] = int(share) if share == int(share) else share
+        _note_unit(d, text)
+        print(f"   {ref}: {lines[ref]} of the {every} material line(s) on the Project Shoot "
+              f"Load form - quantity {d['Product Qty']}, its share of Total Pallet QTY {text!r}.")
+    return out
 
 
 def repair_quantities(rows, path):
@@ -185,15 +343,282 @@ def repair_quantities(rows, path):
                   f"sheet has no readable quantity - left BLANK, fill it by hand.")
             continue
         d["Product Qty"] = n
-        # "1 Box" only ever existed to be multiplied, so the words are lost
-        # once the number is taken. Against a Pallet_NDC line a bare 1 reads
-        # as a pallet; this load is a 10kg box, which is a different vehicle.
-        if unit and re.search(r"[a-z]", unit, re.I):
-            instr = str(d.get("Delivery Instructions") or "").strip()
-            if unit.lower() not in instr.lower():
-                d["Delivery Instructions"] = (instr + " / " + unit).strip(" /")
+        _note_unit(d, unit)
         print(f"   {ref}: Product Qty was an Excel error ({q}); recovered "
               f"{n!r} from the input sheet ({unit!r}).")
+
+
+_TIME_TXT = re.compile(r"^\s*(\d{1,2})\s*[:.]\s*(\d{2})\s*$")
+_CELL_REF = re.compile(r"(?:'([^']+)'|([A-Za-z0-9_ ]+))?!?\$?([A-Z]{1,3})\$?(\d{1,5})")
+_LOOKUP_ARG = re.compile(r"VLOOKUP\(\s*([^,]+),", re.I)
+_PRODUCT_COLS = ("Product / Service Code", "Product / Description")
+
+
+def typed_product(path):
+    """What the requester put in the form's product box, or "".
+
+    The admin tab's product is a VLOOKUP of that box in the form's own
+    drop-down list; this follows the formula back to the box - through a
+    plain "=G31" if there is one - rather than guessing where it sits. A form
+    has the one box, and its rows' formulas all point at it, so the first one
+    found will do: the order numbers beside them may not be readable at all
+    when Excel has not saved its own results into the file.
+    """
+    sheet, _, cols = _admin_cell_map(path)
+    col = next((cols[c] for c in _PRODUCT_COLS if c in cols), None)
+    if not (sheet and col):
+        return ""
+    try:
+        import openpyxl
+        import warnings
+        warnings.filterwarnings("ignore")
+        wf = openpyxl.load_workbook(path, data_only=False)
+        wv = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return ""
+    try:
+        m = None
+        for row in range(2, _ADMIN_ROWS + 1):
+            m = _LOOKUP_ARG.search(str(wf[sheet].cell(row=row, column=col).value or ""))
+            if m:
+                break
+        name = sheet
+        for _ in range(4):                        # the box, or a short chain of =A1 hops to it
+            hit = _CELL_REF.search(m.group(1)) if m else None
+            if not hit:
+                return ""
+            q, bare, c, r = hit.groups()
+            name = (q or bare or name).strip()
+            if name not in wf.sheetnames:
+                return ""
+            f = wf[name]["%s%s" % (c, r)].value
+            if isinstance(f, str) and f.startswith("="):
+                m = re.match(r"=\s*(.+)$", f)
+                continue
+            v = wv[name]["%s%s" % (c, r)].value
+            return "" if v in (None, "") or is_excel_error(v) else str(v).strip()
+        return ""
+    finally:
+        wf.close()
+        wv.close()
+
+
+def repair_products(rows, path):
+    """Replace an error-valued product with what the requester typed.
+
+    The admin tab looks the product box up in the form's own drop-down list,
+    so a product typed in rather than picked finds no row and comes back #N/A
+    - "RHTT Sandite module" on AH29/10/26YOIP - and Excel's error code went
+    out as the item. The words they typed are what they asked for, and nr_csv
+    reads a CTMS product type from them. Never invents one: with nothing in
+    the box either, the product is left BLANK, which is visibly missing.
+    """
+    for d in rows:
+        bad = [k for k in _PRODUCT_COLS if is_excel_error(d.get(k))]
+        if not bad:
+            continue
+        ref = str(d.get("Customer Order No") or "").strip()
+        typed = typed_product(path)
+        for k in bad:
+            d[k] = typed
+        if typed:
+            print(f"   {ref}: the product was an Excel error - the form's product box says {typed!r}, used that.")
+        else:
+            print(f"!! {ref}: the product is an Excel error and the form's product box is empty "
+                  f"- left BLANK, fill it in by hand.")
+
+
+def _as_clock(v):
+    """(hour, minute) if the cell holds a time Excel could not add to a date."""
+    import datetime as _dt
+    if isinstance(v, _dt.time):
+        return v.hour, v.minute
+    if isinstance(v, _dt.datetime):
+        return None                      # a real date, not a loose clock time
+    m = _TIME_TXT.match(str(v or ""))
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return (h, mi) if 0 <= h <= 23 and 0 <= mi <= 59 else None
+
+
+def formula_time(path, sheet, rownum, want_col):
+    """The clock time the form's own formula was reaching for, or None.
+
+    A time cell on the admin tab is never typed - it is the leg's date plus a
+    time taken off the human sheet, and this template stores those times as
+    TEXT with a leading space (" 08:00", straight out of its depot Lookup
+    tab). Date + text is #VALUE!, so the cell errors on every form built from
+    this template, not only the one that exposed it.
+
+    Rather than guess where the time lives, which differs per template, this
+    follows the reference the broken formula already points at. The form says
+    where its own times come from; the only thing it got wrong was the adding.
+    """
+    try:
+        import openpyxl
+        import warnings
+        warnings.filterwarnings("ignore")
+        wf = openpyxl.load_workbook(path, data_only=False)
+        wv = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None
+    try:
+        f = str(wf[sheet].cell(row=rownum, column=want_col).value or "")
+        if not f.startswith("="):
+            return None
+        for q, bare, col, row in _CELL_REF.findall(f):
+            name = (q or bare or sheet).strip()
+            if name not in wv.sheetnames:
+                continue
+            try:
+                cell = wv[name]["%s%s" % (col, row)]
+            except Exception:
+                continue
+            hit = _as_clock(cell.value)
+            if hit:
+                return hit
+        return None
+    finally:
+        wf.close()
+        wv.close()
+
+
+def _admin_cell_map(path):
+    """(sheet name, {order ref: row}, {header: column}) for the admin tab."""
+    try:
+        import openpyxl
+        import warnings
+        warnings.filterwarnings("ignore")
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None, {}, {}
+    try:
+        sheet = _pick_admin_sheet(
+            wb.sheetnames,
+            lambda n: [c.value for c in next(
+                wb[n].iter_rows(min_row=1, max_row=1, max_col=2))])
+        if sheet is None:
+            return None, {}, {}
+        ws = wb[sheet]
+        cols = {}
+        for c in range(1, min(ws.max_column, 60) + 1):
+            h = str(ws.cell(row=1, column=c).value or "").strip()
+            if h:
+                cols.setdefault(h, c)
+        rownum = {}
+        for r in range(2, min(ws.max_row, 10) + 1):
+            ref = _norm_order(ws.cell(row=r, column=1).value)
+            if ref:
+                rownum.setdefault(ref, r)
+        return sheet, rownum, cols
+    finally:
+        wb.close()
+
+
+def repair_times(rows, path):
+    """Rebuild an error-valued time cell from the date and the form's own cell.
+
+    Never invents a window: a time that cannot be recovered is left BLANK, and
+    to_transform_row then applies the usual unconfirmed 09:01-17:01, which is
+    visibly ours rather than a number nobody wrote.
+    """
+    import datetime as _dt
+    legs = (("collection_time", "Collection Date"),
+            ("collection_time_end", "Collection Date"),
+            ("delivery_time", "Delivery Date"),
+            ("delivery_time_end", "Delivery Date"))
+    sheet, rowmap, cols = None, {}, {}
+    looked = False
+    for d in rows:
+        ref = str(d.get("Customer Order No") or "").strip()
+        for field, datekey in legs:
+            bad = d.get(field)
+            if not is_excel_error(bad):
+                continue
+            if not looked:
+                sheet, rowmap, cols = _admin_cell_map(path)
+                looked = True
+            r = rowmap.get(_norm_order(ref))
+            got = (formula_time(path, sheet, r, cols[field])
+                   if sheet and r and field in cols else None)
+            if not got:
+                d[field] = ""
+                print("!! %s: %s is an Excel error (%r) and the form has no "
+                      "readable time behind it - left BLANK, the unconfirmed "
+                      "window will be used." % (ref, field, bad))
+                continue
+            base = d.get(datekey)
+            if not isinstance(base, _dt.datetime):
+                ds, _ = _dt_parts(base)
+                base = _dt.datetime.strptime(ds, "%d/%m/%Y") if ds else None
+            if base is None:
+                d[field] = ""
+                print("!! %s: %s recovered %02d:%02d but the leg has no date - "
+                      "left BLANK." % (ref, field, got[0], got[1]))
+                continue
+            d[field] = base.replace(hour=got[0], minute=got[1])
+            print("   %s: %s was an Excel error; recovered %02d:%02d from the "
+                  "form's own cell." % (ref, field, got[0], got[1]))
+
+
+_PC_RE = re.compile(r"^([A-Z]{1,2}\d[\dA-Z]?)\s*(\d[A-Z]{2})$")
+
+
+def repair_phones(rows):
+    """Put back the leading zero Excel drops when a phone is typed as a number.
+
+    A requester who types 07700900263 into an unformatted cell leaves Excel
+    holding the number 7700900263, and the zero is gone before this code ever
+    sees it. Twelve records in the reference corpus are already 10 digits
+    starting with 7, so this has been going out for a while: the haulier gets
+    a number that will not dial, and rings nobody at the delivery site.
+
+    Deliberately narrow. A UK number is 10 or 11 digits WITH its zero, so a
+    bare 10-digit value is one short and the missing digit can only be the
+    zero. Anything else is left exactly as typed.
+    """
+    for d in rows:
+        ref = str(d.get("Customer Order No") or "").strip()
+        for field in ("Telephone No", "D Telephone No", "Order Contact No"):
+            v = d.get(field)
+            if v in (None, ""):
+                continue
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)
+            t = str(v).strip()
+            if not t.isdigit() or len(t) != 10 or t.startswith("0"):
+                d[field] = t
+                continue
+            d[field] = "0" + t
+            print("   %s: %s %r is 10 digits - read as %r (Excel stripped the "
+                  "leading zero)." % (ref, field, t, d[field]))
+
+
+def repair_postcodes(rows):
+    """Fix a letter O typed for the zero in a postcode's inward half.
+
+    The inward half is ALWAYS digit-letter-letter, so an O in first position
+    cannot be a letter - "WS10 OLH" is Bescot Yard's WS10 0LH. Left alone it
+    reaches the haulier as the delivery address and is not a real postcode,
+    so a sat-nav drops the driver wherever the outward code lands.
+    """
+    for d in rows:
+        ref = str(d.get("Customer Order No") or "").strip()
+        for field in ("Postcode", "D Postcode"):
+            raw = str(d.get(field) or "").strip().upper()
+            if not raw or _PC_RE.match(raw):
+                continue
+            fixed = re.sub(r"O(?=[A-Z]{2}$)", "0", raw)
+            m = _PC_RE.match(fixed)
+            if m:
+                d[field] = "%s %s" % (m.group(1), m.group(2))
+                print("   %s: %s %r is not a postcode - read as %r (a letter O "
+                      "cannot start an inward code)."
+                      % (ref, field, raw, d[field]))
+            else:
+                print("!! %s: %s %r is not a valid postcode - CHECK BY HAND "
+                      "before this goes to a haulier." % (ref, field, raw))
 
 
 def fmt_dt(v):
@@ -203,6 +628,12 @@ def fmt_dt(v):
     must come out EMPTY, never '30/12/1899 00:00' in the upload."""
     import datetime as _dt
     if v is None or v == "":
+        return ""
+    # An error cell has no time in it. Left to the fallthrough below it came
+    # out as the text "#VALUE!" (or "-2146826273" under COM) and landed in a
+    # time column of the upload, where nothing downstream reads it as absent.
+    # Blank is what the window defaults in to_transform_row are waiting for.
+    if is_excel_error(v):
         return ""
     if isinstance(v, _dt.datetime):
         return "" if v.year < 1990 else v.strftime("%d/%m/%Y %H:%M")
@@ -253,6 +684,13 @@ def _dateonly_window(a, b):
     import datetime as _dt
     mid = lambda v: (isinstance(v, _dt.datetime) and v.year >= 1990
                      and (v.hour, v.minute) == (0, 0))
+    # A leg whose START is gone and whose END is a bare midnight is just as
+    # unstated as a midnight-to-midnight pair. That is what a blank closing
+    # time looks like once the opening time has been discarded as an error,
+    # and the map record read "latest 00:00" - a delivery deadline nobody set,
+    # sitting next to a CSV that had correctly used the unconfirmed window.
+    if a in (None, "") and mid(b):
+        return True
     return mid(a) and (b in (None, "") or (mid(b) and b == a))
 
 
@@ -268,6 +706,15 @@ def to_transform_row(d):
         r["collection time"] = r["collection time end"] = ""
     if nr_csv.unstated_window(d.get("delivery_time"), d.get("delivery_time_end")):
         r["delivery time"] = r["delivery time end"] = ""
+    # A close left blank is no close, whatever midnight it reads as. See
+    # nr_csv.unstated_close. The rules for a start with no end take it from there.
+    for k in ("collection time", "delivery time"):
+        if nr_csv.unstated_close(r[k], r[k + " end"]):
+            r[k + " end"] = ""
+    # One date on the form and two times, so a night window closes on the next
+    # day. See nr_csv.roll_overnight.
+    r["collection time end"] = nr_csv.roll_overnight(r["collection time"], r["collection time end"])
+    r["delivery time end"] = nr_csv.roll_overnight(r["delivery time"], r["delivery time end"])
     # Delali (24/07): "if you ever get one where there is no delivery time,
     # just put nine to five so when I upload it the system recognizes it."
     # Only the WINDOW is invented - the date comes from the leg's own date
@@ -290,8 +737,17 @@ def to_transform_row(d):
         if base:
             # Default the delivery off THIS job's collection window (+1h01m),
             # which is what the real database does - not off a fixed pair.
-            r["delivery time"], r["delivery time end"] = nr_csv.unconfirmed_window(
-                base, (r["collection time"], r["collection time end"]))
+            ct, cte = r["collection time"], r["collection time end"]
+            r["delivery time"], r["delivery time end"] = nr_csv.unconfirmed_window(base, (ct, cte))
+            # With no collection end the default is the fixed pair, which can land
+            # before a collection that starts after 09:01. Those times are ours, so
+            # work them from the collection instead of asking the requester why.
+            if ct and not cte and nr_csv.dated(r["delivery time"]) and nr_csv.dated(ct) and nr_csv.dated(
+                    r["delivery time"]) < nr_csv.dated(ct):
+                r["delivery time"], r["delivery time end"] = nr_csv.unconfirmed_window(
+                    base, (ct, nr_csv.close_window(ct)))
+            r["delivery time"], r["delivery time end"] = nr_csv.after_collection(
+                r["delivery time"], r["delivery time end"], ct)
     # A window with a start but no end used to be closed at the fixed 17:01,
     # which put the delivery marker on collection windows and turned a 22:00
     # start into an end earlier than itself. See nr_csv.close_window.
@@ -307,6 +763,27 @@ def to_transform_row(d):
         r["delivery time end"] = nr_csv.slot_window_end(r["delivery time"])
     r["Account"] = account_for(d)   # preset account wins; else NRADHOC
     return r
+
+
+def window_notes(d, tr):
+    """What the toolkit decided about a leg's dates, for the run's output: every route that builds an upload
+    prints these. The date a night window closes on is ours, so it says so. One still ending before it starts
+    was not a night shift, and needs a person."""
+    out = []
+    ref = d.get("Customer Order No")
+    for lbl, k in (("collection", "collection time"), ("delivery", "delivery time")):
+        s, e = nr_csv.dated(tr.get(k)), nr_csv.dated(tr.get(k + " end"))
+        if s and e and e < s:
+            out.append(f"!! {ref}: {lbl} window ends before it starts ({tr[k]} to {tr[k + ' end']}) "
+                       "- CHECK BY HAND before uploading.")
+        elif s and e and e.date() > s.date():
+            out.append(f"NOTE {ref}: {lbl} window runs past midnight - closes {tr[k + ' end']} in the CSV.")
+    day, _ = _dt_parts(d.get("Delivery Date"))
+    s = nr_csv.dated(tr.get("delivery time"))
+    if day and s and s.strftime("%d/%m/%Y") != day:
+        out.append(f"NOTE {ref}: the form says delivery {day}, but with no time and a collection that runs "
+                   f"into the night it goes up as {s:%d/%m/%Y} - the map still shows {day}.")
+    return out
 
 
 # ---------- dashboard map record ----------
@@ -384,6 +861,11 @@ def _leg_dates(d):
         ct1 = ct2 = ""
     if _dateonly_window(dtk, dtke):
         dt1 = dt2 = ""
+    # the same blank close the CSV leaves out: a haulier must not read "12:00 - 00:00"
+    if nr_csv.unstated_close(ctk, ctke):
+        ct2 = ""
+    if nr_csv.unstated_close(dtk, dtke):
+        dt2 = ""
     return (cdate or cd2, {"earliest": ct1, "latest": ct2},
             ddate or dd2, {"earliest": dt1, "latest": dt2})
 
@@ -671,6 +1153,8 @@ def main():
         if defaulted:
             print(f"NOTE {d.get('Customer Order No')}: {' & '.join(defaulted)} time not set on the "
                   f"form - defaulted to 09:00-17:00 in the CSV (correct in CTMS if wrong).")
+        for line in window_notes(d, tr):
+            print(line)
         if missing:
             print(f"!! {d.get('Customer Order No')}: {' & '.join(missing)} has NO DATE on the form "
                   f"at all - times are BLANK in the CSV; fill in before uploading.")

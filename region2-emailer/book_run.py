@@ -371,8 +371,10 @@ def words(greet, carrier, haulier, date, trips, rec, thanks=False):
     n = len(mans)
     last = f"Here is the ref number {mans[0]}" if n == 1 else (
         f"It will come on {LORRIES.get(n, n)} lorries. Here are the ref numbers: {and_list(mans)}")
+    import pickup_split
+    split = pickup_split.note(rec, date)          # several pick-ups / days: the site is told (his rule 02/11)
     return (f"Hi {greet or 'there'},<br><br>{'Thanks. ' if thanks else ''}This order has been arranged with {who} for {day}"
-            + (f", {when}" if when else "") + f". {last}<br><br>")
+            + (f", {when}" if when else "") + f". {last}<br><br>" + (f"{split}<br><br>" if split else ""))
 
 
 def _addresses(mail):
@@ -1105,6 +1107,11 @@ def book(job, R=None, now=None):
             said.append(f"{t['manifest']} has {len(t['lines'])} lines: {t.get('took', 1)} went on from selecting them in one go"
                         + (f", the other {len(t['lines']) - t.get('took', 1)} by Apply to Trip." if t.get("took", 1) < len(t["lines"]) else "."))
     said += follow(k, R, now)
+    import pickup_split
+    split_rec = record_of(job.get("record")) or {"orders": orders}
+    if pickup_split.is_split(split_rec):     # the order is split by day: this day's own comment goes on what was made
+        said.append("Split order: " + (pickup_split.note(split_rec, job["date"]) or "one day") + " By hand: change the comment "
+                    f"on the order made for {job['date']} to read that day only ({pickup_split.short(job['date'])}).")
     e = J.get(k) or {}
     out.update(ok=True, said=" ".join(said), email=bool(((e.get("steps") or {}).get("site_email") or {}).get("ok")),
                total=round(time.time() - t0, 1))

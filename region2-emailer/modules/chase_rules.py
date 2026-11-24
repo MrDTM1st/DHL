@@ -47,7 +47,10 @@ SEND, WAIT, BLOCK, HOLD, STOP = "SEND", "WAIT", "BLOCK", "HOLD", "STOP"
 MAX_CHASES = None         # no limit (his rule 01/11): "keep on following up on this person every 2 business days
                           # until they reply back" - a reply, the delivery date, a booking or a haulier asked stops it
 CHASE_AFTER_BDAYS = 2     # business days since the LAST email to them (ask or chase)
-ESCALATE_BDAYS = 4        # no reply this many working days after the first ask: escalate (his rule 01/11)
+ESCALATE_DAYS_LEFT = 4    # no reply with this many working days left to the delivery: escalate (his rule 02/11)
+ESCALATE_GRACE_BDAYS = 1  # a short-notice ask gets this long to be answered first
+ESCALATE_AFTER_CHASES = 1  # his rule 10/11: the ask, ONE chase, and the next contact is the escalation - however far
+                           # off the delivery ("the third chase would have to be an escalation, no matter how long")
 IN_TOUCH_BDAYS = 2        # "they emailed about something else" holds this long, then lapses
 OOO_HOLD_BDAYS = 5        # an out-of-office holds this long, then chasing resumes
 OOO_LINK_HOURS = 24       # an auto-reply counts only if it answers one of OUR emails
@@ -172,10 +175,40 @@ def business_days_between(start, end, holidays=()):
     return n
 
 
+def last_contact(rec):
+    """When we last emailed them about it, as the tracker has it: the ask, a chase, or the escalation (which copies
+    them in). None when it has none of those."""
+    got = [x for x in (parse_dt(rec.get(k)) for k in ("emailed_at", "last_emailed_at", "last_chased_at",
+                                                      "escalated_at")) if x]
+    return max(got) if got else None
+
+
+def chased_out(rec, now, holidays=()):
+    """His rule 10/11: the ask and one chase have gone unanswered and the next chase would be due by now, so that
+    next contact is the escalation instead - however far off the delivery is. "If we've chased twice, so we've
+    emailed once and we then chase again ... the third chase would have to be an escalation, no matter how long, no
+    matter how far the order is."
+
+    The chases are the tracker's count (the ones the tool sent), or the chase run's own count from the mailbox - his
+    by-hand chases too - which it leaves on the record (chase_status.escalate) for the escalation to see."""
+    if (rec.get("chase_status") or {}).get("escalate"):
+        return True
+    if int(rec.get("chases") or 0) < ESCALATE_AFTER_CHASES:
+        return False
+    last = last_contact(rec)
+    return bool(last) and business_days_between(last, now, holidays) >= CHASE_AFTER_BDAYS
+
+
 def escalate_due(rec, now, holidays=()):
-    """Whether an order's site contact is due escalating - the materials team asked for another contact: asked
-    (sent, not just drafted), no reply, ESCALATE_BDAYS working days since that first ask, the delivery still ahead,
-    and not escalated already."""
+    """Whether an order's site contact is due escalating - the materials team asked for another contact. Asked (sent,
+    not just drafted), no reply, not escalated already, the delivery not gone, and either:
+
+      * the ask and one chase have gone unanswered and the next chase would be due (his rule 10/11, chased_out) -
+        whenever the delivery is, with a date or without; or
+      * ESCALATE_DAYS_LEFT working days or fewer to go until the delivery. His 02/11: "it's not 4 days when I've sent
+        the message, is 4 days left until ... the actual delivery." Counted from the delivery, so an order with no
+        date cannot be due this way. An ask sent with four days or fewer already left would be due the moment it
+        went, so it gets a working day to be answered first."""
     if rec.get("kind", "delivery") != "delivery" or rec.get("status", "sent") != "sent":
         return False
     if rec.get("reply_at") or rec.get("escalated_at"):
@@ -184,7 +217,12 @@ def escalate_due(rec, now, holidays=()):
     deliv = parse_day(rec.get("delivery_date"))
     if not asked or (deliv and deliv <= now.date()):
         return False
-    return business_days_between(asked, now, holidays) >= ESCALATE_BDAYS
+    if chased_out(rec, now, holidays):
+        return True
+    if not deliv:
+        return False
+    return (business_days_between(now, deliv, holidays) <= ESCALATE_DAYS_LEFT
+            and business_days_between(asked, now, holidays) >= ESCALATE_GRACE_BDAYS)
 
 
 def in_working_hours(now, holidays=()):
@@ -488,10 +526,17 @@ def assess(rec, mails, ctx, text_of, now):
         return _d(STOP, f"already chased {chased} time(s) - over to you")
     last = max([fr["asked"]] + [m["at"] for m in ours]
                + [x for x in (parse_dt(rec.get("last_emailed_at")),
-                              parse_dt(rec.get("last_chased_at"))) if x])
+                              parse_dt(rec.get("last_chased_at")),
+                              parse_dt(rec.get("escalated_at"))) if x])     # the escalation copies them in
     bdays = business_days_between(last, now, ctx.get("holidays", ()))
     if bdays < CHASE_AFTER_BDAYS:
         return _d(WAIT, f"last emailed {last:%d/%m %H:%M} - {bdays} business day(s) ago")
+    if (chased >= ESCALATE_AFTER_CHASES and not rec.get("escalated_at")
+            and rec.get("kind", "delivery") == "delivery"):
+        # his rule 10/11: the ask and a chase have gone - the next contact is the escalation (auto_escalate, run
+        # straight after the chasers), not another chase. WAIT, not STOP: a STOP tells the escalation to skip it.
+        return _d(WAIT, f"no reply since {fr['asked']:%d/%m %H:%M} to the ask and {chased} chase(s) - the next "
+                        "contact is the escalation to the materials team, not another chase", {"escalate": True})
     return _d(SEND, f"no reply since {fr['asked']:%d/%m %H:%M} ({bdays} business days) - "
                     f"chase #{chased + 1}")
 

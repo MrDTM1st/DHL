@@ -87,7 +87,7 @@ def push_tracker():
             site_contacts.enrich(data)
         except Exception:
             pass
-        try:   # who is due escalating: no reply 4 working days after the ask (his rule 01/11) - worked out fresh
+        try:   # who is due escalating: no reply with 4 working days left to the delivery (his rule 02/11) - worked out fresh
             from datetime import datetime
             from modules import chase_rules
             from services import BANK_HOLIDAYS
@@ -923,12 +923,20 @@ def _bg_jobs():
         # auto-chasers: OPT-IN via auto_chase.enabled (re-checked inside
         # phase2 right before sending, in case it is switched off meanwhile)
         ("chase", ["phase2.py", "chase", "send"], 10800, 1800, auto_chase_on),
+        # escalations between the chase runs (his 11/11): one held only until CTMS has been looked at today goes
+        # once the work PC's look-up lands (phase2.py escalate: auto_escalate through the Outlook gate, one job at
+        # a time, as in the chase run). Off with
+        # the automatic chasers; outside working hours it returns at once
+        ("escalate", ["phase2.py", "escalate"], 1200, 900, auto_chase_on),
         # bookings: an answer the home PC gave up waiting for looked for again, and a site / Parcel Pass email, the
         # filing or off-the-map that failed tried again a few minutes on (book_run.py retry, the booking journal).
         # Nothing is booked from here - CTMS is only asked for its own record of what it made
         ("book_retry", ["book_run.py", "retry"], 180, 600, lambda: True),
         # ad hocs whose manifest has come back leave the map
         ("adhoc_sweep", ["adhoc_booked_sweep.py", "apply"], 300, 600, lambda: True),
+        # hauliers' plain "no" replies to a ring-round go to Region 2 > Completed
+        # (05/10/2026: "so it doesn't absolutely clutter my inbox")
+        ("decline_sweep", ["decline_sweep.py", "apply"], 600, 300, lambda: True),
         # Phase 2: replies + OOO flags. Also run when monitor_tick
         # flags new mail (_phase2_due). A check after a backlog took 803s on
         # 02/10/2026, so it gets 30 minutes - a killed check saves nothing.
@@ -1134,8 +1142,10 @@ class BackgroundJobs:
         elif key == "waitlist_release":
             push_waitlist()
             low = out.lower()
-            if any(k in low for k in ("sent:", "missed", "failed")):
-                report("error" if ("missed" in low or "failed" in low) else "done",
+            # closing an entry without sending is the one outcome that takes it
+            # off the list for good - always say so
+            if any(k in low for k in ("sent:", "missed", "failed", "held -", "skipped (already handled)")):
+                report("error" if ("missed" in low or "failed" in low or "held -" in low) else "done",
                        "Wait-list auto-send ran.", tail(out, 14))
         elif key == "chase":
             # say what the automatic chaser did - or, in shadow mode, what it

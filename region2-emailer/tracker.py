@@ -119,7 +119,7 @@ def log(orders, to, name, product_codes, materials, site, postcode, delivery_dat
 
 def escalated(orders, when=None):
     """The materials team was asked for another contact for these orders: their records stop showing the escalation
-    as due (his rule 01/11: due after 4 working days without a reply). Returns how many were marked."""
+    as due (his rule 02/11: due with 4 working days left to the delivery and no reply). Returns how many were marked."""
     want = {str(o).strip() for o in orders or []}
     d = load()
     n = 0

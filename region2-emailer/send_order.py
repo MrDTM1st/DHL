@@ -635,7 +635,19 @@ def send_emails(ns, emails):
                 print(f"   attached: {os.path.basename(p)}")
             else:
                 print(f"   !! attachment missing, sending WITHOUT it: {p}")
-        m.HTMLBody = e.get("html") or e["body"]
+        # The queue is written by several producers and they do not agree on
+        # the key. waitlist stages "body"/"html"; seasonal, media_sets,
+        # upload_notice, date_query, bounce_escalate, stand_down and handover
+        # all stage "message". e["body"] therefore raised KeyError on most of
+        # them - and raised it AFTER the earlier emails in the same batch had
+        # already gone, so sending the two seasonal cover requests on 09/10
+        # left Revis sent, DEO not sent, and the queue untouched. Only
+        # checking Sent Items before the retry stopped Revis going twice.
+        text = e.get("message") or e.get("body") or ""
+        if not (e.get("html") or text.strip()):
+            print(f"   ! no body text, skipped: {e['subject']}")
+            continue
+        m.HTMLBody = e.get("html") or bd.html_from_message(text)
         if not bind_account(m, acct):
             print(f"   ! could not bind DHL account - NOT sending: {e['subject']}")
             continue

@@ -266,6 +266,15 @@ def find_dates(text, default_year=None):
             out.append(datetime(int(m.group(3) or year0), mo, int(m.group(1))).date())
         except Exception:
             continue
+    # "11th & 13th November": the first day carries no month of its own - it takes the one after the last day
+    for m in re.finditer(r"(\d{1,2})(?:st|nd|rd|th)?\s*(?:&|and|,|/|\+)\s*(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?\s*(\d{4})?", s):
+        mo = MONTHS.get(m.group(3)[:3])
+        if not mo:
+            continue
+        try:
+            out.append(datetime(int(m.group(4) or year0), mo, int(m.group(1))).date())
+        except Exception:
+            continue
     return sorted(set(out))
 
 

@@ -380,15 +380,20 @@ def fitted_tasks(o, tasks):
     return kept, why
 
 
+def dated(v):
+    """A datetime or a "dd/mm/YYYY HH:MM" window time as a datetime, None where it is neither."""
+    if isinstance(v, datetime):
+        return v
+    try:
+        return datetime.strptime(str(v).strip(), "%d/%m/%Y %H:%M")
+    except ValueError:
+        return None
+
+
 def order_windows(records):
     """[(order ref, [(leg, start, end)])] - each ORDER row's collection and
     delivery windows as datetimes, None where a time is not a date."""
-    def at(v):
-        try:
-            return datetime.strptime(str(v).strip(), "%d/%m/%Y %H:%M")
-        except ValueError:
-            return None
-    return [(r[1], [("collect", at(r[13]), at(r[14])), ("deliver", at(r[25]), at(r[26]))])
+    return [(r[1], [("collect", dated(r[13]), dated(r[14])), ("deliver", dated(r[25]), dated(r[26]))])
             for r in records if r and r[0] == "ORDER"]
 
 
@@ -678,6 +683,72 @@ def slot_window_end(startstr, hours=2):
     return end.strftime("%d/%m/%Y %H:%M")
 
 
+# A night shift is measured in hours. Past this, an end before its start is more
+# likely a slip of the keyboard than a window running over midnight.
+NIGHT_WINDOW_MAX = timedelta(hours=14)
+
+
+# The earliest a window closing on the stroke of midnight is taken at its word.
+EVENING_FROM = (18, 0)
+
+
+def unstated_close(start, end):
+    """True when a window's closing time was left blank on the form.
+
+    A blank time cell reaches us as midnight on the leg's date, so a 12:00 delivery
+    with no close reads 12:00 -> 00:00. Rolled as a night shift it would come out
+    as twelve hours to the next midnight: AH17/8/26EHEH and AH26/8/26SWRG, seen when
+    the overnight fix was run over every form on file (02/11). Every real close at
+    midnight on those forms starts at 21:00 or later; every false one at 12:00 or
+    earlier, or small hours like AH15/9/26GUKT's 01:00. The caller then treats it
+    as a start with no end, which is what it is.
+    """
+    s, e = dated(start), dated(end)
+    if s is None or e is None or s.date() != e.date() or (e.hour, e.minute) != (0, 0) or s == e:
+        return False
+    return (s.hour, s.minute) < EVENING_FROM
+
+
+def roll_overnight(startstr, endstr):
+    """The end of a window that runs past midnight, on the day it really ends.
+
+    A form has one date for a leg and two times, so a night delivery of 23:30 to
+    01:00 arrives as 07/11 23:30 -> 07/11 01:00: an end before its own beginning.
+    AH15/11/26YOYO's CSV had to be put right by hand on 30/10, and both orders of
+    AH7/11/26NECA in CTMS on 02/11.
+
+    Only the end moves, and only to the next day, and only for a window that starts
+    in the evening. 14:00 to 04:00 is an AM/PM slip, and 14:00 to 08:00 is not a
+    night shift either: they stay as they are for someone to look at rather than
+    becoming a window nobody asked for. An end on an earlier DATE is left alone too:
+    those dates were typed, and which one is wrong is the requester's call.
+    """
+    s, e = dated(startstr), dated(endstr)
+    if s is None or e is None or e >= s or e.date() != s.date() or (s.hour, s.minute) < EVENING_FROM:
+        return endstr
+    rolled = e + timedelta(days=1)
+    return rolled.strftime("%d/%m/%Y %H:%M") if rolled - s <= NIGHT_WINDOW_MAX else endstr
+
+
+def after_collection(startstr, endstr, collectstr):
+    """A defaulted delivery window, moved on a day if the default wrapped past
+    midnight and landed it before its own collection.
+
+    The default is the collection window plus 1h01m, on the clock. A 23:30
+    collection comes out at 00:31 with the date unchanged, which reads as 22h59m
+    BEFORE it collects - and date_query then asked the requester to confirm dates
+    they had never given (AH7/11/26NECA_R, 02/11). Those times are ours, so the
+    correction is too. A delivery on another date is not touched: that date came
+    from the form, and date_query's question is the right answer to it.
+    """
+    s, e, c = dated(startstr), dated(endstr), dated(collectstr)
+    if s is None or c is None or s >= c or s.date() != c.date():
+        return startstr, endstr
+    day = timedelta(days=1)
+    return ((s + day).strftime("%d/%m/%Y %H:%M"),
+            (e + day).strftime("%d/%m/%Y %H:%M") if e else endstr)
+
+
 def unconfirmed_window(datestr, base=None):
     """The delivery window to use when nobody has confirmed one.
 
@@ -705,8 +776,12 @@ def unconfirmed_window(datestr, base=None):
     b = _hhmm(base[1]) if base and len(base) > 1 else None
     if a is None or b is None:
         a, b = _hhmm(DEFAULT_BASE[0]), _hhmm(DEFAULT_BASE[1])
-    return ((d + " " + _shift(a, MARKER)).strip(),
-            (d + " " + _shift(b, MARKER)).strip())
+    start = (d + " " + _shift(a, MARKER)).strip()
+    end = (d + " " + _shift(b, MARKER)).strip()
+    # These times are ours, so an end the clock wrapped is always the next day,
+    # whatever hour the window starts at. See roll_overnight for the typed kind.
+    s, e = dated(start), dated(end)
+    return start, (e + timedelta(days=1)).strftime("%d/%m/%Y %H:%M") if s and e and e < s else end
 
 
 def _csv_safe(v):

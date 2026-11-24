@@ -28,6 +28,9 @@ COUNTRIES = {"england", "scotland", "wales", "uk", "united kingdom", "gb"}
 PC_RE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b", re.I)
 TIME_RE = re.compile(r"(\d{1,2})[:.](\d{2})\s*(?:[-‐-―~]|to)\s*(\d{1,2})[:.](\d{2})")
 DATE_RE = re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b")
+# Something trying to be a date, for a desk flag that reads as none.
+DATE_WORD_RE = re.compile(r"(?i)\b\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}/\d{1,2}\b"
+                          r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)[a-z]*\b")
 
 
 # ---------- reading the document ----------
@@ -98,19 +101,31 @@ def _after(cell, *labels):
     return ""
 
 
+def _real_date(m):
+    """Whether a DATE_RE match is a date: one separator, a real day and month, a
+    year of this century. '08.00-16' from a window of 08.00-16.00 has the shape
+    and is none of them, and 04/11/202 has lost a digit."""
+    y = int(m.group(3))
+    return (len(set(re.findall(r"[/.-]", m.group(0)))) == 1
+            and 1 <= int(m.group(1)) <= 31 and 1 <= int(m.group(2)) <= 12 and (y < 100 or 2000 <= y < 2100))
+
+
 def _first_date(text):
     """dd/mm/yyyy from anywhere in the text, as a date - or None. Two-digit
     years are this century; the forms are never historic."""
-    m = DATE_RE.search(text or "")
-    if not m:
-        return None
-    d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    if y < 100:
-        y += 2000
-    try:
-        return datetime(y, mth, d)
-    except ValueError:
-        return None
+    for m in DATE_RE.finditer(text or ""):
+        if len(set(re.findall(r"[/.-]", m.group(0)))) != 1:     # '08.00-16', out of a window
+            continue
+        d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if y < 100:
+            y += 2000
+        if not 2000 <= y < 2100:                                # a digit dropped: 04/11/202
+            return None
+        try:
+            return datetime(y, mth, d)
+        except ValueError:
+            return None
+    return None
 
 
 def _window(text):
@@ -358,7 +373,7 @@ def _cli(argv):
     return path, opts
 
 
-def apply_overrides(row, opts):
+def apply_overrides(row, opts, read_window=_window, read_date=_first_date):
     """Merge the desk-supplied fields into a parsed row. Returns what changed,
     so the run can say it out loud.
 
@@ -373,16 +388,20 @@ def apply_overrides(row, opts):
         v = opts.get(flag)
         if not v:
             continue
-        day = _first_date(v) or row[dkey]
+        start, end = read_window(v)
+        day = read_date(v)
+        if not day and start and not DATE_WORD_RE.search(v):
+            day = row[dkey]             # a time on its own keeps the job's date
         if not day:
+            # Not the job's date instead, and its window wiped: whoever typed this
+            # was correcting that date.
             print(f"!! --{flag} {v!r} has no readable date - ignored.")
             continue
-        start, end = _window(v)
         row[dkey] = day
         row[tkey] = _at(day, start) if start else None
         row[ekey] = _at(day, end) if end else None
         used.append(f"{flag} {day:%d/%m/%Y} "
-                    f"{start + '-' + end if start and end else '(no window given)'}")
+                    f"{start + '-' + end if start and end else 'from ' + start if start else '(no window given)'}")
     for flag, key, label in (("raised-by", "Raised by", "1002 raised by"),
                              ("collection-phone", "Telephone No", "collection phone"),
                              ("delivery-phone", "D Telephone No", "delivery phone")):
@@ -453,6 +472,8 @@ def main():
 
     tr = process_form.to_transform_row(row)
     records = nr_csv.transform([tr])
+    for line in process_form.window_notes(row, tr):
+        print(line)
 
     # Detection only. A backwards window here is usually the FORM's missing
     # collection date being defaulted, not the requester making a mistake, so

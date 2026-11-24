@@ -177,6 +177,8 @@ def services_owed(legs):
         if hm >= NIGHT_FROM or hm < NIGHT_TO or past_midnight:
             owed.add("NIGHT")
         for t in (start, end):
+            if t is end and t is not None and t.date() > start.date() and t.strftime("%H:%M") == "00:00":
+                continue                        # closing on the stroke of midnight never works into that day
             if t is not None and t.weekday() == 5:
                 owed.add("SATURDAY")
             if t is not None and t.weekday() == 6:

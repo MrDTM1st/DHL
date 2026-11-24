@@ -949,6 +949,8 @@ def run_chasers(ns=None, send=False, only=None):
         if dec:
             r["chase_status"] = {"action": dec["action"], "reason": dec["reason"][:200],
                                  "at": now.strftime("%Y-%m-%d %H:%M")}
+            if (dec.get("evidence") or {}).get("escalate"):
+                r["chase_status"]["escalate"] = True    # his rule 10/11: escalated next, not chased (auto_escalate)
         if r.get("id") in chased_ids and r.get("kind") == "collection":
             r["chases"] = r.get("chases", 0) + 1     # in-thread chase skips tracker.log's bump
             r["last_emailed_at"] = now.strftime("%Y-%m-%d %H:%M")
@@ -1072,6 +1074,9 @@ def main():
             and not os.path.exists(os.path.join(bd.HERE, "auto_chase.enabled"))):
         print("SKIP phase2 chase: automatic follow-ups were turned off.")
         return
+    if cmd == "escalate" and not os.path.exists(os.path.join(bd.HERE, "auto_chase.enabled")):
+        print("SKIP escalations: automatic follow-ups are turned off.")
+        return
     ns = bd.get_ns()
     if cmd == "recover":
         # slow (rebuilds each order from its extract) - runs on its own daily
@@ -1084,13 +1089,28 @@ def main():
         # phase2.py chase send [order ...] - with orders, only those are chased
         send = len(sys.argv) > 2 and sys.argv[2] == "send"
         only = {a.strip() for a in sys.argv[3:] if a.strip()} if send else None
-        run_chasers(ns, send=send, only=only or None)
+        # The timer's run only: a by-hand "chase send <order>" is about those orders alone. In a finally, so a
+        # chaser that falls over cannot cost an escalation that is due.
+        try:
+            run_chasers(ns, send=send, only=only or None)
+        finally:
+            if send and not only and os.environ.get("R2_AUTO_CHASE") == "1":
+                try:
+                    import auto_escalate
+                    auto_escalate.run(ns, send=True)
+                except Exception as e:
+                    print(f"ABORT escalations: {e}")
+    elif cmd == "escalate":
+        # escalations between the 3-hourly chase runs (his 11/11): one held only until CTMS has been looked at today
+        # goes once the work PC's look-up has landed, not at the next chase run (auto_escalate decides, as ever)
+        import auto_escalate
+        auto_escalate.run(ns, send=True)
     elif cmd == "all":
         check(ns)
         run_chasers(ns, send=False)
     else:
         print("usage: phase2.py check | chase [send] | chase shadow|live|off | "
-              "chase rearm <order> | all | learn <id> <field> <value>")
+              "chase rearm <order> | escalate | all | learn <id> <field> <value>")
 
 
 if __name__ == "__main__":

@@ -813,6 +813,26 @@ def enrol_by_hand(skipped_sent):
     return n
 
 
+def _internal_only(item):
+    """True when every recipient is a DHL colleague. Fails to False (counts as
+    contact) when the recipients can't be read, so a hiccup never un-suppresses
+    an order."""
+    try:
+        rs = item.Recipients
+        if rs.Count == 0:
+            return False
+        for k in range(1, rs.Count + 1):
+            r = rs.Item(k)
+            a = str(r.Address or "")
+            if "@" not in a or a.startswith("/"):
+                a = str(r.AddressEntry.GetExchangeUser().PrimarySmtpAddress or "")
+            if not a.lower().endswith("@dhl.com"):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def find_already_emailed(ns, order_numbers, limit=500):
     """For each order number, look in the DHL Sent Items and Drafts for a mail
     that already references it (subject or body). This catches emails you sent
@@ -844,8 +864,23 @@ def find_already_emailed(ns, order_numbers, limit=500):
                     continue   # a collection request to a supplier is NOT a delivery email
                 body = str(getattr(it, "Body", "") or "")
                 blob = subj + " " + body[:6000]
-                booked = (label == "Sent Items") and _looks_booked(subj, body)
-                ref = _booked_ref(body) if booked else ""
+                # Booking language anywhere in the body used to mark EVERY
+                # order the body mentioned as booked, with the body's first MAN
+                # attached. The daily Region 2 round-up lists forty orders and
+                # several MANs, so 10 of 10 unbooked orders came back "booked in
+                # MAN-..." - another order's ref. An order genuinely booked
+                # was handed that same wrong ref. Since the booked sweep drops
+                # booked orders from the tracker, that silently stops the
+                # chasers on everything in the list.
+                #
+                # A real booking is announced IN THREAD, so the order is named
+                # in the subject. Gating on that keeps all five genuine
+                # bookings in Sent Items, each with its OWN ref, and clears the
+                # round-up. Checked against the subject with its RE:/FW: prefix
+                # stripped, so "RE: 9100001 & 9100002" still books both.
+                maybe_booked = (label == "Sent Items") and _looks_booked(subj, body)
+                subj_bare = re.sub(r"^\s*(re|fw|fwd)\s*:\s*", "", subj,
+                                   flags=re.I)
                 eid = str(getattr(it, "EntryID", "") or "")
                 try:
                     when = (it.SentOn if label == "Sent Items"
@@ -853,9 +888,22 @@ def find_already_emailed(ns, order_numbers, limit=500):
                 except Exception:
                     when = "?"
                 to = str(getattr(it, "To", "") or "")[:40]
+                # An email only to colleagues is not contact with the site.
+                # The 16/10 handover to a colleague listed six orders still to be
+                # emailed, and the wait-list release read it as "you emailed
+                # it" and closed all six. Still allowed as a booking, which is
+                # evidence whoever it went to.
+                internal = None
                 for o in targets:
                     if o not in blob:
                         continue
+                    booked = maybe_booked and (o in subj_bare)
+                    if not booked:
+                        if internal is None:
+                            internal = _internal_only(it)
+                        if internal:
+                            continue
+                    ref = _booked_ref(body) if booked else ""
                     if o not in found:
                         found[o] = {"where": label, "when": when, "to": to,
                                     "booked": booked, "ref": ref, "entryid": eid}
@@ -943,6 +991,8 @@ def find_emailed_deliveries(ns, groups, limit=500):
                     except Exception:
                         when = "?"
                     booked = (label == "Sent Items") and _looks_booked(subj, body)
+                    if not booked and k[0] not in rcpts and _internal_only(it):
+                        continue          # a colleague told about it - not the contact
                     if k not in hit:
                         hit[k] = {"where": label, "when": when,
                                   "to": str(getattr(it, "To", "") or "")[:40],

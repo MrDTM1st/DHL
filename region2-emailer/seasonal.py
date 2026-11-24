@@ -646,8 +646,11 @@ def main():
         if nr_csv.unstated_window(o.get("delivery time"), o.get("delivery time end")):
             day = str(o.get("delivery time") or o.get("Delivery Date") or "")[:10]
             if day.strip():
+                # a close left blank reads as midnight: no base for a window (nr_csv.unstated_close)
+                cte = o.get("collection time end")
                 o["delivery time"], o["delivery time end"] = nr_csv.unconfirmed_window(
-                    day, (o.get("collection time"), o.get("collection time end")))
+                    day, (o.get("collection time"),
+                          "" if nr_csv.unstated_close(o.get("collection time"), cte) else cte))
     records = nr_csv.transform(orders)
     csv_out = outbox.path(f"NR_seasonal_{stamp}.csv")
     nr_csv.write_csv(records, csv_out)
