@@ -15,8 +15,8 @@ SRC = open(os.path.join(os.path.dirname(HERE), "build_drafts.py"), encoding="utf
 
 def test_synergy_upload_is_read_back_over_the_wait_lists_whole_lead():
     assert "SYNERGY_UPLOAD_DAYS = waitlist.LEAD_DAYS" in SRC
-    assert "find_synergy_upload(ns, days=SYNERGY_UPLOAD_DAYS" in SRC
-    assert "find_synergy_upload(ns, days=3" not in SRC
+    calls = [ln for ln in SRC.splitlines() if "find_synergy_upload(" in ln and not ln.lstrip().startswith("def ")]
+    assert calls and all("days=SYNERGY_UPLOAD_DAYS" in ln for ln in calls), calls
 
 
 if __name__ == "__main__":
