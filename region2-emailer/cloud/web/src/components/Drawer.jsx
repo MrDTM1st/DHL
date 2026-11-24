@@ -3,7 +3,7 @@ import {
   ordLabel, statusLabel, dueText, dateShort, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
   fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, omAltContact, siteContactOf, stamp, answerText,
-  emailedBack,
+  emailedBack, railDetails,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
@@ -85,7 +85,9 @@ function coverRequest(r) {
     `Collection date/time: ${collWhen}`,
     `Delivery date/time: ${when}`,
     returnLine,
-    `Materials: ${[r.materials, r.weight].filter(Boolean).join(' — ')}`,
+    `Materials: ${[r.materials, r.weight || (r.ctms_weight ? `approx ${Math.round(r.ctms_weight).toLocaleString('en-GB')} kg total (CTMS)` : '')].filter(Boolean).join(' — ')}`,
+    // rails: profile, grade, length, drilling, Zinoco or not - Gundel asked "What rails are they please" (24/11)
+    railDetails(r).length ? `Rails: ${railDetails(r).join(' + ')}` : null,
     `Vehicle: ${(() => {
       const code = (d.vehicle || {}).value || '';
       const vl = vehicleInfo(code).label;

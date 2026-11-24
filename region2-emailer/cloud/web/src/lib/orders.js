@@ -745,3 +745,31 @@ export function journeyFor(repo, leg) {
   };
 }
 
+
+// What a haulier needs to know about the RAILS on a job (his ask 24/11, after Gundel had to ask "What rails are they
+// please ... if it is NOT zinoco it can be load & go"): profile, grade, length, drilling and Zinoco or not, read off
+// the order's own CTMS product code ("RAIL SHORT, 56E1, 260 GRADE, 18.288M, UNDRILLED"). Zinoco is always IN the code
+// when it applies ("56E1, ZINOCO COATED, 18.288M" / "56E1, HP, ZINOCO, ..."), so a rail code without it is standard
+// rail. One line per distinct rail code; [] for a job with no rail on it (S&C is not rail here).
+export function railDetails(r) {
+  const out = [];
+  for (const raw of (r && r.product_codes) || []) {
+    const code = String(raw || '').toUpperCase();
+    if (!/\bRAIL\b/.test(code) || /S&C|SWITCH|CROSSING/.test(code)) continue;
+    const parts = code.split(',').map((p) => p.trim()).filter(Boolean)
+      .filter((p) => !/^RAIL(\s+RAIL)?(\s+SHORT|\s+LONG)?$/.test(p));
+    const bits = [];
+    for (const p of parts) {
+      if (/ZINOCO/.test(p)) continue;
+      const len = p.match(/^(\d+(?:\.\d+)?)\s*M$/);
+      if (len) { bits.push(`${len[1]}m`); continue; }
+      const grade = p.match(/^(\d{3})\s*GRADE$/);
+      if (grade) { bits.push(`${grade[1]} grade`); continue; }
+      bits.push(/^\d+E\d$/.test(p) ? p : p.toLowerCase());
+    }
+    bits.push(/ZINOCO/.test(code) ? 'ZINOCO coated' : 'not Zinoco');
+    const line = bits.join(', ');
+    if (!out.includes(line)) out.push(line);
+  }
+  return out;
+}
