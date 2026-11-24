@@ -3,6 +3,7 @@ import * as api from '../api.js';
 import * as theme from '../lib/theme.js';
 import { SetupPanel, SetupSteps, CODE_ZIP, BRIDGE_FOLDER } from '../components/WorkPcSetup.jsx';
 import { ToolkitSwitch } from '../components/Toolkit.jsx';
+import PushToggle from '../components/PushToggle.jsx';
 
 // Settings (his ask 03/11): kept out of the way behind the gear - updating the two PCs' code, and the work PC's setup
 // with its by-hand way. "Update the home PC" pulls main from GitHub on the home PC (home_update.py: fast-forward only,
@@ -237,6 +238,7 @@ export default function SettingsPage({ panel, status, agentOnline, onCommand, on
           <h1 className="h1">Settings</h1>
         </div>
       </div>
+      <PushToggle push={panel && panel.push} onCommand={onCommand} />
       <Toolkit toolkit={toolkit} asked={toolkitAsk} onSet={onToolkit} />
       <Appearance />
       <HomePc code={panel && panel.home_code} status={status} agentOnline={agentOnline} onCommand={onCommand} />

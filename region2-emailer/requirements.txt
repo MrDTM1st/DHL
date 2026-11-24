@@ -13,6 +13,8 @@
 #   - the local dashboard, supervisor, watchdog and agent are stdlib only
 #   - the work_pc/ CTMS tools are stdlib only, so they run before any install
 #   - Node is needed only to BUILD the React UI, and the container does that
+#   - pywebpush, for phone alerts (push_notify.py) on the HOME PC only: pip install pywebpush there.
+#     Without it nothing breaks - the alerts just aren't sent, and Settings says why
 #
 # The one thing pip cannot supply is Office: the engine drives Classic Outlook
 # over COM, and process_form.py opens ad hoc forms through Excel so the form's

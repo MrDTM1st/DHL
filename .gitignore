@@ -25,6 +25,11 @@ region2-emailer/recent/
 # --- secrets: NEVER goes to GitHub ---
 region2-emailer/cloud.json
 region2-emailer/config/team.json
+# phone alerts (push_notify.py): the VAPID key pair - its private half never leaves the home PC - and the devices
+region2-emailer/_vapid.json
+region2-emailer/_vapid.json.tmp
+region2-emailer/_push_subs.json
+region2-emailer/_push_subs.json.tmp
 
 # --- local index/state ---
 region2-emailer/order_index.json

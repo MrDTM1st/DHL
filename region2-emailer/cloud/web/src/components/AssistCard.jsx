@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { copyText } from '../lib/phone.js';
+import PushToggle from './PushToggle.jsx';
 
 // Needs you (inbox_assist.py, 23/11 - his "something like you to sit in my inbox and to notify me when things need to
 // be actioned right at that moment"): every email in the Inbox is either filed (it needs nothing from him), left for
@@ -51,7 +52,7 @@ function Item({ i, onDealt }) {
   );
 }
 
-export default function AssistCard({ data, onCommand }) {
+export default function AssistCard({ data, onCommand, push }) {
   const [gone, setGone] = useState({});
   const [allNeeds, setAllNeeds] = useState(false);
   const [openFile, setOpenFile] = useState(false);
@@ -103,6 +104,7 @@ export default function AssistCard({ data, onCommand }) {
           + (data.now ? ` · ${data.now} now` : '') : 'Nothing in the Inbox needs you'}</h3>
         <span className="noaddress-why">
           Read {data.at || 'not yet'}{data.pending ? ` · Claude still to read ${data.pending}` : ''}. {modes}
+          <span className="assist-modes"><PushToggle compact push={push} onCommand={onCommand} /></span>
         </span>
       </div>
       {claude.ok === false && (

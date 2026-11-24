@@ -503,7 +503,7 @@ export default function Dashboard({
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
 
-      <AssistCard data={panel && panel.assist} onCommand={onCommand} />
+      <AssistCard data={panel && panel.assist} onCommand={onCommand} push={panel && panel.push} />
       {!(panel && panel.assist && panel.assist.mode && panel.assist.mode !== 'off') && (
         <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
       )}
