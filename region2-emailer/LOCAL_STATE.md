@@ -81,6 +81,8 @@ pushes stay on both agents so the cloud dashboard stays fresh.
 | `waitlist.json` | far-ahead orders held until ~14 days before delivery |
 | `order_index.json` | order number → which extract contains it |
 | `_monitor_seen.json` | watermarks so the live monitor doesn't re-fire |
+| `_vapid.json` | the phone alerts' key pair (`push_notify.py`), made the first time; its private half never leaves this PC. Lost, every device has to turn alerts on again |
+| `_push_subs.json` | the devices (browser push subscriptions) that get phone alerts |
 | `_last_recover.txt`, `_heartbeat_*.txt` | last-run / liveness stamps |
 
 ### Feature switches (presence of the file = ON)

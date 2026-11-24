@@ -665,6 +665,7 @@ def push_panel():
             "rejections": _rejections(),
             "inbox": _inbox(),
             "assist": _assist(),
+            "push": _push(),
             "update_reply": _update_reply(),
             "home_code": _home_code(),
             "toolkit": _toolkit(),
@@ -698,6 +699,42 @@ def _assist():
         return inbox_assist.panel()
     except Exception:
         return {}
+
+
+def _push():
+    """Phone alerts (push_notify) - the public key a browser subscribes with and how many devices get alerts. The
+    private key and the devices stay on this PC: the cloud forgets everything on a redeploy, so this goes up each time."""
+    try:
+        import push_notify
+        return push_notify.panel()
+    except Exception:
+        return {}
+
+
+def _push_command(action, cmd):
+    """Settings / the Needs-you card's phone alerts (push_notify): a browser turned them on (push_subscribe, its
+    PushSubscription in data.sub) or off (push_unsubscribe, data.endpoint), or asked for a test (push_test).
+    -> {"ok", "said"}. Never raises: push must never take the agent down."""
+    try:
+        import push_notify
+        d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+        if action == "push_subscribe":
+            return push_notify.subscribe(d.get("sub"))
+        if action == "push_unsubscribe":
+            gone = push_notify.unsubscribe(d.get("endpoint"))
+            return {"ok": True, "said": "that device won't get alerts any more." if gone
+                    else "that device wasn't on the home PC's list."}
+        res = push_notify.notify("Test alert", "Phone alerts are working", "/")
+        sent, dropped, err = res.get("sent") or 0, res.get("dropped") or 0, res.get("error")
+        if not sent and err:
+            return {"ok": False, "said": "the test didn't go: " + err}
+        if not sent:
+            return {"ok": False, "said": "no device has alerts on" + (" any more" if dropped else "")
+                    + " - turn them on first."}
+        return {"ok": True, "said": f"test alert sent to {sent} device{'' if sent == 1 else 's'}"
+                + (f", {dropped} gone off the list" if dropped else "") + (f" ({err})" if err else "") + "."}
+    except Exception as e:
+        return {"ok": False, "said": f"the home PC couldn't do it: {e}"}
 
 
 def _judge_tick(proc):
@@ -2174,6 +2211,12 @@ def main():
                                           else "The inbox assistant didn't answer - try again."}
                 push_panel()
                 report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
+            elif action in ("push_subscribe", "push_unsubscribe", "push_test"):
+                # phone alerts (push_notify.py): turned on or off on a device, or Send a test - the keys and the list of
+                # devices live on this PC only
+                res = _push_command(action, cmd)
+                push_panel()
+                report("done" if res.get("ok") else "error", "Phone alerts: " + res.get("said", ""))
             elif action == "inbox_dealt":
                 # the inbox card's Dealt with: answered another way (a call, Teams) - it stays off unless they write again
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}

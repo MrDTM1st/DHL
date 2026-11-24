@@ -974,6 +974,9 @@ a.callbtn:hover{ color:var(--red-ink); }
 .assist-modes { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
 .assist-modes .btn.mini { padding: 2px 8px; font-size: 11px; }
 .assist-file .noaddress-said { margin: 0; }
+/* phone alerts (PushToggle, 24/11): its Settings buttons, and what went wrong beside the Needs-you card's button */
+.push-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.push-said { font-size: 12px; color: var(--red-ink); align-self: center; }
 
 /* his reply to the day's Region 2 Updates (daily_update, 11/11) */
 .upd-card { border-left-color: var(--yellow-d); }
