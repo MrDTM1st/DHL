@@ -333,3 +333,137 @@ def test_keep_and_dealt_commands(monkeypatch, tmp_path, capsys):
     assert d["items"]["a"]["kept"] and d["items"]["a"]["kind"] == "quiet" and d["items"]["b"]["state"] == "dealt"
     assert A.main(["x", "mode", "live"]) == 0 and A.load()["mode"] == "live"
     assert A.main(["x", "mode", "loud"]) == 1
+
+
+# ---------- one tap: Send (his 24/11 "Alerts + one-tap replies") ----------
+def test_a_reply_loses_the_sign_off_outlook_will_add_and_never_has_an_em_dash():
+    assert A.clean_reply("Hi Sam,\n\nYes, Monday works.\n\nKind regards") == "Hi Sam,\n\nYes, Monday works."
+    assert A.clean_reply("Hi Sam,\nYes.\nKind regards,\nPat\n\n") == "Hi Sam,\nYes."
+    assert A.clean_reply("Hi Sam,\nThanks for the update — all good.") == "Hi Sam,\nThanks for the update - all good."
+    assert A.clean_reply("Hi Sam,\nIt's booked.") == "Hi Sam,\nIt's booked."
+    assert A.clean_reply("   ") == "" and A.clean_reply(None) == ""
+
+
+def test_the_checks_before_a_one_tap_reply_goes():
+    ours = "me@example.com"
+    good = "Hi Sam,\nYes.\nKind regards\nPat Planner\nOut of Hours\n0000\n"
+    assert A.reply_checks(good, ["sam@example.net"], ours) == []
+    assert "nobody to send it to" in A.reply_checks(good, [], ours)
+    assert "DHL Road is on it" in A.reply_checks(good, ["dhlroad@example.org"], ours)
+    assert "you are on it" in A.reply_checks(good, [ours], ours)
+    assert any("signatures" in b for b in A.reply_checks("Hi Sam,\nYes.\n", ["sam@example.net"], ours))
+    assert any("signatures" in b for b in A.reply_checks(good + good, ["sam@example.net"], ours))
+    assert "an em dash crept in" in A.reply_checks(good.replace("Yes.", "Yes — fine."), ["sam@example.net"], ours)
+
+
+class _Rcpt:
+    def __init__(self, a):
+        self.Address, self.AddressEntry = a, None
+
+
+class _Rcpts:
+    def __init__(self, addrs):
+        self.l = [_Rcpt(a) for a in addrs]
+
+    @property
+    def Count(self):
+        return len(self.l)
+
+    def Item(self, i):
+        return self.l[i - 1]
+
+    def Remove(self, i):
+        del self.l[i - 1]
+
+
+class _Atts:
+    Count = 0
+
+
+class _Reply:
+    Class, Sent, CC, BCC, Subject = 43, False, "", "", "RE: Monday"
+
+    def __init__(self, addrs, html):
+        self.Recipients, self.HTMLBody, self.EntryID, self.Attachments = _Rcpts(addrs), html, "NEW1", _Atts()
+        self.sent = False
+
+    @property
+    def To(self):
+        return "; ".join(r.Address for r in self.Recipients.l)
+
+    @property
+    def Body(self):
+        import re as _re
+        return _re.sub(r"<[^>]+>", "\n", self.HTMLBody)
+
+    def Save(self):
+        pass
+
+    def Send(self):
+        self.sent = True
+
+
+def _outlook_with(reply):
+    src = types.SimpleNamespace(ReplyAll=lambda: reply)
+    items = {"E1": src, "NEW1": reply}
+    ns = types.SimpleNamespace(GetItemFromID=lambda eid, store_id=None: items[eid])
+    store = types.SimpleNamespace(StoreID="S1", GetRootFolder=lambda: None)
+    return None, ns, types.SimpleNamespace(SmtpAddress="me@example.com"), store
+
+
+SIGNED = ("<html><body><div>Kind regards<br>Pat Planner<br>Out of Hours<br>0000</div>"
+          "<div>From: Sam Asker &lt;sam@example.net&gt;</div><div>Can we do Monday?</div></body></html>")
+
+
+def _one(text="Hi Sam,\n\nYes, Monday works.\n\nKind regards"):
+    return {"items": {"x1": {"id": "x1", "eid": "E1", "state": "open", "subject": "Monday", "from": "Sam Asker",
+                             "received": "2026-11-24 10:00", "action": {"type": "reply", "text": text}}}}
+
+
+def test_one_tap_sends_to_all_but_us_and_dhl_road_then_files_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(A, "LOG", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(A, "SEEN", str(tmp_path / "seen.json"))
+    monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED1")
+    reply = _Reply(["sam@example.net", "me@example.com", "dhlroad@example.org", "jo@example.net"], SIGNED)
+    d = _one()
+    said = A.send_reply(d, "x1", outlook=_outlook_with(reply))
+    assert reply.sent and [r.Address for r in reply.Recipients.l] == ["sam@example.net", "jo@example.net"]
+    assert "Yes, Monday works." in reply.HTMLBody and reply.Body.count("Kind regards") == 1      # Outlook's, once
+    it = d["items"]["x1"]
+    assert it["state"] == "answered" and it["eid"] == "MOVED1" and it["sent_to"] == ["sam@example.net", "jo@example.net"]
+    assert "Sent to sam@example.net, jo@example.net and filed to Regions/Region 2/Completed" in said
+    assert "inbox_assist_sent" in open(tmp_path / "log.jsonl", encoding="utf-8").read()
+
+
+def test_his_edit_goes_instead_and_a_failed_check_sends_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(A, "LOG", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(A, "SEEN", str(tmp_path / "seen.json"))
+    monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED1")
+    reply = _Reply(["sam@example.net"], SIGNED)
+    A.send_reply(_one(), "x1", text="Hi Sam,\nTuesday instead, sorry.\nThanks", outlook=_outlook_with(reply))
+    assert "Tuesday instead, sorry." in reply.HTMLBody and "Monday works" not in reply.HTMLBody and reply.sent
+    unsigned = _Reply(["sam@example.net"], SIGNED.replace("Out of Hours", "Mobile"))
+    d = _one()
+    try:
+        A.send_reply(d, "x1", outlook=_outlook_with(unsigned))
+        raise AssertionError("it should not have been sent")
+    except RuntimeError as e:
+        assert "not sent, it's in Drafts" in str(e) and "0 signatures" in str(e)
+    assert not unsigned.sent and d["items"]["x1"]["state"] == "open"
+    gone = _one()
+    gone["items"]["x1"]["state"] = "dealt"
+    try:
+        A.send_reply(gone, "x1", outlook=_outlook_with(_Reply(["sam@example.net"], SIGNED)))
+        raise AssertionError("a dealt-with email should not be answered")
+    except RuntimeError as e:
+        assert "isn't on the list" in str(e)
+
+
+def test_the_card_marks_a_reply_it_can_send():
+    d = {"mode": "shadow", "items": {"x1": dict(_one()["items"]["x1"], kind="needs", urgency="today", ask="Monday?",
+                                                  cc="Jo Example", received="2026-11-24 10:00:00"),
+                                     "x2": dict(_one("")["items"]["x1"], id="x2", kind="needs", urgency="today",
+                                                ask="Call them", received="2026-11-24 10:00:00")}}
+    p = A.panel(d, now=datetime(2026, 11, 24, 11, 0))
+    by = {x["id"]: x for x in p["needs"]}
+    assert by["x1"]["sendable"] and by["x1"]["cc"] == "Jo Example" and not by["x2"]["sendable"]

@@ -31,6 +31,8 @@ marked "Dealt with" leaves the list.
     python inbox_assist.py show
     python inbox_assist.py mode off|shadow|live
     python inbox_assist.py file ID | fileall | putback ID | keep ID | dealt ID
+    python inbox_assist.py send ID [TEXTFILE]   reply to all on its thread with the suggested text (or his edit, read
+                                                from TEXTFILE), checked; sent; the email filed as answered
 
 Every command except show ends with one JSON line, {"ok": ..., "said": ...}, for the home agent.
 """
@@ -672,6 +674,98 @@ def put_back(ns, root, d, sid, now=None):
     return it
 
 
+# ---------- one tap: Send (his 24/11 "Alerts + one-tap replies") ----------
+SIGN_OFF = re.compile(r"^\s*(?:kind regards|best regards|regards|many thanks|thanks(?: again)?|best wishes|cheers)"
+                      r"[\s,.!]*$", re.I)
+
+
+def clean_reply(text):
+    """The reply as it goes out: Outlook puts his own signature under it, so the sign-off Claude wrote (and a name
+    under it) comes off; never an em dash."""
+    lines = [ln.rstrip() for ln in EM_DASH.sub(" - ", str(text or "")).replace("\r\n", "\n").split("\n")]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    for cut in (1, 2):                                    # "Kind regards" / "Kind regards" + one name line
+        if len(lines) > cut and SIGN_OFF.match(lines[-cut]) and (cut == 1 or len(lines[-1].split()) <= 3):
+            lines = lines[:-cut]
+            break
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def _smtp(recipient):
+    try:
+        u = recipient.AddressEntry.GetExchangeUser()
+        a = (u.PrimarySmtpAddress if u is not None else "") or recipient.Address
+    except Exception:
+        a = getattr(recipient, "Address", "")
+    return str(a or "").strip().lower()
+
+
+def reply_checks(mine, people, ours):
+    """What must be true of a one-tap reply before it goes - [] when it may (the checks every send of his has had)."""
+    bad = []
+    if not people:
+        bad.append("nobody to send it to")
+    if any("dhlroad" in a for a in people):
+        bad.append("DHL Road is on it")
+    if any(a == ours for a in people):
+        bad.append("you are on it")
+    if mine.count("Out of Hours") != 1:
+        bad.append(f"{mine.count('Out of Hours')} signatures above the trail, not one")
+    if "—" in mine or "–" in mine:
+        bad.append("an em dash crept in")
+    return bad
+
+
+def send_reply(d, sid, text=None, now=None, outlook=None):
+    """Reply to all on the email's own thread (ourselves and DHL Road taken off) with the suggested text - or his edit
+    of it - Outlook's signature under it and the whole trail kept; checked, sent, and the email filed to Region 2 >
+    Completed (his rule: answered = filed). A check that fails leaves the reply in Drafts, unsent, and says why."""
+    import mail_ops
+    now = now or datetime.now()
+    it = d["items"][sid]
+    if it.get("state") != "open":
+        raise RuntimeError("it isn't on the list any more")
+    body = clean_reply((it.get("action") or {}).get("text") if text is None else text)
+    if not body:
+        raise RuntimeError("there's no reply text to send")
+    app, ns, acct, store = outlook or mail_ops._outlook()
+    root = store.GetRootFolder()
+    ours = str(getattr(acct, "SmtpAddress", "") or "").lower()
+    m = ns.GetItemFromID(it["eid"], store.StoreID).ReplyAll()
+    for i in range(m.Recipients.Count, 0, -1):
+        a = _smtp(m.Recipients.Item(i))
+        if a == ours or "dhlroad" in a:
+            m.Recipients.Remove(i)
+    m.HTMLBody = mail_ops.insert_top(m.HTMLBody, mail_ops.text_to_html(body))
+    mail_ops._use_account(m, acct)
+    m.Save()
+    m = ns.GetItemFromID(str(m.EntryID), store.StoreID)
+    people = [_smtp(m.Recipients.Item(i)) for i in range(1, m.Recipients.Count + 1)]
+    full = str(m.Body or "")
+    k = re.search(r"^\s*From:", full, re.M)
+    mine = full[:k.start()] if k else full
+    bad = reply_checks(mine, people, ours)
+    if bad:
+        raise RuntimeError("not sent, it's in Drafts: " + "; ".join(bad))
+    d0 = mail_ops._describe(m)
+    mail_ops.do_send_draft(ns, acct, store, {"id": d0["id"], "fingerprint": d0["fingerprint"]})
+    filed = ""
+    try:                                                  # answered = filed (his rule), logged for Put back
+        new = _move(ns, root, it["eid"], FOLDERS[0])
+        _remember_new_id(it["eid"], new)
+        _log({"at": now.strftime("%Y-%m-%d %H:%M:%S"), "id": sid, "from": "Inbox", "to": FOLDERS[0],
+              "old_eid": it["eid"], "new_eid": new, "subject": it["subject"], "sender": it["from"],
+              "received": it["received"], "kind": "inbox_assist_sent", "by": "him"})
+        it["eid"], filed = new, f" and filed to {FOLDERS[0]}"
+    except Exception as e:
+        filed = f" (not filed: {str(e)[:60]})"
+    it.update(state="answered", sent_at=now.strftime("%Y-%m-%d %H:%M"), sent_to=people, sent_text=body[:1500])
+    return "Sent to " + ", ".join(people) + filed + "."
+
+
 # ---------- the dashboard's card ----------
 def _mins(it, now, holidays):
     t = _when(it.get("received"))
@@ -709,7 +803,10 @@ def panel(d=None, now=None):
                       "received": it["received"][8:10] + "/" + it["received"][5:7] + " " + it["received"][11:16],
                       "urgency": urgency, "ask": ask, "by_when": it.get("by_when", ""), "action": action,
                       "why": why, "by": by, "unread": it.get("unread"), "orders": it.get("orders") or [],
-                      "mins": mins, "waited": iw.waited_text(mins), "alarm": mins >= BELL_AFTER.get(urgency, 120)})
+                      "mins": mins, "waited": iw.waited_text(mins), "alarm": mins >= BELL_AFTER.get(urgency, 120),
+                      # one tap: a reply with its text can be sent from the card, to all on the thread but DHL Road
+                      "sendable": action.get("type") == "reply" and bool(clean_reply(action.get("text"))),
+                      "cc": str(it.get("cc") or "")[:200]})
     rank = {u: i for i, u in enumerate(URGENCY)}
     needs.sort(key=lambda x: (rank.get(x["urgency"], 3), -x["mins"]))
     would.sort(key=lambda x: x.get("received") or "", reverse=True)
@@ -817,6 +914,18 @@ def main(argv):
             _unlock(h)
         _touch(PUSH_DUE)
         return _say(n > 0 or not ids, f"Filed {n}." + (f" {len(failed)} not: {failed[0]}" if failed else ""))
+    if cmd == "send":
+        text = None
+        if len(argv) > 3 and argv[3]:
+            try:
+                text = open(argv[3], encoding="utf-8").read()
+            except Exception as e:
+                return _say(False, f"Your edited reply couldn't be read ({e}) - nothing sent.")
+        try:
+            out, _ = _with_item(arg, lambda d, it: send_reply(d, arg, text))
+        except Exception as e:
+            return _say(False, f"Not sent: {e}")
+        return _say(out is not None, out or "That email isn't on the list any more - nothing sent.")
     if cmd == "putback":
         try:
             ns, root = _outlook()

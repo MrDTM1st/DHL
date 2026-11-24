@@ -967,6 +967,10 @@ a.callbtn:hover{ color:var(--red-ink); }
 /* the inbox assistant (inbox_assist, 23/11): the suggested reply, the mode switch */
 .assist-reply { white-space: pre-wrap; margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: var(--seg);
   font-size: 12.5px; line-height: 1.45; color: var(--ink); }
+.assist-send { margin-top: 6px; }
+.assist-reply-edit { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line, #ccc); background: var(--seg); color: var(--ink); font: inherit; font-size: 12.5px;
+  line-height: 1.45; resize: vertical; }
 .assist-modes { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
 .assist-modes .btn.mini { padding: 2px 8px; font-size: 11px; }
 .assist-file .noaddress-said { margin: 0; }

@@ -12,12 +12,16 @@ const ACT = { reply: 'Reply', forward: 'Forward', ctms: 'In CTMS', call: 'Call',
   other: 'To do' };
 const MODE = { off: 'Off', shadow: 'Shadow', live: 'Live' };
 
-function Item({ i, onDealt }) {
+function Item({ i, onDealt, onSend }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
   const a = i.action || {};
+  // one tap (his 24/11): the suggested reply, his to change, goes to all on the thread but DHL Road, his signature under it
+  const [text, setText] = useState(a.text || '');
+  const [sending, setSending] = useState(false);
   const [label, cls] = URG[i.urgency] || URG.week;
-  const copy = () => copyText(a.text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+  const copy = () => copyText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+  const sendIt = () => { setSending(true); onSend(i, text); };
   return (
     <div className="noaddress-row">
       <div className="noaddress-what">
@@ -36,12 +40,25 @@ function Item({ i, onDealt }) {
             <b>{ACT[a.type] || 'To do'}{a.to ? ' to ' + a.to : ''}</b>{a.note ? ': ' + a.note : ''}
           </div>
         ) : null}
-        {show && a.text && <div className="assist-reply">{a.text}</div>}
+        {show && a.text && (i.sendable ? (
+          <div className="assist-send">
+            <div className="noaddress-said">
+              Reply to all: <b>{i.from}</b>{i.cc ? ' · cc ' + i.cc : ''} (never DHL Road) · your signature goes under it
+            </div>
+            <textarea className="assist-reply-edit" value={text} onChange={(e) => setText(e.target.value)}
+              rows={Math.min(10, Math.max(4, text.split('\n').length + 1))} />
+          </div>
+        ) : <div className="assist-reply">{a.text}</div>)}
       </div>
       <div className="noaddress-fix">
         {a.text && (
           <button className="btn mini" onClick={() => setShow((s) => !s)}>
             {show ? 'Hide' : a.type === 'forward' ? 'Suggested note' : 'Suggested reply'}</button>
+        )}
+        {a.text && show && i.sendable && (
+          <button className="btn mini go" disabled={sending || !text.trim()} onClick={sendIt}
+            title="Checked first (who it goes to, one signature, the trail kept) - a failed check leaves it in Drafts">
+            {sending ? 'Sending…' : 'Send'}</button>
         )}
         {a.text && show && <button className="btn mini" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>}
         <button className="btn mini" onClick={() => onDealt(i)}
@@ -89,6 +106,7 @@ export default function AssistCard({ data, onCommand }) {
   const filing = mode === 'live' ? (data.filed || []) : (data.would_file || []);
   const files = filing.filter((i) => !gone[i.id]);
   const dealt = (i) => { send('assist_dealt', { id: i.id }); hide(i.id); };
+  const sendReply = (i, text) => { send('assist_send', { id: i.id, text }); hide(i.id); };
   const fileAll = () => {
     if (window.confirm(`File ${files.length} email${files.length === 1 ? '' : 's'} where they belong? `
       + 'Every move is logged, and Put back undoes one.')) {
@@ -117,7 +135,7 @@ export default function AssistCard({ data, onCommand }) {
           </div>
         </div>
       )}
-      {shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} />)}
+      {shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onSend={sendReply} />)}
       {needs.length > shown.length && (
         <div className="noaddress-row">
           <button className="btn mini" onClick={() => setAllNeeds(true)}>Show all {needs.length}</button>

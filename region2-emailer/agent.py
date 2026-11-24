@@ -2133,6 +2133,31 @@ def main():
                                                                 "before trying again."}
                 push_panel()
                 report("done" if res.get("ok") else "error", res.get("said", ""), tail(out, 4))
+            elif action == "assist_send":
+                # one tap on the Needs-you card (his 24/11 "Alerts + one-tap replies"): the suggested reply - or his edit
+                # of it - to all on the email's thread but DHL Road, checked, sent, the email filed as answered. A
+                # check that fails leaves it in Drafts. Outlook takes turns with the other jobs
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                sid = str(d.get("id") or "")[:20]
+                text, tmp = d.get("text"), None
+                if isinstance(text, str) and text.strip():
+                    import tempfile
+                    fd, tmp = tempfile.mkstemp(prefix="_assist_reply_", suffix=".txt", dir=HERE)   # gitignored _*.txt
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(text[:6000])
+                try:
+                    out = run(["outlook_gate.py", "run", "--wait", "90", "inbox_assist.py", "send", sid]
+                              + ([tmp] if tmp else []), timeout=400) if sid else ""
+                finally:
+                    if tmp:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                res = _last_json(out) or {"ok": False, "said": "Outlook is busy - try again in a minute." if "SKIP " in out
+                                          else "The reply didn't finish - look in Drafts before trying again."}
+                push_panel()
+                report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
             elif action in ("assist_file", "assist_fileall", "assist_putback", "assist_keep", "assist_dealt",
                             "assist_mode"):
                 # the Needs-you card (inbox_assist.py): file one or all it would file, put one back, keep one in the
