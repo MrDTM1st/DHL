@@ -18,10 +18,15 @@ NOW = datetime(2026, 11, 2, 15, 0)
 TRIP = {"manifest": "MAN-01000001", "cost": "450.00", "revenue": "600", "collect": "06/11/26 07:30", "deliver": "06/11/26 08:30"}
 
 
-def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked_head=True, wide=True, size=None):
-    """The tracker as the work PC pictures it: the cursor's row number highlighted, and whichever yellow cells hold something."""
+def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked_head=True, wide=True, size=None, name="B6",
+           formula="MAN-01000000"):
+    """The tracker as the work PC pictures it: the cursor's row number highlighted, and whichever yellow cells hold something;
+    over them the Name Box's text and the formula bar's, each as long as its words."""
     im = Image.new("RGB", size or (1910 if wide else 900, 915), (255, 255, 255))
     d = ImageDraw.Draw(im)
+    d.rectangle((B.NAME_AT[0] + 4, 245, B.NAME_AT[0] + 4 + 9 * len(name), 257), fill=(30, 30, 30))
+    if formula:
+        d.rectangle((305, 245, 305 + 9 * len(formula), 257), fill=(30, 30, 30))
     d.rectangle((0, 358, 64, 831), fill=(245, 245, 245))
     d.rectangle((0, row_top, 64, row_bottom), fill=B.PICKED)
     d.rectangle((B.HEAD_B - 20, B.HEAD_Y - 8, B.HEAD_B + 20, B.HEAD_Y + 8), fill=B.PICKED if picked_head else (245, 245, 245))
@@ -79,10 +84,11 @@ def test_the_tracker_row_is_the_yellow_cells_in_their_order_with_notes_blank():
 
 
 class _Tracker:
-    """The work PC as tracker_rows works it: the sheet's picture after each move, the paste, the look after it."""
+    """The work PC as tracker_rows works it: the sheet's picture after each move, the paste, the look after it. typed_in:
+    where the typed address goes - "name" (the Name Box), "cell" (24/11: the selected cell) or "nowhere"."""
 
-    def __init__(self, out, fail=""):
-        self.OUT, self.fail, self.pasted = out, fail, []
+    def __init__(self, out, fail="", typed_in="name"):
+        self.OUT, self.fail, self.pasted, self.typed_in, self.batches = out, fail, [], typed_in, []
 
     def ask(self, action, **args):
         if action == "paste":
@@ -92,9 +98,16 @@ class _Tracker:
         return {"ok": True}, {}
 
     def send_batch(self, name, steps):
+        self.batches.append((name, steps))
         if name == "tracker-check" and self.fail == "check":
             raise RuntimeError("Could not reach the dashboard")
-        _sheet(filled="BCDEG" if self.pasted else ()).save(os.path.join(self.OUT, "latest.png"))
+        if name == "tracker-escape" and self.fail == "escape":
+            return 1
+        if name == "tracker-address":
+            im = {"name": _sheet(name=B.SHEET_END), "cell": _sheet(formula=B.SHEET_END), "nowhere": _sheet()}[self.typed_in]
+        else:
+            im = _sheet(filled="BCDEG" if self.pasted else ())
+        im.save(os.path.join(self.OUT, "latest.png"))
         return 0
 
     def save_state(self, payload):
@@ -112,14 +125,15 @@ def test_a_row_pasted_is_counted_even_when_the_look_after_it_fails(tmp_path):
 class _Walk(_Tracker):
     """The tracker step by step: each move's picture in turn, every batch kept."""
 
-    def __init__(self, out, sheets):
-        super().__init__(out)
-        self.sheets, self.batches = list(sheets), []
+    def __init__(self, out, sheets, **kw):
+        super().__init__(out, **kw)
+        self.sheets = list(sheets)
 
     def send_batch(self, name, steps):
+        if name != "tracker-row":
+            return super().send_batch(name, steps)
         self.batches.append((name, steps))
-        im = self.sheets.pop(0) if name == "tracker-row" else _sheet(filled="BCDEG")
-        im.save(os.path.join(self.OUT, "latest.png"))
+        self.sheets.pop(0).save(os.path.join(self.OUT, "latest.png"))
         return 0
 
 
@@ -128,10 +142,40 @@ def test_the_row_is_found_from_column_bs_end_whatever_row_the_view_was_left_on(t
     # by hand. Now: the Name Box to B's last row, Ctrl+Up to the last manifest, Down - no Ctrl+Down at all.
     R = _Walk(str(tmp_path), [_sheet()])
     assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (1, "") and len(R.pasted) == 1
-    name, steps = R.batches[0]
-    assert name == "tracker-row" and steps[0] == {"action": "click", "px": B.NAME_BOX}
-    assert [s["text"] for s in steps if s["action"] == "type"] == [B.SHEET_END]
-    assert [s["key"] for s in steps if s["action"] == "key"] == ["ctrl+a", "enter", "ctrl+up", "down"]
+    (n1, box), (n2, address), (n3, row) = R.batches[:3]
+    assert n1 == "tracker-name-box" and [s for s in box if s["action"] == "click"] == [{"action": "click", "px": B.NAME_BOX}] * 2
+    assert [s["key"] for s in box if s["action"] == "key"] == ["ctrl+a"] and not any(s["action"] == "type" for s in box)
+    assert n2 == "tracker-address" and [s.get("text") for s in address if s["action"] != "wait"] == [B.SHEET_END]
+    assert n3 == "tracker-row" and [s["key"] for s in row if s["action"] == "key"] == ["enter", "ctrl+up", "down"]
+
+
+def test_an_address_that_lands_in_a_cell_is_escaped_and_never_entered(tmp_path):
+    # 24/11, 09:15: right after Edge switched to the tracker's tab the Name Box click didn't take, and "B1048576" + Enter
+    # went into the selected cell - over a colleague's manifest (put back with Ctrl+Z). The formula bar changing gives it
+    # away before any Enter: Escape throws the typing away, and nothing more is done.
+    for where in ("cell", "nowhere"):
+        R = _Walk(str(tmp_path), [_sheet()], typed_in=where)
+        n, why = B.tracker_rows(R, [TRIP], "ACME_DH", NOW)
+        assert n == 0 and R.pasted == [] and "thrown away with Escape - nothing written" in why
+        names = [name for name, _ in R.batches]
+        assert names == ["tracker-name-box", "tracker-address", "tracker-escape"]        # no Enter, no tracker-row
+        assert R.batches[-1][1][0] == {"action": "key", "key": "escape"}
+        assert not any(s.get("key") == "enter" for _, steps in R.batches for s in steps)
+
+
+def test_an_escape_that_doesnt_go_says_to_look_at_the_tracker_now(tmp_path):
+    R = _Walk(str(tmp_path), [_sheet()], typed_in="cell", fail="escape")
+    n, why = B.tracker_rows(R, [TRIP], "ACME_DH", NOW)
+    assert n == 0 and why.startswith("LOOK AT THE TRACKER NOW") and B.SHEET_END in why
+
+
+def test_the_name_box_is_told_from_a_cell_by_what_changed_on_the_picture():
+    for size in ((1910, 915), (1709, 1275)):
+        before = _sheet(size=size)
+        assert B.in_name_box(before, _sheet(size=size, name=B.SHEET_END))                    # the Name Box took it
+        assert not B.in_name_box(before, _sheet(size=size, formula=B.SHEET_END))             # a cell took it
+        assert not B.in_name_box(before, _sheet(size=size, name=B.SHEET_END, formula="x"))   # both: never entered
+        assert not B.in_name_box(before, _sheet(size=size))                                   # neither
 
 
 def test_a_colleagues_half_typed_rows_under_the_last_manifest_are_stepped_over(tmp_path):

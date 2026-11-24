@@ -57,6 +57,11 @@ CELLS = {"C": (332, 544), "D": (556, 669), "E": (682, 835), "F": (848, 1595), "G
 SCROLLBAR, SHEET_FOOT = 20, 83     # what the page keeps on its right and under the rows, whatever the window's size (03-04/11)
 NAME_BOX = [80, 250]               # Excel's Name Box, over column A's heading (seen 23/11)
 SHEET_END = "B1048576"             # column B's last row: Ctrl+Up from it stops on the last manifest, wherever the view was
+# What the keys typed for the Name Box changed, on the pictures before and after (the same at 1910 x 915 and 1709 x 1275):
+# the Name Box's own text, and the formula bar with its X, tick and fx - which change only when a CELL is being typed in
+NAME_AT = (12, 240, 140, 262)
+FORMULA_AT = (180, 240, 900, 262)
+CHANGED = 12                       # pixels that differ: that part of the picture changed
 PASS_CARRIER = "PASS_DH"
 PASS_DOMAIN = "passlogistics"
 
@@ -234,6 +239,21 @@ def row_filled(im):
     return bool(_dark(im, CELL_B, band)) and all(_dark(im, CELLS[c], band) for c in shown)
 
 
+def _changed(a, b, box):
+    """How many pixels inside box differ markedly between two pictures."""
+    x0, y0, x1, y1 = box
+    pa, pb = a.load(), b.load()
+    return sum(1 for y in range(y0, min(y1, a.size[1], b.size[1])) for x in range(x0, min(x1, a.size[0], b.size[0]))
+               if sum(abs(int(p) - int(q)) for p, q in zip(pa[x, y][:3], pb[x, y][:3])) > 60)
+
+
+def in_name_box(before, after):
+    """Whether the keys just typed went into the Name Box: its text changed and the formula bar didn't. The formula bar
+    changing is a cell being typed in - 24/11, 09:15: right after Edge switched to the tracker's tab the Name Box click
+    didn't take, and "B1048576" went into the selected cell, over a colleague's manifest."""
+    return _changed(before, after, NAME_AT) >= CHANGED and _changed(before, after, FORMULA_AT) < CHANGED
+
+
 def row_text(trip, carrier, now):
     """B manifest, C the carrier code, D the cost, E the planner, F left blank, G Urgent."""
     return "\t".join([trip["manifest"], carrier, str(trip.get("cost") or ""), PLANNER, "",
@@ -254,9 +274,23 @@ def tracker_rows(R, trips, carrier, now=None, look_only=False):
         for trip in trips:
             # The Name Box to column B's last row, Ctrl+Up to the last manifest, Down: wherever the sheet was left. A click
             # into the view and Ctrl+Down ran off to row 1048576 when the clicked row was the last one filled (23/11).
-            steps = [{"action": "click", "px": NAME_BOX}, {"action": "wait", "seconds": 0.4},
-                     {"action": "key", "key": "ctrl+a"}, {"action": "type", "text": SHEET_END},
-                     {"action": "key", "key": "enter"}, {"action": "wait", "seconds": 0.9},
+            # The Name Box clicked twice - after Edge switches tabs the first click only gives the page the keys - and
+            # the address typed, NOT entered, until the pictures before and after show it went into the Name Box. In a
+            # cell (24/11: over a colleague's manifest) it is thrown away with Escape, and nothing more is done.
+            if _quiet(R.send_batch, "tracker-name-box", [{"action": "click", "px": NAME_BOX}, {"action": "wait", "seconds": 0.6},
+                                                         {"action": "click", "px": NAME_BOX}, {"action": "wait", "seconds": 0.4},
+                                                         {"action": "key", "key": "ctrl+a"}, {"action": "wait", "seconds": 0.3}]):
+                return done, "the tracker didn't take the clicks"
+            before = Image.open(latest).convert("RGB")
+            typed = _quiet(R.send_batch, "tracker-address", [{"action": "type", "text": SHEET_END},
+                                                             {"action": "wait", "seconds": 0.5}])
+            if typed or not in_name_box(before, Image.open(latest).convert("RGB")):
+                if _quiet(R.send_batch, "tracker-escape", [{"action": "key", "key": "escape"}, {"action": "wait", "seconds": 0.5}]):
+                    return done, (f"LOOK AT THE TRACKER NOW: the Name Box didn't have the keys, and the Escape that throws "
+                                  f"\"{SHEET_END}\" away didn't go either - it may be sitting in a cell, not yet entered")
+                return done, ("the Name Box didn't have the keys, so what was typed was thrown away with Escape - nothing "
+                              "written on the tracker")
+            steps = [{"action": "key", "key": "enter"}, {"action": "wait", "seconds": 0.9},
                      {"action": "key", "key": "ctrl+up"}, {"action": "wait", "seconds": 0.9},
                      {"action": "key", "key": "down"}, {"action": "wait", "seconds": 0.9}]
             past = False                   # stepped over a colleague's half-typed row: no manifest above is then expected

@@ -371,6 +371,7 @@ def test_a_row_whose_look_after_the_paste_failed_is_kept_as_written_and_never_pa
     from PIL import Image
     monkeypatch.setattr(B, "tracker_rows", ROWS)
     monkeypatch.setattr(B, "row_state", lambda im: {"blank": True, "above": True})
+    monkeypatch.setattr(B, "in_name_box", lambda before, after: True)     # the Name Box took the address
 
     class Sheet(FakeR):
         OUT = str(tmp_path)
