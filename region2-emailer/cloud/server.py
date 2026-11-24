@@ -1756,7 +1756,8 @@ function needsFor(r){
   // loose ballast is tipped, not bagged - it needs a tipper (see orders.js)
   // 0057/100500/001 = loose, /002 = 1 tonne bags (see orders.js)
   const looseCode=(r.product_codes||[]).some(c=>String(c).trim().endsWith('100500/001'));
-  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats)) || looseCode;
+  const loose = !!r.loose_ballast || looseCode
+    || (/\\bloose\\b/.test(mats) && /ballast|aggregate|\\bmot\\b|type\\s*1\\b|scalping|chipping|\\bstone\\b/.test(mats));
   if(loose) need.push('tipper');
   else if(/ballast|bag/.test(mats)) need.push('bags');
   const off=(d.offloading||{}).value||'';

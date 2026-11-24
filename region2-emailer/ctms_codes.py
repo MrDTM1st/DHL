@@ -55,6 +55,8 @@ def product_code(desc, code=""):
         return None
     if bd.is_stoneblower(blob):
         return LOOSE_STONEBLOWER
+    if bd.is_loose_ballast(blob):              # loose aggregate / MOT Type 1 too, ballast or not in the words (24/11)
+        return LOOSE_BALLAST
     if "ballast" in blob.lower():
         return LOOSE_BALLAST if bd.is_loose_ballast(blob) else BAG_BALLAST
     return None

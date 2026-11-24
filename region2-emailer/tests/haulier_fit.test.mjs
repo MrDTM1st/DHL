@@ -243,4 +243,11 @@ test('orders run soonest first, then no date, then past ones most recent first',
   assert.deepEqual(byDeliveryDate(rs).map((r) => r.id), ['5', '2', '0', '3', '1', '4']);
 });
 
+test('a loose ballast-kind order is loose ballast: a tipper, whatever it calls itself (his 24/11)', () => {
+  assert.ok(labels(job('20x aggregate /mot type 1 loose (virgin material)')).some((l) => /tipper/i.test(l)));
+  assert.ok(labels(job('20x loose ballast')).some((l) => /tipper/i.test(l)));
+  assert.ok(!labels(job('20x aggregate /mot type 1 1 tonne bags')).some((l) => /tipper/i.test(l)));
+  assert.ok(!labels(job('10x concrete sleepers loose')).some((l) => /tipper/i.test(l)));
+});
+
 console.log(`\n${n}/${n} passed`);

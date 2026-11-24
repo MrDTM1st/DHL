@@ -335,7 +335,9 @@ export function jobOf(r) {
   //     0057/100500/002 = Track ballast (50mm) - 1 tonne bags
   const looseCode = (r.product_codes || []).some((c) => String(c).trim().endsWith('100500/001'));
   const stoneblower = /stone\s*-?\s*blower/.test(mats);
-  const loose = !!r.loose_ballast || (/ballast/.test(mats) && /loose/.test(mats)) || looseCode;
+  // his 24/11: "if a ballast order is loose, its a loose ballast order" - loose aggregate / MOT Type 1 too (7116946)
+  const loose = !!r.loose_ballast || looseCode
+    || (/\bloose\b/.test(mats) && /ballast|aggregate|\bmot\b|type\s*1\b|scalping|chipping|\bstone\b/.test(mats));
   const bagged = !loose && !stoneblower && /ballast|aggregate|\bbags?\b/.test(mats);
   const bags = bagged ? bagsIn(mats) : 0;
   // the load's weight: bagged ballast's bags in tonnes ("always"), else what CTMS says

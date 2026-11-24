@@ -231,7 +231,9 @@ _PRODUCT_WORDS = (
     # stoneblower first, as its line can say ballast too, and loose ballast is
     # a type of its own - it rides a tipper. Bagged is the form's Bagged Ballast.
     (r"stone\W*blow", "LOOSE_STONEB"),
-    (r"\bloose\b.*\bballast|\bballast\b.*\bloose\b", "LOOSE_BALLAS"),
+    # loose aggregate / MOT Type 1 / stone is loose ballast too - his 24/11 (7116946)
+    (r"\bloose\b.*(ballast|aggregate|\bmot\b|type\s*1\b|scalping|chipping|\bstone\b)"
+     r"|(ballast|aggregate|\bmot\b|type\s*1\b|scalping|chipping|\bstone\b).*\bloose\b", "LOOSE_BALLAS"),
     (r"\bballast\b", "BAG_BALLAST"),
     # the form's options, in the requester's own words ("that switch is
     # supposed to be an S&C" - Delali 31/10)

@@ -37,6 +37,14 @@ def upload(o):
     return next(r for r in recs if r[0] == "ORDER"), [r[1] for r in recs if r[0] == "ORD_TASKS"], out.getvalue()
 
 
+def test_a_loose_ballast_kind_material_uploads_as_loose_ballast():
+    # his 24/11: "if a ballast order is loose, its a loose ballast order" (7116946's MOT Type 1)
+    assert N.placed_product("AGGREGATE /MOT TYPE 1 LOOSE (VIRGIN MATERIAL)") == "LOOSE_BALLAS"
+    assert N.placed_product("Track ballast (50mm) - Loose") == "LOOSE_BALLAS"
+    assert N.placed_product("Track ballast (50mm) - 1 tonne bags") == "BAG_BALLAST"
+    assert N.placed_product("Concrete Sleepers loose") == "CONC_SLEEPER"
+
+
 def test_postcodes_go_up_with_their_space():
     row, _, _ = upload(order("Pallet", Postcode="OL113AU", **{"D Postcode": "le27st"}))
     assert (row[11], row[23]) == ("OL11 3AU", "LE2 7ST"), row

@@ -413,12 +413,19 @@ def is_stoneblower(*descs):
     return False
 
 
+# Ballast and its kin: a LOOSE one of these is loose ballast - his rule 24/11, "if a ballast order is loose, its a
+# loose ballast order" (7116946, "AGGREGATE /MOT TYPE 1 LOOSE (VIRGIN MATERIAL)", went out as "20x aggregate" and had
+# an artic flatbed typed into CTMS). Mirrored in nr_csv._PRODUCT_WORDS, orders.js materialsTypeFor and server.py.
+BALLAST_KIN = re.compile(r"ballast|aggregate|\bmot\b|type\s*1\b|scalping|chipping|\bstone\b", re.I)
+
+
 def is_loose_ballast(*descs):
     """Loose (tipped/bulk) ballast - needs a tipper, so Delali wants it flagged +
-    prioritised. Description reads 'BALLAST ... - Loose' (vs '1 tonne bags' etc.)."""
+    prioritised. Description reads 'BALLAST ... - Loose' (vs '1 tonne bags' etc.), or
+    any loose aggregate / MOT Type 1 / stone (his 24/11)."""
     for d in descs:
         dl = str(d or "").lower()
-        if "ballast" in dl and "loose" in dl:
+        if re.search(r"\bloose\b", dl) and BALLAST_KIN.search(dl):
             return True
     return False
 
