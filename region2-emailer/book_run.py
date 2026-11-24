@@ -519,6 +519,33 @@ def left_off_site(address, ours):
     return address == ours or "dhlroad" in address
 
 
+_NOBODY = re.compile(r"no-?reply|donotreply|service-now|mailer-daemon|postmaster", re.I)
+
+
+def requester(src, ours):
+    """Who asked for the job, when its request names nobody we can email (his 24/11, an RDA order: "code that in too"):
+    the person who first wrote it - the deepest "From:" in the chain the mail quotes, so not a colleague who only sent it
+    on, nor our own forward of DHL Road's copy - else the mail's own sender. Never ourselves, DHL Road or a no-reply
+    portal. (address, name) - ("", "") when there's nobody."""
+    def person(a):
+        a = str(a or "").strip().lower()
+        return "@" in a and not left_off_site(a, ours) and not _NOBODY.search(a)
+
+    quoted = re.findall(r"From:\s*([^<>\r\n]*?)\s*<([\w.'+-]+@[\w-]+(?:\.[\w-]+)+)", str(getattr(src, "Body", "") or ""))
+    for who, a in reversed(quoted):
+        if person(a):
+            return a.lower(), who.strip()
+    sender = str(getattr(src, "SenderEmailAddress", "") or "")
+    try:
+        u = src.Sender.GetExchangeUser()
+        sender = (u.PrimarySmtpAddress if u is not None else "") or sender
+    except Exception:
+        pass
+    if person(sender):
+        return sender.lower(), str(getattr(src, "SenderName", "") or "")
+    return "", ""
+
+
 def checks(top, trips, got, mine):
     """What must be true of a site email before it goes: the words, the recipients. [] when it may."""
     bad = []
@@ -556,11 +583,14 @@ def site_email(rec, job, trips, send=True):
         src = ns.GetItemFromID(entry)
         contact = ((rec.get("details") or {}).get("contact") or {}).get("name") or ""
         to = job.get("site_to") or adhoc_address(src, contact)
+        greet = first_name(contact)
+        if not to:                       # nobody on the request to email: whoever asked for it is told (his 24/11)
+            to, who = requester(src, bd.DHL_SMTP.lower())
+            greet = first_name(who)
         if not to:
-            return False, f"no address for {contact or 'the delivery contact'} on the request"
+            return False, f"no address for {contact or 'the delivery contact'} on the request, and nobody who asked"
         m = src.Forward()
         m.To = to
-        greet = first_name(contact)
     else:
         src, _ = site_thread(ns, rec)
         if src is not None:
@@ -828,7 +858,7 @@ def follow(k, R=None, now=None, auto=False, only=None):
     carrier = str(e.get("carrier") or "")
     job = {x: e.get(x) for x in J.JOB_KEYS if e.get(x) not in (None, "")}
     orders = [str(o) for o in e.get("orders") or []]
-    rec = record_of(e.get("record")) or {"orders": orders}
+    rec = record_of(e.get("record")) or e.get("record_copy") or {"orders": orders}
     said = []
     for name in J.left(e):
         if only and name not in only:
@@ -1044,6 +1074,11 @@ def book(job, R=None, now=None):
     wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
     numbered = []
     if not dry:
+        if rec.get("id") and not job.get("record_copy"):
+            # the record as it is now, on the journal: an ad hoc leaves the map once booked (or the map's cap pushes it
+            # off), and what follows - the site email above all - must still know its request and contact (his 24/11:
+            # an RDA order went "no site thread and no contact" because its record had gone)
+            job["record_copy"] = rec
         J.asking(job)
 
         def on_id(cid):

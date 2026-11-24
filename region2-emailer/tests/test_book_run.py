@@ -358,3 +358,39 @@ def test_loose_ballast_and_stoneblowers_are_looked_for_on_strategy_4():
     assert BR.strategy_for({"materials": "20x stoneblower stone"}) == "Strategy 4 - Tippers"
     assert BR.strategy_for({"materials": "80x ballast", "product_codes": ["0057/100500/002"]}) == ""   # bags
     assert BR.strategy_for({"materials": "37x rails"}) == "" and BR.strategy_for(None) == ""
+
+
+def test_with_nobody_on_the_request_to_email_whoever_asked_for_it_is_told():
+    """His 24/11 (an RDA order): our own forward of DHL Road's copy, the contact only a name and a phone - the person who
+    wrote the request gets the confirmation; never us, DHL Road or a no-reply portal, nor a colleague who only sent it on."""
+    import types
+    ours = "me@example.net"
+    me = types.SimpleNamespace(GetExchangeUser=lambda: types.SimpleNamespace(PrimarySmtpAddress=ours))
+    own_forward = types.SimpleNamespace(
+        SenderEmailAddress="/o=ExchangeLabs/ou=Exchange/cn=Recipients/cn=me", SenderName="Pat Planner", Sender=me,
+        Body=("OFFICIAL\r\nFrom: Sam Asker (Example Co) <sam.asker@example.net> On Behalf Of Transport Projects\r\n"
+              "Sent: 24 November 2026 11:52\r\nTo: ZX-DHLRoad <DHLRoad@example.org>\r\nCc: Orders <orders@example.org>\r\n"))
+    assert B.requester(own_forward, ours) == ("sam.asker@example.net", "Sam Asker (Example Co)")
+    assert B.first_name("Sam Asker (Example Co)") == "Sam"
+    sent_on = types.SimpleNamespace(
+        SenderEmailAddress="jo.colleague@example.org", SenderName="Jo Colleague", Sender=None,
+        Body=("Please can you plan\r\nFrom: Jo Colleague <jo.colleague@example.org> On Behalf Of ZX-DHLRoad\r\n"
+              "From: Robin Field <robin.field@example.org>\r\nSent: 16 November 2026 09:58\r\n"
+              "To: ZX-DHLRoad <DHLRoad@example.org>\r\n"))
+    assert B.requester(sent_on, ours)[0] == "robin.field@example.org"          # who wrote it, not who sent it on
+    direct = types.SimpleNamespace(SenderEmailAddress="robin.field@example.org", SenderName="Robin Field", Sender=None,
+                                   Body="Hi, can you collect a pallet please")
+    assert B.requester(direct, ours) == ("robin.field@example.org", "Robin Field")
+    portal = types.SimpleNamespace(SenderEmailAddress="", SenderName="", Sender=None,
+                                   Body="From: ZX-DHLRoad <DHLRoad@example.org>\r\nFrom: Portal <noreply@service-now.com>\r\n")
+    assert B.requester(portal, ours) == ("", "")
+
+
+def test_the_journal_keeps_the_record_so_what_follows_a_booking_still_knows_the_request(tmp_path):
+    """An ad hoc leaves the map once booked: the journal's own copy of the record is what the site email reads then."""
+    import book_journal as J
+    path = str(tmp_path / "journal.json")
+    rec = {"id": "adhoc|9100001|1", "kind": "adhoc", "mail": {"entryid": "E1"}, "details": {"contact": {"name": "Sam"}}}
+    e = J.asking({"orders": ["9100001"], "date": "26/11/2026", "carrier": "PASS_DH", "record": rec["id"],
+                  "record_copy": rec}, path=path)
+    assert J.get(e["key"], path=path)["record_copy"] == rec

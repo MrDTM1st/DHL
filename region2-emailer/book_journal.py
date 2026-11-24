@@ -161,7 +161,7 @@ def left(e):
 
 
 # -- what book_run tells it
-JOB_KEYS = ("record", "orders", "date", "carrier", "haulier", "trailer", "haulage", "vehicles", "site_to")
+JOB_KEYS = ("record", "orders", "date", "carrier", "haulier", "trailer", "haulage", "vehicles", "site_to", "record_copy")
 
 
 def asking(job, path=None, now=None):
