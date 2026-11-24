@@ -1185,7 +1185,7 @@ class Bridge:
         took = round(time.time() - t0, 1)
         made = [x for x in job.trips if x.get("manifest")]
         fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n)
-        by_hand = "; ".join(n for n in job.said if n.startswith(("PUT BACK BY HAND", "CLOSE BY HAND")))
+        by_hand = "; ".join(n for n in job.said if n.startswith(("PUT BACK BY HAND", "CLOSE BY HAND", "CHECK BY HAND")))
         if pressed:
             said = stopped_by_you(made, getattr(job, "of", 1), pressed, took)
         else:
@@ -1199,13 +1199,17 @@ class Bridge:
             said += f" CTMS keeps {job.veh_kept} as the line's Veh Type from the carrier screen."
         if fixed:
             said += f" On the lines first: {fixed}."
+        priced = list(getattr(job, "priced", None) or [])
+        if priced:
+            said += f" Price: {'; '.join(priced)}."
         if by_hand:
             said += f" {by_hand}."
         # written down before the answer goes, so the home PC can ask for it again if the answer never reaches it
         book_record.keep(cmd.get("id"), orders, date, carrier, cmd.get("dry"), not stopped, said, job.trips, stopped,
                          pressed=bool(pressed))
         return done(not stopped, said, dict(self._batch_look(times, t0), kind="ctms_book", trips=job.trips,
-                                            stages=job.stages, notes=job.said, stopped=stopped, seconds=took,
+                                            stages=job.stages, notes=job.said, priced=priced, stopped=stopped,
+                                            seconds=took,
                                             reads=job.reads, stop_pressed=bool(pressed), of=getattr(job, "of", 1)))
 
     # -- one item of the CTMS to-do, done in one go (02/11, ctms_items) --

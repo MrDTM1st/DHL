@@ -18,7 +18,7 @@ X0, Y0 = 443, 604
 YES_AT, NO_AT, OK_AT = [980, 560, 40, 20], [1040, 560, 40, 20], [1000, 480, 40, 20]     # nowhere the old fixed points were
 T = {k: {"rgb": "", "w": 1, "h": 1} for k in (
     "wm-refresh", "wm-apply-trip", "wm-create-trip", "sc-title", "cp-title", "cc-title", "mt-set-status", "st-accepted",
-    "al-accepted", "os-split", "split-title", "split-ok", "close-ask", "od-vehtype", "os-card", "os-close",
+    "st-planned", "al-accepted", "os-split", "split-title", "split-ok", "close-ask", "od-vehtype", "os-card", "os-close",
     "os-search")}
 
 
@@ -87,6 +87,19 @@ class FakeCtms:
         self.split_names = ("Process", "Exit")
         self.split_typed = ""
         self.split_done = False
+        self.payments = {}              # manifest: [[kind, amount], ...] - its carrier lines (Finance > Payments)
+        self.extras = []                # the haulier's own lines CTMS puts on a trip for the order's services
+        self.extras_on = "create"       # when it puts them on: "create" (the trip made) or "accept" (Accepted)
+        self.extras_given = set()
+        self.pay_up = None              # the manifest whose Payments window is open
+        self.pay_row = None             # the line clicked on it
+        self.pay_box = None             # the box Edit opened on that line: {"row", "amount", "was"}
+        self.pay_cut = False            # the carrier Payments' name cut short, as it read late on 23/11
+        self.pay_for = None             # a Payments window that opens for another trip than the one selected
+        self.opened = []                # what was pressed on the Finance tab: carrier / revenue / calc
+        self.statuses = []              # (manifest, status) as each Set Status took
+        self.finance_gone = False       # True: no Finance tab to be had once a trip is ACCEPTED
+        self.planned_refused = False    # True: Set Status's Planned can't be found
 
     # -- what the Access Bridge hands over
     def upto(self):
@@ -128,8 +141,12 @@ class FakeCtms:
         if self.to_list:
             els += [{"r": "label", "nm": self.to_list, "lv": 3, "at": [750, 369, 73, 22], "st": ["selected"]}]
         if self.planning_tab is not None:
-            els += [{"r": "page tab", "nm": name, "lv": 1, "at": at, "st": ["selected"] if self.planning_tab == name else None}
-                    for name, at in (("Stops", [520, 150, 73, 23]), ("Finance", [810, 150, 73, 23]))]
+            for name, at in (("Stops", [520, 150, 73, 23]), ("Finance", [810, 150, 73, 23])):
+                if name == "Finance" and self.finance_gone and "ACCEPTED" in self.tree.values():
+                    continue
+                els.append({"r": "page tab", "nm": name, "lv": 1, "at": at, "st": ["selected"] if self.planning_tab == name else None})
+                if name == "Finance" and self.planning_tab == "Finance":
+                    els += self.finance_els()
         els += [{"r": "push button", "nm": "Cust Ref", "lv": 1, "at": [X0, 560, 100, 25]},
                {"r": "push button", "nm": "Deliver From", "lv": 1, "at": [1127, 560, 66, 25]},
                {"r": "label", "nm": self.status_line or "<OSC>", "lv": 1, "at": [416, 949, 1162, 16]}]
@@ -181,6 +198,10 @@ class FakeCtms:
                         {"r": "text", "nm": "Number of splits", "v": self.split_typed, "lv": 1, "at": [620, 440, 60, 23]}] + [
                 {"r": "push button", "nm": name, "lv": 1, "at": at}
                 for name, at in zip(self.split_names, ([560, 620, 100, 30], [800, 620, 100, 30]))]
+        if self.pay_up:
+            els[0:0] = self.payments_els()
+        if self.pay_box is not None:
+            els[0:0] = self.pay_box_els()
         if self.card:
             els += self.card_els()
         if self.carrier_behind:     # last: CTMS reads its windows front first, so a new carrier window comes before this one
@@ -188,6 +209,81 @@ class FakeCtms:
                 {"r": "push button", "nm": name, "lv": 2, "at": list(at), "st": ["disabled"]}   # behind Planning (11/11)
                 for name, at in (("Select Carrier", SELECT_AT), ("Exit", EXIT_AT))]
         return els
+
+    def finance_els(self):
+        """Planning's Finance tab as read live (23/11): its names carry the tab page before them, once more each visit."""
+        pre = "Finance tab page " * 2
+        return [{"r": "text", "nm": pre + "Trip Revenue", "v": "562.62", "lv": 2, "at": list(REVENUE_AT)},
+                {"r": "push button", "nm": pre + ("Finance tab p" if self.pay_cut else "Payments"), "lv": 2,
+                 "at": list(PAY_CARRIER_AT)},
+                {"r": "push button", "nm": pre + "Payments", "lv": 2, "at": list(PAY_REVENUE_AT)},
+                {"r": "push button", "nm": pre + "Calc Costs", "lv": 2, "at": list(CALC_AT)}]
+
+    def payments_els(self):
+        """A trip's Payments as read live: each line's cells named by their column, its amount and VAT both AMOUNTs, and
+        the grid's empty row under the lines."""
+        man = self.pay_for or self.pay_up
+        lines = self.payments[self.pay_up]
+        els = [{"r": "internal frame", "nm": f"Payments for Trip 261106-{man}", "lv": 0, "at": [400, 300, 900, 420]}]
+        for i, (kind, amt) in enumerate(lines + [["", None]]):
+            haul = kind.startswith("Trip")
+            cells = (("REVENUE_DATE", "" if amt is None else "02/11/2026", 410), ("REVENUE_TYPE", kind, 520),
+                     ("NARRATIVE_1", "" if amt is None else f"261106-{man}" if haul else "SERVICE", 640),
+                     ("AMOUNT", "" if amt is None else f"{amt:,.2f}", 760),
+                     ("VAT_AMOUNT", "" if amt is None else f"{amt * 0.2 if haul else 0:,.2f}", 860))
+            els += [{"r": "text", "nm": f"Enter value for : {col}", "v": v, "lv": 2, "at": [x, PAY_Y + 24 * i, 95, 23],
+                     "st": ["read-only"]} for col, v, x in cells]
+        els.append({"r": "text", "nm": "Total", "v": f"{sum(a for _, a in lines):,.2f}", "lv": 1, "at": [760, 640, 95, 23],
+                    "st": ["read-only"]})
+        return els + [{"r": "push button", "nm": name, "lv": 1, "at": list(at)}
+                      for name, at in (("Edit", PAY_EDIT_AT), ("Delete", PAY_DELETE_AT), ("Close", PAY_CLOSE_AT))]
+
+    def pay_box_els(self):
+        """The box Edit opens on one line: its Type, the amount it had (read-only) and the box to type in."""
+        b = self.pay_box
+        return [{"r": "internal frame", "nm": "Payment 40001234", "lv": 0, "at": [520, 380, 520, 300]},
+                {"r": "combo box", "nm": "Type", "v": self.payments[self.pay_up][b["row"]][0], "lv": 1, "at": [560, 420, 150, 23]},
+                {"r": "text", "nm": "Original Amount", "v": f"{b['was']:.2f}", "lv": 1, "at": [700, 450, 110, 23],
+                 "st": ["read-only"]},
+                {"r": "text", "nm": "", "v": f"{b['amount']:.2f}", "lv": 1, "at": list(PAY_AMOUNT_AT)},
+                {"r": "push button", "nm": "OK", "lv": 1, "at": list(PAY_OK_AT)},
+                {"r": "push button", "nm": "Cancel", "lv": 1, "at": list(PAY_CANCEL_AT)}]
+
+    def pay_click(self, sc):
+        """A click on a line's box, the Payments window or the Finance tab's buttons: True when it landed on one. The box is
+        in front of the window, and the window in front of Planning: what's behind them takes no click."""
+        def on(at):
+            return at[0] <= sc[0] <= at[0] + at[2] and at[1] <= sc[1] <= at[1] + at[3]
+        if self.pay_box is not None:
+            if on(PAY_AMOUNT_AT):
+                self.focus = "pay_amount"
+            elif on(PAY_OK_AT):
+                self.payments[self.pay_up][self.pay_box["row"]][1] = self.pay_box["amount"]
+                self.pay_box, self.focus = None, None
+            elif on(PAY_CANCEL_AT):
+                self.pay_box, self.focus = None, None
+            return True
+        if self.pay_up:
+            lines = self.payments[self.pay_up]
+            if on(PAY_EDIT_AT) and self.pay_row is not None:
+                amt = lines[self.pay_row][1]
+                self.pay_box = {"row": self.pay_row, "amount": amt, "was": amt}
+            elif on(PAY_CLOSE_AT):
+                self.pay_up, self.pay_row = None, None
+            elif 400 <= sc[0] <= 960 and PAY_Y <= sc[1] < PAY_Y + 24 * len(lines):
+                self.pay_row = (sc[1] - PAY_Y) // 24
+            return True
+        if self.planning_tab == "Finance":
+            for name, at in (("carrier", PAY_CARRIER_AT), ("revenue", PAY_REVENUE_AT), ("calc", CALC_AT)):
+                if on(at):
+                    self.opened.append(name)
+                    if name == "carrier":
+                        self.pay_up = self.selected
+                    return True
+        return False
+
+    def lines_total(self, man):
+        return round(sum(a for _, a in self.payments[man]), 2)
 
     def info(self, ref):
         return self.line_info.setdefault(ref, {"product": "S&C", "qty": 1, "items": [{"id": "S&C", "ordered": 1}]})
@@ -369,6 +465,8 @@ class FakeCtms:
                 self.types["find"] = s["text"]
             elif self.split_up and self.focus == "split":
                 self.split_typed = s["text"]
+            elif self.pay_box is not None and self.focus == "pay_amount":
+                self.pay_box["typed"] = s["text"]
             if self.list is not None and s["text"][:1] == "D":
                 self.list = [c for c in ALT_CARRIERS if c.startswith("D")][:8]
 
@@ -393,6 +491,10 @@ class FakeCtms:
             self.well = [r for r in self.well if r["cust_ref"] != self.current]
         elif name == "st-accepted":
             self.alert = "Manifest accepted"
+        elif name == "st-planned":
+            if self.planned_refused:
+                raise RuntimeError("'st-planned' is not on the screen")
+            self.alert = "Manifest planned"
         elif name == "wm-refresh":
             self.page = 0
         elif name == "mt-set-status":
@@ -423,17 +525,34 @@ class FakeCtms:
                 self.up = "carrier"             # the payment box shuts with it (02/11)
                 return
             if self.alert and list(sc) == [OK_AT[0] + 20, OK_AT[1] + 10]:
-                if self.alert == "Manifest accepted" and self.selected and self.tree.get(self.selected) == "PLANNED":
-                    self.tree[self.selected] = "ACCEPTED"
+                man = self.selected
+                if self.alert == "Manifest accepted" and man and self.tree.get(man) == "PLANNED":
+                    self.tree[man] = "ACCEPTED"
+                    self.statuses.append((man, "ACCEPTED"))
+                    if self.extras_on == "accept" and man not in self.extras_given:
+                        self.extras_given.add(man)
+                        self.payments[man] += [list(x) for x in self.extras]
+                elif self.alert == "Manifest planned" and man and self.tree.get(man) == "ACCEPTED":
+                    self.tree[man] = "PLANNED"
+                    self.statuses.append((man, "PLANNED"))
                 self.alert = ""
                 return
             if self.card and self.card_click(sc):
                 return
             if self.up == "carrier" and self.list and self.list_click(sc):
                 return
+            if self.pay_click(sc):
+                return
             if self.planning_tab is not None and list(sc) == [520 + 36, 150 + 11]:
                 self.planning_tab = "Stops"
                 return
+            if self.planning_tab is not None and list(sc) == [810 + 36, 150 + 11]:
+                self.planning_tab = "Finance"
+                return
+            for n, man in enumerate(self.tree):          # a manifest's row in the tree: selected
+                if list(sc) == [53 + 142, 228 + 23 * n + 11]:
+                    self.selected = man
+                    return
             if self.named_click(sc):
                 return
             if self.panel and not self.panel_stuck and list(sc) == [503 + 1006 - B.PLANNED_X, 513 + B.PLANNED_Y]:
@@ -480,6 +599,8 @@ class FakeCtms:
         self.next_man += 1
         self.tree[man] = "PLANNED"
         self.selected = man
+        self.payments[man] = [["Trip Haul Ma", float(self.cost)]] + (
+            [list(x) for x in self.extras] if self.extras_on == "create" else [])
         self.trip_lines[man] = list(self.creating)
         self.well = [r for r in self.well if r["cust_ref"] not in self.creating]
         self.selection = []
@@ -497,6 +618,13 @@ class FakeCtms:
         self.current = ref
 
     def key(self, k):
+        if self.pay_box is not None and k == "escape":
+            self.pay_box, self.focus = None, None
+            return
+        if self.pay_box is not None and self.focus == "pay_amount":
+            if k == "tab" and "typed" in self.pay_box:
+                self.pay_box["amount"] = float(self.pay_box.pop("typed"))
+            return                                       # home, shift+end: the box's text selected, nothing more
         if k == "delete" and self.item_win and self.focus in ("weight", "delivered"):
             self.item_win[self.focus] = ""
             return
@@ -533,6 +661,12 @@ WINDOW_AT, CARRIER_ITEM_AT = (340, 29, 63, 30), (343, 190, 189, 24)    # the Win
 def _middle(at):
     return [at[0] + at[2] // 2, at[1] + at[3] // 2]
 CREATE_AT, CANCEL_AT = (600, 700, 146, 30), (600, 731, 146, 30)
+# Planning's Finance tab: the carrier's Payments left of the revenue on its row, the revenue's right of it, Calc Costs under
+REVENUE_AT, PAY_CARRIER_AT, PAY_REVENUE_AT, CALC_AT = (900, 250, 100, 23), (780, 250, 100, 23), (1010, 250, 100, 23), \
+    (1010, 280, 100, 23)
+PAY_Y = 340                                                           # the Payments window's first line
+PAY_EDIT_AT, PAY_DELETE_AT, PAY_CLOSE_AT = (500, 680, 80, 25), (600, 680, 80, 25), (700, 680, 80, 25)
+PAY_AMOUNT_AT, PAY_OK_AT, PAY_CANCEL_AT = (560, 450, 110, 23), (560, 600, 80, 25), (660, 600, 80, 25)
 ALT_CARRIERS = ("DAWN_HAULAGE", "DELTA_DH", "DOVER FREIGHT")
 
 
@@ -700,8 +834,132 @@ def test_a_dry_run_says_no_at_the_last_box_and_books_nothing():
 
 def test_his_price_is_typed_for_a_tier_2_and_read_back_off_the_box():
     ctms = FakeCtms([_row("9100001-1-1")], carriers=("DHL_NOC", "ACME"), cost="450.00")
+    ctms.planning_tab = "Stops"
     job = _book(ctms, carrier="ACME", haulage=450)
     assert ctms.typed == ["450"] and job.trips[0]["cost"] == "450.00"
+
+
+EXTRAS = [("HIAB", 70.0), ("NIGHT", 110.0), ("SUN/BANK HOL", 160.0)]      # made up: the haulier's rates for the services
+
+
+def _quoted(extras=EXTRAS, cost="900.00", **kw):
+    ctms = FakeCtms([_row("9100001-1-1")], carriers=("ACME",), cost=cost)
+    ctms.planning_tab = "Stops"
+    ctms.extras = list(extras)
+    for k, v in kw.items():
+        setattr(ctms, k, v)
+    return ctms
+
+
+def test_a_quote_has_the_hauliers_own_lines_taken_off_the_haulage_before_the_trip_is_accepted():
+    # 23/11: CTMS put the haulier's HIAB, NIGHT, SAT and SUN lines on top of the quote typed, the manifest went out far
+    # over it, and the price was put right by hand and sent again. His rule (09/11): a quote is the trip's TOTAL.
+    ctms = _quoted()
+    job = _book(ctms, carrier="ACME", haulage=900)
+    man = job.trips[0]["manifest"]
+    assert ctms.lines_total(man) == 900.0 and ctms.payments[man][0] == ["Trip Haul Ma", 560.0]
+    assert ctms.payments[man][1:] == [list(x) for x in EXTRAS]             # the haulier's own lines stay as CTMS made them
+    assert ctms.statuses == [(man, "ACCEPTED")]                            # set before Accepted: it goes out once, right
+    assert ctms.typed == ["900", "560.00"]
+    t = job.trips[0]
+    assert (t["status"], t["cost"], t["total"], t["extras"], t["haulage"]) == ("ACCEPTED", "900.00", "900.00", "340.00",
+                                                                              "560.00")
+    assert job.priced == [f"{man}: the haulier's own lines (HIAB 70.00, NIGHT 110.00, SUN/BANK HOL 160.00) taken off the "
+                          "900 quote - haulage 560.00, total 900.00"]
+    assert ctms.opened == ["carrier"]                                      # never the revenue's Payments, never Calc Costs
+    assert ctms.pay_up is None and ctms.pay_box is None and ctms.planning_tab == "Stops"
+
+
+def test_a_quote_with_nothing_on_top_is_left_as_typed_and_looked_at_again_once_accepted():
+    ctms = _quoted(extras=[], cost="450.00")
+    job = _book(ctms, carrier="ACME", haulage=450)
+    man = job.trips[0]["manifest"]
+    assert ctms.payments[man] == [["Trip Haul Ma", 450.0]] and ctms.typed == ["450"]
+    assert ctms.opened == ["carrier", "carrier"] and ctms.statuses == [(man, "ACCEPTED")]
+    assert job.trips[0]["total"] == "450.00" and "extras" not in job.trips[0] and job.priced == []
+
+
+def test_lines_ctms_puts_on_only_with_accepted_are_taken_off_and_the_manifest_sent_again():
+    ctms = _quoted(extras_on="accept")
+    job = _book(ctms, carrier="ACME", haulage=900)
+    man = job.trips[0]["manifest"]
+    assert ctms.lines_total(man) == 900.0 and ctms.payments[man][0] == ["Trip Haul Ma", 560.0]
+    assert ctms.statuses == [(man, "ACCEPTED"), (man, "PLANNED"), (man, "ACCEPTED")]   # his way to send it again
+    assert ctms.tree[man] == "ACCEPTED" and job.trips[0]["status"] == "ACCEPTED"
+    assert job.priced[0].endswith("total 900.00, then sent to the haulier again (Planned, then Accepted)")
+
+
+def test_a_second_look_that_cant_be_had_once_accepted_is_said_and_the_booking_goes_on():
+    ctms = _quoted(extras=[], cost="450.00", finance_gone=True)
+    job = _book(ctms, carrier="ACME", haulage=450)
+    assert job.trips[0]["status"] == "ACCEPTED" and ctms.statuses == [(job.trips[0]["manifest"], "ACCEPTED")]
+    assert [n for n in job.said if n.startswith("CHECK BY HAND")] == [
+        f"CHECK BY HAND: {job.trips[0]['manifest']}'s lines couldn't be looked at again once it was ACCEPTED (Planning's "
+        "Finance tab couldn't be found.) - they came to the 450 quote before"]
+
+
+def test_a_resend_that_cant_be_done_stops_saying_the_price_is_right_but_not_sent():
+    ctms = _quoted(extras_on="accept", planned_refused=True)
+    try:
+        _book(ctms, carrier="ACME", haulage=900)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "lines now add up to the 900 quote, but it couldn't be sent to the haulier again (it reads ACCEPTED" in str(e)
+        assert "Set Status Planned, Save, then Accepted, Save." in str(e)
+    assert ctms.lines_total("MAN-01000100") == 900.0 and ctms.tree["MAN-01000100"] == "ACCEPTED"
+
+
+def test_the_hauliers_lines_over_the_quote_stop_it_planned_with_nothing_changed():
+    ctms = _quoted(extras=[("ESCORT", 950.0)])
+    try:
+        _book(ctms, carrier="ACME", haulage=900)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "still PLANNED" in str(e) and "more than the quote" in str(e) and "then accept it" in str(e)
+    man = next(iter(ctms.tree))
+    assert ctms.tree[man] == "PLANNED" and ctms.statuses == []
+    assert ctms.payments[man] == [["Trip Haul Ma", 900.0], ["ESCORT", 950.0]]
+    assert ctms.pay_up is None and ctms.planning_tab == "Stops"           # its Payments closed again
+
+
+def test_the_carriers_payments_is_pressed_by_its_place_when_its_name_is_cut_short():
+    ctms = _quoted(pay_cut=True)
+    job = _book(ctms, carrier="ACME", haulage=900)
+    assert ctms.opened == ["carrier"] and ctms.lines_total(job.trips[0]["manifest"]) == 900.0
+
+
+def test_payments_that_open_for_another_trip_are_closed_untouched():
+    ctms = _quoted(pay_for="MAN-01999999")
+    try:
+        _book(ctms, carrier="ACME", haulage=900)
+        raise AssertionError("should have stopped")
+    except B.Stop as e:
+        assert "not MAN-01000100's" in str(e) and "still PLANNED" in str(e)
+    assert ctms.payments["MAN-01000100"][0] == ["Trip Haul Ma", 900.0] and ctms.pay_up is None
+
+
+def test_a_matrix_price_is_left_as_ctms_makes_it():
+    ctms = _quoted(cost="400.00")
+    job = _book(ctms, carrier="ACME")                                      # tier 1: no price typed, nothing to take off
+    man = job.trips[0]["manifest"]
+    assert ctms.opened == [] and ctms.lines_total(man) == 740.0 and job.priced == []
+
+
+def test_payment_lines_are_read_by_place_an_amount_and_its_vat_a_line():
+    ctms = _quoted()
+    ctms.payments["MAN-1"] = [["HIAB", 70.0], ["Trip Haul Ma", 1234.5]]
+    ctms.pay_up = "MAN-1"
+    rows = B.payment_rows(B.window_with(ctms.read(), B.PAYMENTS_FRAME))
+    assert [(B.line_kind(r), r["amount"]) for r in rows] == [("HIAB", 70.0), ("Trip Haul Ma", 1234.5)]
+    line, others, new = B.price_plan(rows, 1000)
+    assert line is rows[1] and (others, new) == (70.0, 930.0)
+    for lines, words in (([["Trip Haulage", 500.0], ["Trip Haul Ma", 500.0]], "2 haulage lines"), ([["NIGHT", 9.0]], "0 haulage")):
+        ctms.payments["MAN-1"] = lines
+        try:
+            B.price_plan(B.payment_rows(B.window_with(ctms.read(), B.PAYMENTS_FRAME)), 1000)
+            raise AssertionError("should have stopped")
+        except B.Stop as e:
+            assert words in str(e)
 
 
 def test_a_box_under_the_price_typed_stops_with_nothing_booked():

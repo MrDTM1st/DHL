@@ -205,6 +205,22 @@ def test_a_booking_writes_the_row_emails_the_site_files_and_takes_it_off_in_that
     assert J.get(J.key(JOB["orders"], DATE))["state"] == "done"
 
 
+def test_he_is_told_the_hauliers_own_lines_came_off_his_quote(steps):
+    note = ("MAN-01000001: the haulier's own lines (HIAB 70.00, NIGHT 110.00) taken off the 900 quote - haulage 720.00, "
+            "total 900.00")
+    answer = ({"ok": True, "detail": "Booked 9000001 in 60s: MAN-01000001 ACCEPTED"},
+              {"trips": [dict(TRIP, cost="900.00")], "seconds": 60, "priced": [note]})
+    res = B.book(dict(JOB, haulage=900), R=FakeR(answer))
+    assert res["ok"] and f"Price: {note}." in res["said"]
+    check = "CHECK BY HAND: MAN-01000003's lines couldn't be looked at again once it was ACCEPTED (x) - they came to it before"
+    answer = ({"ok": True, "detail": "Booked"}, {"trips": [dict(TRIP, manifest="MAN-01000003")], "seconds": 60,
+                                                 "notes": ["CTMS had \"x\" up from before: OK'd it", check]})
+    res = B.book(dict(JOB, orders=["9000003"], record="9000003|06/11/2026"), R=FakeR(answer))
+    assert f"{check}." in res["said"] and "up from before" not in res["said"]
+    assert "Price:" not in B.book(dict(JOB, orders=["9000002"], record="9000002|06/11/2026"),
+                                  R=FakeR(_answer([dict(TRIP, manifest="MAN-01000002")])))["said"]
+
+
 def test_pressing_book_again_on_a_finished_job_books_nothing(steps):
     R = FakeR(_answer([TRIP]))
     B.book(dict(JOB), R=R)

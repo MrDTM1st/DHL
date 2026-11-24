@@ -1058,6 +1058,12 @@ def book(job, R=None, now=None):
              if "put right" in n or "put up to" in n or "PUT BACK BY HAND" in n or "split into" in n]
     if fixed:
         said.append("On the lines first: " + "; ".join(fixed) + ".")
+    priced = [str(n) for n in payload.get("priced") or []]    # a quote is the TOTAL: the haulier's own lines came off it
+    if priced:
+        said.append("Price: " + "; ".join(priced) + ".")
+    by_hand = [str(n) for n in payload.get("notes") or [] if str(n).startswith(("CLOSE BY HAND", "CHECK BY HAND"))]
+    if by_hand and result.get("ok"):                          # a stop's own words carry them already
+        said.append("; ".join(by_hand) + ".")
     if not result.get("ok"):
         said.append(f"Then CTMS stopped: {result.get('detail')} What was ACCEPTED is followed up below.")
     for t in made:

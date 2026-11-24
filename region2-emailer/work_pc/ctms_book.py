@@ -18,7 +18,9 @@ through the Access Bridge. In order, the way he books:
      others sit between them), Create New Trip, the carrier, the trailer, the haulage (typed only when he gave one: tier 1
      comes off the matrix, DHL NOC stays 0), Create Trip, Yes once the box names the right carrier and a real cost; Save;
      Planned Orders says what the trip took - a line of ours it didn't gets Apply to Trip, one that isn't ours stops it
-  6. every line checked on the manifest, set Accepted, Save, read back
+  6. every line checked on the manifest; with his quote, the trip's carrier lines made to add up to it (his 09/11: a quote
+     is the TOTAL - CTMS's own lines for the haulier's HIAB, NIGHT, SAT, SUN stay, the haulage takes what's left); set
+     Accepted, Save, read back
 
 Anything not as expected stops there with what was done so far, and any box left open is backed out of so nothing goes
 on half made. dry runs it all but presses No at the last box, so a run can be tried with nothing booked - but CTMS keeps a
@@ -298,6 +300,121 @@ def edit_box(win):
                  and not {"disabled", "read-only"} & set(e.get("st") or [])), None)
 
 
+# -- a trip's carrier lines (Planning > Finance > the left-hand Payments). His rule 09/11: a quote is the trip's TOTAL, yet
+# CTMS puts the haulier's own lines for the order's services (HIAB, NIGHT, SAT, SUN...) on top of the haulage typed: on
+# 23/11 four of them went on over a quote, so the manifest went out at far more than it and was put right by hand.
+PAYMENTS_FRAME = "Payments for Trip"
+HAULAGE = re.compile(r"\s*trip haul", re.I)       # "Trip Haulage" - or "Trip Haul Ma", the line a typed haulage makes
+TAB_PREFIX = re.compile(r"^(?:[\w &/]+? tab page )+")
+DATE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+
+
+def clean(name):
+    """A name without the "<tab> tab page " the Access Bridge puts before it - once more on every visit to the tab - nor an
+    ALT shortcut after it."""
+    name = re.sub(r"\s+", " ", re.sub(r"\s+(?:mnemonic|ALT)\s+\S+$", "", str(name or ""))).strip()
+    return TAB_PREFIX.sub("", name).strip()
+
+
+def cut_short(name, tab):
+    """Whether a name is only what is left of "<tab> tab page" once the Access Bridge cut it off: late on 23/11 the carrier's
+    Payments read "Finance tab page" eleven times over and ended before its own word."""
+    n = str(name or "").strip()
+    return bool(n) and f"{tab} tab page".startswith(n)
+
+
+def under(els, el):
+    """Everything under el in the Access Bridge's tree: the elements after it with a deeper level."""
+    i = next((k for k, e in enumerate(els) if e is el), None)
+    if i is None:
+        return []
+    out = []
+    for e in els[i + 1:]:
+        if e.get("lv", 0) <= el.get("lv", 0):
+            break
+        out.append(e)
+    return out
+
+
+def amount(text):
+    try:
+        return float(str(text).replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def carrier_payments(page):
+    """The carrier's Payments on Planning's Finance tab, or None: the button on the Trip Revenue row, left of it - the one
+    right of it is the revenue's, and Calc Costs (never pressed) sits under that. Its name reads "Payments", or is cut
+    short (23/11: the old by-name pick opened Order Revenue instead)."""
+    pays = [e for e in page if e.get("r") == "push button" and placed(e)
+            and (clean(e.get("nm")) == "Payments" or cut_short(clean(e.get("nm")), "Finance"))]
+    rev = next((e for e in page if clean(e.get("nm")) == "Trip Revenue" and placed(e)), None)
+    if rev is not None:
+        mid = rev["at"][1] + rev["at"][3] / 2
+        row = [e for e in pays if abs(e["at"][1] + e["at"][3] / 2 - mid) <= 10 and e["at"][0] + e["at"][2] <= rev["at"][0]]
+        return row[0] if len(row) == 1 else None
+    named = sorted((e for e in pays if clean(e.get("nm")) == "Payments"), key=lambda e: e["at"][0])
+    return named[0] if len(named) == 2 else None
+
+
+def payment_rows(win):
+    """The lines on a trip's Payments window, top first: [{"cells", "amount", "el"}]. A line is the texts level with an
+    AMOUNT cell that holds a figure - two a line, the amount and then its VAT - read by their place: the grid's cells have
+    no other names (30/10, 23/11)."""
+    part = [e for e in win or [] if e.get("r") == "text" and placed(e)]
+    figures = sorted((e for e in part if "AMOUNT" in str(e.get("nm") or "") and str(e.get("v") or "").strip()),
+                     key=lambda e: (e["at"][1], e["at"][0]))
+    rows, top = [], None
+    for e in figures:
+        if top is None or e["at"][1] - top > 3:
+            rows.append([])
+            top = e["at"][1]
+        rows[-1].append(e)
+    out = []
+    for line in rows:
+        first = min(line, key=lambda e: e["at"][0])
+        cells = sorted((e for e in part if abs(e["at"][1] - first["at"][1]) <= 3), key=lambda e: e["at"][0])
+        out.append({"cells": [str(e.get("v") or "").strip() for e in cells], "amount": amount(first.get("v")),
+                    "el": cells[0]})
+    return out
+
+
+def line_kind(row):
+    """What a payment line is: its first cell that isn't a date ("HIAB", "NIGHT", "Trip Haul Ma")."""
+    return next((c for c in row["cells"] if c and not DATE.match(c)), "?")
+
+
+def price_plan(rows, quote):
+    """How the trip's lines come to the quote: (the haulage line, the other lines' sum, the haulage's new amount). The other
+    lines stay as CTMS made them; only the haulage moves. Stop unless there is one haulage line and the others leave it
+    something."""
+    haul = [r for r in rows if any(HAULAGE.match(c) for c in r["cells"])]
+    if len(haul) != 1:
+        raise Stop(f"it has {len(haul)} haulage lines ({', '.join(line_kind(r) for r in rows) or 'no lines'}), and only "
+                   "one can be set.")
+    others = round(sum(r["amount"] or 0 for r in rows if r is not haul[0]), 2)
+    new = round(quote - others, 2)
+    if new <= 0:
+        raise Stop(f"the haulier's own lines already come to {others:.2f}, more than the quote.")
+    return haul[0], others, new
+
+
+def pressable(win, name):
+    """A push button among these, on the screen and enabled, by its name as clean reads it."""
+    return next((e for e in win or [] if e.get("r") == "push button" and placed(e) and "disabled" not in (e.get("st") or [])
+                 and clean(e.get("nm")).lower() == name.lower()), None)
+
+
+def payment_box(els):
+    """The box Edit opens on one payment ("Payment " and its number): its frame and what's in it, or None."""
+    for e in els:
+        nm = str(e.get("nm") or "")
+        if e.get("r") == "internal frame" and nm.startswith("Payment ") and not nm.startswith(PAYMENTS_FRAME):
+            return [e] + under(els, e)
+    return None
+
+
 def type_rows(els):
     """The Delivery Types list's rows, top first, each as its first column reads - None when the list isn't up."""
     win = ctms_rows._frame(els, TYPES_FRAME)
@@ -350,6 +467,7 @@ class Booking:
         self.has_tree = False
         self.veh_kept = ""         # what CTMS now keeps as the Veh Type of the line taken to the carrier screen
         self.said = []
+        self.priced = []           # each trip whose haulage was set so its lines add up to his quote, in words
         self.stages = []
         self._t = time.time()
 
@@ -1407,22 +1525,190 @@ class Booking:
 
     def accept(self, manifest):
         """Set Status > Accepted, its OK, Save, read back. The manifest has to be on the screen: it is the one just made."""
+        self.set_status(manifest, "ACCEPTED")
+
+    def set_status(self, manifest, status):
+        """Set Status > Accepted or Planned on the manifest just made: its OK, Save, read back - never tried twice."""
         got = manifests(self.els if self.has_tree else self.look(tree=True)).get(manifest)
+        was = (got or {}).get("status") or "PLANNED"
         box = tree_box(self.els)
         if not got or not placed(got) or (box and not box[1] <= got["at"][1] <= box[1] + box[3] - got["at"][3]):
-            raise Stop(f"{manifest} is made, but isn't on the screen in the tree to accept: it's still PLANNED.")
+            raise Stop(f"{manifest} is made, but isn't on the screen in the tree to "
+                       f"{'accept' if status == 'ACCEPTED' else 'set ' + status}: it's still {was}.")
         pt = _at(got)
         self.run([{"action": "click", "screen": pt, "after": 0.5}, {"action": "click", "screen": pt, "right": True, "after": 0.3},
                   _find(self.t, "mt-set-status", TREE_MENU, 3, click=True, after=0.3),
-                  _find(self.t, "st-accepted", STATUS_MENU, 3, click=True, after=0.2)])
+                  _find(self.t, f"st-{status.lower()}", STATUS_MENU, 3, click=True, after=0.2)])
         q = self.asked(seconds=5)
         if q is None:
-            raise Stop(f"{manifest}: Set Status asked nothing, so it's still PLANNED: look at it before anything else.")
+            raise Stop(f"{manifest}: Set Status asked nothing, so it's still {was}: look at it before anything else.")
         self.run([self.ok_step(q, react=True, timeout=10), _click(PLANNING_SAVE, after=0.8)])
         for _ in range(4):
-            if (manifests(self.look(tree=True)).get(manifest) or {}).get("status") == "ACCEPTED":
+            if (manifests(self.look(tree=True)).get(manifest) or {}).get("status") == status:
                 return
-        raise Stop(f"{manifest} did not read back as ACCEPTED: look at it in Planning.")
+        raise Stop(f"{manifest} did not read back as {status}: look at it in Planning.")
+
+    def resend(self, trip, quote):
+        """The manifest sent to the haulier again now its price has changed - his way (30/10): Planned, Save, then
+        Accepted, Save. One that can't be stops the booking saying where it was left."""
+        man = trip["manifest"]
+        try:
+            self.set_status(man, "PLANNED")
+            self.set_status(man, "ACCEPTED")
+        except StopPressed:
+            raise
+        except RuntimeError as e:                     # a Stop, or a step the work PC couldn't take
+            try:
+                now = (manifests(self.look(tree=True)).get(man) or {}).get("status")
+            except Exception:
+                now = None
+            trip["status"] = now or trip.get("status")
+            raise Stop(f"{man}'s lines now add up to the {quote:g} quote, but it couldn't be sent to the haulier again "
+                       f"(it reads {now or 'as nothing'} now): {str(e).rstrip('.')}. By hand: Set Status Planned, Save, "
+                       "then Accepted, Save.") from e
+
+    # -- the price: a quote is the trip's TOTAL (his 09/11)
+    def to_quote(self, trip, quote, accepted=False):
+        """The trip's carrier lines made to add up to his quote: CTMS's own lines for the haulier's services stay, and the
+        haulage line takes what's left. Done before Accepted, so the manifest goes out once and right; looked at again
+        after when nothing was there to take off yet, in case CTMS only puts them on with Accepted. True when the haulage
+        was changed. A trip whose lines can't be made to add up stops the booking there, said."""
+        man = trip["manifest"]
+        try:
+            try:
+                self.select_trip(man)
+                rows = self.open_payments(man)
+            except RuntimeError as e:                 # a Stop, or a step the work PC couldn't take
+                if not accepted or isinstance(e, StopPressed):
+                    raise
+                # only a second look, its lines having come to the quote before Accepted: said, the booking goes on
+                self.said.append(f"CHECK BY HAND: {man}'s lines couldn't be looked at again once it was ACCEPTED ({e}) - "
+                                 f"they came to the {quote:g} quote before")
+                return False
+            unread = [line_kind(r) for r in rows if r["amount"] is None]
+            if unread:
+                raise Stop(f"the amount on its {', '.join(unread)} line couldn't be read.")
+            total = round(sum(r["amount"] for r in rows), 2)
+            trip["total"] = f"{total:.2f}"
+            if abs(total - quote) < 0.005:
+                return False
+            line, others, new = price_plan(rows, quote)
+            self.set_haulage(line, new, quote)
+            trip.update(total=f"{quote:.2f}", extras=f"{others:.2f}", haulage=f"{new:.2f}")
+            kinds = ", ".join(f"{line_kind(r)} {r['amount']:.2f}" for r in rows if r is not line)
+            self.priced.append(f"{man}: the haulier's own lines ({kinds}) taken off the {quote:g} quote - haulage "
+                               f"{new:.2f}, total {quote:.2f}")
+            return True
+        except StopPressed:
+            raise
+        except RuntimeError as e:
+            raise Stop(f"{man} is made and {'ACCEPTED' if accepted else 'still PLANNED'}, but its price couldn't be "
+                       f"made the {quote:g} quote: {str(e).rstrip('.')}. By hand: Finance > Payments, the haulage line "
+                       f"set so the lines add up to {quote:g}" + (", then Planned and Accepted to send it again." if accepted
+                                                                  else ", then accept it.")) from e
+        finally:
+            self.payments_away()
+
+    def select_trip(self, manifest):
+        """The manifest selected in the tree - the Finance tab shows the selected trip's money. The trip just made comes
+        selected; if it isn't, it is clicked, as Accepted's own first click does."""
+        got = manifests(self.look(tree=True)).get(manifest)
+        if got and got["selected"]:
+            return
+        box = tree_box(self.els)
+        if not got or not placed(got) or (box and not box[1] <= got["at"][1] <= box[1] + box[3] - got["at"][3]):
+            raise Stop("it isn't on the screen in the tree to select.")
+        self.run([{"action": "click", "screen": _at(got), "after": 0.6}])
+        if not (manifests(self.look(tree=True)).get(manifest) or {}).get("selected"):
+            raise Stop("clicking it in the tree didn't select it.")
+
+    def finance_page(self):
+        """Planning's Finance tab up, and what's on it. The top one of that name: Planning has a second Finance tab lower
+        down. A first click may only give Java the focus."""
+        for _ in range(3):
+            tabs = [e for e in ctms_rows._frame(self.els) or [] if e.get("r") == "page tab" and clean(e.get("nm")) == "Finance"
+                    and placed(e)]
+            if not tabs:
+                raise Stop("Planning's Finance tab couldn't be found.")
+            tab = min(tabs, key=lambda e: e["at"][1])
+            if "selected" in (tab.get("st") or []):
+                return under(self.els, tab)
+            self.run([{"action": "click", "screen": _at(tab), "after": 0.8}])
+            self.look()
+        raise Stop("Planning's Finance tab wouldn't come up.")
+
+    def open_payments(self, manifest):
+        """The trip's carrier Payments open, proved to be this manifest's: its lines, as payment_rows reads them."""
+        page = self.finance_page()
+        pay = carrier_payments(page)
+        if pay is None:
+            raise Stop("the carrier's Payments couldn't be told on the Finance tab (buttons: "
+                       + ", ".join(repr(clean(e.get("nm"))) for e in page if e.get("r") == "push button") + ").")
+        self.run([{"action": "click", "screen": _at(pay), "after": 1.5}])
+        win = self.until(lambda els: window_with(els, PAYMENTS_FRAME), 10, "The trip's Payments")
+        name = str(win[0].get("nm") or "")
+        if manifest not in name:
+            raise Stop(f"the Payments that opened are \"{name}\", not {manifest}'s.")
+        rows = payment_rows(win)
+        if not rows:
+            raise Stop("its Payments show no lines at all.")
+        return rows
+
+    def set_haulage(self, line, new, quote):
+        """The haulage line's Edit: the Type proved to be the haulage, its amount box (the one holding the old figure) typed
+        over, read back, OK - which saves it there and then - and the lines read back adding up to the quote."""
+        win = window_with(self.els, PAYMENTS_FRAME)
+        edit = pressable(win, "Edit")
+        if edit is None:
+            raise Stop("the Payments window's Edit couldn't be found.")
+        self.run([{"action": "click", "screen": _at(line["el"]), "after": 0.6},
+                  {"action": "click", "screen": _at(edit), "after": 1.5}])
+        box = self.until(payment_box, 8, "The haulage line's own box")
+        kind = next((e for e in box if e.get("r") == "combo box" and clean(e.get("nm")) == "Type"), None)
+        if kind is None or not HAULAGE.match(str(kind.get("v") or "")):
+            raise Stop(f"the box Edit opened is for \"{(kind or {}).get('v', '?')}\", not the haulage line.")
+        was = line["amount"] or 0
+        boxes = [e for e in box if e.get("r") == "text" and placed(e) and not {"read-only", "disabled"} & set(e.get("st") or [])
+                 and amount(e.get("v")) is not None and abs(amount(e.get("v")) - was) < 0.005]
+        if len(boxes) != 1:
+            raise Stop(f"its amount box couldn't be told ({len(boxes)} boxes hold {was:.2f}).")
+        self.run([{"action": "click", "screen": _at(boxes[0]), "after": 0.3}, _key("home"), _key("shift+end"),
+                  {"action": "type", "text": f"{new:.2f}", "after": 0.2}, _key("tab", 0.5)])
+        box = payment_box(self.look()) or []
+        if not any(e.get("r") == "text" and abs((amount(e.get("v")) or -1) - new) < 0.005 and
+                   not {"read-only", "disabled"} & set(e.get("st") or []) for e in box):
+            raise Stop(f"the amount didn't read back as {new:.2f}, so it wasn't OK'd.")
+        ok = pressable(box, "OK")
+        if ok is None:
+            raise Stop("the box's OK couldn't be found, so the new amount wasn't saved.")
+        self.run([{"action": "click", "screen": _at(ok), "after": 1.5}])
+        for _ in range(8):                            # anything CTMS asks now stops it, answered the way that changes nothing
+            if payment_box(self.look()) is None:
+                break
+            time.sleep(0.5)
+        else:
+            raise Stop("the haulage line's box didn't close on its OK.")
+        got = round(sum(r["amount"] or 0 for r in payment_rows(window_with(self.els, PAYMENTS_FRAME))), 2)
+        if abs(got - quote) > 0.005:
+            raise Stop(f"the lines read back adding up to {got:.2f}, not {quote:.2f}.")
+
+    def payments_away(self):
+        """The Payments window and any box of it closed, by their own Cancel and Close, and the Stops tab put back up -
+        Planned Orders and the next trip want it. Never in the way of what stopped the booking."""
+        try:
+            self.look(asking=True)
+            box = payment_box(self.els)
+            if box:
+                cancel = pressable(box, "Cancel")
+                self.run([{"action": "click", "screen": _at(cancel), "after": 0.8} if cancel is not None else _key("escape", 0.8)])
+                self.look(asking=True)
+            close = pressable(window_with(self.els, PAYMENTS_FRAME), "Close")
+            if close is not None:
+                self.run([{"action": "click", "screen": _at(close), "after": 1.0}])
+                self.look()
+            self.stops_tab()
+        except Exception as e:                      # said for him to look at; what stopped the booking stays what's said
+            self.said.append(f"CLOSE BY HAND: the trip's Payments window ({str(e)[:80]})")
 
     def trip(self, refs, carrier, trailer, haulage):
         """One vehicle: its first line's new trip, the others applied to it, the check, Accepted. Once its Confirm box
@@ -1455,9 +1741,17 @@ class Booking:
                 done["lines"].append(ref)
         self.stage("the trip")
         self.check_order(got["manifest"], refs)
+        quote = float(haulage) if haulage not in (None, "") and float(haulage) > 0 else None
+        took_off = quote is not None and self.to_quote(done, quote)
+        if quote is not None:
+            self.stage("the quote")
         self.accept(got["manifest"])
         done["status"] = "ACCEPTED"
         self.stage("accepted")
+        if quote is not None and not took_off and self.to_quote(done, quote, accepted=True):
+            self.resend(done, quote)       # CTMS put the haulier's lines on only with Accepted: it goes again, right
+            self.priced[-1] += ", then sent to the haulier again (Planned, then Accepted)"
+            self.stage("sent again")
         try:                               # the booking's carrier window goes too, if it's in front
             self.look()
             self.carrier_window_away()
