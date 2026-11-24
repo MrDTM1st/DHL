@@ -75,6 +75,14 @@ class Held(Exception):
     """CTMS has the update already - nothing typed, the item stays on the to-do."""
 
 
+GONE = ("CANCELLED", "ABORTED")    # a line CTMS has finished with: never updated (his 24/11)
+
+
+class Gone(Exception):
+    """The line is CANCELLED (or ABORTED) in CTMS: left alone, nothing typed - his 24/11 "on ctms to do, avoid updating
+    cancelled orders". Order Summary's row says so before the card is opened."""
+
+
 def templates():
     with open(TEMPLATES, encoding="utf-8") as f:
         t = json.load(f)
@@ -162,20 +170,20 @@ def services(els):
 
 
 def summary_line(els, ref):
-    """Order Summary's row for one line: {ready_at, deliver_by} - None when it isn't listed."""
+    """Order Summary's row for one line: {ready_at, deliver_by, status} - None when it isn't listed."""
     frame = ctms_rows._frame(els, "Order Summary")
     if frame is None:
         return None
     cols = {}
     for e in frame:
         m = re.fullmatch(r"Enter value for : (\w+)(?:\s+Required)?", str(e.get("nm") or ""))   # the app's " Required"
-        if e.get("r") == "text" and m and m.group(1) in ("EXTERNAL_REF", "EARLY_AVAIL", "LATE_DEL") and e.get("at"):
+        if e.get("r") == "text" and m and m.group(1) in ("EXTERNAL_REF", "EARLY_AVAIL", "LATE_DEL", "STATUS") and e.get("at"):
             cols.setdefault(m.group(1), []).append((e["at"][1], str(e.get("v") or "").strip()))
     down = {k: [v for _, v in sorted(c)] for k, c in cols.items()}
     for n, r in enumerate(down.get("EXTERNAL_REF") or []):
         if r == ref:
             pick = lambda k: (down.get(k) or [""] * (n + 1))[n] if n < len(down.get(k) or []) else ""  # noqa: E731
-            return {"ready_at": pick("EARLY_AVAIL"), "deliver_by": pick("LATE_DEL")}
+            return {"ready_at": pick("EARLY_AVAIL"), "deliver_by": pick("LATE_DEL"), "status": pick("STATUS")}
     return None
 
 
@@ -343,7 +351,8 @@ class Items:
 
     def open(self, ref, read_line=False):
         """One line's card, proved to be that line's by its Customer Ref. A scheduled line asks "are you sure?" instead of
-        opening, and stops here. read_line: Order Summary's times for it kept first, as self.line."""
+        opening, and stops here; a CANCELLED (or ABORTED) one isn't opened at all - Gone (his 24/11). read_line: Order
+        Summary's times for it kept first, as self.line."""
         self.to_search()
         parts = ctms_orders.card_parts(self.els)          # to_search's read: the card up
         if parts and not parts.get("customer"):
@@ -353,10 +362,14 @@ class Items:
             self.run(ctms_orders.search_at(self.els, ref))
         except RuntimeError:
             raise Stop(f"{ref}: CTMS's search found nothing for it.")
+        line = summary_line(self.look(), ref)
         if read_line:
-            self.line = summary_line(self.look(), ref)
+            self.line = line
+        status = str((line or {}).get("status") or "").upper()
+        if status in GONE:
+            raise Gone(f"{ref} is {status} in CTMS - left alone, nothing typed")
         try:
-            self.run(ctms_orders.open_line_at(self.els if read_line else self.look(), self.t))
+            self.run(ctms_orders.open_line_at(self.els, self.t))
         except RuntimeError:
             raise Stop(f"{ref}: its card wouldn't open - it may have been booked since.")
         self.look()
@@ -454,23 +467,34 @@ class Items:
         used to be saved, and had to be taken back by hand)."""
         s = item.get("set") or {}
         self.refs = list(item.get("lines") or [])
+        # a CANCELLED (or ABORTED) line is left alone (his 24/11): a note on one has nothing to do, so the item is done and
+        # comes off the to-do saying why; an update goes on with its other lines
         if item.get("kind") == "note":
-            return self.note(item["lines"][0], s.get("note") or "", dry=dry)
+            try:
+                return self.note(item["lines"][0], s.get("note") or "", dry=dry)
+            except Gone as e:
+                return str(e)
         if dry:
-            return self.update(item["lines"][0], s, dry=True)
-        lines, saved = list(item.get("lines") or []), []
+            try:
+                return self.update(item["lines"][0], s, dry=True)
+            except Gone as e:
+                return str(e)
+        lines, saved, alone = list(item.get("lines") or []), [], []
         for i, ref in enumerate(lines):
             try:
                 saved.append(self.update(ref, s))
+            except Gone as e:
+                alone.append(str(e))
             except Exception as e:
                 if not saved:
                     raise
                 # a later line stopped: the lines before it ARE saved in CTMS, and the answer must say so
                 rest = lines[i + 1:]
                 said = (f"Saved first: {'; '.join(saved)}. Then {ref} was not: {e}"
-                        + (f" Not tried: {', '.join(rest)}." if rest else ""))
+                        + (f" Not tried: {', '.join(rest)}." if rest else "")
+                        + (f" Left alone: {'; '.join(alone)}." if alone else ""))
                 raise (type(e) if isinstance(e, (Stop, Held)) else Stop)(said) from e
-        return "; ".join(saved)
+        return "; ".join(saved + alone)
 
     def note(self, ref, note, dry=False):
         self.open(ref)

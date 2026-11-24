@@ -24,10 +24,12 @@ class Templates(dict):
 class FakeOrder:
     """The screen: an order card over Order Summary. `lands_in` is where a click on Special Instructions really puts the cursor."""
 
-    def __init__(self, ref="9100001-1-1", si="BPA ref", veh="", comment="", have=(), lands_in="si", save_works=True, ready="", deliver_by=""):
+    def __init__(self, ref="9100001-1-1", si="BPA ref", veh="", comment="", have=(), lands_in="si", save_works=True, ready="", deliver_by="",
+                 status="UNSCHEDULED"):
         self.ref, self.si, self.veh, self.comment, self.have = ref, si, veh, comment, list(have)
         self.lands_in, self.save_works = lands_in, save_works
         self.ready, self.deliver_by = ready, deliver_by
+        self.status = status            # Order Summary's Status for the line
         self.cost = "NRCC"
         self.open_card = False
         self.tab = "detail"
@@ -75,6 +77,7 @@ class FakeOrder:
                 {"r": "text", "nm": "Enter value for : EXTERNAL_REF", "v": self.ref, "lv": 3, "at": [0, 100]},
                 {"r": "text", "nm": "Enter value for : EARLY_AVAIL", "v": self.ready, "lv": 3, "at": [0, 100]},
                 {"r": "text", "nm": "Enter value for : LATE_DEL", "v": self.deliver_by, "lv": 3, "at": [0, 100]},
+                {"r": "text", "nm": "Enter value for : STATUS Required", "v": self.status, "lv": 3, "at": [0, 100]},
                 {"r": "internal frame", "nm": "Planning", "lv": 0}]
         return els
 
@@ -597,6 +600,51 @@ def test_an_item_does_each_of_its_lines():
     assert job.refs == ["9100001-1-1", "9100001-2-1"]
 
 
+def test_a_cancelled_line_is_never_opened_or_noted_and_the_note_comes_off_the_to_do():
+    # his 24/11: "on ctms to do, avoid updating cancelled orders"
+    for status in ("CANCELLED", "ABORTED"):
+        o = FakeOrder(status=status)
+        said = _items(o).do({"kind": "note", "lines": ["9100001-1-1"], "set": {"note": NOTE}})
+        assert said == f"9100001-1-1 is {status} in CTMS - left alone, nothing typed"
+        assert not any(s.get("name") == "od-vehtype" for s in o.steps)       # its card was never opened
+        assert NOTE not in o.typed and o.si == "BPA ref" and o.saved == 0
+
+
+def test_a_cancelled_line_gets_no_update_and_a_rehearsal_says_so():
+    o = FakeOrder(status="CANCELLED")
+    assert _items(o).do({"kind": "update", "lines": ["9100001-1-1"], "set": SET}) == \
+        "9100001-1-1 is CANCELLED in CTMS - left alone, nothing typed"
+    assert not any(s.get("name") == "od-vehtype" for s in o.steps) and o.saved == 0 and o.typed == ["9100001-1-1"]
+    o = FakeOrder(status="CANCELLED")
+    assert "left alone" in _items(o).do({"kind": "update", "lines": ["9100001-1-1"], "set": SET}, dry=True)
+    assert o.saved == 0
+
+
+def test_an_items_cancelled_line_is_left_alone_and_its_others_done():
+    job = _items(_updated())
+
+    def one(ref, s):
+        if ref == "9100001-2-1":
+            raise I.Gone(f"{ref} is CANCELLED in CTMS - left alone, nothing typed")
+        return f"{ref}: done"
+    job.update = one
+    said = job.do({"kind": "update", "lines": ["9100001-1-1", "9100001-2-1", "9100001-3-1"], "set": SET})
+    assert said == ("9100001-1-1: done; 9100001-3-1: done; "
+                    "9100001-2-1 is CANCELLED in CTMS - left alone, nothing typed")
+
+    def then_stops(ref, s):
+        if ref == "9100001-3-1":
+            raise I.Stop(f"{ref}: its card wouldn't open.")
+        return one(ref, s)
+    job.update = then_stops
+    try:
+        job.do({"kind": "update", "lines": ["9100001-1-1", "9100001-2-1", "9100001-3-1"], "set": SET})
+        raise AssertionError("should have stopped")
+    except I.Stop as e:
+        assert str(e).startswith("Saved first: 9100001-1-1: done. Then 9100001-3-1 was not: ")
+        assert str(e).endswith("Left alone: 9100001-2-1 is CANCELLED in CTMS - left alone, nothing typed.")
+
+
 def test_a_line_that_stops_after_one_was_saved_says_which_was_saved_and_which_wasnt():
     job = _items(_updated())
     lines = ["9100001-1-1", "9100001-2-1", "9100001-3-1"]
@@ -631,7 +679,8 @@ def test_the_parsers():
     assert I.window_parts("05/11/26 22:00-06/11/26 06:00") == ("05/11/26", "22:00", "06/11/26", "06:00")
     assert I.ends("05/11/26 08:00-12:00") == ("05/11/26 08:00", "05/11/26 12:00") and I.ends(None) == ("", "")
     o = FakeOrder(ready="a", deliver_by="b")
-    assert I.summary_line(o.read(), o.ref) == {"ready_at": "a", "deliver_by": "b"} and I.summary_line(o.read(), "x") is None
+    assert I.summary_line(o.read(), o.ref) == {"ready_at": "a", "deliver_by": "b", "status": "UNSCHEDULED"}
+    assert I.summary_line(o.read(), "x") is None
     assert I.question(o.read()) is None
     o.open_card, o.asked = True, "Do you want to discard your changes?"
     words, buttons = I.question(o.read())
@@ -640,7 +689,7 @@ def test_the_parsers():
     req = [{"r": "internal frame", "nm": "Order Summary", "lv": 0},
            {"r": "text", "nm": "Enter value for : EXTERNAL_REF", "v": "9100001-1-1", "lv": 3, "at": [0, 100]},
            {"r": "text", "nm": "Enter value for : LATE_DEL Required", "v": "b", "lv": 3, "at": [0, 100]}]
-    assert I.summary_line(req, "9100001-1-1") == {"ready_at": "", "deliver_by": "b"}
+    assert I.summary_line(req, "9100001-1-1") == {"ready_at": "", "deliver_by": "b", "status": ""}
 
 
 class AppCardOrder(FakeOrder):
