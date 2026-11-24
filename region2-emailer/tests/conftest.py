@@ -12,6 +12,9 @@ import pytest
 # subprocess to ctms_routes.py). No test may ever reach the real CTMS that way: their stand-in clients only fake Book's
 # own ask.
 os.environ["R2_NO_CARD_READ"] = "1"
+# Nor may a test ring his real phone: the inbox assistant's phone alerts (inbox_assist.alert_phone) only go through a
+# stand-in a test hands them, never through push_notify's real subscriptions.
+os.environ["R2_NO_PUSH"] = "1"
 
 
 @pytest.fixture

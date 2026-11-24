@@ -467,3 +467,49 @@ def test_the_card_marks_a_reply_it_can_send():
     p = A.panel(d, now=datetime(2026, 11, 24, 11, 0))
     by = {x["id"]: x for x in p["needs"]}
     assert by["x1"]["sendable"] and by["x1"]["cc"] == "Jo Example" and not by["x2"]["sendable"]
+
+
+# ---------- phone alerts (his 24/11) ----------
+class _Push:
+    def __init__(self, subs=1):
+        self.subs, self.sent = subs, []
+
+    def count(self):
+        return self.subs
+
+    def notify(self, title, body, url="/", tag=None):
+        self.sent.append((title, body, tag))
+        return {"sent": self.subs, "dropped": 0, "error": None}
+
+
+def _items_for_alerts():
+    return {"mode": "shadow", "items": {
+        "n1": {"id": "n1", "state": "open", "kind": "needs", "urgency": "now", "from": "Sam Asker",
+               "ask": "Sam asks if the driver can wait", "received": "2026-11-24 10:55:00"},
+        "t1": {"id": "t1", "state": "open", "kind": "needs", "urgency": "today", "from": "Jo Example",
+               "ask": "Jo asks for a time", "received": "2026-11-24 10:50:00"},
+        "w1": {"id": "w1", "state": "open", "kind": "pending", "words": ["urgent", "says urgent"], "from": "Robin Field",
+               "subject": "URGENT: gate locked", "received": "2026-11-24 10:58:00"},
+        "f1": {"id": "f1", "state": "open", "kind": "file", "from": "Teams", "subject": "x", "received": "2026-11-24 10:00:00"},
+        "d1": {"id": "d1", "state": "dealt", "kind": "needs", "urgency": "now", "from": "Pat", "ask": "y",
+               "received": "2026-11-24 10:00:00"}}}
+
+
+def test_a_now_email_rings_his_phone_once_and_today_waits_for_its_bell():
+    push, d, now = _Push(), _items_for_alerts(), datetime(2026, 11, 24, 11, 0)
+    alerts = A.alert_phone(d, now, push=push)
+    assert sorted(t for _, _, t in alerts) == ["assist-n1", "assist-w1"]                # now, and the urgent words
+    assert alerts[0][0].startswith("Needs you now: ") and d["items"]["n1"]["alerted"] and "alerted" not in d["items"]["t1"]
+    assert A.ring(alerts, push=push) == 2 and len(push.sent) == 2
+    assert A.alert_phone(d, now, push=push) == []                                     # each rings once
+    later = A.alert_phone(d, datetime(2026, 11, 24, 12, 0), push=push)                 # today's bell: 60 working mins
+    assert [t for _, _, t in later] == ["assist-t1"] and later[0][0].startswith("Still waiting: ")
+
+
+def test_no_alert_while_off_or_with_no_phone_signed_up_and_nothing_marked():
+    d = _items_for_alerts()
+    assert A.alert_phone(d, datetime(2026, 11, 24, 11, 0), push=_Push(subs=0)) == []
+    assert not any(it.get("alerted") for it in d["items"].values())
+    d["mode"] = "off"
+    assert A.alert_phone(d, datetime(2026, 11, 24, 11, 0), push=_Push()) == []
+    assert A.ring([("t", "b", "x")], push=types.SimpleNamespace(notify=lambda *a: 1 / 0)) == 0      # never raises

@@ -467,6 +467,7 @@ def sweep(ns=None, now=None):
         holidays = set()
     t0 = time.time()
     now = now or datetime.now()
+    alerts = []
     h = _lock()
     try:
         d = load()
@@ -535,9 +536,11 @@ def sweep(ns=None, now=None):
         d["items"] = {k: v for k, v in d["items"].items() if v.get("received", "") >= cut or v["state"] == "open"}
         d.update(at=now.strftime("%d/%m %H:%M"), seconds=round(time.time() - t0, 1), read=len(msgs),
                  holidays=sorted(str(x) for x in holidays)[:40])
+        alerts = alert_phone(d, now)
         save(d)
     finally:
         _unlock(h)
+    ring(alerts)                                          # his phone, once the lock is let go
     if any(it.get("kind") == "pending" and it["state"] == "open" for it in d["items"].values()):
         _touch(JUDGE_DUE)                                 # also retries Claude once he has signed in
     _touch(PUSH_DUE)
@@ -587,13 +590,15 @@ def judge(limit=PER_JUDGE, ask=ask_claude, now=None):
             it = d["items"].get(sid)
             if it and it.get("kind") == "pending":
                 it.update(v, judged=now.strftime("%Y-%m-%d %H:%M"))
-                for k in ("text", "trail", "to", "cc"):
-                    it.pop(k, None)                      # the email stays in Outlook, not here
+                for k in ("text", "trail", "to"):
+                    it.pop(k, None)                      # the email stays in Outlook, not here (cc stays: the card's Send)
         d["claude"] = {"ok": not said, "said": said, "at": now.strftime("%d/%m %H:%M")}
         more = any(it.get("kind") == "pending" and it["state"] == "open" for it in d["items"].values())
+        alerts = alert_phone(d, now)
         save(d)
     finally:
         _unlock(h)
+    ring(alerts)
     if more and not said:
         _touch(JUDGE_DUE)
     _touch(PUSH_DUE)
@@ -672,6 +677,61 @@ def put_back(ns, root, d, sid, now=None):
           "received": it["received"], "kind": "inbox_assist_put_back", "by": "him"})
     it.update(state="open", kind="quiet", kept=True, eid=new, why="put back by you - never filed by the assistant")
     return it
+
+
+# ---------- phone alerts (his 24/11 "Alerts + one-tap replies") ----------
+def _alerts_due(d, now):
+    """The open emails that should ring his phone now, each once: one that needs him now, or one waiting past its
+    bell."""
+    holidays = set(d.get("holidays") or ())
+    out = []
+    for it in d["items"].values():
+        if it.get("state") != "open" or it.get("alerted"):
+            continue
+        if it.get("kind") == "needs":
+            urgency = it.get("urgency", "today")
+        elif it.get("kind") == "pending" and it.get("words"):
+            urgency = WORDS_URGENCY.get(it["words"][0], "week")
+        else:
+            continue
+        if urgency == "now" or _mins(it, now, holidays) >= BELL_AFTER.get(urgency, 120):
+            out.append((it, urgency))
+    return out
+
+
+def alert_phone(d, now=None, push=None):
+    """Marks what is due to ring his phone (under the store's lock) and returns the alerts to send once the lock is
+    let go: [(title, body, tag)]. Nothing while the assistant is off or no phone is signed up for alerts."""
+    if d.get("mode") == "off" or (push is None and os.environ.get("R2_NO_PUSH")):   # the tests never ring a real phone
+        return []
+    try:
+        push = push or __import__("push_notify")
+        if not push.count():
+            return []
+    except Exception:
+        return []
+    now = now or datetime.now()
+    out = []
+    for it, urgency in _alerts_due(d, now):
+        it["alerted"] = now.strftime("%Y-%m-%d %H:%M")
+        title = ("Needs you now: " if urgency == "now" else "Still waiting: ") + str(it.get("from") or "")
+        out.append((title[:80], str(it.get("ask") or it.get("subject") or "")[:160], "assist-" + str(it.get("id"))))
+    return out
+
+
+def ring(alerts, push=None):
+    """Sends what alert_phone picked, each to every phone signed up. Never raises; the number that went."""
+    if not alerts:
+        return 0
+    try:
+        push = push or __import__("push_notify")
+        n = 0
+        for title, body, tag in alerts:
+            res = push.notify(title, body, "/", tag)
+            n += 1 if isinstance(res, dict) and res.get("sent") else 0
+        return n
+    except Exception:
+        return 0
 
 
 # ---------- one tap: Send (his 24/11 "Alerts + one-tap replies") ----------
