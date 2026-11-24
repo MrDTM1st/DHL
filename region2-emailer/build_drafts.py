@@ -552,6 +552,13 @@ def find_inbox_extracts(ns, limit=300):
     return found
 
 
+# How far back the batch and the wait-list scan read normal extracts filed in Synergy Upload: the wait list's lead, so
+# an order due within it stays in every batch built until it is emailed, booked or past. At 3 days (his 24/11 "you
+# missed this"): an order from an extract that came while he was away sat in batches nobody sent, the extract was
+# filed, and four days on the order was in no batch and on no list.
+SYNERGY_UPLOAD_DAYS = waitlist.LEAD_DAYS
+
+
 def find_synergy_upload(ns, days=3, bs_days=30, exclude=()):
     """Safety net for the Synergy Upload folder (Inbox > ADHOC > Synergy Upload).
     Both the normal Haulier Extract AND BS batch files sometimes get filed there
@@ -1381,7 +1388,7 @@ def main():
         ns = get_ns()
         extracts = find_inbox_extracts(ns)
         root_names = {fn for _, fn in extracts}
-        syn_extras = find_synergy_upload(ns, days=3, bs_days=30, exclude=root_names)
+        syn_extras = find_synergy_upload(ns, days=SYNERGY_UPLOAD_DAYS, bs_days=30, exclude=root_names)
         # BS files can be FILED anywhere in the Inbox tree before a scan sees
         # them (21/07: two BS Acks in Regions/Region 2/Completed were missed)
         tree_extras = find_bs_tree(ns, days=30,
