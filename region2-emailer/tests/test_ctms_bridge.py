@@ -1302,6 +1302,57 @@ def test_a_page_with_no_window_to_measure_is_measured_by_name_and_kept():
         W.find_windows, W._remember_area, B.ctms_form.page_area = keep
 
 
+def test_a_closed_rejection_form_is_opened_from_its_own_link_then_filled():
+    keep = (W.find_windows, B.LOG, A.to_front, A._send, B.ctms_tabs.select, B.ctms_tabs.open_form, B.ctms_form.fill,
+            B.FORM_OPEN_FOR)
+    form = dict(FAKE_WIN, hwnd=6161, kind="page", score=1, title="Haulier Rejection Form 2026 - Work - Microsoft Edge")
+    B.LOG = os.path.join(tempfile.gettempdir(), "ctms_bridge_test_log.jsonl")
+    A.to_front, A._send = (lambda hwnd: True), (lambda inputs: None)
+    B.ctms_tabs.select = lambda target, timeout=10.0: (False, TB.NOT_OPEN["form"])
+    opened, windows = [], [[dict(FAKE_WIN)]]
+    B.ctms_tabs.open_form = lambda: (opened.append(1) or windows.append([dict(FAKE_WIN), dict(form)])
+                                     or (True, "Opened the Haulier Rejection Form in Edge."))
+    W.find_windows = lambda: windows[-1]
+    seen = {}
+    B.ctms_form.fill = lambda hwnd, answers, submit=False: (seen.update(fill=hwnd) or {
+        "filled": 1, "off": [], "submitted": submit, "items": [], "said": "Your response was submitted."})
+    try:
+        desk = _Rec()
+        b = B.Bridge(desk, 1, "", allow_control=True)
+        answers = [{"q": "Haulier Name", "tick": ["DHL NOC"]}]
+        b.handle({"id": 1, "action": "form_fill", "answers": answers, "submit": True})     # not armed: never opened
+        assert desk.sent[-1][1]["ok"] is False and opened == []
+        b.armed = True
+        b.handle({"id": 2, "action": "form_fill", "answers": answers, "submit": True})
+        assert opened == [1] and seen["fill"] == 6161 and desk.sent[-1][1]["ok"]
+        windows[:] = [[dict(FAKE_WIN)]]                                                  # opened, never the form
+        B.ctms_tabs.open_form = lambda: (opened.append(2) or (True, "Opened."))
+        B.FORM_OPEN_FOR = 1
+        b.handle({"id": 3, "action": "form_fill", "answers": answers, "submit": True})
+        body = desk.sent[-1][1]
+        assert body["ok"] is False and "may want signing in" in body["detail"] and opened == [1, 2]
+        B.ctms_tabs.select = lambda target, timeout=10.0: (False, "Edge would not bring up it - select it yourself.")
+        b.handle({"id": 4, "action": "form_fill", "answers": answers, "submit": True})   # another reason: not opened
+        assert opened == [1, 2] and "select it yourself" in desk.sent[-1][1]["detail"]
+    finally:
+        (W.find_windows, B.LOG, A.to_front, A._send, B.ctms_tabs.select, B.ctms_tabs.open_form, B.ctms_form.fill,
+         B.FORM_OPEN_FOR) = keep
+
+
+def test_the_form_opens_in_edge_s_dhl_profile_and_only_at_its_own_link():
+    state = {"profile": {"info_cache": {"Default": {"name": "Personal", "user_name": "someone@outlook.com"},
+                                        "Profile 2": {"name": "Work", "user_name": "d.o@dhl.com"}}}}
+    assert TB.work_profile(state) == "Profile 2"
+    named = {"profile": {"info_cache": {"Default": {"name": "Personal"}, "Profile 3": {"name": "Work"}}}}
+    assert TB.work_profile(named) == "Profile 3" and TB.work_profile({}) == ""
+    cmd = TB.open_command(state, exes=("edge.exe",), exists=lambda p: True)
+    assert cmd == ["edge.exe", "--profile-directory=Profile 2", TB.FORM_URL]
+    assert TB.open_command({}, exes=("edge.exe",), exists=lambda p: True) == ["edge.exe", TB.FORM_URL]
+    assert TB.open_command(state, exes=("edge.exe",), exists=lambda p: False) is None
+    assert TB.FORM_URL.startswith("https://forms.cloud.microsoft/pages/responsepage.aspx?id=-P6ZzdMcKkqb3xVTEYHW")
+    assert TB.open_form.__code__.co_argcount == 1                                    # no link can be handed in
+
+
 def test_the_dashboard_lets_form_answers_through_cleaned_and_cut_to_size():
     out = S._ctms_args("form_fill", {"answers": [
         {"q": "Haulier Name", "tick": ["DHL NOC", "", "x" * 300]}, {"q": "Date of Job", "text": "11/16/2026"},

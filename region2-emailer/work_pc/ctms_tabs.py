@@ -28,7 +28,7 @@ CTMS_TAB_WORDS = ("oracle fusion middleware", "forms services", "frmservlet", "c
 WHAT = {"ctms": "CTMS's tab", "page": "the DigiHaul Job Tracker's tab", "form": "the Haulier Rejection Form's tab"}
 NOT_OPEN = {"ctms": "CTMS is not open in any Edge tab.",
             "page": "The DigiHaul Job Tracker is not open in any Edge tab.",
-            "form": "The Haulier Rejection Form is not open in any Edge tab - open it once from its link, in Edge."}
+            "form": "The Haulier Rejection Form is not open in any Edge tab."}
 
 # UI Automation as UIAutomationClient.h lays it out: the class, the interfaces, and the slot of each method used.
 CLSID_CUIAutomation8 = "{E22AD333-B25F-460C-83D0-0581107395C9}"
@@ -335,3 +335,61 @@ def select(target, timeout=10.0):
     if not out:
         return False, f"Edge did not answer in time, so {WHAT[target]} was not brought up - select it yourself."
     return out[0]
+
+
+# -- the rejection form opened when its tab is gone (his ask 24/11: "if it isn't open, you open it") --
+# The one link the bridge ever opens: fixed here, never taken from a command. He shared it 11/11.
+FORM_URL = ("https://forms.cloud.microsoft/pages/responsepage.aspx?id=-P6ZzdMcKkqb3xVTEYHWXvukHak8uklOtz4j9fRlcBl"
+            "UMU9TVFNUVkxMOVBSMlk1VjNPMVdMR0NGVi4u&route=shorturl")
+EDGE_EXES = (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe")
+WORK_WORDS = ("dhl",)            # the signed-in account of the profile the form opens in (its tab reads "Work")
+
+
+def _local_state():
+    p = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data", "Local State")
+    try:
+        import json
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def work_profile(state=None):
+    """Edge's profile folder signed in with the DHL account (the "Work" one the form was always open in), or the
+    one named Work, or "" - Edge then opens it in whichever it used last."""
+    cache = ((state if state is not None else _local_state()).get("profile") or {}).get("info_cache") or {}
+    for words in (WORK_WORDS, None):
+        for folder, info in cache.items():
+            info = info or {}
+            if words is None:
+                if str(info.get("name") or "").strip().lower() == "work":
+                    return folder
+            elif any(w in str(info.get("user_name") or "").lower() for w in words):
+                return folder
+    return ""
+
+
+def open_command(state=None, exes=EDGE_EXES, exists=os.path.exists):
+    """The command that opens the form in Edge's Work profile - or None with no Edge to run."""
+    exe = next((e for e in exes if exists(e)), None)
+    if exe is None:
+        return None
+    folder = work_profile(state)
+    return [exe] + ([f"--profile-directory={folder}"] if folder else []) + [FORM_URL]
+
+
+def open_form(popen=None):
+    """(True, what was done) or (False, why not): Edge asked to open the Haulier Rejection Form in a new tab."""
+    if not IS_WIN and popen is None:
+        return False, "Opening the form works on Windows only."
+    cmd = open_command()
+    if cmd is None:
+        return False, "Edge wasn't found to open the Haulier Rejection Form in."
+    try:
+        import subprocess
+        (popen or subprocess.Popen)(cmd)
+    except Exception as e:
+        return False, f"Edge wouldn't open the Haulier Rejection Form ({e})."
+    return True, "Opened the Haulier Rejection Form in Edge."

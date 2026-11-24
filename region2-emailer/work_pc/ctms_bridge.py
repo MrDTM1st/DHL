@@ -142,6 +142,7 @@ WINDOW_STEPS = ("click", "drag", "key", "type", "wait", "paste")
 # where CTMS sits now, waiting for it to answer, a pixel it must show, a small picture kept for the answer.
 BATCH_STEPS = ("anchor", "waitfor", "check", "snap", "settle", "find")
 STEPS_MAX = 120         # a whole order update - times, comments, services, vehicle - is ~90 steps
+FORM_OPEN_FOR = 25          # seconds a freshly opened rejection form gets to load and take its name (24/11)
 WORKED = {"ctms": "CTMS", "page": "the tracker", "form": "the rejection form"}      # what `use` can work
 TITLES = {"ctms": "CTMS's window", "page": "the DigiHaul Job Tracker", "form": "the Haulier Rejection Form"}
 SCALE_SLACK = 0.05      # the bar is 30 rows at the size measured: a row off is drawing, two is another scale
@@ -805,6 +806,17 @@ class Bridge:
                 win = find()
             if ok and win is None:
                 why = "Edge brought up the Haulier Rejection Form's tab, but no window showed it after - try again."
+            if not ok and why == ctms_tabs.NOT_OPEN["form"]:
+                # its tab is gone: the form opened from its own link (his ask 24/11), and given time to load and
+                # take its name - the fill then waits for its questions and Submit as after any reload
+                ok, why = ctms_tabs.open_form()
+                end = time.time() + FORM_OPEN_FOR
+                while ok and win is None and time.time() < end:
+                    time.sleep(0.5)
+                    win = find()
+                if ok and win is None:
+                    why = ("Opened the Haulier Rejection Form in Edge, but it didn't come up as the form within "
+                           f"{FORM_OPEN_FOR} s - it may want signing in. Look at Edge, then try again.")
         return win, ("" if win is not None else why)
 
     def form(self, action, cmd, done):
