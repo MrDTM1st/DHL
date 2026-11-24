@@ -1253,6 +1253,12 @@ class Booking:
         self.close_filters()
         self.said.append("the well's filters cleared to find it: " + "; ".join(ctms_filters.said(v) for v in was.values())
                          + (f" (left on {ctms_filters.said(self.kept_filters)}: those can't be emptied)" if self.kept_filters else ""))
+        if ctms_filters.REGION in stuck:
+            # its nameless blank row didn't take (three Books stopped on it 24/11, each with the real cause elsewhere - a
+            # night job's date, a Business Type left on by an earlier booking): left on and said, like Business Type, so
+            # a still-hidden order is told plainly further on
+            stuck.remove(ctms_filters.REGION)
+            self.kept_filters[ctms_filters.REGION] = was.get(ctms_filters.PANEL, {}).get(ctms_filters.REGION)
         if stuck:
             raise Stop(f"The well's filters wouldn't all clear ({', '.join(stuck)}). Nothing was booked.")
         return True

@@ -213,6 +213,16 @@ def test_business_type_is_never_emptied_but_to_plan_reg_goes_to_its_nameless_bla
     assert f.vals["To Plan Reg"] == "PR2" and job.said[-1] == "the well's filters put back as they were"
 
 
+def test_a_to_plan_reg_that_wont_blank_is_left_on_and_said_never_a_stop():
+    # live 24/11: three Books stopped "the well's filters wouldn't all clear (To Plan Reg)" while the real cause was
+    # elsewhere (a night job's date, a Business Type left on by an earlier booking): it is left on, like Business Type
+    f = Filters(business="Strategy 1 - Flats & Hiabs", region="PR2", stuck=("To Plan Reg",))
+    job = _job(f)
+    job.look()
+    job.clear_filters()
+    assert job.kept_filters == {"Business Type": "Strategy 1 - Flats & Hiabs", "To Plan Reg": "PR2"}, job.kept_filters
+
+
 def test_a_blank_to_plan_reg_is_put_on_the_orders_region():
     # live 16/11: a booking's tidy left To Plan Reg blank, and Book couldn't move it - no row read as picked
     f = Filters(business="Strategy 4 - Tippers", region="")

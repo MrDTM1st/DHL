@@ -120,14 +120,63 @@ def region_for(postcode):
 TIPPERS = "Strategy 4 - Tippers"     # the well's Business Type for loose ballast and stoneblowers (his 16/11)
 
 
+ADHOC_PROJECTS = "Strategy 6 - Ad-Hoc/Projects"
+
+
+def _upload_rows(rec):
+    """The order's own rows in its upload CSV - its ORDER row and those under it - [] when there's no upload on file."""
+    try:
+        import csv
+        import outbox
+        with open(outbox.path(rec["csv"]), encoding="utf-8", newline="") as f:
+            rows = [r for r in csv.reader(f) if r]
+    except Exception:
+        return []
+    want = {str(o) for o in (rec.get("orders") or [])}
+    out, mine = [], False
+    for r in rows:
+        if r[0] == "ORDER":
+            mine = len(r) > 1 and (not want or r[1] in want)
+        if mine:
+            out.append(r)
+    return out
+
+
+def upload_account(rec):
+    """The CTMS account its upload put the order on (NRADHOC, NRADHOC_NS ...): "" without one."""
+    row = next((r for r in _upload_rows(rec or {}) if r[0] == "ORDER"), [])
+    return str(row[28]).strip() if len(row) > 28 else ""
+
+
+def raised_by(rec):
+    """The addresses its upload names as raising it (sub-ref 1002: the requester, often the site contact too)."""
+    out = []
+    for r in _upload_rows(rec or {}):
+        if r[0] == "ORD_SUB_REFS" and len(r) > 2 and str(r[1]).strip() == "1002":
+            out += [a.strip().lower() for a in re.split(r"[;,]", r[2]) if "@" in a]
+    return out
+
+
+def contact_in(addresses, name):
+    """The address among these that goes by the contact's name - every word of it in the address - "" when none does."""
+    words_ = [w.lower().replace("'", "") for w in re.findall(r"[A-Za-z'-]{2,}", str(name or ""))]
+    if not words_:
+        return ""
+    return next((a.lower() for a in addresses if all(w in a.lower().split("@")[0] for w in words_)), "")
+
+
 def strategy_for(rec):
-    """The well's strategy for an order when its material says it: loose ballast and stoneblower stone are on Strategy 4,
-    the tippers (his 16/11). "" when it isn't known - the well is then filtered on the region alone."""
+    """The well's strategy for an order when it can be told: loose ballast and stoneblower stone are on Strategy 4, the
+    tippers (his 16/11); an ad hoc over 4 tonnes - its upload on NRADHOC_NS - imports on Strategy 6 (seen 24/11, when
+    the well's Business Type left on another strategy by an earlier booking hid one). "" when it isn't known - the well
+    is then filtered on the region alone."""
     try:
         import ctms_run_plan
-        return TIPPERS if ctms_run_plan.tipped(rec or {}) else ""
+        if ctms_run_plan.tipped(rec or {}):
+            return TIPPERS
     except Exception:
-        return ""
+        pass
+    return ADHOC_PROJECTS if upload_account(rec or {}) == "NRADHOC_NS" else ""
 
 
 def owed_first(orders, listing=None):
@@ -578,18 +627,28 @@ def site_email(rec, job, trips, send=True):
     thanks = False
     if oneoff:
         entry = (rec.get("mail") or {}).get("entryid")
-        if not entry:
-            return False, "no request email on this ad hoc to forward"
-        src = ns.GetItemFromID(entry)
+        src = ns.GetItemFromID(entry) if entry else None
         contact = ((rec.get("details") or {}).get("contact") or {}).get("name") or ""
-        to = job.get("site_to") or adhoc_address(src, contact)
+        raised = raised_by(rec)          # the upload's "raised by" - the site contact is often there (his 24/11)
+        ours = bd.DHL_SMTP.lower()
+        to = (job.get("site_to") or (adhoc_address(src, contact) if src is not None else "")
+              or contact_in(raised, contact))
         greet = first_name(contact)
-        if not to:                       # nobody on the request to email: whoever asked for it is told (his 24/11)
-            to, who = requester(src, bd.DHL_SMTP.lower())
+        if not to and src is not None:   # nobody on the request to email: whoever asked for it is told (his 24/11)
+            to, who = requester(src, ours)
             greet = first_name(who)
+        if not to:                       # no request email kept on the job: who raised it, as its upload says
+            to = next((a for a in raised if not left_off_site(a, ours) and not _NOBODY.search(a)), "")
+            greet = ""
         if not to:
-            return False, f"no address for {contact or 'the delivery contact'} on the request, and nobody who asked"
-        m = src.Forward()
+            return False, (f"no address for {contact or 'the delivery contact'} on the request or its upload, and "
+                           "nobody who asked")
+        if src is not None:
+            m = src.Forward()
+        else:                            # a new email of its own, as for a tracker order with no thread
+            m = ns.Application.CreateItem(0)
+            m.Subject = bd.subject_for(rec.get("orders") or [], rec.get("worksite") or "", rec.get("site") or "",
+                                       rec.get("postcode") or "", rec.get("po") or {})
         m.To = to
     else:
         src, _ = site_thread(ns, rec)
@@ -611,7 +670,7 @@ def site_email(rec, job, trips, send=True):
             greet = greeting(sender, getattr(src, "SenderEmailAddress", ""), rec)
             thanks = first_name(sender) != PLANNER
     body = words(greet, carrier, haulier, date, trips, rec, thanks)
-    if oneoff or src is not None:
+    if src is not None:
         new, n = re.subn(r"(<body[^>]*>)", lambda mm: mm.group(1) + f'<div style="{FONT}">{body}</div>', m.HTMLBody,
                          count=1, flags=re.I)
         if n != 1:

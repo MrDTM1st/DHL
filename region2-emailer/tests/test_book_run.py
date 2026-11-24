@@ -394,3 +394,23 @@ def test_the_journal_keeps_the_record_so_what_follows_a_booking_still_knows_the_
     e = J.asking({"orders": ["9100001"], "date": "26/11/2026", "carrier": "PASS_DH", "record": rec["id"],
                   "record_copy": rec}, path=path)
     assert J.get(e["key"], path=path)["record_copy"] == rec
+
+
+def test_an_ad_hoc_over_four_tonnes_is_on_strategy_6_and_its_upload_names_who_raised_it(tmp_path, monkeypatch):
+    """His 24/11: an ad hoc the well's Business Type (left on another strategy) hid, and a site email with no request
+    email on the job. Its upload says both: NRADHOC_NS imports on Strategy 6, and sub-ref 1002 names who raised it."""
+    import outbox
+    order = ["ORDER", "AH1/1/26EXEX", "Exa", "Example Yard"] + [""] * 24 + ["NRADHOC_NS", "", "", "0", "Material x"]
+    rows = [order, ["ORD_SUB_REFS", "1002", "sam.asker@example.net;Robin.Field@site.example.com"],
+            ["ORD_SUB_REFS", "1003", "100001"], ["ORDER", "AH2/1/26EXEX", "Other"] + [""] * 25 + ["NRADHOC"],
+            ["ORD_SUB_REFS", "1002", "someone.else@example.net"]]
+    (tmp_path / "up.csv").write_text("\n".join(",".join(r) for r in rows) + "\n", encoding="utf-8")
+    monkeypatch.setattr(outbox, "path", lambda name: str(tmp_path / name))
+    rec = {"orders": ["AH1/1/26EXEX"], "csv": "up.csv"}
+    assert B.upload_account(rec) == "NRADHOC_NS" and B.strategy_for(rec) == "Strategy 6 - Ad-Hoc/Projects"
+    assert B.raised_by(rec) == ["sam.asker@example.net", "robin.field@site.example.com"]     # its own rows only
+    assert B.contact_in(B.raised_by(rec), "Robin Field") == "robin.field@site.example.com"
+    assert B.contact_in(B.raised_by(rec), "Jo Colleague") == ""
+    other = {"orders": ["AH2/1/26EXEX"], "csv": "up.csv"}
+    assert B.strategy_for(other) == "" and B.raised_by(other) == ["someone.else@example.net"]
+    assert B.strategy_for({"orders": ["X"], "csv": "missing.csv"}) == "" and B.raised_by({}) == []
