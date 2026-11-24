@@ -414,3 +414,27 @@ def test_an_ad_hoc_over_four_tonnes_is_on_strategy_6_and_its_upload_names_who_ra
     other = {"orders": ["AH2/1/26EXEX"], "csv": "up.csv"}
     assert B.strategy_for(other) == "" and B.raised_by(other) == ["someone.else@example.net"]
     assert B.strategy_for({"orders": ["X"], "csv": "missing.csv"}) == "" and B.raised_by({}) == []
+
+
+def test_an_order_whose_strategy_the_toolkit_cant_tell_has_it_read_off_its_card():
+    """His 24/11 "the book button has a gap with not checking the strategy types": the card's Business Type, read by
+    the routes' order-read; a bare order number opens its first line; nothing readable is ""."""
+    import json as _json
+    import types
+    said = []
+
+    def run(args, **kw):
+        ref = args[-1]
+        said.append(ref)
+        if ref == "9100001":
+            out = 'no line 9100001 in Order Summary (lines found: 9100001-1-1, 9100001-2-1)\nROUTE_RESULT {"ok": false}'
+        elif ref in ("9100001-1-1", "AH1/12/26EXEX"):
+            out = "ROUTE_RESULT " + _json.dumps({"order": {"business_type": "Strategy 10 - Non NR"}, "ok": True})
+        else:
+            out = "it fell over"
+        return types.SimpleNamespace(stdout=out, returncode=0)
+
+    assert B.order_strategy("AH1/12/26EXEX", run=run) == "Strategy 10 - Non NR" and said == ["AH1/12/26EXEX"]
+    said.clear()
+    assert B.order_strategy("9100001", run=run) == "Strategy 10 - Non NR" and said == ["9100001", "9100001-1-1"]
+    assert B.order_strategy("9100009", run=run) == ""

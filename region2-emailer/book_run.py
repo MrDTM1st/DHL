@@ -165,6 +165,36 @@ def contact_in(addresses, name):
     return next((a.lower() for a in addresses if all(w in a.lower().split("@")[0] for w in words_)), "")
 
 
+def order_strategy(ref, run=None):
+    """The order's Business Type off its card in CTMS - the routes' order-read, about half a minute - "" when it can't
+    be read. A bare order number opens its first line."""
+    import subprocess
+    run = run or subprocess.run
+
+    def read(r):
+        try:
+            p = run([sys.executable, os.path.join(HERE, "ctms_routes.py"), "order-read", str(r)], capture_output=True,
+                    text=True, encoding="utf-8", errors="replace", timeout=240, cwd=HERE)
+            out = str(p.stdout or "")
+        except Exception:
+            return "", ""
+        line = next((ln for ln in out.splitlines() if ln.startswith("ROUTE_RESULT ")), "")
+        try:
+            d = json.loads(line[len("ROUTE_RESULT "):]) if line else {}
+        except ValueError:
+            d = {}
+        bt = str(((d.get("order") or {}).get("business_type")) or "").strip()
+        return (bt if bt.startswith("Strategy") else ""), out
+
+    bt, out = read(ref)
+    if not bt:
+        m = re.search(r"lines found: ([^)\r\n]+)\)", out)
+        first = m.group(1).split(",")[0].strip() if m else ""
+        if first and first not in ("none", str(ref)):
+            bt, _ = read(first)
+    return bt
+
+
 def strategy_for(rec):
     """The well's strategy for an order when it can be told: loose ballast and stoneblower stone are on Strategy 4, the
     tippers (his 16/11); an ad hoc over 4 tonnes - its upload on NRADHOC_NS - imports on Strategy 6 (seen 24/11, when
@@ -1128,6 +1158,13 @@ def book(job, R=None, now=None):
     if region:
         args["region"] = region
     strategy = job.get("strategy") or strategy_for(rec)
+    if not strategy and not dry and orders and not os.environ.get("R2_NO_CARD_READ"):
+        # his 24/11 "the book button has a gap with not checking the strategy types": a Business Type an earlier booking
+        # left on hid three orders in one afternoon. When the toolkit can't tell the order's own, its card says it.
+        # (The tests set R2_NO_CARD_READ: their stand-in CTMS must never become the real one through this read.)
+        strategy = order_strategy(orders[0])
+        if strategy:
+            before.append(f"Its Business Type read off its card in CTMS ({strategy}), so another's can't hide it.")
     if strategy:
         args["strategy"] = strategy
     wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
