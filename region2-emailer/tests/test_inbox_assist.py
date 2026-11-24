@@ -513,3 +513,246 @@ def test_no_alert_while_off_or_with_no_phone_signed_up_and_nothing_marked():
     d["mode"] = "off"
     assert A.alert_phone(d, datetime(2026, 11, 24, 11, 0), push=_Push()) == []
     assert A.ring([("t", "b", "x")], push=types.SimpleNamespace(notify=lambda *a: 1 / 0)) == 0      # never raises
+
+
+# ---------- Deal with it (his 24/11: "one button that just says either dealt with or deal with it") ----------
+class _PushUrl(_Push):
+    def notify(self, title, body, url="/", tag=None):
+        self.sent.append((title, body, tag, url))
+        return {"sent": 1, "dropped": 0, "error": None}
+
+
+def test_a_tap_on_an_alert_opens_the_desk_on_that_email():
+    assert A.deep_link("assist-abc123def456") == "/?assist=abc123def456"
+    assert A.deep_link("something-else") == "/" and A.deep_link(None) == "/" and A.deep_link("assist-") == "/"
+    push = _PushUrl()
+    assert A.ring([("Needs you now: Sam", "Sam asks", "assist-abc123def456")], push=push) == 1
+    assert push.sent[0][3] == "/?assist=abc123def456"
+
+
+def _dealable(tmp_path, monkeypatch, **items):
+    for name in ("PATH", "LOG", "SEEN", "JUDGE_DUE", "PUSH_DUE", "CFG", "WORK_DUE"):
+        monkeypatch.setattr(A, name, str(tmp_path / ("x_" + name.lower())))
+    d = {"mode": "live", "items": {sid: dict({"id": sid, "eid": "E1", "state": "open", "subject": "Monday",
+                                              "from": "Sam Asker", "addr": "sam@example.net", "orders": ["1234567"],
+                                              "received": "2026-11-24 10:00"}, **kw) for sid, kw in items.items()}}
+    A.save(d)
+    return d
+
+
+def test_deal_with_it_sends_a_ready_reply_files_noise_and_gives_claude_the_rest(monkeypatch, tmp_path):
+    d = _dealable(tmp_path, monkeypatch,
+                  r1={"kind": "needs", "urgency": "now", "action": {"type": "reply", "text": "Hi Sam,\nYes, Monday.\nThanks"}},
+                  f1={"kind": "file", "dest": "DHL"},
+                  c1={"kind": "needs", "urgency": "today", "action": {"type": "ctms", "note": "move it to Tuesday"}},
+                  p1={"kind": "pending", "words": ["high", "x"]})
+    assert A.deal_plan(d["items"]["r1"])["kind"] == "send" and A.deal_plan(d["items"]["f1"])["kind"] == "file"
+    assert A.deal_plan(d["items"]["c1"])["kind"] == "claude" and A.deal_plan(d["items"]["p1"])["kind"] == "claude"
+    monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED-" + dest)
+    reply = _Reply(["sam@example.net", "me@example.com"], SIGNED)
+    said = A.deal(d, "r1", outlook=_outlook_with(reply))
+    assert reply.sent and "Sent to sam@example.net" in said and d["items"]["r1"]["state"] == "answered"
+    said = A.deal(d, "f1", outlook=_outlook_with(_Reply([], SIGNED)))
+    assert said == "Filed to DHL." and d["items"]["f1"]["state"] == "filed"
+    said = A.deal(d, "c1", now=NOW)
+    job = d["items"]["c1"]["job"]
+    assert "Claude is on it" in said and job["state"] == "queued" and os.path.exists(A.WORK_DUE)
+    assert A.deal(d, "c1") == "Claude is on it already."
+    try:
+        A.deal(d, "r1")
+        raise AssertionError("an answered email is not dealt with twice")
+    except RuntimeError as e:
+        assert "isn't on the list" in str(e)
+
+
+def test_a_note_or_his_own_words_go_to_claude_with_the_job(monkeypatch, tmp_path):
+    d = _dealable(tmp_path, monkeypatch,
+                  r1={"kind": "needs", "urgency": "now", "action": {"type": "reply", "text": "Hi Sam,\nYes.\nThanks"}})
+    said = A.deal(d, "r1", text="Hi Sam,\nTuesday instead.\nKind regards", note="check CTMS first", now=NOW)
+    job = d["items"]["r1"]["job"]
+    assert "Claude is on it" in said and job["note"] == "check CTMS first" and job["reply"] == "Hi Sam,\nTuesday instead."
+    brief = A.work_brief(d["items"]["r1"], ctx(), [], set())
+    assert "His note to you - do this: check CTMS first" in brief and "Tuesday instead." in brief
+    assert "1234567 - not on his tracker" in brief and "assist_tools.py email" in brief
+
+
+def test_the_background_claude_is_held_to_the_toolkit_alone(tmp_path):
+    exe = tmp_path / "claude.exe"
+    exe.write_text("")
+    seen = {}
+
+    def run(args, **kw):
+        seen.update(args=args, **kw)
+        return _proc(json.dumps({"type": "result", "is_error": False,
+                                 "structured_output": {"status": "done", "summary": "Told Sam."}}))
+    ok, got = A.ask_worker("BRIEF", "abc123def456", "RULES", {"claude": str(exe)}, run=run)
+    a = seen["args"]
+    assert ok and got["summary"] == "Told Sam."
+    assert a[a.index("--tools") + 1] == "Bash" and a[a.index("--allowedTools") + 1] == "Bash(python assist_tools.py:*)"
+    assert a[a.index("--permission-mode") + 1] == "dontAsk" and a[a.index("--setting-sources") + 1] == "user"
+    assert "--strict-mcp-config" in a and a[a.index("--append-system-prompt") + 1] == "RULES"
+    assert seen["env"]["R2_ASSIST_JOB"] == "abc123def456" and seen["cwd"] == A.HERE and seen["input"] == "BRIEF"
+    assert not any(k.startswith(("CLAUDE_CODE_", "ANTHROPIC_")) for k in seen["env"])
+    r = A.work_rules(ctx(), {"rules": ["Made-up rule."]})
+    assert "Pat" in r and "order-update" in r and "Made-up rule." in r and "money" in r
+
+
+def test_the_worker_takes_the_job_and_his_phone_hears_how_it_went(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch,
+              a1={"kind": "needs", "urgency": "now", "ask": "Sam asks if it's booked", "action": {"type": "other"},
+                  "job": {"state": "queued", "asked_at": "2026-11-24 10:05", "note": "", "asks": [], "log": []}},
+              b1={"kind": "needs", "urgency": "today", "ask": "Jo wants a price", "action": {"type": "other"},
+                  "job": {"state": "queued", "asked_at": "2026-11-24 10:06", "note": "", "asks": [], "log": []}})
+    monkeypatch.setattr(W, "context", lambda *a, **k: ctx())
+    rang = []
+    monkeypatch.setattr(A, "ring", lambda alerts, push=None: rang.extend(alerts) or len(alerts))
+
+    def ask(brief, sid, system, cfg):
+        assert A.load()["items"][sid]["job"]["state"] == "working"          # the desk shows it working
+        if sid == "b1":                                                     # it held something for his yes
+            dd = A.load()
+            dd["items"]["b1"]["job"]["asks"].append({"kind": "todo", "what": "Agree Jo's price", "state": "open"})
+            A.save(dd)
+        return True, {"status": "done", "summary": "Checked CTMS — it's booked; told Sam."}
+    assert A.work(ask=ask, now=NOW)[0] == "a1"                              # the oldest first
+    it = A.load()["items"]["a1"]
+    assert it["job"]["state"] == "done" and it["state"] == "dealt" and it["dealt_by"] == "claude"
+    assert it["job"]["summary"] == "Checked CTMS - it's booked; told Sam."   # never an em dash
+    assert rang[-1] == ("Done: Sam Asker", "Checked CTMS - it's booked; told Sam.", "assist-a1")
+    assert os.path.exists(A.WORK_DUE)                                       # b1 still queued: go again
+    assert A.work(ask=ask, now=NOW)[0] == "b1"
+    it = A.load()["items"]["b1"]
+    assert it["job"]["state"] == "needs_you" and it["state"] == "open"
+    assert rang[-1][0] == "Needs your yes: Sam Asker" and rang[-1][1] == "Agree Jo's price"
+    assert A.work(ask=ask, now=NOW) == (None, "nothing queued")
+    d = A.load()                                                            # it couldn't: said on the card and phone
+    d["items"]["a1"].update(state="open", job={"state": "queued", "asked_at": "2026-11-24 11:00", "asks": []})
+    A.save(d)
+    A.work(ask=lambda *a: (False, "Not logged in"), now=NOW)
+    job = A.load()["items"]["a1"]["job"]
+    assert job["state"] == "failed" and job["said"] == "Not logged in" and rang[-1][0] == "Couldn't finish: Sam Asker"
+
+
+def test_a_job_that_crashes_or_is_lost_never_hides_its_email(monkeypatch, tmp_path):
+    d = _dealable(tmp_path, monkeypatch,
+                  s1={"kind": "needs", "urgency": "now", "ask": "Stuck one", "received": iso(NOW - timedelta(minutes=50)),
+                      "job": {"state": "working", "started": iso(NOW - timedelta(minutes=30)), "asks": []}},
+                  w1={"kind": "needs", "urgency": "now", "ask": "Still going", "received": iso(NOW - timedelta(minutes=50)),
+                      "job": {"state": "working", "started": iso(NOW - timedelta(minutes=5)), "asks": []}})
+    assert A._unstick(d, NOW) == 1                                          # the home PC lost it: back on his list
+    assert d["items"]["s1"]["job"]["state"] == "failed" and "stopped without finishing" in d["items"]["s1"]["job"]["said"]
+    assert d["items"]["w1"]["job"]["state"] == "working"                    # one still within its time is left
+    assert [it["id"] for it, _ in A._alerts_due(d, NOW)] == ["s1"]          # and its bell is back
+    monkeypatch.setattr(W, "context", lambda *a, **k: ctx())
+    monkeypatch.setattr(A, "ring", lambda alerts, push=None: len(alerts))
+    d = A.load()
+    d["items"]["s1"]["job"] = {"state": "queued", "asked_at": iso(NOW), "asks": []}
+    A.save(d)
+    A.work(ask=lambda *a: 1 / 0, now=NOW)                                   # the worker itself broke
+    job = A.load()["items"]["s1"]["job"]
+    assert job["state"] == "failed" and "ZeroDivisionError" in job["said"]
+
+
+def test_a_job_that_needs_him_but_held_nothing_still_asks_him(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch, n1={"kind": "needs", "urgency": "now", "ask": "x", "action": {"type": "other"},
+                                         "job": {"state": "queued", "asked_at": iso(NOW), "asks": []}})
+    monkeypatch.setattr(W, "context", lambda *a, **k: ctx())
+    monkeypatch.setattr(A, "ring", lambda alerts, push=None: len(alerts))
+    A.work(ask=lambda *a: (True, {"status": "needs_you", "summary": "Only you can ring the site about the gate."}), now=NOW)
+    job = A.load()["items"]["n1"]["job"]
+    assert job["state"] == "needs_you" and job["asks"] == [
+        {"kind": "todo", "state": "open", "at": iso(NOW), "what": "Only you can ring the site about the gate."}]
+
+
+class _Ran:
+    def __init__(self, out):
+        self.out, self.args = out, None
+
+    def __call__(self, args, **kw):
+        self.args = args
+        return _proc(self.out)
+
+
+def test_his_yes_sends_a_held_email_runs_a_held_ctms_change_and_no_leaves_it(monkeypatch, tmp_path):
+    asks = [{"kind": "send", "thread": True, "what": "Send this reply to sam@example.net", "to": "sam@example.net",
+             "draft": {"id": "D1", "fingerprint": "F1"}, "state": "open"},
+            {"kind": "route", "what": "Set MAN-1's total to 500", "route": ["trip-price", "MAN-1", "--total", "500"],
+             "state": "open"},
+            {"kind": "todo", "what": "Ring the site", "state": "open"}]
+    d = _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "action": {"type": "other"},
+                                              "job": {"state": "needs_you", "asks": asks}})
+    import mail_ops
+    sent = []
+    monkeypatch.setattr(mail_ops, "do_send_draft", lambda ns, acct, store, args: sent.append(args) or {"said": "sent"})
+    monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED-1")
+    o = _outlook_with(_Reply([], SIGNED))
+    a = A.yes_begin(d, "a1", 0)
+    assert d["items"]["a1"]["job"]["asks"][0]["state"] == "running"
+    ok, said = A.yes_do(a, outlook=o)
+    said = A.yes_end(d, "a1", 0, ok, said, outlook=o)
+    assert ok and sent == [{"id": "D1", "fingerprint": "F1"}] and "filed to Regions/Region 2/Completed" in said
+    assert d["items"]["a1"]["state"] == "answered"
+    a = A.yes_begin(d, "a1", 1)                                             # CTMS closed: it waits for his yes again
+    ok, said = A.yes_do(a, run=_Ran('STOPPED: CTMS isn\'t open\nROUTE_RESULT {"ok": false, "said": "CTMS isn\'t open"}'))
+    A.yes_end(d, "a1", 1, ok, said)
+    assert d["items"]["a1"]["job"]["asks"][1]["state"] == "open" and d["items"]["a1"]["job"]["asks"][1]["said"] == "CTMS isn't open"
+    ran = _Ran('DONE trip-price in 9s\nROUTE_RESULT {"ok": true, "said": "total 500.00"}')
+    a = A.yes_begin(d, "a1", 1)
+    ok, said = A.yes_do(a, run=ran)
+    assert ok and said == "total 500.00" and ran.args[-5:] == ["trip-price", "MAN-1", "--total", "500", "--commit"]
+    A.yes_end(d, "a1", 1, ok, said)
+    assert A.no(d, "a1", 2) == "Left undone."
+    job = d["items"]["a1"]["job"]
+    assert [x["state"] for x in job["asks"]] == ["done", "done", "declined"] and job["state"] == "done"
+    try:
+        A.yes_begin(d, "a1", 0)
+        raise AssertionError("a yes counts once")
+    except RuntimeError as e:
+        assert "done already" in str(e)
+
+
+def test_a_held_route_is_never_a_raw_click_or_a_commit_smuggled_in():
+    assert A.held_route(["order-cancel", "1234567-1-1"]) == ["order-cancel", "1234567-1-1"]
+    for bad in (["press", "Save"], ["menu", "x"], ["trip-price", "MAN-1", "--commit"], [], ["rm -rf", "x"],
+                ["order-note", "1234567-1-1", "a\nb"]):
+        try:
+            A.held_route(bad)
+            raise AssertionError(f"{bad} should be refused")
+        except RuntimeError:
+            pass
+    ok, said = A._route_result('STOPPED: CTMS isn\'t open\nROUTE_RESULT {"ok": false, "said": "CTMS isn\'t open"}')
+    assert not ok and said == "CTMS isn't open"
+    assert A._route_result("garbage\nlast words") == (False, "last words")
+
+
+def test_the_card_says_what_deal_with_it_will_do_and_shows_the_job():
+    d = {"mode": "live", "items": {
+        "r1": _item("r1", kind="needs", urgency="now", ask="Sam asks", action={"type": "reply", "text": "Hi Sam,\nYes."}),
+        "c1": _item("c1", kind="needs", urgency="now", ask="Move it", action={"type": "ctms"},
+                    job={"state": "working", "asked_at": iso(NOW), "now": "Reading CTMS", "asks": [], "log": ["10:00 x"]}),
+        "h1": _item("h1", kind="needs", urgency="today", ask="Price?", action={"type": "other"},
+                    job={"state": "needs_you", "asked_at": iso(NOW), "asks": [
+                        {"kind": "route", "what": "Set the total", "route": ["trip-price", "MAN-1"], "state": "open"}]}),
+        "d1": _item("d1", kind="needs", urgency="now", ask="Done one", state="dealt",
+                    job={"state": "done", "asked_at": iso(NOW), "summary": "Told Sam it's booked.", "asks": []}),
+        "o1": _item("o1", kind="needs", urgency="now", ask="Old", state="dealt",
+                    job={"state": "done", "asked_at": "2026-11-20 09:00", "summary": "x", "asks": []})}}
+    p = A.panel(d, NOW)
+    by = {x["id"]: x for x in p["needs"]}
+    assert by["r1"]["deal"]["kind"] == "send" and by["c1"]["deal"]["kind"] == "claude"
+    assert by["c1"]["job"]["now"] == "Reading CTMS" and not by["c1"]["alarm"] and by["r1"]["alarm"]
+    assert by["h1"]["job"]["asks"][0]["route"] == "trip-price MAN-1" and by["h1"]["job"]["asks"][0]["n"] == 0
+    assert [j["id"] for j in p["jobs"]] == ["d1"] and p["jobs"][0]["job"]["summary"] == "Told Sam it's booked."
+    assert [it["id"] for it, _ in A._alerts_due(d, NOW)] == ["r1"]          # Claude's jobs ring when they end
+
+
+def test_dealt_with_drops_what_claude_held(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch,
+              h1={"kind": "needs", "urgency": "today", "job": {"state": "needs_you", "asks": [
+                  {"kind": "send", "what": "Send it", "state": "open"}, {"kind": "todo", "what": "x", "state": "done"}]}},
+              q1={"kind": "needs", "urgency": "today", "job": {"state": "queued", "asks": []}})
+    assert A.main(["x", "dealt", "h1"]) == 0 and A.main(["x", "dealt", "q1"]) == 0
+    d = A.load()
+    assert [a["state"] for a in d["items"]["h1"]["job"]["asks"]] == ["declined", "done"]
+    assert d["items"]["h1"]["job"]["state"] == "done" and d["items"]["q1"]["job"]["state"] == "dropped"
+    assert A.work(ask=lambda *a: (True, {}), now=NOW) == (None, "nothing queued")   # a dropped job never runs

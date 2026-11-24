@@ -757,6 +757,26 @@ def _judge_tick(proc):
         return None
 
 
+def _work_tick(proc):
+    """The background Claude takes a "Deal with it" he pressed (inbox_assist.py work): one job at a time, outside the
+    Outlook gate - its one tool, assist_tools.py, takes Outlook's turn for each call it makes."""
+    if proc is not None and proc.poll() is None:
+        return proc
+    if not os.path.exists(ASSIST_WORK_DUE):
+        return None
+    try:
+        os.remove(ASSIST_WORK_DUE)
+        with open(os.path.join(HERE, "_assist_work.txt"), "a", encoding="utf-8", errors="replace") as log:
+            log.write(f"\n=== {time.strftime('%d/%m %H:%M:%S')} work\n")
+            log.flush()
+            return subprocess.Popen([sys.executable, "inbox_assist.py", "work"], cwd=HERE, stdout=log,
+                                    stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                                    creationflags=0x08000000)
+    except Exception as e:
+        print(f"inbox assistant: Deal with it could not start: {e}")
+        return None
+
+
 def _rejections():
     """The Haulier Rejection Form's responses and the Auto switch (rejections.py) - the dashboard's rejection card."""
     try:
@@ -945,6 +965,7 @@ PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # monitor_tick: new mail, check
 PUSH_DUE = os.path.join(HERE, "_push_due")       # monitor_tick: an ad hoc went on the map - push its CSV and pin now
 ASSIST_PUSH_DUE = os.path.join(HERE, "_assist_push_due")    # inbox_assist: the Needs-you card changed - push it now
 ASSIST_JUDGE_DUE = os.path.join(HERE, "_assist_judge_due")  # inbox_assist: emails queued for Claude to read
+ASSIST_WORK_DUE = os.path.join(HERE, "_assist_work_due")    # inbox_assist: a "Deal with it" queued for the worker
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
 SEND_JOBS = ("waitlist_release", "chase")
 _said_today = {}        # a job's failure said once a day, not every run
@@ -1359,6 +1380,7 @@ def main():
     except OSError:
         assist_pushed = 0.0
     judge_proc = None
+    work_proc = None
     bg = None
     if IS_LOCAL:                    # the cloud agent runs no timer jobs
         try:
@@ -2195,6 +2217,48 @@ def main():
                                           else "The reply didn't finish - look in Drafts before trying again."}
                 push_panel()
                 report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
+            elif action == "assist_deal":
+                # Deal with it (his 24/11: "one button that just says either dealt with or deal with it. The deal with
+                # it button lets you deal with it"): a ready reply sent (his edit if he made one), a no-action email
+                # filed, or the job queued for the background Claude with his note. Outlook's turn is taken inside
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                sid = str(d.get("id") or "")[:20]
+                tmps, extra = [], []
+                import tempfile
+                for key, flag in (("text", "--text"), ("note", "--note")):
+                    v = d.get(key)
+                    if isinstance(v, str) and v.strip():
+                        fd, tmp = tempfile.mkstemp(prefix="_assist_" + key + "_", suffix=".txt", dir=HERE)  # gitignored
+                        with os.fdopen(fd, "w", encoding="utf-8") as f:
+                            f.write(v[:6000])
+                        tmps.append(tmp)
+                        extra += [flag, tmp]
+                try:
+                    out = run(["inbox_assist.py", "deal", sid] + extra, timeout=400) if sid else ""
+                finally:
+                    for tmp in tmps:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                res = _last_json(out) or {"ok": False, "said": "It didn't finish - look in Drafts before trying again."}
+                push_panel()
+                report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
+            elif action in ("assist_yes", "assist_no"):
+                # his one tap on something Deal with it held for his yes: a drafted email sent as it stands, a CTMS
+                # change committed (the dashboard switched Look mum, no hands on for it), or left undone
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                sid = str(d.get("id") or "")[:20]
+                try:
+                    n = str(int(d.get("n")))
+                except (TypeError, ValueError):
+                    n = ""
+                if action == "assist_yes":
+                    report("running", "Doing what you said yes to…")
+                out = run(["inbox_assist.py", action[len("assist_"):], sid, n], timeout=960) if sid and n else ""
+                res = _last_json(out) or {"ok": False, "said": "It didn't finish - look before trying again."}
+                push_panel()
+                report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
             elif action in ("assist_file", "assist_fileall", "assist_putback", "assist_keep", "assist_dealt",
                             "assist_mode"):
                 # the Needs-you card (inbox_assist.py): file one or all it would file, put one back, keep one in the
@@ -2512,6 +2576,10 @@ def main():
         if IS_LOCAL:                           # Claude reads what the inbox assistant queued (one run at a time)
             try:
                 judge_proc = _judge_tick(judge_proc)
+            except Exception as e:
+                print(f"inbox assistant: {e}")
+            try:                               # a "Deal with it" he pressed: the background Claude takes it
+                work_proc = _work_tick(work_proc)
             except Exception as e:
                 print(f"inbox assistant: {e}")
         if not IS_LOCAL and time.time() - last_ctms > 60:   # CTMS captures come home

@@ -539,3 +539,34 @@ def test_the_desk_and_its_service_worker_are_never_kept_stale_by_a_phone():
         with _op.open(BASE + path, timeout=5) as r:
             assert r.status == 200 or path == "/sw.js"
             assert r.headers.get("Cache-Control") == "no-cache", (path, dict(r.headers))
+
+
+def test_deal_with_it_switches_acting_on_only_for_a_job_that_may_need_ctms():
+    """24/11: Deal with it's background Claude reads and updates CTMS. His tap on the dashboard is the go-ahead - the
+    home PC's own key can't switch it on. Not for a reply or a filing, left alone when on already, never on a work PC
+    set to look only."""
+    fresh()
+    with S._lock:
+        S._queue.clear()
+    try:
+        assert call("/api/command", {"action": "assist_deal", "data": {"id": "abc123def456"}})[0] == 200
+        assert not S._ctms_armed()                                        # a reply or a filing: no CTMS
+        assert call("/api/command", {"action": "assist_deal", "data": {"id": "abc123def456", "ctms": True}})[0] == 200
+        assert S._ctms_armed() and S._ctms["control_until"] - time.time() <= S._ASSIST_CTMS_MINUTES * 60 + 1
+        assert "Deal with it" in S._ctms["results"][0]["detail"]
+        until = S._ctms["control_until"]
+        call("/api/command", {"action": "assist_yes", "data": {"id": "abc123def456", "n": 0, "ctms": True}})
+        assert S._ctms["control_until"] == until                          # on already: left as it was
+        assert [c["action"] for c in S._queue] == ["assist_deal", "assist_deal", "assist_yes"]
+        fresh()
+        S._ctms["state"] = {"control": False}
+        call("/api/command", {"action": "assist_deal", "data": {"id": "abc123def456", "ctms": True}})
+        assert not S._ctms_armed()                                        # the work PC is set to look only
+        fresh()
+        assert call("/api/command", {"action": "assist_deal", "data": {"ctms": True}}, key=AGENT)[0] == 401
+        assert not S._ctms_armed()
+    finally:
+        fresh()
+        with S._lock:
+            S._queue.clear()
+            S._status.update(state="idle", detail="", at="", output="", email=None)

@@ -607,6 +607,19 @@ _RAIL_SEND_MINUTES = 10    # ... then the plans built and emailed (the card's on
 _BOOK_RUN_MINUTES = 25       # the longest a Book runs: the to-do's update first, a few vehicles, the row, the email
 _BOOK_BATCH_MAX = 12         # bookings one Book approved takes: a morning's ready orders
 _REJECTION_RUN_MINUTES = 3   # a rejection form's share of a Send run: Look mum, no hands on for that a form (~40 s)
+_ASSIST_CTMS_MINUTES = 15    # Deal with it's background Claude: Look mum, no hands on for this long at most
+
+
+def _assist_arm_locked(d):
+    """His Deal with it - or his Yes to a CTMS change it held - on a job that may need CTMS (the desk says so in
+    data.ctms): his tap on the dashboard is the go-ahead, so Look mum, no hands goes on for a quarter of an hour when it
+    is off. The home PC's own key can't switch it on; this is the dashboard's, as /api/ctms/control is."""
+    if not (isinstance(d, dict) and d.get("ctms")) or _ctms["state"].get("control") is False or _ctms_armed():
+        return
+    _ctms["control_until"], _ctms["armed_for"] = time.time() + _ASSIST_CTMS_MINUTES * 60, None
+    _ctms_note_locked(f"Look mum, no hands mode switched on for {_ASSIST_CTMS_MINUTES} min: Claude is dealing with an "
+                      "email you pressed Deal with it on.")
+    _ctms_cv.notify_all()
 _REJECTION_RUN_MAX = 20      # forms one Send takes
 _REJECTION_IDLE = 60         # Auto sends one only while the work PC has been left alone this long (seconds)
 _REJECTION_ID = re.compile(r"r[0-9a-f]{6,16}")
@@ -3171,6 +3184,8 @@ class Handler(BaseHTTPRequestHandler):
                                # Rail plan: Build & send with no file = the plan last previewed
                                "source": "last" if data.get("source") == "last" else None,
                                "queued_at": time.time()})
+                if data.get("action") in ("assist_deal", "assist_yes"):
+                    _assist_arm_locked(data.get("data"))
                 det = f"{data.get('action')} queued"
                 if not _agent_online():
                     det += f" — home PC is offline; runs when it reconnects or expires after {_ttl_text()}"

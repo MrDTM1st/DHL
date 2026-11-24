@@ -466,7 +466,7 @@ function NoAddress({ rows, onCommand }) {
 
 export default function Dashboard({
   records, status, panel, setPage, onCommand, onUpload, currentOrder, setCurrentOrder,
-  agentOnline, ttlText, onClearDropped, uploadBusy,
+  agentOnline, ttlText, onClearDropped, uploadBusy, onAssistOpen,
 }) {
   const tracked = records.length;
   const urgent = records.filter(isUrgent).length;
@@ -503,7 +503,7 @@ export default function Dashboard({
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
 
-      <AssistCard data={panel && panel.assist} onCommand={onCommand} push={panel && panel.push} />
+      <AssistCard data={panel && panel.assist} onCommand={onCommand} push={panel && panel.push} onOpen={onAssistOpen} />
       {!(panel && panel.assist && panel.assist.mode && panel.assist.mode !== 'off') && (
         <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
       )}

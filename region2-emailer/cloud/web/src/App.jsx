@@ -11,6 +11,7 @@ import Notifications from './pages/Notifications.jsx';
 import CtmsPage from './pages/CtmsPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import { ToolkitStrip } from './components/Toolkit.jsx';
+import AssistFocus from './components/AssistFocus.jsx';
 import { useStatus, useTracker } from './hooks.js';
 import { isUrgent, within3, ordLabel, dueText, stamp, answerText, emailedBack } from './lib/orders.js';
 import * as api from './api.js';
@@ -36,6 +37,39 @@ export default function App() {
   const [currentOrder, setCurrentOrder] = useState('');
   const [toasts, setToasts] = useState([]);
   const [uploadBusy, setUploadBusy] = useState(false);
+
+  // Deal with it (his 24/11): a tap on a phone alert opens the desk on that email - /?assist=ID, or, with the desk open
+  // already, the service worker says which in a message. The address goes back to plain / so a reload doesn't reopen it.
+  const ASSIST_ID = /^[0-9a-f]{12}$/;
+  const [assistFocus, setAssistFocus] = useState(() => {
+    try {
+      const id = new URLSearchParams(window.location.search).get('assist') || '';
+      return ASSIST_ID.test(id) ? id : '';
+    } catch { return ''; }
+  });
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).has('assist')) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    } catch { /* an old browser: the address stays as it is */ }
+    if (!('serviceWorker' in navigator)) return undefined;
+    const onMsg = (e) => {
+      const id = e.data && e.data.type === 'assist-open' ? String(e.data.id || '') : '';
+      if (ASSIST_ID.test(id)) setAssistFocus(id);
+    };
+    // a phone can bring a sleeping desk back without that message: back at the front, it asks which email was tapped
+    const ask = () => {
+      const sw = navigator.serviceWorker.controller;
+      if (document.visibilityState === 'visible' && sw) sw.postMessage({ type: 'assist-pending' });
+    };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    document.addEventListener('visibilitychange', ask);
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', onMsg);
+      document.removeEventListener('visibilitychange', ask);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // notifications derived from urgent orders (persisted read/dismiss in state)
   const [notes, setNotes] = useState([]);
@@ -566,6 +600,7 @@ export default function App() {
             records={records} status={status} panel={panel} setPage={setPage}
             onCommand={onCommand} onUpload={onUpload} currentOrder={currentOrder} setCurrentOrder={setCurrentOrder}
             agentOnline={agentOnline} ttlText={ttlText} onClearDropped={onClearDropped} uploadBusy={uploadBusy}
+            onAssistOpen={setAssistFocus}
           />
         )}
         {page === 'map' && (
@@ -599,6 +634,10 @@ export default function App() {
             approved={approved.some((a) => a.id === selectedId)} onApprove={onApprove} onUnapprove={onUnapprove} />
         )}
       </div>
+      {assistFocus && (
+        <AssistFocus id={assistFocus} assist={panel.assist} loaded={!!status} onCommand={onCommand}
+          onClose={() => setAssistFocus('')} />
+      )}
       <Toasts toasts={toasts} dismiss={dismissToast} />
     </div>
   );

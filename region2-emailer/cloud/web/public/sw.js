@@ -5,7 +5,7 @@
 // the app still opens on a train with no signal. The /api/* endpoints are
 // never touched - live data must be live, and stale tracker state presented as
 // current would be worse than an error.
-const CACHE = 'r2-desk-v2';
+const CACHE = 'r2-desk-v3';
 const SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -54,7 +54,19 @@ self.addEventListener('push', (e) => {
   e.waitUntil(self.registration.showNotification(d.title || 'Haulage Desk', opts));
 });
 
-// A tap on an alert: back to the desk if it is open in a tab or window, else open it. Only the desk's own pages.
+// The email of the alert last tapped, for a minute: a phone can resume a sleeping desk without handing it the message
+// below, so the desk asks again when it comes to the front ('assist-pending'), and is told once.
+let pendingAssist = { id: '', at: 0 };
+self.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'assist-pending' || !e.source) return;
+  const fresh = pendingAssist.id && Date.now() - pendingAssist.at < 60000;
+  if (fresh) e.source.postMessage({ type: 'assist-open', id: pendingAssist.id });
+  pendingAssist = { id: '', at: 0 };
+});
+
+// A tap on an alert: the desk opened on that email (/?assist=ID - his 24/11 "you will tell me what it is ... one
+// button that just says either dealt with or deal with it"). Open already in a tab or window: it is told which email
+// (a message) and brought forward; else it is opened at the address. Only the desk's own pages.
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   let url = new URL('/', self.location.origin);
@@ -62,10 +74,15 @@ self.addEventListener('notificationclick', (e) => {
     const u = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin);
     if (u.origin === self.location.origin) url = u;
   } catch (err) { /* not an address: the desk's front page */ }
+  const id = url.searchParams.get('assist') || '';
+  pendingAssist = { id, at: Date.now() };
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((tabs) => {
       const open = tabs.find((c) => new URL(c.url).origin === self.location.origin && 'focus' in c);
-      if (open) return open.focus();
+      if (open) {
+        if (id) open.postMessage({ type: 'assist-open', id });
+        return open.focus();
+      }
       return self.clients.openWindow ? self.clients.openWindow(url.href) : undefined;
     })
   );

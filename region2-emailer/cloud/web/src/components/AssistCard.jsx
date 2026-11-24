@@ -7,22 +7,34 @@ import PushToggle from './PushToggle.jsx';
 // the desk (the toolkit takes it in), or put here with who wants what, by when, and the suggested action with the
 // text ready. Claude reads each one once on the home PC; until it can, the word rules decide. "Now" rings at once.
 // Shadow mode lists what it would file and moves nothing; live files it, logged, and Put back undoes one.
+// Each email has his two buttons (24/11): Dealt with, and Deal with it - which opens the email (AssistFocus, as a
+// phone alert does) saying what it will do, and then shows Claude's job as it goes.
 
 const URG = { now: ['Now', 'urgent'], today: ['Today', 'high'], week: ['This week', 'normal'] };
 const ACT = { reply: 'Reply', forward: 'Forward', ctms: 'In CTMS', call: 'Call', upload: 'Upload', file: 'File',
   other: 'To do' };
 const MODE = { off: 'Off', shadow: 'Shadow', live: 'Live' };
 
-function Item({ i, onDealt, onSend }) {
+// a job he gave Claude (Deal with it, 24/11), in a line
+const JOB = { queued: 'Claude will start in a moment', working: 'Claude is on it', needs_you: 'Needs your yes',
+  done: 'Claude dealt with it', failed: "Claude couldn't finish", dropped: 'Dropped' };
+
+function jobLine(j) {
+  if (!j) return '';
+  const open = (j.asks || []).filter((a) => a.state === 'open');
+  if (j.state === 'working') return JOB.working + (j.now ? ': ' + j.now : '');
+  if (j.state === 'needs_you') return JOB.needs_you + (open.length ? ': ' + open[0].what : '');
+  if (j.state === 'failed') return JOB.failed + (j.summary || j.said ? ': ' + (j.summary || j.said) : '');
+  return (JOB[j.state] || j.state) + (j.summary ? ': ' + j.summary : '');
+}
+
+function Item({ i, onDealt, onOpen }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
   const a = i.action || {};
-  // one tap (his 24/11): the suggested reply, his to change, goes to all on the thread but DHL Road, his signature under it
-  const [text, setText] = useState(a.text || '');
-  const [sending, setSending] = useState(false);
+  const j = i.job;
   const [label, cls] = URG[i.urgency] || URG.week;
-  const copy = () => copyText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
-  const sendIt = () => { setSending(true); onSend(i, text); };
+  const copy = () => copyText(a.text || '').then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
   return (
     <div className="noaddress-row">
       <div className="noaddress-what">
@@ -41,38 +53,32 @@ function Item({ i, onDealt, onSend }) {
             <b>{ACT[a.type] || 'To do'}{a.to ? ' to ' + a.to : ''}</b>{a.note ? ': ' + a.note : ''}
           </div>
         ) : null}
-        {show && a.text && (i.sendable ? (
-          <div className="assist-send">
-            <div className="noaddress-said">
-              Reply to all: <b>{i.from}</b>{i.cc ? ' · cc ' + i.cc : ''} (never DHL Road) · your signature goes under it
-            </div>
-            <textarea className="assist-reply-edit" value={text} onChange={(e) => setText(e.target.value)}
-              rows={Math.min(10, Math.max(4, text.split('\n').length + 1))} />
-          </div>
-        ) : <div className="assist-reply">{a.text}</div>)}
+        {j && <div className={'assist-job ' + j.state}>{jobLine(j)}</div>}
+        {show && a.text && <div className="assist-reply">{a.text}</div>}
       </div>
       <div className="noaddress-fix">
         {a.text && (
           <button className="btn mini" onClick={() => setShow((s) => !s)}>
             {show ? 'Hide' : a.type === 'forward' ? 'Suggested note' : 'Suggested reply'}</button>
         )}
-        {a.text && show && i.sendable && (
-          <button className="btn mini go" disabled={sending || !text.trim()} onClick={sendIt}
-            title="Checked first (who it goes to, one signature, the trail kept) - a failed check leaves it in Drafts">
-            {sending ? 'Sending…' : 'Send'}</button>
-        )}
         {a.text && show && <button className="btn mini" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>}
         <button className="btn mini" onClick={() => onDealt(i)}
           title="Answered or done another way - it stays off unless they write again">Dealt with</button>
+        {/* his 24/11: "one button that just says either dealt with or deal with it" - it opens the email with what it
+            will do said first, and the job as it goes */}
+        <button className={'btn mini ' + (j && j.state === 'needs_you' ? 'red' : 'go')} onClick={() => onOpen(i.id)}>
+          {j && j.state === 'needs_you' ? 'Your yes' : j && (j.state === 'working' || j.state === 'queued')
+            ? 'Watch' : 'Deal with it'}</button>
       </div>
     </div>
   );
 }
 
-export default function AssistCard({ data, onCommand, push }) {
+export default function AssistCard({ data, onCommand, push, onOpen }) {
   const [gone, setGone] = useState({});
   const [allNeeds, setAllNeeds] = useState(false);
   const [openFile, setOpenFile] = useState(false);
+  const [openJobs, setOpenJobs] = useState(false);
   if (!data || !data.mode) return null;
   const mode = data.mode;
   const send = (action, d) => onCommand({ action, data: d || {} });
@@ -107,7 +113,8 @@ export default function AssistCard({ data, onCommand, push }) {
   const filing = mode === 'live' ? (data.filed || []) : (data.would_file || []);
   const files = filing.filter((i) => !gone[i.id]);
   const dealt = (i) => { send('assist_dealt', { id: i.id }); hide(i.id); };
-  const sendReply = (i, text) => { send('assist_send', { id: i.id, text }); hide(i.id); };
+  const open = (id) => onOpen && onOpen(id);
+  const jobs = data.jobs || [];
   const fileAll = () => {
     if (window.confirm(`File ${files.length} email${files.length === 1 ? '' : 's'} where they belong? `
       + 'Every move is logged, and Put back undoes one.')) {
@@ -130,14 +137,14 @@ export default function AssistCard({ data, onCommand, push }) {
           <div className="noaddress-what">
             <div className="noaddress-said">
               <b>Claude can't read your mail yet:</b> {claude.said || 'no answer'}. If it says to log in: on the
-              home PC open PowerShell, run <code>{'& "$env:USERPROFILE\\.local\\bin\\claude.exe"'}</code>, then
-              type <code>/login</code> and sign in. Until then the word rules decide, and nothing is filed on their
-              say-so.
+              home PC open PowerShell, run <code>{'& "$env:USERPROFILE\\.local\\bin\\claude.exe" auth login --claudeai'}</code>
+              {' '}and press Authorize in the browser it opens. Until then the word rules decide, and nothing is
+              filed on their say-so.
             </div>
           </div>
         </div>
       )}
-      {shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onSend={sendReply} />)}
+      {shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} />)}
       {needs.length > shown.length && (
         <div className="noaddress-row">
           <button className="btn mini" onClick={() => setAllNeeds(true)}>Show all {needs.length}</button>
@@ -148,6 +155,27 @@ export default function AssistCard({ data, onCommand, push }) {
           <button className="btn mini" onClick={() => setAllNeeds(false)}>Show fewer</button>
         </div>
       )}
+      {jobs.length > 0 && (
+        <div className="noaddress-row">
+          <div className="noaddress-what">
+            <div className="noaddress-order">Claude dealt with today: {jobs.length}</div>
+          </div>
+          <div className="noaddress-fix">
+            <button className="btn mini" onClick={() => setOpenJobs((o) => !o)}>{openJobs ? 'Hide' : 'Show'}</button>
+          </div>
+        </div>
+      )}
+      {openJobs && jobs.map((x) => (
+        <div className="noaddress-row assist-file" key={'j' + x.id}>
+          <div className="noaddress-what">
+            <div className="noaddress-said"><b>{x.from}</b> · {x.ask}</div>
+            <div className={'assist-job ' + ((x.job && x.job.state) || '')}>{jobLine(x.job)}</div>
+          </div>
+          <div className="noaddress-fix">
+            <button className="btn mini" onClick={() => open(x.id)}>Open</button>
+          </div>
+        </div>
+      ))}
       {files.length > 0 && (
         <div className="noaddress-row">
           <div className="noaddress-what">
