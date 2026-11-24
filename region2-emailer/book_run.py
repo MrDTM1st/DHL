@@ -1060,7 +1060,7 @@ def book(job, R=None, now=None):
     args = {k_: job[k_] for k_ in ("orders", "date", "carrier", "trailer", "vehicles", "dry") if job.get(k_) not in (None, "")}
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
-    rec = record_of(job.get("record")) or {}
+    rec = record_of(job.get("record")) or job.get("record_copy") or {}     # a record already off the map, carried
     qty = quantities(rec)
     if qty:
         args["qty"] = qty

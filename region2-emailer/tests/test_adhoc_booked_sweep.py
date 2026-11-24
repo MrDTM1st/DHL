@@ -73,6 +73,37 @@ def test_only_a_manifest_that_books_this_job_takes_it_off_the_map():
         S._folders = keep
 
 
+def test_one_mail_about_two_jobs_books_only_the_one_its_manifest_is_for():
+    """His 24/11: our reply on a cover request for two jobs gave the first job's manifest, and the sweep took BOTH off the
+    map. The manifest now books the job its own words name, else the one Book's journal has on it - never both."""
+    keep_f, keep_j = S._folders, S.journal_lines
+    both = _Folder("Sent Items", [_Mail("RE: Cover request Thu - 9100001 Here to There + 9100002 There to Here",
+                                        "Thanks for covering this. Here's the manifest number: MAN-01900001\nFrom: them",
+                                        "planner@example.com")])
+    try:
+        S._folders = lambda ns: [both]
+        S.journal_lines = lambda man: []                       # not Book's: nothing comes off on its say-so
+        assert S.find_bookings(None, ["9100001", "9100002"]) == {}
+        S.journal_lines = lambda man: ["9100001"] if man == "MAN-01900001" else []
+        got = S.find_bookings(None, ["9100001", "9100002"])
+        assert set(got) == {"9100001"} and got["9100001"]["man"] == "MAN-01900001", got
+        said = _Folder("Sent Items", [_Mail("RE: Cover request - 9100001 + 9100002",
+                                            "9100002 is booked on MAN-01900002\nFrom: them", "planner@example.com")])
+        S._folders = lambda ns: [said]
+        assert set(S.find_bookings(None, ["9100001", "9100002"])) == {"9100002"}     # the one its own words name
+    finally:
+        S._folders, S.journal_lines = keep_f, keep_j
+
+
+def test_the_journal_says_which_lines_a_manifest_carries(tmp_path):
+    import json
+    path = tmp_path / "journal.json"
+    path.write_text(json.dumps({"jobs": {"9100001@26/11/2026": {"trips": [
+        {"manifest": "MAN-01900001", "lines": ["9100001", "9100001_R"]}]}}}), encoding="utf-8")
+    assert S.journal_lines("MAN-01900001", path=str(path)) == ["9100001", "9100001_R"]
+    assert S.journal_lines("MAN-01900009", path=str(path)) == []
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

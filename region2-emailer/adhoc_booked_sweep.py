@@ -133,6 +133,31 @@ def _folders(ns):
     return out
 
 
+def journal_lines(man, path=None):
+    """The order lines Book's journal has on this manifest - [] when Book didn't make it."""
+    try:
+        with open(path or os.path.join(HERE, "_book_journal.json"), encoding="utf-8") as f:
+            jobs = json.load(f).get("jobs") or {}
+    except Exception:
+        return []
+    want = re.sub(r"\D", "", str(man or ""))[-8:]
+    if not want:
+        return []
+    return [str(ln) for e in jobs.values() if isinstance(e, dict) for t in (e.get("trips") or [])
+            if re.sub(r"\D", "", str(t.get("manifest") or ""))[-8:] == want for ln in (t.get("lines") or [])]
+
+
+def _which(hits, top, man):
+    """One mail about several jobs - a cover request for two (his 24/11: the manifest for the first took the second off
+    the map too): its manifest books the job its own words name, else the one Book's journal has on that manifest,
+    never all of them. [] when it can't tell: nothing comes off on its say-so."""
+    named = [r for r in hits if r in top]
+    if named:
+        return named
+    lines = journal_lines(man) if man else []
+    return [r for r in hits if any(ln == r or ln.split("_")[0] == r for ln in lines)]
+
+
 def find_bookings(ns, refs, days=DAYS):
     """{ref: {"man","when","who","subject"}} for every ad hoc now booked in."""
     wanted = {str(r).strip() for r in refs if str(r).strip()}
@@ -182,6 +207,8 @@ def find_bookings(ns, refs, days=DAYS):
             if not ours and declined(top):
                 continue                          # a haulier turning it down, or busy on another manifest
             man = m.group(0).upper().replace(" ", "-") if m else ""
+            if len(hits) > 1:
+                hits = _which(hits, top, man)
             for r in hits:
                 # keep the EARLIEST confirmation, not whichever we saw last
                 prev = booked.get(r)
