@@ -352,28 +352,39 @@ def enrol_untracked(ns, limit=600):
         return added
     try:
         collected, _tokens, _nf = send_order.resolve_orders(ns, " ".join(rebuild))
-        emails = send_order.build_from_collected(collected) if collected else []
     except Exception:
         return added
-    for e in emails:
-        ords = [str(o) for o in e.get("orders", [])]
-        if not ords or any(o in tracked for o in ords):
+    # resolve_orders brings each order's siblings with it - every line to the same contact, site and day - and they
+    # went on as emailed at the time of an email that named only the order beside them; with none of the group named,
+    # at the time of the sweep. Only the orders a Sent subject NAMED were emailed (his cross-check, 24/11), so each
+    # record is built from the lines of the orders one email named, dated from that email.
+    by_mail = {}                              # (sent time, EntryID) -> the orders that one email named
+    for o in rebuild:
+        by_mail.setdefault(seen[o], []).append(o)
+    for (when, eid), named in by_mail.items():
+        part = [(r, C, fn) for r, C, fn in collected if bd.base_order(r[C["order"]]) in named]
+        try:
+            emails = send_order.build_from_collected(part) if part else []
+        except Exception:
             continue
-        if not bd._is_future(e.get("date", "")):
-            continue                          # delivery date already gone
-        when, eid = next((seen[o] for o in ords if o in seen), (None, None))
-        tracker.log(orders=ords, to=e.get("to", ""), name=e.get("name", ""),
-                    product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
-                    site=e.get("site", ""), postcode=e.get("postcode", ""),
-                    delivery_date=e.get("date", ""), source="sent (recovered)", status="sent",
-                    emailed_at=bd._to_tracker_dt(when) if when else None,
-                    only_if_new=True, kind="delivery", orig_entryid=eid,
-                    worksite=e.get("worksite", ""), collections=e.get("collections"),
-                    collection_site=e.get("collection_site", ""),
-                    collection_pc=e.get("collection_pc", ""), po=e.get("po"))
-        metrics.log("order_recovered", orders=ords, via="extract")
-        tracked.update(ords)
-        added += 1
+        for e in emails:
+            ords = [str(o) for o in e.get("orders", [])]
+            if not ords or any(o in tracked for o in ords):
+                continue
+            if not bd._is_future(e.get("date", "")):
+                continue                          # delivery date already gone
+            tracker.log(orders=ords, to=e.get("to", ""), name=e.get("name", ""),
+                        product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                        site=e.get("site", ""), postcode=e.get("postcode", ""),
+                        delivery_date=e.get("date", ""), source="sent (recovered)", status="sent",
+                        emailed_at=bd._to_tracker_dt(when),
+                        only_if_new=True, kind="delivery", orig_entryid=eid,
+                        worksite=e.get("worksite", ""), collections=e.get("collections"),
+                        collection_site=e.get("collection_site", ""),
+                        collection_pc=e.get("collection_pc", ""), po=e.get("po"))
+            metrics.log("order_recovered", orders=ords, via="extract")
+            tracked.update(ords)
+            added += 1
     return added
 
 

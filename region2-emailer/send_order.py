@@ -342,6 +342,7 @@ def build_from_collected(collected):
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, area=bd.area(dpc),
                            orders=orders, po=dict(pos), product_codes=pcodes,
+                           lines=bd.order_lines(bundle, items, [p[1] for p in picked]),
                            materials=bd.product_summary(items),
                            site=bd.clean(r0[C0['daddr']]), postcode=dpc, source=source,
                            worksite=bd.worksite_of(wsite),
@@ -658,15 +659,24 @@ def send_emails(ns, emails):
         # customer - the same reason send_haulier is not tracker-logged.
         if not e.get("no_track"):
             try:
-                tracker.log(orders=e.get("orders", []), to=to, name=e.get("name", ""),
-                            product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
-                            site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
-                            source=e.get("source", ""), status="sent",
-                            worksite=e.get("worksite", ""),
-                            collection_site=e.get("collection_site", ""),
-                            collection_pc=e.get("collection_pc", ""),
-                            collections=e.get("collections"),
-                            po=e.get("po"))
+                # Only the orders the email that went NAMES (tracker.named): Review & send lets the subject and
+                # message be edited before it goes, and an order taken out of them was not asked about.
+                said = "\n".join(str(x or "") for x in (e["subject"], text, e.get("html")))
+                ords = tracker.named(e.get("orders", []), said)
+                left = [o for o in e.get("orders", []) if o not in ords]
+                if left:
+                    say(f"   !! the email does not name {' / '.join(map(str, left))} - not tracked as emailed")
+                if ords:
+                    tracker.log(orders=ords, to=to, name=e.get("name", ""),
+                                product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                                site=e.get("site", ""), postcode=e.get("postcode", ""), delivery_date=e["date"],
+                                source=e.get("source", ""), status="sent",
+                                worksite=e.get("worksite", ""),
+                                collection_site=e.get("collection_site", ""),
+                                collection_pc=e.get("collection_pc", ""),
+                                collections=e.get("collections"),
+                                po={o: p for o, p in (e.get("po") or {}).items() if o in ords} if left
+                                else e.get("po"))
             except Exception as ex:
                 # the email is GONE: still counted, or SEND_RESULT says none went and a resend sends it twice
                 say(f"   !! SENT, but the tracker's record of it failed ({ex}): {e.get('subject')}")

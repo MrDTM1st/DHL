@@ -136,6 +136,21 @@ def main():
             print("  !! already BOOKED IN - pinning, but NOT tracking it:"
                   " a booked order must not go back to the chasers.")
 
+        # Tracked means emailed, so only the orders a sent email NAMES are tracked, each from the email that named
+        # it (his cross-check, 24/11: Sent Items is the proof). The lookup brings the order's whole delivery with it -
+        # every line to the same contact, site and day - and the whole group went on as emailed: a sibling no email
+        # named, or the lot "emailed now" with no trace in Sent Items at all.
+        mails = {}
+        if do_pin and do_track and not booked:
+            for o in e.get("orders", []):
+                h = already.get(o) or {}
+                if h.get("where") == "Sent Items":
+                    mails.setdefault(h.get("entryid") or h.get("when"), (h, []))[1].append(o)
+            left = [o for o in e.get("orders", []) if not any(o in got for _h, got in mails.values())]
+            if left:
+                print(f"  !! NOT tracking {' / '.join(left)}: no sent email names "
+                      f"{'it' if len(left) == 1 else 'them'}, so nobody has been asked yet.")
+
         if not do_pin:
             continue
 
@@ -157,28 +172,30 @@ def main():
             "source": e.get("source", ""),
             "emailed_at": (sent or {}).get("when", ""),
             "booked": booked,
-            "tracked": bool(do_track and not booked),
+            "tracked": bool(mails),
             "pinned_at": tracker._now(),
         }
         pins.add(rec)
         pinned += 1
         print("  -> PINNED on the map"
-              + (" and tracked" if (do_track and not booked) else " (map only)"))
+              + (" and tracked" if mails else " (map only)"))
 
-        if do_track and not booked:
+        for h, got in mails.values():
             tracked += 1
-            # only_if_new: never bump the chase count of an order already tracked.
-            tracker.log(orders=e.get("orders", []), to=e.get("to", ""),
-                        name=e.get("name", ""), product_codes=e.get("product_codes", []),
-                        materials=e.get("materials", ""), site=e.get("site", ""),
-                        postcode=e.get("postcode", ""), delivery_date=e.get("date"),
+            p = bd.only_orders(e, got)
+            # only_if_new: never bump the chase count of an order already tracked. The time goes in the tracker's
+            # own form: Sent Items gives dd/mm/yyyy, which CTMS's "Emailed DO" note could not read.
+            tracker.log(orders=p["orders"], to=p.get("to", ""),
+                        name=p.get("name", ""), product_codes=p.get("product_codes", []),
+                        materials=p.get("materials", ""), site=p.get("site", ""),
+                        postcode=p.get("postcode", ""), delivery_date=p.get("date"),
                         source="by hand", status="sent",
-                        emailed_at=(sent or {}).get("when") or None,
-                        only_if_new=True,
-                        worksite=e.get("worksite", ""),
-                        collection_site=e.get("collection_site", ""),
-                        collection_pc=e.get("collection_pc", ""),
-                        collections=e.get("collections"))
+                        emailed_at=bd._to_tracker_dt(h.get("when")),
+                        only_if_new=True, orig_entryid=h.get("entryid") or None, po=p.get("po"),
+                        worksite=p.get("worksite", ""),
+                        collection_site=p.get("collection_site", ""),
+                        collection_pc=p.get("collection_pc", ""),
+                        collections=p.get("collections"))
 
     if not do_pin:
         print("\nSEARCH ONLY - nothing written. To put it on the map:")

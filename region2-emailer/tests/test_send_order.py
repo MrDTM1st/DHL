@@ -60,6 +60,26 @@ def test_an_email_sent_is_counted_and_said_even_when_its_tracker_record_fails(S,
     assert "SENT, but the tracker's record of it failed" in capsys.readouterr().out
 
 
+def test_an_edited_email_is_tracked_as_emailed_only_for_the_orders_it_still_names(S, monkeypatch, capsys):
+    # The tracker - and CTMS's "Emailed DO" note after it - counts an order as emailed only when the email that went
+    # names it (his cross-check, 24/11). Review & send lets the subject and message be edited before it goes.
+    logged = []
+    monkeypatch.setattr(S.tracker, "log", lambda **k: logged.append(k))
+    emails = [
+        {"to": "site1@example.com", "subject": "9000001 Example Yard EX1 1AA", "date": "06/11/2026",     # 9000002 cut
+         "message": "Hi,\n\nI've got 10x rail available on 06/11/2026.", "orders": ["9000001", "9000002"],
+         "po": {"9000001": "PO100001", "9000002": "PO100002"}},
+        {"to": "site2@example.com", "subject": "Delivery to Example Yard", "message": "Hi", "date": "06/11/2026",
+         "orders": ["9000003"]},                                                    # names none: sent, nothing claimed
+        {"to": "site3@example.com", "subject": "9000004 / 9000005 Example Yard EX1 1AA", "message": "Hi",
+         "date": "06/11/2026", "orders": ["9000004", "9000005"]}]                   # as built: all in the subject
+    assert S.send_emails(NS, emails) == 3
+    assert [(k["orders"], k["po"]) for k in logged] == [(["9000001"], {"9000001": "PO100001"}),
+                                                        (["9000004", "9000005"], None)]
+    out = capsys.readouterr().out
+    assert "does not name 9000002 - not tracked as emailed" in out and "does not name 9000003" in out
+
+
 def test_a_haulier_request_sent_is_reported_whatever_the_console_can_show(S, monkeypatch):
     with open(S.PENDING_HAULIER, "w", encoding="utf-8") as f:
         json.dump({"to": "ops@haulier.example", "subject": "9000001 Łódź Delivery", "message": "Hi",

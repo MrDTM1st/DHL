@@ -459,6 +459,28 @@ def product_summary(items):
     return ", ".join(f"{q}x {t}" for t, q in agg.items())
 
 
+def order_lines(bundle, items, codes):
+    """Each line of a group with the order it belongs to - [{order, qty, product, code}] - so the group can be cut
+    down to some of its orders (only_orders). bundle, items and codes run line for line."""
+    return [{"order": base_order(r[C["order"]]), "qty": q, "product": d, "code": c}
+            for (r, C, _), (q, d), c in zip(bundle, items, codes)]
+
+
+def only_orders(e, orders):
+    """Group `e` cut down to `orders`: their own materials, product codes and POs, so a tracker record that holds some
+    of a delivery's orders never lists what the others brought. The whole group comes back as it is."""
+    keep = [str(o) for o in orders]
+    if set(keep) >= {str(o) for o in e.get("orders") or []}:
+        return e
+    part = dict(e, orders=keep, po={o: p for o, p in (e.get("po") or {}).items() if str(o) in keep})
+    lines = [ln for ln in e.get("lines") or [] if str(ln.get("order")) in keep]
+    if lines:
+        part["lines"] = lines
+        part["materials"] = product_summary([(ln["qty"], ln["product"]) for ln in lines])
+        part["product_codes"] = sorted({ln["code"] for ln in lines if ln.get("code")})
+    return part
+
+
 # ---------- consolidation (share-a-vehicle) suggestions ----------
 # postcodes.py is the single correct implementation - splitting on the space
 # silently failed for unspaced postcodes ("BS119DE" grouped as its own district,
@@ -793,38 +815,63 @@ def enrol_by_hand(skipped_sent):
     Items, not via the tool) onto the tracker so they get chased like the rest.
     Idempotent, dated from your actual send time. Drafts-only matches are ignored
     - nothing was sent, so there's no one to chase. Returns how many were newly
-    enrolled."""
+    enrolled.
+
+    Only the orders a sent email NAMES go on, each from the email that named it.
+    A group is skipped as already contacted when ANY of its orders was emailed,
+    or when its contact, postcode and day were emailed under another order number
+    (find_emailed_deliveries) - and the WHOLE group used to go on as emailed, at
+    that email's time. So an order that joined a delivery after it was asked
+    about went on as asked at a chase that named only the first order, and rails
+    sharing a site and a day with sleepers went on as asked at the sleepers'
+    email, which named neither. The tracker, the map and CTMS ("Emailed DO
+    dd/mm") all said they had been asked; no email had named them (his
+    cross-check, 24/11). Sending is unchanged - such a group is still skipped -
+    but the orders no sent email names are left off, and put on the group's
+    "_unnamed" for the run to say so."""
     existing = {r["id"] for r in tracker.load().get("records", [])}
     n = 0
     for e in skipped_sent:
-        ev = next((v for v in e.get("_seen", {}).values() if v.get("where") == "Sent Items"), None)
-        if not ev:
-            continue
-        rid = tracker._key(e["orders"], e["date"])
-        if rid in existing:
-            continue
-        tracker.log(orders=e["orders"], to=e.get("to", ""), name=e.get("name", ""),
-                    product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
-                    site=e.get("site", ""), postcode=e.get("postcode", ""),
-                    delivery_date=e["date"], source="by hand", status="sent",
-                    emailed_at=_to_tracker_dt(ev.get("when")), only_if_new=True,
-                    kind="delivery", orig_entryid=ev.get("entryid"), po=e.get("po"),
-                    # The collection end was on `e` the whole time - it comes
-                    # off the extract row exactly like site and postcode above -
-                    # and leaving it out put by-hand orders on the map as a
-                    # delivery pin with nothing to join them to. 7115774 on
-                    # 15/09 is what that looks like from the map: Hardy
-                    # Aggregates Boroughbridge YO51 9JH to Network Rail March,
-                    # and the map knew only the March end. order_pin has always
-                    # passed these three; this path never did, so every order
-                    # emailed by hand arrived half-imported.
-                    worksite=e.get("worksite", ""),
-                    collection_site=e.get("collection_site", ""),
-                    collection_pc=e.get("collection_pc", ""),
-                    collections=e.get("collections"))
-        existing.add(rid)
-        n += 1
+        seen = e.get("_seen") or {}
+        ords = [str(o).strip() for o in e.get("orders") or []]
+        mails = OrderedDict()     # each Sent item -> (its evidence, the orders it named)
+        for o in ords:
+            ev = seen.get(o)      # the order's OWN evidence - a "_delivery" match names none of them
+            if ev and ev.get("where") == "Sent Items":
+                mails.setdefault(ev.get("entryid") or ev.get("when"), (ev, []))[1].append(o)
+        got = {o for _ev, part in mails.values() for o in part}
+        e["_unnamed"] = [o for o in ords if o not in got]
+        for ev, part in mails.values():
+            rid = tracker._key(part, e["date"])
+            if rid in existing:
+                continue
+            _enrol_one(only_orders(e, part), ev)
+            existing.add(rid)
+            n += 1
     return n
+
+
+def _enrol_one(e, ev):
+    """One by-hand record: group `e` (cut down to the orders Sent item `ev` named), dated from that item."""
+    tracker.log(orders=e["orders"], to=e.get("to", ""), name=e.get("name", ""),
+                product_codes=e.get("product_codes", []), materials=e.get("materials", ""),
+                site=e.get("site", ""), postcode=e.get("postcode", ""),
+                delivery_date=e["date"], source="by hand", status="sent",
+                emailed_at=_to_tracker_dt(ev.get("when")), only_if_new=True,
+                kind="delivery", orig_entryid=ev.get("entryid"), po=e.get("po"),
+                # The collection end was on `e` the whole time - it comes
+                # off the extract row exactly like site and postcode above -
+                # and leaving it out put by-hand orders on the map as a
+                # delivery pin with nothing to join them to. 7115774 on
+                # 15/09 is what that looks like from the map: Hardy
+                # Aggregates Boroughbridge YO51 9JH to Network Rail March,
+                # and the map knew only the March end. order_pin has always
+                # passed these three; this path never did, so every order
+                # emailed by hand arrived half-imported.
+                worksite=e.get("worksite", ""),
+                collection_site=e.get("collection_site", ""),
+                collection_pc=e.get("collection_pc", ""),
+                collections=e.get("collections"))
 
 
 def _internal_only(item):
@@ -1268,6 +1315,9 @@ def build_emails_multi(files):
         emails.append(dict(to=em, cc="", name=nm, subject=subject, body=text, html=html,
                            message=message, items=len(items), date=dd, orders=orders,
                            po=dict(pos),
+                           lines=order_lines(bundle, items, [
+                               clean(r[C['prod_code']]) if C.get('prod_code') is not None and r[C['prod_code']] else ""
+                               for r, C, _ in bundle]),
                            product_codes=pcodes, materials=product_summary(items),
                            ballast=ballast_bags,
                            only_ballast=bool(ptypes) and ptypes <= {"ballast", "loose ballast"},
@@ -1527,6 +1577,16 @@ def main():
             ev = next(iter(e["_seen"].values()))
             print(f"   > {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | "
                   f"already {ev['where']} {ev['when']} to {ev['to']}")
+            if e.get("_unnamed"):
+                # skipped with the rest of its delivery, but nobody has been asked about it: never tracked as emailed
+                if "_delivery" in e["_seen"]:
+                    why = "that email was for the same contact, postcode and day under another order number"
+                elif any(v.get("where") == "Sent Items" for v in e["_seen"].values()):
+                    why = "only other orders on this delivery are in it"
+                else:
+                    why = "it is only in Drafts so far"
+                print(f"       !! no sent email names {' / '.join(e['_unnamed'])} - {why}. "
+                      f"Not on the tracker as emailed.")
         print()
     if skipped_past:
         print("Region 2 orders NOT emailed - delivery date already passed (check none still need action):")

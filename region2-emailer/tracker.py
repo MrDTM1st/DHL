@@ -8,7 +8,7 @@ reply has come back and whether the Send-out brief is ready.
     python tracker.py             # print the current tracker
     python tracker.py refresh     # update reply status from Outlook (replied = ready to book)
 """
-import os, json
+import os, json, re
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +39,17 @@ def save(d):
 
 def _key(orders, date):
     return "-".join(orders) + "|" + str(date)
+
+
+def named(orders, text):
+    """The orders an email's own words name - its subject and body, as `text`. A record says its orders were emailed,
+    and CTMS gets "Emailed DO dd/mm" on each of them from it, so an order goes on only when the email that went names
+    it (his cross-check, 24/11: "Some might say I've emailed them, but I haven't because you haven't" - Sent Items is
+    the proof, and the tracker never claims more than that). A whole number, not part of a longer one: 9100001 is not
+    named by 91000012 or 19100001. Kept in the order given."""
+    text = str(text or "")
+    return [o for o in orders or [] if str(o).strip()
+            and re.search(r"(?<![0-9A-Za-z])" + re.escape(str(o).strip()) + r"(?![0-9])", text)]
 
 
 # Orders removed from the tracker because YOU booked them stay removed. The
