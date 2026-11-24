@@ -90,31 +90,9 @@ def card(t):
     return [{"action": "anchor", "window": True}, _find(t, "os-card", CARD_BOX, 12)]
 
 
-UPTO_DAYS = 120                    # how far ahead "up to" is put: the wait list holds orders a fortnight out and more
-
-
-def upto(fields, now=None, days=UPTO_DAYS):
-    """Order Summary's "up to", put far enough ahead that a later order is listed at all (03/11: it sat on tomorrow,
-    so the 10/11 wheelsets and a 13/11 order came back as nothing whatever the ref). The box is found by its name and
-    clicked where the Access Bridge places it - never a stored point that could land in another box. [] when it is
-    already far enough ahead, or isn't on the screen (the search goes on as it always did)."""
-    from datetime import datetime, timedelta
-    els = (fields or {}).get("elements") if isinstance(fields, dict) else fields
-    box = next((e for e in els or [] if e.get("r") == "text" and str(e.get("nm") or "").strip() == "up to"
-                and len(e.get("at") or []) == 4 and e["at"][2] > 0 and e["at"][3] > 0), None)
-    if box is None:
-        return []
-    now = now or datetime.now()
-    want = now + timedelta(days=days)
-    try:
-        if datetime.strptime(str(box.get("v") or "").strip(), "%d/%m/%y") >= now + timedelta(days=days // 2):
-            return []
-    except ValueError:
-        pass
-    x, y, w, h = box["at"]
-    return [{"action": "click", "screen": [x + w // 2, y + h // 2], "after": 0.15},
-            {"action": "key", "key": "home", "after": 0.05}, {"action": "key", "key": "shift+end", "after": 0.05},
-            {"action": "type", "text": want.strftime("%d/%m/%y"), "after": 0.1}]
+# Order Summary's own dates - its "up to" and the range beside it - are never typed in (his rule 24/11). From 03/11 every
+# search put "up to" four months on (it had sat on tomorrow, and a later order came back as nothing), and the to-do's
+# updates went on to miss orders as the dates moved. A search is by the ref alone, under the dates as he keeps them.
 
 
 def search(ref, booking=False):

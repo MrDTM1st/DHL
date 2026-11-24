@@ -338,9 +338,7 @@ class Items:
         except RuntimeError:
             if not ctms_orders.card_up(self.look()):    # the app's card can open away from where Edge's sat (10/11)
                 raise
-        far = ctms_orders.upto(self.look())       # a later order isn't listed at all under tomorrow's "up to"
-        if far:
-            self.run(far)
+        self.look()                               # Order Summary's dates left as they are (his 24/11): the card's read
 
     def open(self, ref, read_line=False):
         """One line's card, proved to be that line's by its Customer Ref. A scheduled line asks "are you sure?" instead of

@@ -1020,8 +1020,7 @@ class Bridge:
             run([{"action": "anchor"}, {"action": "click", "px": [1000, 37], "after": 0.4}])  # Java's focus
             if not self._seen(t, "os-card", ctms_orders.CARD_BOX):
                 run(ctms_orders.to_orders(t))
-            card_read = card_up()
-            run(ctms_orders.upto(card_read))   # later orders listed at all
+            card_read = card_up()              # Order Summary's dates left as they are (his 24/11)
         except Exception as e:
             return done(False, f"Could not get to CTMS's Order Search: {why(e)} Nothing was looked up - the "
                                "picture shows where it stopped.", dict(self._batch_look(times, t0), kind="ctms_check"))

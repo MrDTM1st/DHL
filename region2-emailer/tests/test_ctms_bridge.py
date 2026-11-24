@@ -3414,8 +3414,10 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
             ran.clear()
             b.handle(dict({"id": n, "action": "ctms_check", "orders": orders}, **cmd))
             return desk.sent[-1][1]
-        far = {"elements": [{"r": "text", "nm": "up to", "v": "30/12/68", "lv": 2, "at": [216, 251, 67, 27]}]}
-        reads[:] = [far, _summary_read(both), _summary_read(both[:1]), _card_read(["   1,232.00", ""]),
+        # Order Summary's "up to" on tomorrow, as it opens: left so (his 24/11 - moving it lost the to-do orders)
+        near = {"elements": [{"r": "text", "nm": "up to", "v": (datetime.now() + timedelta(days=1)).strftime("%d/%m/%y"),
+                              "lv": 2, "at": [216, 251, 67, 27]}]}
+        reads[:] = [near, _summary_read(both), _summary_read(both[:1]), _card_read(["   1,232.00", ""]),
                     _summary_read([_line("AH01/11/2026/AB-CD", "SCHEDULED", "03/11/26 12:00", "261103")])]
         r = go(1)
         assert r["ok"] and "Looked up 2 of 2" in r["detail"] and "Order Summary closed again" in r["detail"], r
@@ -3423,6 +3425,7 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
             ran.index(("find", "os-card", False))                       # the card was not up: the menu first
         typed = [w for a, w, _ in ran if a == "type"]
         assert typed == ["9100020%", "9100020-2-1", "AH01/11/2026/AB-CD%"], typed   # searches only
+        assert ("click", (249, 264), False) not in ran                  # its "up to" never clicked into
         # one line opened, the open one: its Status cell double-clicked where the Access Bridge places it (10/11)
         assert [x for x in ran if x[2]] == [("click", (40, 337), True)]
         assert ran.index(("click", (509, 226), False)) < ran.index(("click", (40, 337), True))   # the card shut first
@@ -3438,7 +3441,7 @@ def test_the_ctms_look_up_reads_each_order_opens_only_an_open_line_and_saves_not
         assert "veh" not in got["AH01/11/2026/AB-CD|03/11/2026"]
         # the card already up: straight to it; a read that fails stops the run - what was found still goes home
         seen["os-card"] = True
-        reads[:] = [far, _summary_read(both[1:]), RuntimeError("CTMS's Java did not answer")]
+        reads[:] = [near, _summary_read(both[1:]), RuntimeError("CTMS's Java did not answer")]
         r = go(2)
         assert r["ok"] is False and "Stopped reading AH01/11/2026/AB-CD's lines" in r["detail"], r["detail"]
         assert ("find", "os-search", False) not in ran

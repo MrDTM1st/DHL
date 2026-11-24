@@ -1,4 +1,4 @@
-"""Book's line checks (03/11, work_pc/ctms_lines.py), Order Summary's "up to", and the home PC's side: which quantity
+"""Book's line checks (03/11, work_pc/ctms_lines.py), Order Summary's dates left alone, and the home PC's side: which quantity
 the desk knows, and the CTMS to-do's update run before a booking instead of refusing it. Screens built with the names
 and places read live on 03/11. Made-up orders only.
 
@@ -6,7 +6,6 @@ and places read live on 03/11. Made-up orders only.
 """
 import os
 import sys
-from datetime import datetime
 
 import pytest
 
@@ -94,19 +93,18 @@ def test_ctrl_ls_list_is_read_top_first():
 
 
 # -- Order Summary's "up to"
-UPTO = {"r": "text", "nm": "up to", "v": "04/11/26", "lv": 2, "at": [216, 251, 67, 27]}
-
-
-def test_up_to_on_tomorrow_is_put_well_ahead_by_its_own_place():
-    steps = ctms_orders.upto([UPTO], now=datetime(2026, 11, 3, 18, 0))
-    assert steps[0] == {"action": "click", "screen": [249, 264], "after": 0.15}
-    assert steps[-1]["text"] == "03/03/27"                          # 120 days on
-
-
-def test_up_to_far_enough_ahead_or_not_there_is_left_alone():
-    assert ctms_orders.upto([dict(UPTO, v="30/03/27")], now=datetime(2026, 11, 3)) == []
-    assert ctms_orders.upto([], now=datetime(2026, 11, 3)) == []
-    assert ctms_orders.upto({"elements": [dict(UPTO, at=[-1, -1, -1, -1])]}, now=datetime(2026, 11, 3)) == []
+def test_order_summarys_dates_are_never_typed_in():
+    # his 24/11: searches moved "up to" four months on, and the to-do's updates missed orders as the dates moved. A search
+    # is by the ref alone: no Order Summary search types anything but the ref (the to-do's, the map's look-up and Book's
+    # are each checked with "up to" on tomorrow in their own tests)
+    assert not hasattr(ctms_orders, "upto")
+    work_pc = os.path.join(os.path.dirname(HERE), "work_pc")
+    for name in sorted(os.listdir(work_pc)):           # Book's split and its Order Summary look aren't run in a test
+        if name.endswith(".py"):
+            with open(os.path.join(work_pc, name), encoding="utf-8") as f:
+                assert "upto(" not in f.read(), name
+    steps = ctms_orders.search("9100001%") + ctms_orders.search_at([], "AH01/11/26AB%")
+    assert [s["text"] for s in steps if s["action"] == "type"] == ["9100001%", "AH01/11/26AB%"]
 
 
 # -- the home PC: the order's quantity, and the to-do first

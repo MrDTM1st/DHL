@@ -13,6 +13,7 @@ import ctms_items as I  # noqa: E402
 
 SI_AT = [152, 700, 1066, 66]
 COST_AT = [156, 281, 117, 23]
+UP_TO_AT = (216, 251, 67, 27)                  # Order Summary's "up to", as read live
 
 
 class Templates(dict):
@@ -70,6 +71,7 @@ class FakeOrder:
                     {"r": "push button", "nm": "Cancel ALT C", "lv": 3, "at": [1029, 569, 91, 31]},
                     {"r": "label", "nm": self.asked, "lv": 3, "at": [871, 505, 249, 60]}]
         els += [{"r": "internal frame", "nm": "Order Summary", "lv": 0},
+                {"r": "text", "nm": "up to", "v": "25/11/26", "lv": 2, "at": list(UP_TO_AT)},    # its date, as he keeps it
                 {"r": "text", "nm": "Enter value for : EXTERNAL_REF", "v": self.ref, "lv": 3, "at": [0, 100]},
                 {"r": "text", "nm": "Enter value for : EARLY_AVAIL", "v": self.ready, "lv": 3, "at": [0, 100]},
                 {"r": "text", "nm": "Enter value for : LATE_DEL", "v": self.deliver_by, "lv": 3, "at": [0, 100]},
@@ -320,6 +322,17 @@ SET = {"collect": "04/11/26 08:00-15:45", "deliver": "05/11/26 08:00-12:00", "co
 
 def _updated(have=("REAR STEER", "PTS", "HIAB"), **kw):
     return FakeOrder(ready="04/11/26 08:00", deliver_by="05/11/26 12:00", have=have, **kw)
+
+
+def test_order_summarys_date_is_never_touched_by_a_note_or_an_update():
+    # his 24/11: the Run moved Order Summary's "up to" four months on before each search, and updates missed orders as
+    # the dates moved - its date is left as he keeps it, here on tomorrow, and the search goes by the ref alone
+    for o, go in ((FakeOrder(), lambda o: _items(o).note(o.ref, NOTE)), (_updated(), lambda o: _items(o).update(o.ref, SET))):
+        go(o)
+        on_it = [s for s in o.steps if s["action"] == "click" and s.get("screen")
+                 and UP_TO_AT[0] <= s["screen"][0] <= UP_TO_AT[0] + UP_TO_AT[2]
+                 and UP_TO_AT[1] <= s["screen"][1] <= UP_TO_AT[1] + UP_TO_AT[3]]
+        assert on_it == [] and o.saved == 1
 
 
 def test_an_update_types_what_it_should_and_reads_the_times_back_from_order_summary():

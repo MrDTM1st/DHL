@@ -1119,10 +1119,7 @@ class Booking:
     def summary_lines(self, orders):
         """Every line of these orders as Order Summary lists them (searches and reads only), then back to Planning."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t))
-        card = self.search_card(card=True)
-        far = ctms_orders.upto(card, self.now)
-        if far:
-            self.run(far)
+        card = self.search_card(card=True)            # Order Summary's dates left as they are (his 24/11)
         got = []
         for o in orders:
             try:
@@ -1336,10 +1333,7 @@ class Booking:
         back to Planning with the well refreshed - then the parts as CTMS made them (split_parts). CTMS halves the
         weight itself."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.4)] + ctms_orders.to_orders(self.t))
-        card = self.search_card()
-        far = ctms_orders.upto(card, self.now)
-        if far:
-            self.run(far)
+        card = self.search_card()                     # Order Summary's dates left as they are (his 24/11)
         try:
             self.run(ctms_orders.search_at(card, ref))
         except RuntimeError:
