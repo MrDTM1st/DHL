@@ -106,7 +106,8 @@ _OVERRIDES = {
     # 2026-07-24. Not a hard no: they stay on the list, but a night/weekend
     # job flags them and drops them below the external hauliers so the first
     # call is someone who'll actually take it.
-    "dhl": {"avoid_night_weekend": True},
+    # "7115450 can go with NOC, they now have rear steer" - Delali, 24/11/2026: a rear steer job no longer leaves NOC off.
+    "dhl": {"avoid_night_weekend": True, "caps_add": ["Rear Steer"]},
     # KMS Transport is DO NOT USE on the contact sheet, and the sheet says so
     # in CELL COLOUR - so a re-import paints them red again however many times
     # the JSON is edited. Delali approved them on 22/09/2026, so the approval

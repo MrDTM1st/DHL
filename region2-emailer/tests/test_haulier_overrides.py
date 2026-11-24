@@ -56,6 +56,18 @@ def test_the_real_list_marks_aht_logistics_rarely_used():
                                "patch co": {"only_areas": ["SE"], "only_scope": "delivery"}}
 
 
+def test_the_real_list_gives_noc_rear_steer():
+    # "they now have rear steer" - Delali 24/11/2026: a rear steer job no longer leaves our own fleet off
+    import importlib
+    real = importlib.reload(hauliers)._OVERRIDES
+    try:
+        assert "Rear Steer" in real["dhl"]["caps_add"] and real["dhl"]["avoid_night_weekend"] is True
+    finally:
+        hauliers._OVERRIDES = {"adder co": {"caps_add": ["Rear Steer", "Moffett"]},
+                               "swapper co": {"caps": ["Log Grab"]},
+                               "patch co": {"only_areas": ["SE"], "only_scope": "delivery"}}
+
+
 def test_the_override_list_is_not_changed_by_applying_it():
     _load({"name": "Adder Co", "caps": []})
     assert hauliers._OVERRIDES["adder co"] == {"caps_add": ["Rear Steer", "Moffett"]}
