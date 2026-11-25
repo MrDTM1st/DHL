@@ -3,18 +3,28 @@ The Network Rail team email when a site asks for a different delivery date than 
 all of it by itself (his words: "The network rail date changes thing, could you also make that automatic? I don't want
 to be manually doing that.").
 
-His rule (09/11/2026). We email a site: the order is available on e.g. the 20th.
-- The site sends details for an EARLIER day (the 7th, anything before the 20th): the Network Rail team that sent the
-  order down is asked whether that is allowed and whether the stock will be ready by then - and the order is NOT moved
-  until they say yes. 6055887 went wrong on 09/11 because it was brought forward without anyone confirming the
-  goods were ready (the supplier turned the driver away).
-- The site sends details for a LATER day in a different week (a different week commencing): the team is told the
-  order now delivers on that day instead, so nobody chases a delivery that "didn't happen" when it was moved.
-  A later day in the SAME week is just a move - nobody needs telling.
+His rule, as he put it on 25/11: "if sleepers are being collected before the availability date, we have to ask. If it's
+after the availability date, then it won't be a problem. We're just notifying them they'll just be collected later than
+usual. That's the basic rule of the whole thing." (It was by delivery days, 09/11 - which went wrong once the desk had
+moved an order itself: the day the site asked for was judged against our own later day, not the stock's.)
+- The AVAILABILITY date is the one the order came down with: the extract's collection date (collections[].date on the
+  record). Our own moves never touch it - they change the delivery date only.
+- The COLLECTION is worked out from the site's day and time by his collection rules (ctms_run_plan.collection_days):
+  near enough with the yard open in time, the same day; a morning delivery, the day before; never at the weekend.
+- Collected BEFORE the availability date: the Network Rail team that sent the order down is asked whether that is
+  allowed and whether the stock will be ready - and nothing moves, and CTMS gets no collection before it, until they
+  say yes. An order went wrong on 09/11 because it was brought forward without anyone confirming the goods were
+  ready (the supplier turned the driver away).
+- Collected AFTER the availability date: the team is told it will be collected later than usual - no permission, just
+  so nobody chases a collection that didn't happen. Collected ON the availability date: nothing to say, it just moves.
+- Not sure (no firm time from the site and the morning/afternoon decides it, no availability date on the order,
+  several pick-ups): drafted and held for him, never sent by itself.
 
 What lives on the tracker record, as r["nr_date"] (the dashboard shows it on the order's panel and its own card):
-    kind      "earlier" | "later"
-    offered   the day we offered (dd/mm/yyyy)        asked   the day the site wants
+    kind      "earlier" (collected before availability: ask) | "later" (collected after it: tell)
+    offered   the day the order is on (dd/mm/yyyy)   asked   the day the site wants
+    collect   the day it would be collected          available   the stock's availability date
+    his       set when the desk leaves the email to him ("time", "availability", "asked_before") - never sent by itself
     state     "to_send"  drafted, going by itself in working hours (or by his Send on the dashboard)
               "sent"     gone to Network Rail (for "earlier": waiting for their answer)
               "allowed" / "not_allowed"   their answer (earlier only) - read off their reply, or pressed by him
@@ -158,11 +168,38 @@ def _what(r):
     return " ".join(b for b in bits if b)
 
 
-def draft(r, kind, offered, asked):
-    """(subject, message) - his plain wording, no em dashes; the signature is added when it is sent."""
+def draft(r, kind, offered, asked, plan=None):
+    """(subject, message) - his plain wording, no em dashes; the signature is added when it is sent. With `plan`
+    (collect_plan: the collection day and the stock's availability) it says what his 25/11 rule turns on - when it
+    would be collected against when it is available; without one, the delivery days, as before."""
     orders = " / ".join(r.get("orders") or [])
     what = _what(r)
     about = f"order {orders}" + (f" ({what})" if what else "")
+    plan = plan or {}
+    collect, avail = plan.get("collect"), plan.get("available")
+    if collect and avail and kind == "earlier":
+        subject = (f"{orders} - collection before the availability date ({_short(collect)}, available "
+                   f"{_short(avail)})")
+        keep = (f"It stays on {_short(offered)} until I hear back from you." if offered != asked else
+                "I will not book it in until I hear back from you.")
+        message = "\n".join([
+            "Hi all,", "",
+            f"The site has come back on {about} asking for delivery on {_long(asked)}. To deliver then it would be "
+            f"collected on {_long(collect)}, before the {_long(avail)} it was sent down as available from.", "",
+            f"Please could you confirm whether collecting it on {_short(collect)} is allowed, and whether the stock "
+            f"will be ready for collection in time? {keep}", "",
+            "The site's email is below."])
+        return subject, message
+    if collect and avail and kind == "later":
+        subject = f"{orders} - collected later than usual ({_short(collect)}, available {_short(avail)})"
+        message = "\n".join([
+            "Hi all,", "",
+            f"Just to let you know, the site on {about} has asked for delivery on {_long(asked)}, so it will be "
+            f"collected on {_long(collect)}, later than the {_long(avail)} it was sent down as available from. "
+            f"Nothing is needed from you - this is so nobody chases a collection on {_short(avail)} that didn't "
+            "happen.", "",
+            "The site's email is below."])
+        return subject, message
     if kind == "earlier":
         subject = f"{orders} - site asking for an earlier delivery ({_short(asked)} instead of {_short(offered)})"
         message = "\n".join([
@@ -185,44 +222,167 @@ def draft(r, kind, offered, asked):
     return subject, message
 
 
+def available(r):
+    """(day, why) - the day the stock is available from: the extract's collection date the order came down with
+    (collections[].date). Our own moves never touch it, they change the delivery date only. None, with why, when the
+    record has none, or pick-ups on different days."""
+    days = sorted({str(c.get("date") or "").strip() for c in (r or {}).get("collections") or [] if _d(c.get("date"))},
+                  key=_d)
+    if not days:
+        return None, "no availability date on the order (no collection date came down with it)"
+    if len(days) > 1:
+        return None, f"pick-ups on different days ({', '.join(_short(x) for x in days)})"
+    return days[0], ""
+
+
+def _start(r):
+    """The site's delivery start (HH:MM) off the parsed reply, when it is firm - "" when it isn't."""
+    t = ((r or {}).get("details") or {}).get("time")
+    if isinstance(t, dict) and t.get("confidence") in ("high", None):
+        m = re.match(r"\s*(\d{1,2}):(\d{2})", str(t.get("earliest") or ""))
+        if m:
+            return f"{int(m.group(1)):02d}:{m.group(2)}"
+    return ""
+
+
+def collect_plan(r, day, start=None, run=None):
+    """His 25/11 rule on the site's day: when it would be collected against when the stock is available.
+        {"verdict": "ask" | "tell" | "fine" | "undecided", "collect", "available", "why", "undecided": reason}
+    ask: collected before the availability date. tell: after it. fine: on it. undecided: can't be told - no
+    availability date, the collection can't be worked out, or the site's time isn't firm and morning or afternoon
+    decides it (a morning delivery goes the day before, an afternoon one may go the same day)."""
+    import ctms_run_plan as P
+    avail, why = available(r)
+    start = _start(r) if start is None else start
+    if not avail:
+        return {"verdict": "undecided", "collect": "", "available": "", "why": why, "undecided": "availability"}
+    days = P.collection_days(r, day, start, run=run)
+    if not days:
+        return {"verdict": "undecided", "collect": "", "available": avail, "undecided": "availability",
+                "why": "the collection day can't be worked out from the record (several pick-ups?)"}
+    a = _d(avail)
+    after = [(c, how) for c, how in days if _d(c) >= a]
+    if not after:
+        c, how = days[0]
+        return {"verdict": "ask", "collect": c, "available": avail,
+                "why": f"collected {_short(c)} ({how}), before the {_short(avail)} it is available from"}
+    if len(after) < len(days) and not start:
+        c = days[0][0]
+        return {"verdict": "undecided", "collect": c, "available": avail, "undecided": "time",
+                "why": f"the site's time isn't firm: a morning delivery is collected {_short(c)}, before the "
+                       f"{_short(avail)} it is available from - an afternoon one could go {_short(after[0][0])}"}
+    c, how = min(after, key=lambda x: _d(x[0]))
+    if _d(c) == a:
+        return {"verdict": "fine", "collect": c, "available": avail,
+                "why": f"collected {_short(c)}, the day it is available from"}
+    return {"verdict": "tell", "collect": c, "available": avail,
+            "why": f"collected {_short(c)} ({how}), later than the {_short(avail)} it is available from"}
+
+
 def on_new_date(d, r, new, why, reply_eid=None):
-    """The one place a site's date (by reply, by his confirm of a parsed date, by phone) lands on a delivery record.
-    Earlier than offered: the order stays put and the "is this allowed" email is drafted. A later week: the order
-    moves and the "now delivering on X" notice is drafted. Anything else: it just moves. Returns True when the
-    order's date changed. `d` is the loaded tracker (the caller saves it)."""
+    """The one place a site's date (by reply, by his confirm of a parsed date, by phone) lands on a delivery record -
+    judged by his 25/11 rule (collect_plan). Collected before the stock's availability: the order stays put and the
+    "is this allowed" email is drafted. After it: the order moves and the "collected later than usual" heads-up is
+    drafted. On it: it just moves. Not sure: drafted, held for him. Returns True when the order's date changed. `d` is
+    the loaded tracker (the caller saves it)."""
     import tracker
     new = str(new or "").strip()
     if not _d(new) or r.get("kind", "delivery") != "delivery":
         return tracker.move_date(d, r, new, why) if _d(new) else False
     offered = str(r.get("delivery_date") or "").strip()
     cur = r.get("nr_date") or {}
-    if cur.get("kind") == "earlier" and cur.get("asked") == new:
+    if cur.get("asked") == new and cur.get("kind") == "earlier":
         if cur.get("state") == "allowed":
             return tracker.move_date(d, r, new, why)
-        if cur.get("state") in OPEN or cur.get("state") == "not_allowed":
-            return False        # already asked (or refused) for this very day: nothing new
-    kind = classify(offered, new)
+        if cur.get("state") in ("sent", "not_allowed") or (cur.get("state") == "to_send" and not cur.get("his")):
+            return False        # already asked (or answered) for this very day: nothing new
+    plan = collect_plan(r, new)
+    his, held_why = "", ""
+    if plan["verdict"] == "undecided" and plan.get("undecided") == "availability":
+        # no availability date to judge it by: the delivery days, as before 25/11 - and it is his to send or not
+        kind = classify(offered, new)
+        his, held_why = "availability", plan["why"].capitalize() + " - check it before anything goes to Network Rail"
+    elif plan["verdict"] == "undecided":
+        kind = "earlier"
+        his, held_why = "time", plan["why"].capitalize() + " - ask them, or press No email needed"
+    else:
+        kind = {"ask": "earlier", "tell": "later", "fine": None}[plan["verdict"]]
+    now = tracker._now()
+    if cur.get("state") == "to_send" and (cur.get("asked") != new or (kind is None and cur.get("his"))):
+        # a draft for another day, or one held on the site's time that turns out not to be needed: never sent now
+        cur.update(state="dismissed", superseded_by=new, answered_at=now)
+        cur.pop("held", None)
+    if cur.get("state") == "sent" and cur.get("asked") != new and kind is None:
+        # Network Rail were emailed about another day, and the site's day now needs nothing from them: no answer of
+        # theirs moves anything now - he lets them know it's off
+        cur.update(state="dismissed", superseded_by=new, answered_at=now,
+                   held={"why": f"The site now wants {_short(new)}, which needs nothing from "
+                                f"{cur.get('team') or 'Network Rail'} - they were emailed about "
+                                f"{_short(cur.get('asked'))}: let them know it's off", "at": now})
     if kind is None:
         return tracker.move_date(d, r, new, why)
-    if cur.get("kind") == kind and cur.get("asked") == new and cur.get("offered") == offered:
+    if (cur.get("state") == "to_send" and cur.get("asked") == new and cur.get("kind") == kind
+            and cur.get("his", "") == his and (cur.get("collect") or "") == (plan.get("collect") or "")):
+        return kind == "later" and tracker.move_date(d, r, new, why)     # the same draft again: nothing new
+    if (cur.get("kind") == kind and cur.get("asked") == new and cur.get("offered") == offered
+            and cur.get("state") not in ("to_send", "dismissed")):
         return kind == "later" and tracker.move_date(d, r, new, why)
+    if cur.get("state") == "sent" and cur.get("asked") != new:
+        # Network Rail were emailed about another day already: the new email is his to send, after a word with them
+        his = his or "asked_before"
+        held_why = held_why or (f"{cur.get('team') or 'Network Rail'} were emailed about {_short(cur.get('asked'))} "
+                                f"({str(cur.get('sent_at') or '')[:16]}) - the site now wants {_short(new)}: check "
+                                "with them before this goes")
     team = team_for(r)
-    subject, message = draft(r, kind, offered, new)
+    subject, message = draft(r, kind, offered, new, plan if not his or his == "time" else None)
     nd = {"kind": kind, "offered": offered, "asked": new, "why": why, "at": tracker._now(),
           "state": "to_send", "team": team["name"] if team else "", "to": _addrs(team["to"]) if team else "",
           "cc": "", "subject": subject, "message": message,
-          "reply_eid": str(reply_eid or "") or str(r.get("orig_entryid") or "")}
+          "reply_eid": str(reply_eid or "") or str(r.get("orig_entryid") or ""),
+          "collect": plan.get("collect") or "", "available": plan.get("available") or "", "rule": plan.get("why")}
+    if his:
+        nd["his"] = his
+        nd["held"] = {"why": held_why, "at": now}
     if cur:
-        nd["prev"] = {k: cur.get(k) for k in ("kind", "offered", "asked", "state", "at")}
+        nd["prev"] = {k: cur.get(k) for k in ("kind", "offered", "asked", "state", "at", "sent_at")}
     r["nr_date"] = nd
     try:
         import metrics
-        metrics.log("nr_date_" + kind, orders=r.get("orders", []), offered=offered, asked=new)
+        metrics.log("nr_date_" + kind, orders=r.get("orders", []), offered=offered, asked=new,
+                    collect=nd["collect"], available=nd["available"])
     except Exception:
         pass
     if kind == "later":
         return tracker.move_date(d, r, new, why)
     return False
+
+
+def audit(d, now=None):
+    """The replied deliveries his 25/11 rule hasn't been put to: the site's day firm on the record and no Network Rail
+    email for it - replies parsed before the rule came in, or a draft that waited on the site's time, which is firm
+    now. Each is run through on_new_date as if it had just landed. [(record, what it is now)] for the ones that
+    change - the caller saves."""
+    import ctms_run_plan as P
+    import delivery_details as dd
+    now = now or datetime.now()
+    out = []
+    for r in list(d.get("records") or []):
+        if r.get("kind", "delivery") != "delivery" or r.get("status") != "sent" or not r.get("reply_at"):
+            continue
+        # the one day the reply settles on, as the reply check takes it (a choice of days, "flexible" or not sure: his)
+        day = P._day(dd.firm_date(r.get("details")))
+        if not _d(day) or _d(day).date() < now.date():
+            continue
+        cur = r.get("nr_date") or {}
+        if cur and not (cur.get("state") == "to_send" and cur.get("his") == "time" and cur.get("asked") == day):
+            continue                     # the rule was put to it when the site's day landed
+        before = json.dumps(cur, sort_keys=True)
+        on_new_date(d, r, day, cur.get("why") or "the site's reply (his 25/11 rule)",
+                    reply_eid=cur.get("reply_eid") or None)
+        nd = r.get("nr_date") or {}
+        if json.dumps(nd, sort_keys=True) != before:
+            out.append((r, nd))
+    return out
 
 
 def held(r):
@@ -239,8 +399,8 @@ def moved_to(r):
     or an earlier day they said yes to (or he let go without asking). None when it moved nowhere - still asked, or
     their no."""
     nd = (r or {}).get("nr_date") or {}
-    if not _d(nd.get("asked")):
-        return None
+    if not _d(nd.get("asked")) or nd.get("superseded_by"):
+        return None                        # (an email for a day the site has since changed: it moved nothing)
     if nd.get("kind") == "later" or (nd.get("kind") == "earlier" and nd.get("state") in ("allowed", "dismissed")):
         return nd["asked"]
     return None
@@ -608,6 +768,8 @@ def judge(r, mails, text_of, now, me=(), holidays=()):
     asked = _d(nd.get("asked"))
     seen = set(nd.get("seen") or [])
     if state == "to_send":
+        if nd.get("his"):                  # the rule couldn't settle it (the site's time, no availability date...)
+            return {"do": "hold", "why": (nd.get("held") or {}).get("why") or "Left to you"}
         if not str(nd.get("to") or "").strip():
             return {"do": "hold", "why": "No Network Rail team is known for this material - type who it goes to, "
                                          "and press Send"}
@@ -944,6 +1106,14 @@ def _index(ns, records):
     return guard.MailIndex(ns, since)
 
 
+def _stopped(d, live, did, lines, why, mode_):
+    """A run that stopped at the mailbox: what the rule drafted before it (no Outlook in that) is kept all the same."""
+    import tracker
+    if live and did:
+        tracker.save(d)
+    return {"ok": True, "lines": lines + [why], "did": did, "mode": mode_}
+
+
 def auto(live=True, ns=None, idx=None, sender=None, now=None):
     """The timer's run. Every open Network Rail date change judged against the whole mailbox; with live, what that
     says is done and saved - else it only says what it would do. Fails closed: a mailbox it can't read completely,
@@ -958,9 +1128,22 @@ def auto(live=True, ns=None, idx=None, sender=None, now=None):
     if m["mode"] == "shadow":
         live = False                       # shadow: what it would do, said and nothing more
     d = tracker.load()
+    # his 25/11 rule put to the replies it hasn't been put to yet (parsed before it came in, or a draft that waited on
+    # the site's time): what it drafts goes on below like any other. Shadow and a dry run work on a copy - said only
+    if not live:
+        d = copy.deepcopy(d)
+    lines, did = [], 0
+    for r, nd in audit(d, now):
+        orders = " / ".join(r.get("orders") or [])
+        what = ("ask" if nd.get("kind") == "earlier" else "heads-up") if nd.get("state") == "to_send" else "none needed"
+        lines.append(f"{'DRAFT ' if live else 'WOULD DRAFT'} {orders}: {what} - {nd.get('rule') or nd.get('why')}"
+                     + (f" (held for you: {(nd.get('held') or {}).get('why')})" if nd.get("his") else ""))
+        did += 1 if live else 0
     recs = [r for r in d["records"] if (r.get("nr_date") or {}).get("state") in OPEN]
     if not recs:
-        return {"ok": True, "lines": [], "did": 0, "mode": m["mode"]}
+        if live and did:
+            tracker.save(d)
+        return {"ok": True, "lines": lines, "did": did, "mode": m["mode"]}
     try:
         from services import BANK_HOLIDAYS
         hol = {datetime.strptime(h, "%Y-%m-%d").date() for h in BANK_HOLIDAYS}
@@ -973,22 +1156,21 @@ def auto(live=True, ns=None, idx=None, sender=None, now=None):
         try:
             idx = _index(ns, recs)
         except Exception as e:
-            return {"ok": True, "lines": [f"ABORT  the mailbox couldn't be read - nothing sent or decided ({e})"],
-                    "did": 0, "mode": m["mode"]}
+            return _stopped(d, live, did, lines, f"ABORT  the mailbox couldn't be read - nothing sent or decided ({e})",
+                            m["mode"])
         if idx.errors:
-            return {"ok": True, "lines": ["ABORT  part of the mailbox couldn't be read, so an answer could be missed "
-                                           "- nothing sent or decided: " + "; ".join(idx.errors[:3])],
-                    "did": 0, "mode": m["mode"]}
+            return _stopped(d, live, did, lines, "ABORT  part of the mailbox couldn't be read, so an answer could be "
+                            "missed - nothing sent or decided: " + "; ".join(idx.errors[:3]), m["mode"])
         ok, why = guard.mailbox_fresh(ns, idx, now if cr.in_working_hours(now, hol) else now.replace(hour=0))
         if not ok:
-            return {"ok": True, "lines": [f"ABORT  {why} - nothing sent or decided"], "did": 0, "mode": m["mode"]}
+            return _stopped(d, live, did, lines, f"ABORT  {why} - nothing sent or decided", m["mode"])
     me = set()
     try:
         import chase_guard as guard
         me = set(guard._me())
     except Exception:
         pass
-    lines, did, refreshed = [], 0, False
+    refreshed = False
     for r in recs:
         j = judge(r, idx.mails, idx.text_of, now, me, hol)
         orders = " / ".join(r.get("orders") or [])

@@ -108,6 +108,36 @@ def off_weekend(day, drop):
     return friday, max((drop.date() - friday.date()).days - 1, 0)
 
 
+def collection_days(rec, date, start, run=None):
+    """The day(s) a delivery on `date` (dd/mm/yyyy) starting at `start` (HH:MM, "" when not known yet) is collected, by
+    the rules the update types it with: near enough with the yard open in time (his 65-mile rule), the same day; a
+    morning delivery (before 12:00), the day before; never on a weekend - a Saturday's or a Sunday's goes back to the
+    Friday. An afternoon delivery, or one with no time yet, has no rule: both days, the day before first (his pick on the
+    CTMS page). [(dd/mm/yyyy, how)] - [] when it can't be told: no single collection on the record, or no day.
+    `run`: the road run, for a test (same_day.road otherwise)."""
+    colls = (rec or {}).get("collections") or []
+    try:
+        drop = datetime.strptime(str(date or "").strip(), "%d/%m/%Y")
+    except ValueError:
+        return []
+    if len(colls) != 1:
+        return []
+    start = _hm(start)
+
+    def off(first, how):
+        day, _ = off_weekend(first, drop)
+        return day.strftime("%d/%m/%Y"), how if day == first else how + ", so the Friday (never at the weekend)"
+    if start:
+        import same_day
+        same, _ = same_day.check(colls[0].get("pc"), rec.get("postcode"), _hm(colls[0].get("from")), start, run=run)
+        if same:
+            return [off(drop, "the same day (your 65-mile rule)")]
+        if start < "12:00":
+            return [off(drop - timedelta(days=1), "the day before (a morning delivery)")]
+    got = [off(drop - timedelta(days=1), "the day before"), off(drop, "the same day")]
+    return [g for i, g in enumerate(got) if g[0] not in [x[0] for x in got[:i]]]
+
+
 def _orders(order):
     """One order number or several, as the look-up's keys start with them."""
     return {str(order)} if isinstance(order, (str, int)) else {str(o) for o in order}
@@ -587,6 +617,20 @@ def plan_update(it, rec, found):
         yard0, yard1 = _hm(colls[0].get("from")), _hm(colls[0].get("to"))
         when = answers.get("collect")
         same = None
+        # his 25/11 rule: never collected before the stock's availability date (the extract's collection date) unless
+        # Network Rail said yes to it, or he let it go without asking them
+        import nr_date
+        avail = nr_date._d(nr_date.available(rec)[0])
+        nd_ = rec.get("nr_date") or {}
+        allowed = (_day(nd_.get("asked")) == date and not nd_.get("superseded_by")
+                   and (nd_.get("state") == "allowed" or (nd_.get("kind") == "earlier" and nd_.get("state") == "dismissed")))
+        drop = datetime.strptime(date, "%d/%m/%Y")
+
+        def too_early(option):
+            if not avail or allowed:
+                return False
+            first = drop - timedelta(days=1 if option == "the day before" else 0)
+            return off_weekend(first, drop)[0] < avail
         if not when:
             # his 65-mile rule (16/11): near enough, and the yard opens in time to get there - collected the same day
             import same_day
@@ -599,10 +643,34 @@ def plan_update(it, rec, found):
                 explain.append("Not the same day though: never collected at the weekend (your rule)")
             elif same:
                 when = "the same day"
+            elif start < "12:00":
+                when = "the day before"
             else:
-                when = "the day before" if start < "12:00" else doubt(
-                    "collect", "Collection day", "", COLLECT_DAYS,
-                    f"A delivery at {start} on {date[:5]} - no rule for which day to collect: pick one")
+                fit = [o for o in COLLECT_DAYS if not too_early(o)]
+                if not fit:
+                    when = COLLECT_DAYS[0]         # either day is before the stock's: Network Rail's yes first, below
+                elif len(fit) < len(COLLECT_DAYS):
+                    when = fit[0]
+                    explain.append(f"Collected {when}: the stock isn't available before {avail:%d/%m} (your rule)")
+                else:
+                    when = doubt("collect", "Collection day", "", COLLECT_DAYS,
+                                 f"A delivery at {start} on {date[:5]} - no rule for which day to collect: pick one")
+        if when in COLLECT_DAYS and too_early(when):
+            first = drop - timedelta(days=1 if when == "the day before" else 0)
+            on = off_weekend(first, drop)[0]
+            said = ("Network Rail said no to an early collection: agree a later delivery with the site, or an "
+                    "afternoon one collected the same day" if nd_.get("state") == "not_allowed" else
+                    "Network Rail have to say yes first - it's on the Network Rail card")
+            checks.append({"field": "nr_collect", "label": "Collection", "quote": "", "options": [], "text": False,
+                           "why": f"Collected {on:%d/%m}, before the {avail:%d/%m} the stock is available from. {said} "
+                                  "(your 25/11 rule)"})
+            same, when = None, None        # nothing about the collection typed
+        elif allowed and avail and when in COLLECT_DAYS:
+            on = off_weekend(drop - timedelta(days=1 if when == "the day before" else 0), drop)[0]
+            if on < avail:
+                explain.append(f"Collected {on:%d/%m}, before the {avail:%d/%m} it is available from - "
+                               + ("Network Rail said yes" if nd_.get("state") == "allowed" else "your call, no email")
+                               + " (your 25/11 rule)")
         if same:
             # only the day changes, never the time (his 16/11): the work PC moves the collection onto the delivery
             # day keeping the time CTMS has (ctms_items.collection_fix)

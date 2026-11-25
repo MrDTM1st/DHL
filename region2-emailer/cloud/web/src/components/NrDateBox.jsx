@@ -24,18 +24,27 @@ function quote(a) {
 function headline(r, n, auto) {
   const team = n.team || 'Network Rail';
   const was = dateShort(n.offered), asked = dateShort(n.asked);
+  // his 25/11 rule: the day it would be collected against the stock's availability (the extract's collection date)
+  const col = n.collect ? dateShort(n.collect) : '', av = n.available ? dateShort(n.available) : '';
   const ans = n.answer || {};
   const who = ans.who || team;
   const read = n.answered_by === 'auto' ? ', read off their reply' : '';
   const goes = live(auto) && !n.held ? ' It goes by itself in working hours.' : '';
+  if (n.superseded_by) {
+    return `Not needed any more: the site's day changed to ${dateShort(n.superseded_by)}.`
+      + (n.sent_at ? ` ${team} were emailed ${stamp(n.sent_at)} about ${asked}.` : '');
+  }
   if (n.kind === 'earlier') {
+    if (n.state === 'to_send' && col && av) return `The site asked for ${asked}: it would be collected ${col}, before the ${av} the stock is available from. ${team} are asked if that's allowed and the stock will be ready - ${was === asked ? 'nothing goes into CTMS' : 'the order stays on ' + was} until they say yes.${goes}`;
     if (n.state === 'to_send') return `The site asked for ${asked}, earlier than the ${was} we offered. ${team} are asked if it's allowed and the stock will be ready - the order stays on ${was} until they say yes.${goes}`;
-    if (n.state === 'sent') return `Asked ${team} ${stamp(n.sent_at)}${by(n)} about ${asked} - waiting for their answer${live(auto) ? ', which is read by itself' : ''}. The order stays on ${was}.`;
+    if (n.state === 'sent') return `Asked ${team} ${stamp(n.sent_at)}${by(n)} about ${col && av ? `collecting on ${col} (available ${av}) for ${asked}` : asked} - waiting for their answer${live(auto) ? ', which is read by itself' : ''}. The order stays on ${was}.`;
     if (n.state === 'allowed') return `${who} said yes ${stamp(n.answered_at)}${read}${ans.said ? ': ' + quote(ans) : ''} - moved to ${asked}. The CTMS to-do types the new day (your next Run, or Book does it first).`;
     if (n.state === 'not_allowed') return `${who} said no ${stamp(n.answered_at)}${read}${ans.said ? ': ' + quote(ans) : ''} - it stays on ${was}.`;
     if (n.state === 'dismissed') return `No Network Rail email (your call) - moved to ${asked}.`;
   } else {
+    if (n.state === 'to_send' && col && av) return `Moved to ${asked}: collected ${col}, later than the ${av} it is available from. ${team} get a heads-up, so nobody chases a collection on ${av} that didn't happen.${goes}`;
     if (n.state === 'to_send') return `Moved to ${asked} from ${was} (a later week). ${team} are told so nobody chases the ${was} delivery.${goes}`;
+    if (n.state === 'sent' && col && av) return `Told ${team} ${stamp(n.sent_at)}${by(n)} it will be collected ${col}, later than its ${av} availability.` + (ans.verdict === 'ack' ? ` ${who} said thanks.` : '');
     if (n.state === 'sent') return `Told ${team} ${stamp(n.sent_at)}${by(n)} it now delivers on ${asked}.` + (ans.verdict === 'ack' ? ` ${who} said thanks.` : '');
     if (n.state === 'dismissed') return 'No Network Rail email (your call).';
   }
@@ -124,7 +133,7 @@ export default function NrDateBox({ r, onCommand, compact = false, auto = null }
           {held && held.eid && <button className="btn mini" onClick={() => say({ do: 'seen' })}>Keep waiting</button>}
         </div>
       )}
-      {held && n.state === 'sent' && n.kind === 'later' && (
+      {held && !askOpen && n.state !== 'to_send' && (
         <div className="nrdate-acts">
           <button className="btn mini go" onClick={() => say({ do: 'seen' })}>Seen</button>
         </div>
@@ -164,7 +173,7 @@ export function NrDateCard({ records, onCommand, auto = null }) {
   const said = !auto
     ? 'A site asked for another day than we offered. Earlier days wait for Network Rail’s yes; later weeks they are told about.'
     : auto.mode === 'live'
-    ? 'Earlier days are asked about and later weeks told by itself in working hours, and Network Rail’s yes or no is read off their reply. Anything it isn’t sure of is held here for you.'
+    ? 'Collected before the stock’s availability date: Network Rail are asked; after it: they get a heads-up - by itself in working hours, and their yes or no is read off their reply. Anything it isn’t sure of is held here for you.'
     : auto.mode === 'shadow'
       ? `Shadow mode (${auto.why || 'Auto follow-ups'}): it only says what it would do. Send and answer them here.`
       : `Not by itself just now: ${auto.why || 'automatic sending is off'}. Send and answer them here.`;

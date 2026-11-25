@@ -925,7 +925,7 @@ def _last_json(out, prefix=""):
     return None
 
 
-NR_LINES = ("SENT", "SEEN", "YES", "NO", "THANKS", "HOLD", "WAIT", "FAIL", "ABORT", "STOP")
+NR_LINES = ("DRAFT", "SENT", "SEEN", "YES", "NO", "THANKS", "HOLD", "WAIT", "FAIL", "ABORT", "STOP")
 
 
 def _nr_headline(lines):

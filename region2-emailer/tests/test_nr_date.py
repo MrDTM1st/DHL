@@ -1,5 +1,7 @@
-"""The Network Rail team email when a site asks for another day than we offered (his rule 09/11/2026): an earlier day
-is asked about first and the order stays put; a day in a later week moves it and the team is told. Made-up orders.
+"""The Network Rail team email when a site asks for another day than we offered. His rule as of 25/11: the day it would
+be collected against the stock's availability date (the extract's collection date, never our own moves) - collected
+before it, the team is asked first and the order stays put; after it, they are told; on it, it just moves. Made-up
+orders, and road runs worked out offline (a far site unless a test says otherwise).
 
     python -m pytest tests/test_nr_date.py -q
 """
@@ -10,17 +12,30 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+import pytest  # noqa: E402
+
 import ctms_run_plan as P  # noqa: E402
 import nr_date as N  # noqa: E402
+import same_day  # noqa: E402
 import tracker as T  # noqa: E402
 
 OFFERED = "20/11/2026"            # a Friday
+FAR = {"miles": 140.0, "seconds": 3 * 3600}       # too far for his 65-mile same-day rule
+NEAR = {"miles": 30.0, "seconds": 40 * 60}
 
 
-def _rec(order="9100501", date=OFFERED, materials="60x sleepers", **kw):
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    """Road runs worked out offline: a far site unless a test says otherwise."""
+    monkeypatch.setattr(same_day, "road", lambda *a, **k: FAR)
+
+
+def _rec(order="9100501", date=OFFERED, materials="60x sleepers", avail=None, **kw):
     r = {"id": T._key([order], date), "orders": [order], "kind": "delivery", "delivery_date": date,
          "materials": materials, "site": "Example Yard", "worksite": "Exampleton", "postcode": "EX1 1AA",
-         "orig_entryid": "SENT-EID", "reply_at": "2026-11-09 10:00", "sendoff_ready": True,
+         "orig_entryid": "SENT-EID", "reply_at": "2026-11-09 10:00", "sendoff_ready": True, "status": "sent",
+         "collections": [{"site": "Example Supplier", "pc": "EX9 9ZZ", "date": avail or date, "from": "08:00",
+                          "to": "16:00"}],
          "details": {"date": {"value": "", "confidence": "high", "options": []},
                      "time": {"earliest": "08:00", "latest": "10:00", "confidence": "high"},
                      "offloading": {"value": "HIAB", "confidence": "high", "raw": "yes"},
@@ -70,7 +85,10 @@ def test_an_earlier_day_holds_the_order_and_drafts_the_question():
     nd = r["nr_date"]
     assert (nd["kind"], nd["offered"], nd["asked"], nd["state"]) == ("earlier", OFFERED, "07/11/2026", "to_send")
     assert nd["reply_eid"] == "REPLY-EID" and "SCOSleepers&Troughing@networkrail.co.uk" in nd["to"]
-    assert "allowed" in nd["message"] and "stock" in nd["message"] and "07/11" in nd["subject"]
+    assert "allowed" in nd["message"] and "stock" in nd["message"] and "07/11" in nd["message"]
+    # his 25/11 rule: what the team is asked about is the collection (the day before), against the availability
+    assert (nd["collect"], nd["available"]) == ("06/11/2026", OFFERED)
+    assert "06/11" in nd["subject"] and "20/11" in nd["subject"] and "collected on Friday 06/11/2026" in nd["message"]
     assert N.held(r) == OFFERED
     # the same day seen again (a re-read, his confirm) drafts nothing new
     assert N.on_new_date(d, r, "07/11/2026", "your confirm") is False and r["nr_date"]["at"] == nd["at"]
@@ -84,14 +102,15 @@ def test_a_later_week_moves_the_order_and_drafts_the_notice():
     nd = r["nr_date"]
     assert nd["kind"] == "later" and nd["state"] == "to_send" and nd["to"] == "SteelMaterials@networkrail.co.uk"
     assert "30/11" in nd["message"] and "20/11" in nd["message"]
+    assert nd["collect"] == "27/11/2026" and "later than usual" in nd["subject"]       # collected the Friday before
     assert N.held(r) is None
 
 
-def test_a_later_day_in_the_same_week_just_moves():
-    r = _rec(date="16/11/2026")
+def test_collected_on_the_availability_day_it_just_moves():
+    r = _rec(date="16/11/2026")                         # a Monday: available from the 16th
     d = {"records": [r]}
-    assert N.on_new_date(d, r, "19/11/2026", "the site's reply") is True
-    assert "nr_date" not in r and r["delivery_date"] == "19/11/2026"
+    assert N.on_new_date(d, r, "17/11/2026", "the site's reply") is True      # 08:00 on the 17th: collected the 16th
+    assert "nr_date" not in r and r["delivery_date"] == "17/11/2026"
 
 
 def test_no_em_dashes_in_what_is_written():
@@ -553,6 +572,128 @@ def test_the_look_up_never_undoes_a_network_rail_move_or_ticks_off_what_waits_fo
     # CTMS on the new day: the move is in
     lines = [_ln("9100501-1-1", "UNSCHEDULED", "07/11/26")]
     assert C.nr_owed(moved, lines) is None
+
+
+# ---------- his 25/11 rule: the collection against the availability date ----------
+MON = "30/11/2026"                      # a Monday: the stock is available from it
+
+
+def _site(r, day, time="08:00", sure="high"):
+    """The site's reply on the record: its day, and its time (sure: how sure the parser was of it)."""
+    r["details"]["date"].update(value=day, options=[day], confidence="high")
+    r["details"]["time"] = {"earliest": time, "latest": "", "confidence": sure}
+    return r
+
+
+def test_collected_before_the_availability_date_is_asked_after_it_told_on_it_it_just_moves(monkeypatch):
+    def plan(day, time="08:00", sure="high", road=FAR):
+        monkeypatch.setattr(same_day, "road", lambda *a, **k: road)
+        r = _site(_rec(date=MON), day, time, sure)
+        return N.collect_plan(r, day)
+    got = plan(MON)                                      # 08:00 Monday, a far site: the day before, so the Friday
+    assert (got["verdict"], got["collect"]) == ("ask", "27/11/2026") and "before the 30/11" in got["why"]
+    assert plan(MON, "09:30", road=NEAR)["verdict"] == "fine"   # near, the yard open in time: collected that day
+    assert plan(MON, road=NEAR)["verdict"] == "ask"      # ...but not for 08:00: the yard opens 08:00, 40 min away
+    assert plan("01/12/2026")["verdict"] == "fine"       # Tuesday 08:00: collected the Monday it's available
+    got = plan("02/12/2026")
+    assert (got["verdict"], got["collect"]) == ("tell", "01/12/2026") and "later than the 30/11" in got["why"]
+    assert plan(MON, "14:00")["verdict"] == "fine"       # an afternoon delivery can be collected that morning
+    assert plan(MON, "", sure="low")["undecided"] == "time"        # morning or afternoon decides it, not firm
+    assert plan("02/12/2026", "", sure="low")["verdict"] == "tell"  # ...unless both days are after it anyway
+    nothing = _site(_rec(date=MON), MON)
+    nothing["collections"] = []
+    assert N.collect_plan(nothing, MON)["undecided"] == "availability"
+
+
+def test_our_own_moves_never_change_the_availability_date():
+    # moved by us 30/11 -> 04/12 (in CTMS, at his request); the site then confirms the 30th, 08:00, a far site
+    r = _site(_rec(date="04/12/2026", avail=MON, date_was=MON, date_moved_by="CTMS"), MON)
+    d = {"records": [r]}
+    assert N.on_new_date(d, r, MON, "the site's reply") is False        # asked first: collected Friday 27/11
+    nd = r["nr_date"]
+    assert (nd["kind"], nd["collect"], nd["available"], nd["offered"]) == ("earlier", "27/11/2026", MON, "04/12/2026")
+    assert "collection before the availability date" in nd["subject"] and "earlier delivery" not in nd["subject"]
+    # a holding move of ours (available 20/11, moved by us to 16/12), and the site asks for Saturday 28/11 midday:
+    # collected the Friday, after its availability - a heads-up, not a question
+    r = _site(_rec(date="16/12/2026", avail="20/11/2026", materials="13x rails"), "28/11/2026", "12:00")
+    d = {"records": [r]}
+    assert N.on_new_date(d, r, "28/11/2026", "the site's reply") is True
+    assert r["nr_date"]["kind"] == "later" and r["nr_date"]["collect"] == "27/11/2026"
+
+
+def test_what_the_rule_cant_settle_is_drafted_and_held_never_sent():
+    r = _site(_rec(date=MON), MON, "", sure="low")
+    d = {"records": [r]}
+    N.on_new_date(d, r, MON, "the site's reply")
+    nd = r["nr_date"]
+    assert nd["his"] == "time" and nd["state"] == "to_send" and "time isn't firm" in nd["held"]["why"]
+    assert _judge(r, [])["do"] == "hold"
+    # his firm time later (the audit puts it to the rule again): 14:00 - collected the Monday, nothing needed
+    r["details"]["time"] = {"earliest": "14:00", "latest": "16:00", "confidence": "high"}
+    assert N.audit(d, now=NOW) and r["nr_date"]["state"] == "dismissed" and r["nr_date"]["superseded_by"] == MON
+    # no availability date at all: judged by the delivery days as before 25/11, and his to send or not
+    r = _site(_rec(date=OFFERED), "07/11/2026")
+    r["collections"] = []
+    N.on_new_date({"records": [r]}, r, "07/11/2026", "the site's reply")
+    assert r["nr_date"]["his"] == "availability" and r["nr_date"]["kind"] == "earlier"
+
+
+def test_the_audit_puts_replies_from_before_the_rule_to_it():
+    old = _site(_rec(order="9100801", date=MON), MON)                 # replied before 25/11: 08:00 Monday, far
+    fine = _site(_rec(order="9100802", date="01/12/2026", avail=MON), "01/12/2026")
+    done = _site(_rec(order="9100803", date=MON), MON)
+    done["nr_date"] = {"kind": "earlier", "asked": MON, "offered": MON, "state": "sent"}
+    d = {"records": [old, fine, done]}
+    changed = N.audit(d, now=NOW)
+    assert [r["orders"] for r, _ in changed] == [["9100801"]]
+    nd = old["nr_date"]
+    assert (nd["kind"], nd["state"], nd["collect"]) == ("earlier", "to_send", "27/11/2026") and not nd.get("his")
+    assert "will not book it in until I hear back" in nd["message"]      # the site kept its own day
+    assert "nr_date" not in fine and done["nr_date"]["state"] == "sent"
+    assert N.audit(d, now=NOW) == []                                   # nothing new the second time
+    # a reply that gives no one firm day (a choice of days) is his to confirm first - the audit leaves it
+    choice = _site(_rec(order="9100804", date=MON), MON)
+    choice["details"]["date"]["options"] = [MON, "01/12/2026"]
+    assert N.audit({"records": [choice]}, now=NOW) == [] and "nr_date" not in choice
+
+
+def test_a_draft_for_another_day_never_goes_and_a_sent_one_stops_counting():
+    r = _site(_rec(), "07/11/2026")
+    d = {"records": [r]}
+    N.on_new_date(d, r, "07/11/2026", "the site's reply")              # an ask, still to send
+    N.on_new_date(d, r, "21/11/2026", "your confirm")                  # then Saturday 21st: collected Fri 20/11
+    old = r["nr_date"]
+    assert old["state"] == "dismissed" and old["superseded_by"] == "21/11/2026" and r["delivery_date"] == "21/11/2026"
+    # an ask that had gone: no answer of theirs moves anything now, and he's told to let them know it's off
+    r = _site(_rec(), "07/11/2026")
+    d = {"records": [r]}
+    N.on_new_date(d, r, "07/11/2026", "the site's reply")
+    r["nr_date"].update(state="sent", sent_at="2026-11-03 09:30")
+    N.on_new_date(d, r, "21/11/2026", "your confirm")
+    nd = r["nr_date"]
+    assert nd["state"] == "dismissed" and "let them know it's off" in nd["held"]["why"]
+    assert N.moved_to(r) is None and _judge(r, [])["do"] == "nothing"
+
+
+def test_ctms_never_collects_before_the_availability_date_without_their_yes():
+    item = {"id": "u1", "kind": "update", "orders": ["9100501"], "what": "Sam replied"}
+    r = _site(_rec(date=MON), MON)                                     # 08:00 Monday, far: collected Fri 27/11
+    p = P.plan([item], [r], {})[0]
+    assert p["status"] == "held" and "collect" not in p["set"]
+    assert any(c["field"] == "nr_collect" and "before the 30/11" in c["why"] for c in p["checks"])
+    r["nr_date"] = {"kind": "earlier", "asked": MON, "offered": MON, "state": "allowed"}       # their yes
+    p = P.plan([item], [r], {})[0]
+    assert p["set"]["collect"].startswith("27/11/26") and not [c for c in p["checks"] if c["field"] == "nr_collect"]
+    assert any("Network Rail said yes" in x for x in p["explain"])
+    # an afternoon delivery on the availability day: collected that morning, never the Friday - and no question
+    r = _site(_rec(date=MON), MON, "14:00")
+    p = P.plan([item], [r], {})[0]
+    assert p["set"]["collect"].startswith("30/11/26") and not [c for c in p["checks"] if c["field"] == "collect"]
+    # an afternoon delivery the day before it's available: either day is too early - no pick asked, just their yes
+    r = _site(_rec(date="27/11/2026", avail=MON), "27/11/2026", "14:00")
+    p = P.plan([item], [r], {})[0]
+    fields = [c["field"] for c in p["checks"]]
+    assert "nr_collect" in fields and "collect" not in fields and "collect" not in p["set"]
 
 
 # ---------- the home agent ----------
