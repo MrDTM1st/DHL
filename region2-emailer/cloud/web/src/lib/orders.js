@@ -60,6 +60,44 @@ export function nrHeld(r) {
   return nrOpen(r) && r.nr_date.kind === 'earlier';
 }
 
+// Working days (Mon-Fri) from today to a dd/mm/yyyy day: 0 today, negative once it has gone; null if unparseable.
+export function workdaysTo(dd) {
+  const n = wlDays(dd);
+  if (n === null) return null;
+  const day = new Date(); day.setHours(0, 0, 0, 0);
+  let count = 0;
+  const step = n >= 0 ? 1 : -1;
+  for (let i = 0; i !== n; i += step) {
+    day.setDate(day.getDate() + step);
+    if (day.getDay() !== 0 && day.getDay() !== 6) count += step;
+  }
+  return count;
+}
+
+// A Network Rail date change that needs him (nr_date.py, since 25/11 run by itself): held for him with the reason, a
+// "no" the site still has to hear about, an email that would not send, an ask close to the day with no answer - or,
+// while it isn't running by itself (auto: panel.nr_auto), one still to send.
+export function nrNeedsYou(r, auto) {
+  const n = (r && r.nr_date) || null;
+  if (!n) return false;
+  if (n.held || n.tell_site) return true;
+  if (n.state === 'to_send' && (n.send_failed || (auto && auto.mode !== 'live'))) return true;
+  if (n.state === 'sent' && n.kind === 'earlier') {
+    const d = workdaysTo(n.asked);
+    return d !== null && d <= 2;
+  }
+  return false;
+}
+
+// What the desk did about it lately - sent, answered, told - so the card shows what happened for a couple of days.
+export function nrRecent(r, days = 2) {
+  const n = (r && r.nr_date) || {};
+  const last = [n.sent_at, n.answered_at, n.told_site_at].filter(Boolean).sort().pop();
+  if (!last) return false;
+  const t = new Date(String(last).replace(' ', 'T'));
+  return !Number.isNaN(t.getTime()) && Date.now() - t.getTime() < days * 86400000;
+}
+
 export function isReady(r) {
   if (r.kind === 'adhoc' || r.kind === 'dts') return true;
   if (r.kind === 'pinned' || r.kind === 'collection') return false;

@@ -650,6 +650,7 @@ def push_panel():
                      for m in team.get("members", [])],
             "hauliers": _slim_hauliers(),
             "auto_chase": auto_chase_on(),
+            "nr_auto": _nr_auto(),
             "adhocs": _adhocs(),
             "synergy_sites": _synergy_sites(),
             "pins": _pins(),
@@ -908,9 +909,13 @@ def send_verdict(out):
     return n > 0, n
 
 
-def _last_json(out):
-    """The last JSON line a script printed - its {"ok", "said"} - or None."""
+def _last_json(out, prefix=""):
+    """The last JSON line a script printed - its {"ok", "said"} - or None. prefix: only a line that starts with it,
+    the JSON after it (nr_date's "NR_RESULT {...}")."""
     for line in reversed((out or "").splitlines()):
+        if not line.startswith(prefix):
+            continue
+        line = line[len(prefix):]
         if line.startswith("{"):
             try:
                 got = json.loads(line)
@@ -918,6 +923,19 @@ def _last_json(out):
             except ValueError:
                 continue
     return None
+
+
+NR_LINES = ("SENT", "SEEN", "YES", "NO", "THANKS", "HOLD", "WAIT", "FAIL", "ABORT", "STOP")
+
+
+def _nr_headline(lines):
+    """What a Network Rail date run did, in one line: "sent 9100501 / 9100502, hold 9100503"."""
+    bits = []
+    for x in lines:
+        head = x.split(":", 1)[0].split(None, 1)
+        if len(head) == 2 and head[0] in NR_LINES:
+            bits.append(f"{head[0].lower()} {head[1].strip()}")
+    return ", ".join(bits[:4]) + (f" and {len(bits) - 4} more" if len(bits) > 4 else "")
 
 
 def tail(out, n=8):
@@ -967,8 +985,21 @@ ASSIST_PUSH_DUE = os.path.join(HERE, "_assist_push_due")    # inbox_assist: the 
 ASSIST_JUDGE_DUE = os.path.join(HERE, "_assist_judge_due")  # inbox_assist: emails queued for Claude to read
 ASSIST_WORK_DUE = os.path.join(HERE, "_assist_work_due")    # inbox_assist: a "Deal with it" queued for the worker
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
-SEND_JOBS = ("waitlist_release", "chase")
+NR_DATE_EVERY = 900     # the Network Rail date emails (nr_date.py auto): a look this often, and straight after a check
+NR_DATE_MIN_GAP = 300   # ...but never sooner than this after its last run
+SEND_JOBS = ("waitlist_release", "chase", "nr_date")
+SEND_LABELS = {"waitlist_release": "Wait-list auto-send", "chase": "Automatic chasers",
+               "nr_date": "The Network Rail date emails"}
 _said_today = {}        # a job's failure said once a day, not every run
+
+
+def _nr_auto():
+    """How the automatic Network Rail date emails run - {"mode": live|shadow|off, "why"} (nr_date.mode)."""
+    try:
+        import nr_date
+        return nr_date.mode()
+    except Exception as e:
+        return {"mode": "off", "why": f"could not be read ({e})"}
 
 
 def _bg_jobs():
@@ -986,6 +1017,11 @@ def _bg_jobs():
         # a time, as in the chase run). Off with
         # the automatic chasers; outside working hours it returns at once
         ("escalate", ["phase2.py", "escalate"], 1200, 900, auto_chase_on),
+        # the Network Rail date emails (his 25/11 "make that automatic"): a site's other day asked about or told, in
+        # working hours, and Network Rail's yes / no read off their reply - what isn't clear is held on the card. With
+        # the Auto follow-ups switch: off = nothing, shadow = says what it would do. Also run straight after a reply
+        # check (_done), so a reply - the site's or theirs - is acted on within minutes
+        ("nr_date", ["nr_date.py", "auto"], NR_DATE_EVERY, 600, lambda: _nr_auto()["mode"] != "off"),
         # bookings: an answer the home PC gave up waiting for looked for again, and a site / Parcel Pass email, the
         # filing or off-the-map that failed tried again a few minutes on (book_run.py retry, the booking journal).
         # Nothing is booked from here - CTMS is only asked for its own record of what it made
@@ -1148,9 +1184,11 @@ class BackgroundJobs:
             # how due wait-list emails went out late. Already-sent entries are
             # recorded, so a retry does not send them twice.
             self.retry_at[key] = now + BG_FAIL_RETRY
-            what = "Wait-list auto-send" if key == "waitlist_release" else "Automatic chasers"
+            what = SEND_LABELS.get(key, key)
             report("error", f"{what} did not finish - trying again in "
                    f"{BG_FAIL_RETRY // 60} minutes.", tail(out, 14))
+            if key == "nr_date":
+                push_tracker()                # what did go before it stopped is on the card
             return
         self.last[key] = now
         self._save()
@@ -1164,6 +1202,36 @@ class BackgroundJobs:
                 pass
             if rc == 0:
                 push_tracker()
+                # new mail was read: the Network Rail date emails look next - a site's reply just parsed may want its
+                # email, a reply from Network Rail may be the answer
+                if "nr_date" in self.last and now - self.last["nr_date"] >= NR_DATE_MIN_GAP:
+                    self.last["nr_date"] = now - NR_DATE_EVERY
+        elif key == "nr_date":
+            push_tracker()
+            res = _last_json(out, "NR_RESULT ") or {}
+            lines = [x for x in out.splitlines() if x.split(None, 1)[:1] and x.split(None, 1)[0] in NR_LINES
+                     or x.startswith("WOULD")]
+            stopped = [x for x in lines if x.startswith("ABORT")]
+            if (stopped or res.get("did") or res.get("mode") == "shadow") and _review_pending():
+                pass        # never over a review waiting on him: the card says what happened anyway
+            elif stopped and not res.get("did"):
+                # a mailbox it couldn't read (or one gone quiet): nothing was sent or decided, and it looks again at
+                # the next run - said once a day, not every quarter of an hour
+                if _said_today.get("nr_date") != time.strftime("%Y-%m-%d"):
+                    _said_today["nr_date"] = time.strftime("%Y-%m-%d")
+                    report("error", "Network Rail date emails: nothing sent or read this time - "
+                           + stopped[0].split(None, 1)[-1], tail(out, 6))
+            elif res.get("mode") == "shadow":
+                said = "\n".join(x for x in lines if x.startswith("WOULD"))
+                if said and said != getattr(self, "_nr_said", ""):
+                    self._nr_said = said     # shadow says what it would do once, not every quarter of an hour
+                    report("done", "Network Rail date emails (shadow - nothing sent or changed).", tail(out, 18))
+            elif res.get("did"):
+                if any(x.startswith(("YES", "NO")) for x in lines):
+                    push_panel()              # Network Rail's answer changes what the CTMS to-do will type
+                bad = not res.get("ok") or any(x.startswith(("FAIL", "ABORT")) for x in lines)
+                report("error" if bad else "done", f"Network Rail date emails: {_nr_headline(lines)}.",
+                       tail(out, 18))
         elif key == "rejections":
             if rc == 0:
                 push_panel()                  # new no's onto the rejection card - and in front of the dashboard's Auto
@@ -2375,8 +2443,9 @@ def main():
                 report("done" if res["ok"] else "error", res["said"], tail(out, 6))
             elif action == "nr_date":
                 # the Network Rail team email when a site asks for another day than we offered (his rule 09/11,
-                # nr_date.py): data {rid, do: send|yes|no|dismiss, to, cc, subject, message}. It takes the
-                # tracker's lock itself
+                # nr_date.py): data {rid, do: send|yes|no|dismiss|seen|told, to, cc, subject, message}. It takes the
+                # tracker's lock itself. Since 25/11 the desk sends and reads the answers by itself (the nr_date timer
+                # job); these are his buttons for what it held for him
                 import tempfile
                 data = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
                 do = str(data.get("do") or "")
@@ -2389,12 +2458,13 @@ def main():
                     args = ["nr_date.py", "send", rid, edits]
                 elif do in ("yes", "no"):
                     args = ["nr_date.py", "answer", rid, do]
-                elif do == "dismiss":
-                    args = ["nr_date.py", "dismiss", rid]
+                elif do in ("dismiss", "seen", "told"):
+                    args = ["nr_date.py", do, rid]
                 if not (rid and args):
                     report("error", "Network Rail email: which order, and send / yes / no?")
                 else:
-                    report("running", "Emailing Network Rail…" if do == "send" else "Saving Network Rail's answer…")
+                    report("running", {"send": "Emailing Network Rail…", "seen": "Noting it…",
+                                       "told": "Noting the site knows…"}.get(do, "Saving Network Rail's answer…"))
                     try:
                         out = run(args, timeout=120)
                     except subprocess.TimeoutExpired:
@@ -2413,6 +2483,8 @@ def main():
                     if res is None:
                         res = {"ok": False, "said": "Network Rail email: it did not finish - see the output."}
                     push_tracker()
+                    if do in ("yes", "no"):
+                        push_panel()          # their answer changes what the CTMS to-do will type
                     report("done" if res["ok"] else "error", res["said"], tail(out, 6))
             elif action == "haulier_email":
                 # cover-request to a haulier from the brief's contact list -

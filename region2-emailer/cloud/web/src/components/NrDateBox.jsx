@@ -1,36 +1,56 @@
 import { useState, useEffect } from 'react';
-import { dateShort, stamp, nrOpen } from '../lib/orders.js';
+import { dateShort, stamp, nrOpen, nrNeedsYou, nrRecent, workdaysTo } from '../lib/orders.js';
 
 // The Network Rail team email when a site asks for another day than we offered (his rule 09/11, nr_date.py):
 // an EARLIER day waits for the team's yes (is it allowed, will the stock be ready) - the order stays put till then;
-// a day in a LATER week is moved, and the team is told so nobody chases the old day. The email is written for him:
-// he reads it, can change it, and it goes when he presses Send (the site's email is forwarded underneath it).
-function headline(r, n) {
+// a day in a LATER week is moved, and the team is told so nobody chases the old day.
+// Since 25/11 ("could you also make that automatic? I don't want to be manually doing that") the desk sends it by
+// itself in working hours and reads their yes or no off their reply. What it can't be sure of is held for him here,
+// with their words; the buttons are still there to send now, change the email, or answer for them.
+// a home PC on older code says nothing (auto null): the card is the by-hand one it always was
+const live = (auto) => !!auto && auto.mode === 'live';
+
+function by(n) {
+  if (n.sent_by === 'auto') return ' (by itself)';
+  if (n.sent_by === 'by hand') return ' (you, outside the desk)';
+  return '';
+}
+
+function quote(a) {
+  if (!a || !a.said) return '';
+  return `"${a.said}"`;
+}
+
+function headline(r, n, auto) {
   const team = n.team || 'Network Rail';
   const was = dateShort(n.offered), asked = dateShort(n.asked);
+  const ans = n.answer || {};
+  const who = ans.who || team;
+  const read = n.answered_by === 'auto' ? ', read off their reply' : '';
+  const goes = live(auto) && !n.held ? ' It goes by itself in working hours.' : '';
   if (n.kind === 'earlier') {
-    if (n.state === 'to_send') return `The site asked for ${asked}, earlier than the ${was} we offered. Ask ${team} if it's allowed and the stock will be ready - the order stays on ${was} until they say yes.`;
-    if (n.state === 'sent') return `Asked ${team} ${stamp(n.sent_at)} about ${asked} - waiting for their answer. The order stays on ${was}.`;
-    if (n.state === 'allowed') return `${team} said yes - moved to ${asked}.`;
-    if (n.state === 'not_allowed') return `${team} said no - it stays on ${was}. Let the site know.`;
+    if (n.state === 'to_send') return `The site asked for ${asked}, earlier than the ${was} we offered. ${team} are asked if it's allowed and the stock will be ready - the order stays on ${was} until they say yes.${goes}`;
+    if (n.state === 'sent') return `Asked ${team} ${stamp(n.sent_at)}${by(n)} about ${asked} - waiting for their answer${live(auto) ? ', which is read by itself' : ''}. The order stays on ${was}.`;
+    if (n.state === 'allowed') return `${who} said yes ${stamp(n.answered_at)}${read}${ans.said ? ': ' + quote(ans) : ''} - moved to ${asked}. The CTMS to-do types the new day (your next Run, or Book does it first).`;
+    if (n.state === 'not_allowed') return `${who} said no ${stamp(n.answered_at)}${read}${ans.said ? ': ' + quote(ans) : ''} - it stays on ${was}.`;
     if (n.state === 'dismissed') return `No Network Rail email (your call) - moved to ${asked}.`;
   } else {
-    if (n.state === 'to_send') return `Moved to ${asked} from ${was} (a later week). Let ${team} know so nobody chases the ${was} delivery.`;
-    if (n.state === 'sent') return `Told ${team} ${stamp(n.sent_at)} it now delivers on ${asked}.`;
-    if (n.state === 'dismissed') return `No Network Rail email (your call).`;
+    if (n.state === 'to_send') return `Moved to ${asked} from ${was} (a later week). ${team} are told so nobody chases the ${was} delivery.${goes}`;
+    if (n.state === 'sent') return `Told ${team} ${stamp(n.sent_at)}${by(n)} it now delivers on ${asked}.` + (ans.verdict === 'ack' ? ` ${who} said thanks.` : '');
+    if (n.state === 'dismissed') return 'No Network Rail email (your call).';
   }
   return '';
 }
 
-export default function NrDateBox({ r, onCommand, compact = false }) {
+export default function NrDateBox({ r, onCommand, compact = false, auto = null }) {
   const n = r.nr_date || null;
   const [open, setOpen] = useState(false);
   const fresh = () => ({ to: (n && n.to) || '', cc: (n && n.cc) || '', subject: (n && n.subject) || '',
     message: (n && n.message) || '' });
   const [draft, setDraft] = useState(fresh);
   useEffect(() => { setDraft(fresh()); setOpen(false); }, [r.id, n && n.state, n && n.at]);   // eslint-disable-line react-hooks/exhaustive-deps
-  if (!n || !headline(r, n)) return null;
-  if (compact && !nrOpen(r)) return null;
+  if (!n || !headline(r, n, auto)) return null;
+  if (compact && !nrOpen(r) && !nrNeedsYou(r) && !nrRecent(r)) return null;
   const say = (data) => onCommand && onCommand({ action: 'nr_date', data: { rid: r.id, ...data } });
   const edit = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
   const send = () => {
@@ -49,25 +69,64 @@ export default function NrDateBox({ r, onCommand, compact = false }) {
       : 'No email to Network Rail about this move?';
     if (window.confirm(q)) say({ do: 'dismiss' });
   };
+  const held = n.held || null;
   const waiting = nrOpen(r);
+  const askOpen = n.state === 'sent' && n.kind === 'earlier';
+  const days = askOpen ? workdaysTo(n.asked) : null;
+  const late = askOpen && !held && days !== null && days <= 2;
+  const need = nrNeedsYou(r, auto);
   return (
-    <div className={'nrdate' + (waiting ? ' open' : '')}>
+    <div className={'nrdate' + (waiting ? ' open' : '') + (need ? ' need' : '')}>
       <div className="nrdate-h">
         <span className="nrdate-tag">{n.kind === 'earlier' ? 'Earlier day asked' : 'Later week'}</span>
-        <span className="nrdate-said">{headline(r, n)}</span>
+        <span className="nrdate-said">{headline(r, n, auto)}</span>
       </div>
+      {n.state === 'to_send' && auto && !live(auto) && !held && (
+        <div className="nrdate-auto">Not going by itself: {auto.why || 'automatic sending is off'} - press Email to send it.</div>
+      )}
+      {held && (
+        <div className="nrdate-held">
+          <div className="nrdate-why">Held for you: {held.why}</div>
+          {held.said && (
+            <div className="nrdate-quote">
+              {(held.who || held.from || 'They')} {stamp(held.at)}: &ldquo;{held.said}&rdquo;
+              {held.subject ? <span className="nrdate-subj"> ({held.subject})</span> : null}
+            </div>
+          )}
+        </div>
+      )}
+      {n.send_failed && n.state === 'to_send' && (
+        <div className="nrdate-why">Couldn't send {stamp(n.send_failed.at)}: {n.send_failed.said} - it tries again.</div>
+      )}
+      {late && (
+        <div className="nrdate-why">{days <= 0 ? `${dateShort(n.asked)} is here` : `${dateShort(n.asked)} is ${days} working day${days === 1 ? '' : 's'} away`} and {n.team || 'Network Rail'} haven't answered - worth a call?</div>
+      )}
+      {n.tell_site && (
+        <div className="nrdate-held">
+          <div className="nrdate-why">Tell the site: it stays on {dateShort(n.offered)} - they asked for {dateShort(n.asked)}.</div>
+          <div className="nrdate-acts">
+            <button className="btn mini go" onClick={() => say({ do: 'told' })}>Told them</button>
+          </div>
+        </div>
+      )}
       {n.state === 'to_send' && (
         <div className="nrdate-acts">
           <button className={'btn mini' + (open ? ' red' : ' go')} onClick={() => setOpen((v) => !v)}>
-            {open ? 'Close' : 'Email ' + (n.team || 'Network Rail')}
+            {open ? 'Close' : (live(auto) && !held ? 'Send now / change it' : 'Email ' + (n.team || 'Network Rail'))}
           </button>
           <button className="btn mini" onClick={dismiss}>No email needed</button>
         </div>
       )}
-      {n.state === 'sent' && n.kind === 'earlier' && (
+      {askOpen && (
         <div className="nrdate-acts">
-          <button className="btn mini go" onClick={() => answer(true)}>They said yes - move to {dateShort(n.asked)}</button>
+          <button className={'btn mini' + (held || late ? ' go' : '')} onClick={() => answer(true)}>They said yes - move to {dateShort(n.asked)}</button>
           <button className="btn mini" onClick={() => answer(false)}>They said no - keep {dateShort(n.offered)}</button>
+          {held && held.eid && <button className="btn mini" onClick={() => say({ do: 'seen' })}>Keep waiting</button>}
+        </div>
+      )}
+      {held && n.state === 'sent' && n.kind === 'later' && (
+        <div className="nrdate-acts">
+          <button className="btn mini go" onClick={() => say({ do: 'seen' })}>Seen</button>
         </div>
       )}
       {open && (
@@ -93,25 +152,37 @@ export default function NrDateBox({ r, onCommand, compact = false }) {
   );
 }
 
-// The Dashboard's card: every order with a Network Rail date email still to send, or an earlier day still waiting
-// on their answer - so he can see what went and what is held.
-export function NrDateCard({ records, onCommand }) {
-  const rows = (records || []).filter(nrOpen);
+// The Dashboard's card: every order whose Network Rail date change needs him (held, or the site to tell), is still
+// going (to send, or waiting on their answer), or went by itself in the last couple of days - so he sees what
+// happened without pressing anything, and what's held for him and why.
+export function NrDateCard({ records, onCommand, auto = null }) {
+  const rows = (records || []).filter((r) => r.nr_date && (nrOpen(r) || nrNeedsYou(r, auto) || nrRecent(r)));
   if (!rows.length) return null;
+  const need = rows.filter((r) => nrNeedsYou(r, auto));
+  const order = (r) => (nrNeedsYou(r, auto) ? 0 : nrOpen(r) ? 1 : 2);
+  const sorted = rows.slice().sort((a, b) => order(a) - order(b));
+  const said = !auto
+    ? 'A site asked for another day than we offered. Earlier days wait for Network Rail’s yes; later weeks they are told about.'
+    : auto.mode === 'live'
+    ? 'Earlier days are asked about and later weeks told by itself in working hours, and Network Rail’s yes or no is read off their reply. Anything it isn’t sure of is held here for you.'
+    : auto.mode === 'shadow'
+      ? `Shadow mode (${auto.why || 'Auto follow-ups'}): it only says what it would do. Send and answer them here.`
+      : `Not by itself just now: ${auto.why || 'automatic sending is off'}. Send and answer them here.`;
   return (
-    <div className="card noaddress nrcard">
+    <div className={'card noaddress nrcard' + (need.length ? ' need' : '')}>
       <div className="noaddress-head">
-        <h3>Network Rail: {rows.length === 1 ? '1 date change' : rows.length + ' date changes'}</h3>
-        <span className="noaddress-why">A site asked for another day than we offered. Earlier days wait for Network Rail&rsquo;s yes; later weeks they are told about.</span>
+        <h3>Network Rail: {rows.length === 1 ? '1 date change' : rows.length + ' date changes'}
+          {need.length ? <span className="nrcard-need"> &middot; {need.length} for you</span> : null}</h3>
+        <span className="noaddress-why">{said}</span>
       </div>
-      {rows.map((r) => (
+      {sorted.map((r) => (
         <div className="noaddress-row" key={r.id}>
           <div className="noaddress-what">
             <div className="noaddress-order">
               {(r.orders || []).join(' / ')}
               <span className="noaddress-when">{[r.worksite || r.site, r.postcode].filter(Boolean).join(' ')}</span>
             </div>
-            <NrDateBox r={r} onCommand={onCommand} compact />
+            <NrDateBox r={r} onCommand={onCommand} compact auto={auto} />
           </div>
         </div>
       ))}

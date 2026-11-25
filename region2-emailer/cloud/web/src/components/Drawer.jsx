@@ -173,7 +173,7 @@ function clearEdit(id) {
 
 export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUpdate, openPhone,
   onAdhocBooked, onBook, bookRun, onBookDone, pickedHaulier, onPickHaulier, onCommand, matTeams, om, onUploadCsv, asks, nocTeams = [],
-  todo = [], bookings = [], approved = false, onApprove, onUnapprove }) {
+  todo = [], bookings = [], approved = false, onApprove, onUnapprove, nrAuto = null }) {
   const [, setTick] = useState(0);
   // inline compose - haulier cover requests AND materials-team escalations
   const [composing, setComposing] = useState(null);   // haulier / team name
@@ -550,7 +550,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
         </div>
         <div className="drawer-b">
           <BookingStatus b={bookingOf(r, bookings)} onCommand={onCommand} />
-          <NrDateBox r={r} onCommand={onCommand} />
+          <NrDateBox r={r} onCommand={onCommand} auto={nrAuto} />
           {(booking || bookRun) && (
             <BookForm record={r} hauliers={hauliers} recs={recs} run={bookRun} onBook={onBook}
               asks={asks} todo={todo} bookings={bookings} approved={approved} onApprove={onApprove} onUnapprove={onUnapprove}

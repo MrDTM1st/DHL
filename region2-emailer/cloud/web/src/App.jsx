@@ -642,7 +642,7 @@ export default function App() {
             onCommand={onCommand} matTeams={panel.mat_teams || {}} om={panel.om || {}} onUploadCsv={onUploadCsv}
             pickedHaulier={pickedHaulier} onPickHaulier={setPickedHaulier}
             asks={panel.asks || {}} nocTeams={panel.noc_teams || []}
-            todo={panel.ctms_todo || []} bookings={panel.bookings || []}
+            todo={panel.ctms_todo || []} bookings={panel.bookings || []} nrAuto={panel.nr_auto || null}
             approved={approved.some((a) => a.id === selectedId)} onApprove={onApprove} onUnapprove={onUnapprove} />
         )}
       </div>

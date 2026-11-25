@@ -528,7 +528,7 @@ export default function Dashboard({
 
       <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
 
-      <NrDateCard records={records} onCommand={onCommand} />
+      <NrDateCard records={records} onCommand={onCommand} auto={(panel && panel.nr_auto) || null} />
 
       <MyWeek week={panel && panel.planner_week} />
 

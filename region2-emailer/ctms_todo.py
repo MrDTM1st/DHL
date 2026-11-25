@@ -20,6 +20,7 @@ listing() puts them together for the dashboard's CTMS page ("To do on CTMS") and
     python ctms_todo.py done ID                  done - a note is also marked written for ctms_notes
 """
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -153,6 +154,47 @@ def phoned(rec, path=None, when=None, answers=None):
             it = answer(it["id"], field, value, path=path) or it
     services_due(rec["orders"], _reply_legs(rec.get("details")), path=path, when=when)
     return it
+
+
+def nr_moved(rec, asked, path=None, when=None):
+    """Network Rail said yes to the site's earlier day (nr_date): CTMS is to follow. The site's reply left its update on
+    the list, held until their answer, and that update types the new day now - so this only adds one when none is open
+    for the order any more (ticked off meanwhile, or his X), from the record's details with the site's day in them.
+    The open update item, or None for a record that isn't a delivery."""
+    if rec.get("kind", "delivery") != "delivery" or not rec.get("orders"):
+        return None
+    orders = set(_bases(rec["orders"]))
+    for it in load(path)["items"]:
+        if it["kind"] == "update" and not it.get("done_at") and orders & set(it["orders"]):
+            return it
+    details = copy.deepcopy(rec.get("details") or {})
+    cell = details.get("date") if isinstance(details.get("date"), dict) else {}
+    details["date"] = dict(cell, value=asked, confidence="high")
+    return add("update", rec["orders"], f"Network Rail said yes - move it to {asked[:5]} and update the order from "
+               "the site's reply", details={"details": details, "missing": rec.get("missing"),
+                                            "site": rec.get("site"), "to": rec.get("to")},
+               source="nr_date", path=path, when=when)
+
+
+def nr_kept(rec, asked, offered, path=None, when=None):
+    """Network Rail said no: the order stays on the day we offered. A Night / Saturday / Sunday the site's earlier day
+    needed comes off the list - the Run would put it on for a day the order isn't going - and what the offered day
+    needs with the site's times goes on instead. [the reminders taken off]"""
+    orders = _bases(rec.get("orders"))
+    if not orders:
+        return []
+    d = load(path)
+    day = re.escape(str(asked or "")[:5])
+    gone = [it for it in d["items"] if not it.get("done_at") and it.get("source") == "services"
+            and it["orders"] == orders and day and re.search(r"(?<!\d)" + day + r"(?![\d/])", it.get("what") or "")]
+    for it in gone:
+        it["done_at"], it["superseded"] = when or _now(), "nr_date"
+    if gone:
+        _save(d, path)
+    details = dict(rec.get("details") or {})
+    details["date"] = {"value": offered}               # the site's times, on the day it stays on
+    services_due(orders, _reply_legs(details), path=path, when=when)
+    return gone
 
 
 # ---- Night / Saturday / Sunday ---------------------------------------------

@@ -40,6 +40,7 @@ LABELS = {
     "rejections": "the rejection replies", "inbox_watch": "the inbox watch", "daily_update": "the Updates reply",
     "om_tries": "the Order Management look", "dts_sheet": "the DTS sheet", "order_index": "the order index",
     "waitscan": "the wait-list scan", "recover": "the recover sweep", "planner_week": "the planner sheet",
+    "nr_date": "the Network Rail date emails",
 }
 # the supervisor's minute ticks: (said as, outlook_gate's single-instance name)
 TICKS = (("the live monitor", "monitor_tick"), ("the home tick", "home_tick"))

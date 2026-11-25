@@ -56,6 +56,20 @@ def judge(lines, date):
     return None, None
 
 
+def nr_owed(r, lines):
+    """The day a Network Rail date change moved the record to (a later week, or their yes to an earlier day) while
+    CTMS's open lines aren't on it yet - the CTMS to-do still has to type it, so CTMS's old day is no news. None
+    otherwise."""
+    import nr_date
+    to = nr_date.moved_to(r)
+    if not to or to != str(r.get("delivery_date") or "").strip():
+        return None
+    open_ = [ln for ln in lines or [] if ln.get("status") == OPEN]
+    if not open_ or any(_day(ln.get("deliver_by")) == to for ln in open_):
+        return None
+    return to
+
+
 def plan(found, records, jobs=()):
     """What to change, from the bridge's answer `found` ({"ref|date": {"lines": [...], "veh": {ref: bool},
     "weight": {ref: kg}}}): {"booked": [record ids], "moved": [(record id, new date)], "veh": {record id: bool},
@@ -80,8 +94,9 @@ def plan(found, records, jobs=()):
             continue
         vehs = [v for g in got for v in (g.get("veh") or {}).values()]
         # a site's reply moved it and CTMS hasn't been updated from that reply yet: the reply's day stands, or the look-up
-        # would put the order back on the day the site has just changed
-        if what == "moved" and (any(vehs) or r.get("date_moved_by") != "the site's reply"):
+        # would put the order back on the day the site has just changed. A Network Rail date change likewise, whatever
+        # Veh Type an update before it left on the line (nr_owed)
+        if what == "moved" and not nr_owed(r, lines) and (any(vehs) or r.get("date_moved_by") != "the site's reply"):
             out["moved"].append((r["id"], new))
         if vehs:
             out["veh"][r["id"]] = any(vehs)
@@ -97,20 +112,36 @@ def plan(found, records, jobs=()):
     return out
 
 
-def todo_done(found, items):
+def todo_done(found, items, records=()):
     """The CTMS to-do's "update the order from the reply" items CTMS shows are done (his ask 01/11: "you didn't update
     the to-do list"): the order's open line has its Veh Type filled - his rule 30/10, the details are in - or no line
-    is left UNSCHEDULED at all (booked, or cancelled). Their ids."""
+    is left UNSCHEDULED at all (booked, or cancelled). Their ids.
+
+    `records` (the tracker's) keep two Network Rail date changes on the list whatever Veh Type an update before them
+    left: an update held while Network Rail is asked about an earlier day, and one that has a day they moved the order
+    to still to type (nr_owed) - ticked off, the new day would never reach CTMS."""
+    import nr_date
+    asked, moved = set(), []
+    for r in records or ():
+        if nr_date.held(r):
+            asked |= {str(o) for o in r.get("orders") or []}
+        elif nr_date.moved_to(r):
+            moved.append(r)
     out = []
     for it in items:
         if it.get("kind") != "update" or it.get("done_at"):
             continue
-        got = [v for k, v in found.items() for o in it.get("orders") or [] if k.split("|")[0] == str(o)]
+        mine = {str(o) for o in it.get("orders") or []}
+        got = [v for k, v in found.items() for o in mine if k.split("|")[0] == o]
         lines = [ln for g in got for ln in g.get("lines") or []]
         if not lines:
             continue
-        if not any(ln.get("status") == OPEN for ln in lines) or any(
-                v for g in got for v in (g.get("veh") or {}).values()):
+        if not any(ln.get("status") == OPEN for ln in lines):
+            out.append(it["id"])                # booked or cancelled: nothing left to type
+            continue
+        if mine & asked or any(mine & {str(o) for o in r.get("orders") or []} and nr_owed(r, lines) for r in moved):
+            continue
+        if any(v for g in got for v in (g.get("veh") or {}).values()):
             out.append(it["id"])
     return out
 
@@ -150,7 +181,8 @@ def apply(found, at=""):
         tracker.remember_drops(sorted({str(o) for r in gone for o in r.get("orders") or []}))
     p["booked_orders"] = [" / ".join(r.get("orders") or []) for r in gone]
     import ctms_todo
-    p["todo_done"] = [it["what"] for it in (ctms_todo.done(i) for i in todo_done(found, ctms_todo.load()["items"]))
+    p["todo_done"] = [it["what"] for it in (ctms_todo.done(i) for i in todo_done(found, ctms_todo.load()["items"],
+                                                                                 d["records"]))
                       if it]
     return p
 

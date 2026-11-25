@@ -265,6 +265,22 @@ def rail_metres(rec):
     return max(got) if got else None
 
 
+def _nr_moving(rec, date, lines):
+    """Why a Veh Type CTMS already has doesn't mean this update is in: a Network Rail date change moved the order to
+    `date` (nr_date.moved_to) and its open lines in CTMS are all on another day still. '' when that isn't so."""
+    import nr_date
+    nd = (rec or {}).get("nr_date") or {}
+    to = _day(nr_date.moved_to(rec))
+    if not to or to != date or not lines:
+        return ""
+    days = sorted({_day(ln.get("deliver_by")) for ln in lines} - {""})
+    if not days or date in days:
+        return ""
+    why = "Network Rail said yes to the earlier day" if nd.get("kind") == "earlier" else "the site's later week"
+    return (f"CTMS still has it on {', '.join(x[:5] for x in days)} from an update before - {date[:5]} ({why}) goes "
+            "in over it")
+
+
 def plan_note(it):
     return {"id": it["id"], "kind": "note", "orders": it.get("orders") or [], "what": it.get("what") or "",
             "status": "ready", "lines": [it.get("ref")], "set": {"note": it.get("note") or ""}, "explain": [],
@@ -284,7 +300,7 @@ def plan_update(it, rec, found):
     nd = rec.get("nr_date") or {}
     if nd.get("kind") == "earlier" and nd.get("state") in ("to_send", "sent"):
         return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
-                "status": "yours", "lines": [], "set": {}, "checks": [],
+                "status": "yours", "lines": [], "set": {}, "checks": [], "nr_held": True,
                 "explain": [f"Waiting on Network Rail: the site asked for {nd.get('asked')}, earlier than the "
                             f"{nd.get('offered')} we offered - nothing is typed until they say yes"]}
     if nd.get("kind") == "earlier" and nd.get("state") == "not_allowed":
@@ -334,7 +350,13 @@ def plan_update(it, rec, found):
     already = _veh_set(found, every)
     if it.get("ref"):                    # an item for one line looks at that line alone
         already = [r for r in already if r == it["ref"]]
-    if already:
+    moving = _nr_moving(rec, date, lines) if already else ""
+    if moving:
+        # a Network Rail date change moved it (a later week, or their yes to an earlier day): CTMS's Veh Type is from
+        # the update before, its line still on the old day - the new day has to go in over it, or it never would
+        s["anyway"] = True
+        explain.append(moving)
+    elif already:
         pick = answers.get("already")
         if pick == TICK_OFF:
             return {"id": it["id"], "kind": "update", "orders": it.get("orders") or [], "what": it.get("what") or "",
@@ -718,8 +740,14 @@ def plan(items, records, found):
                         "what": it.get("what") or "", "status": "yours", "lines": [], "set": {}, "explain": [],
                         "checks": []})
     waiting = {o for p in out if p["kind"] == "update" and p["status"] == "held" for o in p["orders"]}
+    asked = {o for p in out if p["kind"] == "update" and p.get("nr_held") for o in p["orders"]}
     for p in out:                      # the update may yet change the hours: they go on once it's answered
-        if p["kind"] == "services" and p["status"] == "ready" and waiting & set(p["orders"]):
+        if p["kind"] == "services" and p["status"] == "ready" and asked & set(p["orders"]):
+            # the earlier day's Night / Saturday / Sunday waits for Network Rail: their no keeps the day we offered
+            p.update(status="held", lookup=None, checks=[{"field": "nr_first", "label": "Waits", "quote": "", "options": [],
+                                                          "text": False, "why": "Waits for Network Rail's answer about "
+                                                                                "the site's earlier day"}])
+        elif p["kind"] == "services" and p["status"] == "ready" and waiting & set(p["orders"]):
             p.update(status="held", lookup=None, checks=[{"field": "update_first", "label": "Waits", "quote": "", "options": [],
                                                           "text": False, "why": "Goes on once this order's update is answered"}])
     return out

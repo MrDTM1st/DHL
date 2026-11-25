@@ -1,5 +1,7 @@
 """
-The Network Rail team email when a site asks for a different delivery date than the one we offered.
+The Network Rail team email when a site asks for a different delivery date than the one we offered - and since 25/11
+all of it by itself (his words: "The network rail date changes thing, could you also make that automatic? I don't want
+to be manually doing that.").
 
 His rule (09/11/2026). We email a site: the order is available on e.g. the 20th.
 - The site sends details for an EARLIER day (the 7th, anything before the 20th): the Network Rail team that sent the
@@ -13,20 +15,42 @@ His rule (09/11/2026). We email a site: the order is available on e.g. the 20th.
 What lives on the tracker record, as r["nr_date"] (the dashboard shows it on the order's panel and its own card):
     kind      "earlier" | "later"
     offered   the day we offered (dd/mm/yyyy)        asked   the day the site wants
-    state     "to_send"  drafted, waiting for his Send on the dashboard
+    state     "to_send"  drafted, going by itself in working hours (or by his Send on the dashboard)
               "sent"     gone to Network Rail (for "earlier": waiting for their answer)
-              "allowed" / "not_allowed"   their answer (earlier only), pressed by him
+              "allowed" / "not_allowed"   their answer (earlier only) - read off their reply, or pressed by him
               "dismissed"  he said no email is needed
     team, to, cc, subject, message      the email, which he can edit before Send
     reply_eid  the site's own email, forwarded underneath so the team sees the whole trail
+    sent_by    "auto" (the desk sent it) | "you" (his Send) | "by hand" (found in Sent Items, sent outside the desk)
+    answer     the reply the desk went by: {at, from, who, said, eid, verdict}
+    answered_by  "auto" | "you"
+    held       why the desk stopped and left it to him: {why, at, and the email's from, who, said, eid, subject}
+    tell_site  Network Rail said no, and the site still thinks it is the earlier day: his to tell them ("Told them")
+    seen       emails he looked at on the card and waved through - never held for again
 
-Nothing is sent from here by itself: the email goes when he presses Send on the dashboard (agent action "nr_date").
-Never copies DHL Road. No em dashes in anything written.
+The automatic part (`auto`: the home agent's timer, and straight after each reply check):
+    to_send   goes by itself in working hours (Mon-Fri 08:00-16:30, bank holidays out), the same email his Send sends -
+              unless Sent Items shows it went already (then it is marked sent, "by hand"), nobody is known to send it
+              to, or the day the site asked for has gone: those are held for him
+    sent      Network Rail's reply is read off the whole mailbox: on our email's own thread, from the team (one of the
+              addresses it went to, or anyone at Network Rail but the site). A clear yes moves the order, and the CTMS
+              to-do then types the new day; a clear no keeps the day we offered. Anything else - a question back,
+              "I'll check", a hedge ("should be fine"), another day named, someone else answering, a bounce - is held
+              for him with their words. Never a guessed yes.
+It follows the Toolkit switch (toolkit.off: nothing at all), the Auto follow-ups switch (auto_chase.enabled - off:
+nothing automatic, the card's buttons work as before; SHADOW: it says what it would do and changes nothing) and its own
+nr_date.paused. Never copies DHL Road. No em dashes in anything written. The site is never emailed from here - his
+rule doesn't say to - so a no stays on the card until he has told them.
 
+    python nr_date.py auto [--dry]           the timer's run (--dry: say what it would do, change nothing)
+    python nr_date.py pause | resume         this automation alone off / on again (the card's buttons still work)
     python nr_date.py send <record id> <json file with to/cc/subject/message>
     python nr_date.py answer <record id> yes|no
     python nr_date.py dismiss <record id>
+    python nr_date.py seen <record id>       the held email looked at: keep waiting for a clearer one
+    python nr_date.py told <record id>       the site has been told Network Rail's no
 """
+import copy
 import json
 import os
 import re
@@ -35,6 +59,8 @@ from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEAMS_FILE = os.path.join(HERE, "_nr_teams.json")   # home-only additions (people's own addresses), gitignored
+PAUSE_FLAG = os.path.join(HERE, "nr_date.paused")    # this automation alone switched off
+CHASE_FLAG = os.path.join(HERE, "auto_chase.enabled")  # the dashboard's Auto follow-ups switch: LIVE / SHADOW / gone
 
 # The team that sends each kind of material down to us, from the real threads in the mailbox. Team mailboxes only
 # here (the repo is public); a named person who is always copied goes in _nr_teams.json as {"sleepers": {"add":
@@ -52,6 +78,7 @@ KIND_OF = (
     (re.compile(r"ballast|aggregate|chipping|granite|stone", re.I), "ballast"),
 )
 NEVER = re.compile(r"dhlroad@", re.I)      # his rule: never copy DHL Road on these
+NR_DOMAIN = "networkrail.co.uk"
 
 OPEN = ("to_send", "sent")                 # still something for him (or Network Rail) to do
 
@@ -207,12 +234,456 @@ def held(r):
     return None
 
 
+def moved_to(r):
+    """The day a Network Rail date change moved the order to, which CTMS has to follow: a later week's (moved at once),
+    or an earlier day they said yes to (or he let go without asking). None when it moved nowhere - still asked, or
+    their no."""
+    nd = (r or {}).get("nr_date") or {}
+    if not _d(nd.get("asked")):
+        return None
+    if nd.get("kind") == "later" or (nd.get("kind") == "earlier" and nd.get("state") in ("allowed", "dismissed")):
+        return nd["asked"]
+    return None
+
+
 def waiting(records):
     """The records with a Network Rail date email still to send, or an earlier date still to be answered."""
     return [r for r in records if ((r.get("nr_date") or {}).get("state") in OPEN)]
 
 
-# ---------- the dashboard's buttons (agent action "nr_date") ----------
+# ---------- the switches ----------
+def _flag_head(path):
+    try:
+        raw = open(path, "rb").read(400)
+    except OSError:
+        return ""
+    for enc in ("utf-8-sig", "utf-16"):
+        try:
+            return raw.decode(enc).upper()
+        except Exception:
+            continue
+    return ""
+
+
+def mode():
+    """How the automatic part runs: {"mode": "live" | "shadow" | "off", "why": "..."} - off while the Toolkit switch
+    is off, this alone is paused, or the Auto follow-ups switch is off; SHADOW while that switch says so (it decides
+    and says what it would do, and changes nothing). LIVE only when the switch's file says LIVE, as the chaser."""
+    try:
+        import toolkit_switch
+        if toolkit_switch.is_off():
+            return {"mode": "off", "why": "the Toolkit switch is off"}
+    except Exception:
+        pass
+    if os.path.exists(PAUSE_FLAG):
+        return {"mode": "off", "why": "paused on the home PC (nr_date.paused)"}
+    if not os.path.exists(CHASE_FLAG):
+        return {"mode": "off", "why": "Auto follow-ups are off"}
+    head = _flag_head(CHASE_FLAG)
+    if "LIVE" in head and "SHADOW" not in head:
+        return {"mode": "live", "why": ""}
+    return {"mode": "shadow", "why": "Auto follow-ups are in shadow mode: it says what it would do, nothing is sent"}
+
+
+def set_paused(paused):
+    if paused:
+        with open(PAUSE_FLAG, "w", encoding="utf-8") as f:
+            f.write("Automatic Network Rail date emails paused. `python nr_date.py resume` (or delete this file) "
+                    "to start them again. The dashboard's buttons still work.\n")
+    else:
+        try:
+            os.remove(PAUSE_FLAG)
+        except FileNotFoundError:
+            pass
+    return mode()
+
+
+# ---------- what Network Rail wrote back ----------
+_MARKING = re.compile(r"^\s*\[?\s*(?:OFFICIAL|NOT PROTECTIVELY MARKED)(?:[\s-]*SENSITIVE)?\s*\]?\s*:?\s*$", re.I)
+_GREETING = re.compile(r"^\s*(?:hi|hello|hey|hiya|dear|morning|good morning|afternoon|good afternoon|evening)"
+                       r"(?:\s+[a-z'.-]+){0,3}\s*[,!.:]?\s*$", re.I)
+_SIGN_OFF = re.compile(r"^\s*(?:(?:many|kind|best|warm|warmest)\s+)?(?:thanks|thank you|thankyou|cheers|regards|"
+                       r"wishes|ta|best|rgds|thx)\b[\s,.!]*(?P<rest>.*?)\s*$", re.I)
+_THANKS = re.compile(r"\s*(?:many\s+)?(?:thanks|thank you|thankyou|cheers|ta|thx)\b", re.I)
+_TAIL = re.compile(r"^\s*(?:sent from my|get outlook for|from:|sent:|-{2,}|_{4,})", re.I)
+# the courtesies round an answer, which are no part of it ("let me know if you need anything else", "any issues give
+# me a call") - taken out up to the end of their sentence, so the "if" or the "call" in them doesn't hold a plain yes
+_CLOSING = re.compile(r"(?:(?:^|(?<=[.!?,;]\s)|(?<=[,;]))\s*any (?:other |further )?(?:questions|queries|issues|"
+                      r"problems)"
+                      r"|(?:please\s+)?(?:do\s+)?let (?:me|us) know if you (?:need|have|require|want)"
+                      r"|if you (?:need|require|want) (?:anything|any (?:more|further|other)|any(?:thing)? else)"
+                      r"|if you have any (?:other |further )?(?:questions|queries|issues|problems|concerns)"
+                      r"|(?:please\s+)?(?:feel free|don'?t hesitate) to"
+                      r"|hope (?:this|that) helps|have a (?:good|great|nice|lovely))[^.!?]*", re.I)
+
+
+def _sign_off(line):
+    """A line that is only a sign-off: "Thanks", "Many thanks,", "Kind regards", "Thanks, Dan" (a name after it,
+    capitalised) - not "Thanks for the email", which is a sentence."""
+    m = _SIGN_OFF.match(line)
+    if not m or not line.strip():
+        return False
+    rest = m.group("rest").strip(" ,.!")
+    return not rest or (len(rest.split()) <= 3 and all(w[:1].isupper() for w in rest.split()))
+
+
+def _name_line(line):
+    """A line that is just someone's name - one to three capitalised words, no sentence in it, and no answer either
+    ("Yes", "Fine" and "No" are capitalised too)."""
+    words = line.strip().split()
+    if not 1 <= len(words) <= 3 or re.search(r"[,!?:;]|\d", line):
+        return False
+    if _POS.search(line) or _NEG.search(" " + line.lower()) or _POS_NEGATED.search(line):
+        return False
+    if all(w.lower().strip(".") in _ACK_WORDS for w in words):
+        return False                        # "Noted", "Received": an answer to a notice
+    return all(re.fullmatch(r"[A-Z][A-Za-z'.-]*", w) for w in words)
+
+
+def said(body):
+    """Their own words: above the quoted trail, without the OFFICIAL marking, the greeting, the courtesies, the
+    sign-off and what follows it. (text, thanked) - thanked: a thanks was there (a bare "Thanks" acknowledges a
+    notice)."""
+    from modules import chase_rules as cr
+    lines, thanked = [], False
+    for ln in cr.own_text(body).splitlines():
+        if _TAIL.match(ln):
+            break
+        if _sign_off(ln):
+            thanked = thanked or bool(_THANKS.match(ln))
+            if lines:
+                break                       # the sign-off: their name and signature follow
+            continue                        # "Thanks Delali" before anything else: a greeting, really
+        if _MARKING.match(ln) or (not lines and _GREETING.match(ln)):
+            continue
+        if ln.strip():
+            lines.append(ln.strip())
+    while lines and _name_line(lines[-1]):
+        lines.pop()                         # "Sam" under the answer: who wrote it, not what they said
+    text = " ".join(_CLOSING.sub("", ln) for ln in lines)          # a line of an email starts a sentence
+    text = re.sub(r"\s+([,.!?])", r"\1", re.sub(r"\s+", " ", text))
+    text = re.sub(r"[,;]+\s*([.!?])", r"\1", text)
+    text = re.sub(r"([.!?])(?:\s*\.)+", r"\1", text)                # what a courtesy taken out leaves behind
+    return text.strip(" ,;"), thanked
+
+
+# a positive put negatively ("no problem"), and a negative wrapped round a positive ("won't be ready"): these go first,
+# so the words inside them aren't counted the other way
+_POS_NEGATED = re.compile(r"\b(?:no|not an?|without any|zero)\s+(?:problems?|issues?|objections?|concerns?|worries)\b|"
+                          r"\bdon'?t see (?:why not|(?:a|an|any) (?:problems?|issues?|reason why not))\b|"
+                          r"\bnot a problem\b|\bno reason why not\b", re.I)
+_NEG_PHRASE = re.compile(r"\b(?:not|never|no longer|can'?t|cannot|can not|won'?t|will not|wouldn'?t|couldn'?t|"
+                         r"isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|unable to)\s+(?:\w+\s+){0,3}?"
+                         r"(?:fine|ok|okay|possible|allowed|permitted|ready|available|able|happen|happening|go|"
+                         r"deliver(?:ed)?|collect(?:ed)?|in stock|agree|approve|confirm|accept|do|work|manage)\b|"
+                         r"\bunavailable\b|\bimpossible\b|\bnot until\b|\bnot before\b|\bno stock\b", re.I)
+_NEG = re.compile(r"(?:^|[.!?;:])\s*no\b|\b(?:can'?t|cannot|can not|won'?t|will not|wouldn'?t|couldn'?t|isn'?t|"
+                  r"aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|unable|unfortunately|afraid not|declined?|"
+                  r"reject(?:ed)?|refused?|too (?:early|soon)|keep (?:it|this|them|the order|the delivery|to)|"
+                  r"stays? on|remains? on|stick (?:to|with)|leave it (?:on|as))\b", re.I)
+_POS = re.compile(r"\b(?:yes|yeah|yep|yup|ok|okay|fine|good to go|go ahead|proceed|approved?|agreed?|allowed|"
+                  r"permitted|happy (?:for|with|to)|confirmed|(?:can|happy to|pleased to) confirm|no problem|"
+                  r"works (?:for|with) (?:us|me)|that works|in stock|ready|available|can go|can be (?:delivered|"
+                  r"collected)|perfect|great|acceptable|absolutely|definitely|sure)\b", re.I)
+_HEDGE = re.compile(r"\b(?:should|shouldn'?t|hopefully|probably|possibly|maybe|perhaps|may|might|i think|i believe|"
+                    r"i assume|i'?d assume|i guess|i reckon|as far as i (?:know|am aware|can see)|in theory|"
+                    r"subject to|provided|providing|as long as|so long as|assuming|if|depends?|depending|unless|"
+                    r"tbc|to be confirmed|not sure|unsure|don'?t know|not certain|unclear)\b", re.I)
+_LATER = re.compile(r"\b(?:let me|i'?ll|i will|we'?ll|we will|i need to|we need to|need to|going to|i'?m going to)"
+                    r"\s+(?:\w+\s+){0,2}?(?:check|confirm|find out|ask|look|chase|speak|come back|get back|revert|"
+                    r"double[- ]check|update you|let you know|advise|query)\b|\b(?:come|get) back to you\b|"
+                    r"\bchecking\b|\bawaiting\b|\bwaiting (?:on|for)\b|\bwill advise\b|\bfind out\b|\bin touch\b|"
+                    r"\bpending\b", re.I)
+_ASK = re.compile(r"\?|\b(?:can|could|would) you (?:confirm|check|send|let|tell|advise|call|ring)\b|"
+                  r"\bplease (?:confirm|advise|call|ring|phone|send|check)\b", re.I)
+_CALL = re.compile(r"\b(?:call|ring|phone) (?:me|us)\b|\bgive (?:me|us) a (?:call|ring|bell)\b|\bspeak to\b|"
+                   r"\btalk to\b", re.I)
+_PASSED = re.compile(r"\b(?:cc'?d|copied in|copying in|forwarded|forwarding|passed (?:this|it|on)|over to|"
+                     r"looping in|looped in|best person)\b", re.I)
+_ACK_WORDS = set("""thanks thank you for letting us me know noted received ok okay fine great cheers many that's thats
+that is all understood will update updated our records the system acknowledged perfect no problem good much appreciated
+info information heads up again kindly lovely brilliant i i'll we we'll we've i've have has been done amended changed
+adjusted record recorded this it so and email""".split())
+_MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                                           "dec"))}
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _days_named(text):
+    """The days their words name: [(day, month or None, weekday name or None)] - "28/11/26", "28/11", "28.11.26",
+    "the 28th", "28 November", "Saturday". A time (08.00) or a rail length (13.716) is not a day."""
+    t = str(text or "")
+    out = []
+    for m in re.finditer(r"(?<![\d.])(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?(?![\d/])", t):
+        dd, mm = int(m.group(1)), int(m.group(2))
+        if 1 <= dd <= 31 and 1 <= mm <= 12:
+            out.append((dd, mm, None))
+    for m in re.finditer(r"(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})(?![\d.])", t):
+        dd, mm = int(m.group(1)), int(m.group(2))
+        if 1 <= dd <= 31 and 1 <= mm <= 12:
+            out.append((dd, mm, None))
+    for m in re.finditer(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+                         r"[a-z]*\b", t, re.I):
+        out.append((int(m.group(1)), _MONTHS[m.group(2).lower()], None))
+    for m in re.finditer(r"\b(\d{1,2})(?:st|nd|rd|th)\b(?!\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|"
+                         r"nov|dec))", t, re.I):
+        out.append((int(m.group(1)), None, None))
+    for m in re.finditer(r"\b(" + "|".join(_WEEKDAYS) + r")\b", t, re.I):
+        out.append((None, None, m.group(1).lower()))
+    return out
+
+
+def _is_day(named, day):
+    dd, mm, wd = named
+    if day is None:
+        return False
+    if wd:
+        return _WEEKDAYS[day.weekday()] == wd
+    return dd == day.day and (mm is None or mm == day.month)
+
+
+def verdict(text, nd, thanked=False):
+    """What their words say about the date change: ("yes" | "no" | "ack" | "unclear", why). An earlier day needs a
+    clear yes or a clear no; a later week's notice needs nothing back, so a plain thanks is an "ack" and anything more
+    is for him to read. Never a yes when in doubt: a question, a hedge, a promise to check, a call me, someone else
+    brought in, both a yes and a no, or a day named that isn't one of the two - all "unclear"."""
+    t = str(text or "").strip()
+    if nd.get("kind") == "later":
+        words = re.findall(r"[a-z']+", t.lower())
+        if (not t and thanked) or (words and all(w in _ACK_WORDS for w in words)):
+            return "ack", "a thank-you"
+        return "unclear", "they wrote back about the move" if t else "nothing written above the trail"
+    if not t:
+        return "unclear", "nothing written above the trail"
+    low = " " + t.lower() + " "
+    low = _POS_NEGATED.sub(" (+) ", low)
+    low = _NEG_PHRASE.sub(" (-) ", low)
+    for rx, why in ((_ASK, "a question back"), (_LATER, "they are still finding out"), (_CALL, "they want a call"),
+                    (_PASSED, "someone else is brought in"), (_HEDGE, "not a firm answer")):
+        m = rx.search(low)
+        if m:
+            return "unclear", f"{why} (\"{m.group(0).strip()}\")"
+    asked, offered = _d(nd.get("asked")), _d(nd.get("offered"))
+    days = _days_named(t)
+    other = [x for x in days if not (_is_day(x, asked) or _is_day(x, offered))]
+    if other:
+        return "unclear", "they name another day"
+    pos = low.count("(+)") + len(_POS.findall(low))
+    neg = low.count("(-)") + len(_NEG.findall(low))
+    if pos and neg:
+        return "unclear", "both a yes and a no in it"
+    if pos:
+        if any(_is_day(x, offered) for x in days) and not any(_is_day(x, asked) for x in days):
+            return "unclear", f"a yes, but to {_short(nd.get('offered'))} - the day we offered, not the one asked"
+        return "yes", "a clear yes"
+    if neg:
+        return "no", "a clear no"
+    return "unclear", "no yes or no in it"
+
+
+# ---------- the mailbox ----------
+def _norm_subject(s):
+    s = str(s or "")
+    while True:
+        t = re.sub(r"^\s*(?:(?:re|fw|fwd|aw|wg|undeliverable|automatic reply|auto[- ]?reply|out of office(?: reply)?)"
+                   r"\s*:|\[[^\]]{0,40}\]|\((?:external|official)\))\s*", "", s, flags=re.I)
+        if t == s:
+            break
+        s = t
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _team_addrs(nd):
+    return {a.strip().lower() for a in re.split(r"[;,]", f"{nd.get('to') or ''};{nd.get('cc') or ''}") if "@" in a}
+
+
+def _site_addrs(r):
+    from modules import chase_rules as cr
+    return set(cr.emails_in(r.get("to"))) | set(cr.emails_in(r.get("cc")))
+
+
+def _dt(s):
+    from modules import chase_rules as cr
+    return cr.parse_dt(s)
+
+
+def _who(m, team, site, me=()):
+    """Whose email this is, for a Network Rail date change: "team" (one of the addresses it went to, or anyone at
+    Network Rail but the site), "site", "us", "colleague" (DHL) or "other" (a supplier, a haulier ...)."""
+    from modules import chase_rules as cr
+    frm = str(m.get("from") or "").lower()
+    if m.get("dir") == "out" or not frm or frm in me:
+        return "us"
+    if frm in team:
+        return "team"
+    if frm in site:
+        return "site"
+    dom = cr.domain(frm)
+    if dom == NR_DOMAIN or dom.endswith("." + NR_DOMAIN):
+        return "team"
+    if dom == "dhl.com" or dom.endswith(".dhl.com"):
+        return "colleague"
+    return "other"
+
+
+def _ours(nd, mails):
+    """Our own email(s) to the team for this date change, in the index: the same subject, sent since it was drafted."""
+    since = _dt(nd.get("at")) or datetime.min
+    subj = _norm_subject(nd.get("subject"))
+    return [m for m in mails if m.get("dir") == "out" and _norm_subject(m.get("subject")) == subj
+            and m.get("at") and m["at"] >= since - timedelta(minutes=10)]
+
+
+def sent_already(r, mails, text_of):
+    """(mail, sure) when Sent Items shows the date email went outside the desk - to the team, about the order, since
+    it was drafted: sure when it has our subject or names the day asked; not sure when it only names the order (it
+    may be about something else). (None, False) when nothing went."""
+    from modules import chase_rules as cr
+    nd = r.get("nr_date") or {}
+    team = _team_addrs(nd)
+    since = (_dt(nd.get("at")) or datetime.min) - timedelta(minutes=10)
+    orders = cr.orders_of(r) or [str(o) for o in r.get("orders") or []]
+    subj = _norm_subject(nd.get("subject"))
+    maybe = None
+    for m in sorted((m for m in mails if m.get("dir") == "out" and m.get("at") and m["at"] >= since),
+                    key=lambda m: m["at"]):
+        if not {str(a).strip().lower() for a in list(m.get("to") or []) + list(m.get("cc") or [])} & team:
+            continue
+        if _norm_subject(m.get("subject")) == subj:
+            return m, True
+        if cr.mentions(m.get("subject"), orders):
+            body = text_of(m["eid"]) if text_of else None
+            words = f"{m.get('subject') or ''} {cr.own_text(body or '')}"
+            asked = _d(nd.get("asked"))
+            if asked and any(_is_day(x, asked) for x in _days_named(words)):
+                return m, True
+            maybe = maybe or m
+    return maybe, False
+
+
+def _quote(text, n=220):
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    return t if len(t) <= n else t[:n - 3].rstrip() + "..."
+
+
+def _mail_said(m, text_of, who):
+    body = text_of(m["eid"]) if text_of else None
+    words, thanked = said(body or "")
+    return {"at": m["at"].strftime("%Y-%m-%d %H:%M"), "from": m.get("from") or "", "who": m.get("from_name") or "",
+            "said": _quote(words), "eid": m.get("eid") or "", "subject": str(m.get("subject") or "")[:120],
+            "whose": who, "_text": words, "_thanked": thanked, "_read": body is not None}
+
+
+def answers(r, mails, text_of, me=()):
+    """Everything that came back on our date email's own thread since it went, oldest first, each with whose it is
+    and their words - and the team's emails about the order outside that thread (maybe their answer, sent fresh)."""
+    from modules import chase_rules as cr
+    nd = r.get("nr_date") or {}
+    sent = _dt(nd.get("sent_at")) or _dt(nd.get("at")) or datetime.min
+    team, site = _team_addrs(nd), _site_addrs(r)
+    convs = {m.get("conv") for m in _ours(nd, mails) if m.get("conv")}
+    subj = _norm_subject(nd.get("subject"))
+    orders = cr.orders_of(r) or [str(o) for o in r.get("orders") or []]
+    on, off = [], []
+    for m in sorted((m for m in mails if m.get("dir") == "in" and not m.get("draft") and m.get("at")
+                     and m["at"] > sent), key=lambda m: m["at"]):
+        thread = (m.get("conv") and m["conv"] in convs) or _norm_subject(m.get("subject")) == subj
+        who = _who(m, team, site, me)
+        if who == "us":
+            continue
+        if thread:
+            on.append((m, who))
+        elif who == "team" and cr.mentions(m.get("subject"), orders) and not m.get("auto") and not m.get("ndr"):
+            off.append((m, who))
+    return on, off
+
+
+def judge(r, mails, text_of, now, me=(), holidays=()):
+    """What to do about one record's Network Rail date change, from the mailbox - pure, so it can be tried on anything:
+        {"do": "send" | "mark_sent" | "wait" | "yes" | "no" | "ack" | "hold" | "nothing", "why", "mail": {...}}
+    "wait" is a send held back to working hours, or an ask with no answer yet. Nothing here sends or changes a thing."""
+    from modules import chase_rules as cr
+    nd = r.get("nr_date") or {}
+    state, kind = nd.get("state"), nd.get("kind")
+    asked = _d(nd.get("asked"))
+    seen = set(nd.get("seen") or [])
+    if state == "to_send":
+        if not str(nd.get("to") or "").strip():
+            return {"do": "hold", "why": "No Network Rail team is known for this material - type who it goes to, "
+                                         "and press Send"}
+        if asked and asked.date() < now.date():
+            return {"do": "hold", "why": f"The day the site asked for ({_short(nd['asked'])}) has gone - nothing sent"}
+        if kind == "earlier" and asked and asked.date() == now.date():
+            return {"do": "hold", "why": "The site asked for today - too late to ask Network Rail, nothing sent"}
+        m, sure = sent_already(r, mails, text_of)
+        if m is not None and sure:
+            return {"do": "mark_sent", "why": f"Sent Items has it already ({m['at']:%d/%m %H:%M}) - not sent again",
+                    "mail": {"at": m["at"].strftime("%Y-%m-%d %H:%M"), "eid": m.get("eid") or "",
+                             "subject": str(m.get("subject") or "")[:120]}}
+        if m is not None:
+            return {"do": "hold", "why": f"You emailed {nd.get('team') or 'them'} about the order at "
+                                         f"{m['at']:%d/%m %H:%M} (\"{_quote(m.get('subject'), 80)}\") - was that "
+                                         "this? Send it, or No email needed"}
+        if not cr.in_working_hours(now, holidays):
+            return {"do": "wait", "why": "goes by itself in working hours (Mon-Fri 08:00-16:30)"}
+        return {"do": "send", "why": "the site's reply asks for it"}
+    if state != "sent":
+        return {"do": "nothing", "why": ""}
+    on, off = answers(r, mails, text_of, me)
+    # one he waved through ("Keep waiting") stands for its time: nothing older than it is taken for their answer
+    waved = max((m["at"] for m, who in on if m.get("eid") in seen), default=None)
+    picked = []
+    for m, who in on:
+        if waved is not None and m["at"] <= waved and m.get("eid") not in seen:
+            continue
+        if m.get("ndr"):
+            if m.get("eid") not in seen:
+                return {"do": "hold", "why": "Your email to Network Rail bounced - check the address",
+                        "mail": _mail_said(m, text_of, who)}
+            continue
+        if m.get("auto"):
+            continue                       # an out-of-office: still waiting for the answer
+        got = _mail_said(m, text_of, who)
+        if not got["_read"]:
+            return {"do": "hold", "why": "Their reply couldn't be read - read it in Outlook", "mail": got}
+        if m.get("eid") in seen:
+            continue                       # he looked at this one and said keep waiting
+        if who != "team":
+            name = {"site": "The site", "colleague": "A colleague", "other": "Someone outside Network Rail"}.get(
+                who, "Someone")
+            return {"do": "hold", "why": f"{name} answered on the Network Rail thread, not the team - read it",
+                    "mail": got}
+        picked.append(got)
+    if kind == "later":
+        for got in picked:
+            v, why = verdict(got["_text"], nd, got["_thanked"])
+            if v != "ack":
+                return {"do": "hold", "why": f"{nd.get('team') or 'Network Rail'} wrote back about the move - read "
+                                             "it", "mail": got}
+        if picked and not nd.get("answer"):
+            return {"do": "ack", "why": "they said thanks", "mail": picked[-1]}
+        return {"do": "nothing", "why": ""}
+    if picked:
+        verdicts = [(got, verdict(got["_text"], nd)) for got in picked]
+        newest, (v, why) = verdicts[-1]
+        clear = {x[1][0] for x in verdicts if x[1][0] in ("yes", "no")}
+        if v == "unclear":
+            return {"do": "hold", "why": f"Not a clear yes or no: {why}", "mail": newest}
+        if len(clear) > 1:
+            return {"do": "hold", "why": "A yes and a no in their replies - read them", "mail": newest}
+        return {"do": v, "why": why, "mail": newest}
+    for m, who in off:
+        if m.get("eid") not in seen:
+            got = _mail_said(m, text_of, who)
+            return {"do": "hold", "why": f"{nd.get('team') or 'Network Rail'} wrote about the order outside the "
+                                         "thread - is it their answer?", "mail": got}
+    if kind == "earlier" and asked and asked.date() < now.date():
+        return {"do": "hold", "why": f"No answer, and {_short(nd['asked'])} has gone - it stays on "
+                                     f"{_short(nd.get('offered'))}: press They said no, and tell the site"}
+    return {"do": "wait", "why": "waiting for their answer"}
+
+
+# ---------- the dashboard's buttons (agent action "nr_date") and the automatic part's changes ----------
 def _find(d, rid):
     for r in d["records"]:
         if r.get("id") == rid:
@@ -258,6 +729,25 @@ def _forward_send(nd, to, cc, subject, message):
     return True, f"sent to {to}"
 
 
+def _go(r, nd, edits, sender, by):
+    """The email goes: the (edited) one, the same checks whoever sends it. (ok, said)."""
+    import tracker
+    edits = edits or {}
+    to = _addrs(edits.get("to", nd.get("to")))
+    cc = _addrs(edits.get("cc", nd.get("cc")))
+    subject = str(edits.get("subject") or nd.get("subject") or "").strip()
+    message = str(edits.get("message") or nd.get("message") or "").replace("—", "-").replace("–", "-")
+    if not to:
+        return False, "Who is the Network Rail team for this order? Type their address in To."
+    ok, said_ = (sender or _forward_send)(nd, to, cc, subject, message)
+    if not ok:
+        return False, said_
+    nd.update(state="sent", sent_at=tracker._now(), to=to, cc=cc, subject=subject, message=message, sent_by=by)
+    nd.pop("held", None)
+    nd.pop("send_failed", None)
+    return True, said_
+
+
 def send(rid, edits, sender=None):
     """His Send: the (edited) email goes, and the record says so. sender(nd, to, cc, subject, message) -> (ok,
     said) is the Outlook part (tests pass a stand-in)."""
@@ -269,21 +759,54 @@ def send(rid, edits, sender=None):
         return {"ok": False, "said": "That order has no Network Rail email waiting - nothing sent."}
     if nd.get("state") != "to_send":
         return {"ok": False, "said": f"Already {nd.get('state', '').replace('_', ' ')} - nothing sent."}
-    edits = edits or {}
-    to = _addrs(edits.get("to", nd.get("to")))
-    cc = _addrs(edits.get("cc", nd.get("cc")))
-    subject = str(edits.get("subject") or nd.get("subject") or "").strip()
-    message = str(edits.get("message") or nd.get("message") or "").replace("—", "-").replace("–", "-")
-    if not to:
-        return {"ok": False, "said": "Who is the Network Rail team for this order? Type their address in To."}
-    ok, said = (sender or _forward_send)(nd, to, cc, subject, message)
+    ok, said_ = _go(r, nd, edits, sender, "you")
     if not ok:
-        return {"ok": False, "said": said}
-    nd.update(state="sent", sent_at=tracker._now(), to=to, cc=cc, subject=subject, message=message)
+        return {"ok": False, "said": said_}
     tracker.save(d)
     orders = " / ".join(r.get("orders") or [])
-    return {"ok": True, "said": f"{orders}: Network Rail emailed ({said})"
+    return {"ok": True, "said": f"{orders}: Network Rail emailed ({said_})"
             + (f" - the order stays on {_short(nd['offered'])} until they say yes." if nd["kind"] == "earlier" else ".")}
+
+
+def _todo_after(r, nd, yes):
+    """The CTMS to-do after their answer: a yes needs the order's update open (the site's reply left one; it now types
+    the new day) - one is added if none is; a no takes off the Night / Saturday / Sunday the earlier day needed and
+    puts on what the offered day needs. Never fails the answer itself: it says what went wrong instead."""
+    try:
+        import ctms_todo
+        if yes:
+            it = ctms_todo.nr_moved(r, nd["asked"])
+            return f"CTMS to-do: {it['what']}" if it else ""
+        ctms_todo.nr_kept(r, nd["asked"], nd["offered"])
+        return ""
+    except Exception as e:
+        return f"(the CTMS to-do couldn't be updated: {e})"
+
+
+def decide(d, r, yes, by, mail=None):
+    """Network Rail's answer to an earlier day lands - read off their reply (by "auto") or pressed by him ("you").
+    Yes: the order moves to the site's day, and the CTMS to-do types it. No: it stays on the day we offered (the
+    parsed reply's date is set back to it, so the CTMS update types that day), and the site is his to tell."""
+    import tracker
+    nd = r["nr_date"]
+    nd.update(answered_at=tracker._now(), answered_by=by)
+    nd.pop("held", None)
+    if mail:
+        nd["answer"] = {k: v for k, v in mail.items() if not k.startswith("_")}
+        nd["answer"]["verdict"] = "yes" if yes else "no"
+    if yes:
+        nd["state"] = "allowed"
+        moved = tracker.move_date(d, r, nd["asked"], "Network Rail's OK")
+        note = _todo_after(r, nd, True)
+        return moved, note
+    nd["state"] = "not_allowed"
+    nd["tell_site"] = True
+    cell = (r.get("details") or {}).get("date")
+    if isinstance(cell, dict):
+        cell["asked"] = cell.get("value")
+        cell["value"] = nd["offered"]
+    note = _todo_after(r, nd, False)
+    return False, note
 
 
 def answer(rid, yes):
@@ -296,20 +819,14 @@ def answer(rid, yes):
     if not nd or nd.get("kind") != "earlier" or nd.get("state") not in OPEN:
         return {"ok": False, "said": "That order has no earlier date waiting on Network Rail."}
     orders = " / ".join(r.get("orders") or [])
-    nd["answered_at"] = tracker._now()
-    if yes:
-        nd["state"] = "allowed"
-        moved = tracker.move_date(d, r, nd["asked"], "Network Rail's OK")
-        tracker.save(d)
-        return {"ok": True, "said": f"{orders}: allowed - " + (f"moved to {_short(nd['asked'])}." if moved
-                                                               else f"it is on {_short(nd['asked'])}.")}
-    nd["state"] = "not_allowed"
-    cell = (r.get("details") or {}).get("date")
-    if isinstance(cell, dict):
-        cell["asked"] = cell.get("value")
-        cell["value"] = nd["offered"]
+    moved, note = decide(d, r, yes, "you")
     tracker.save(d)
-    return {"ok": True, "said": f"{orders}: not allowed - it stays on {_short(nd['offered'])}. Let the site know."}
+    if yes:
+        return {"ok": True, "said": f"{orders}: allowed - " + (f"moved to {_short(nd['asked'])}." if moved
+                                                               else f"it is on {_short(nd['asked'])}.")
+                + (f" {note}" if note else "")}
+    return {"ok": True, "said": f"{orders}: not allowed - it stays on {_short(nd['offered'])}. Let the site know."
+            + (f" {note}" if note else "")}
 
 
 def dismiss(rid):
@@ -320,10 +837,198 @@ def dismiss(rid):
     if not nd or nd.get("state") != "to_send":
         return {"ok": False, "said": "Nothing to dismiss on that order."}
     nd.update(state="dismissed", answered_at=tracker._now())
+    nd.pop("held", None)
     if nd.get("kind") == "earlier":       # no email, so no hold: the site's day stands as any other reply's
         tracker.move_date(d, r, nd["asked"], "the site's reply")
     tracker.save(d)
     return {"ok": True, "said": f"{' / '.join(r.get('orders') or [])}: no Network Rail email."}
+
+
+def seen(rid):
+    """His "Keep waiting" / "Seen" on a held email: it is waved through and never held for again - an ask goes on
+    waiting for their answer, a notice is done with."""
+    import tracker
+    d = tracker.load()
+    r = _find(d, rid)
+    nd = (r or {}).get("nr_date")
+    h = (nd or {}).get("held") or {}
+    if not nd or not h:
+        return {"ok": False, "said": "Nothing held on that order."}
+    if h.get("eid"):
+        nd["seen"] = sorted(set(nd.get("seen") or []) | {h["eid"]})
+    nd.pop("held", None)
+    nd["seen_at"] = tracker._now()
+    tracker.save(d)
+    return {"ok": True, "said": f"{' / '.join(r.get('orders') or [])}: seen"
+            + (" - still waiting for Network Rail's answer." if nd.get("state") == "sent" and nd.get("kind") == "earlier"
+               else ".")}
+
+
+def told(rid):
+    """His "Told them": the site knows Network Rail said no, so the card lets it go."""
+    import tracker
+    d = tracker.load()
+    r = _find(d, rid)
+    nd = (r or {}).get("nr_date")
+    if not nd or not nd.get("tell_site"):
+        return {"ok": False, "said": "Nothing to tell the site on that order."}
+    nd["tell_site"] = False
+    nd["told_site_at"] = tracker._now()
+    tracker.save(d)
+    return {"ok": True, "said": f"{' / '.join(r.get('orders') or [])}: the site knows it stays on "
+                                f"{_short(nd.get('offered'))}."}
+
+
+def _hold(nd, why, mail, now):
+    """Held for him - kept as it was when nothing about it changed, so the card doesn't flicker run to run."""
+    h = {"why": why, "at": now.strftime("%Y-%m-%d %H:%M")}
+    if mail:
+        h.update({k: v for k, v in mail.items() if not k.startswith("_")})
+    old = nd.get("held") or {}
+    if old.get("why") == h["why"] and old.get("eid", "") == h.get("eid", ""):
+        return False
+    nd["held"] = h
+    return True
+
+
+def apply(d, r, j, sender=None, now=None):
+    """One record's judgement carried out on the loaded tracker (the caller saves it). Returns the line to report, or
+    "" when nothing changed."""
+    import tracker
+    now = now or datetime.now()
+    nd = r["nr_date"]
+    orders = " / ".join(r.get("orders") or [])
+    team = nd.get("team") or "Network Rail"
+    do = j["do"]
+    if do == "send":
+        ok, said_ = _go(r, nd, {}, sender, "auto")
+        if not ok:
+            nd["send_failed"] = {"at": now.strftime("%Y-%m-%d %H:%M"), "said": said_}
+            return f"FAIL   {orders}: {said_}"
+        return (f"SENT   {orders}: {team} " + ("asked about " if nd["kind"] == "earlier" else "told about ")
+                + f"{_short(nd['asked'])} ({said_})")
+    if do == "mark_sent":
+        mail = j.get("mail") or {}
+        nd.update(state="sent", sent_at=mail.get("at") or tracker._now(), sent_by="by hand",
+                  sent_eid=mail.get("eid") or "")
+        nd.pop("held", None)
+        return f"SEEN   {orders}: {j['why']}"
+    if do in ("yes", "no"):
+        moved, note = decide(d, r, do == "yes", "auto", j.get("mail"))
+        who = (j.get("mail") or {}).get("who") or team
+        if do == "yes":
+            return (f"YES    {orders}: {who} said yes ({j['why']}) - moved to {_short(nd['asked'])}"
+                    + (f"; {note}" if note else ""))
+        return (f"NO     {orders}: {who} said no - it stays on {_short(nd['offered'])}; the site is yours to tell"
+                + (f" {note}" if note else ""))
+    if do == "ack":
+        mail = {k: v for k, v in (j.get("mail") or {}).items() if not k.startswith("_")}
+        nd["answer"] = dict(mail, verdict="ack")
+        return f"THANKS {orders}: {mail.get('who') or team} said thanks for the notice"
+    if do == "hold":
+        if _hold(nd, j["why"], j.get("mail"), now):
+            return f"HOLD   {orders}: {j['why']}"
+        return ""
+    if do == "wait" and nd.get("held") and nd.get("state") == "sent":
+        nd.pop("held", None)               # what was held is gone (read in Outlook, filed): just waiting again
+        return f"WAIT   {orders}: {j['why']}"
+    return ""
+
+
+def _index(ns, records):
+    """The whole mailbox since the oldest open date change was drafted (less a day), as the chaser reads it."""
+    import chase_guard as guard
+    starts = [x for x in ((_dt((r.get("nr_date") or {}).get("at"))) for r in records) if x]
+    since = (min(starts) if starts else datetime.now()) - timedelta(days=1)
+    since = max(since, datetime.now() - timedelta(days=guard.MAX_LOOKBACK_DAYS))
+    return guard.MailIndex(ns, since)
+
+
+def auto(live=True, ns=None, idx=None, sender=None, now=None):
+    """The timer's run. Every open Network Rail date change judged against the whole mailbox; with live, what that
+    says is done and saved - else it only says what it would do. Fails closed: a mailbox it can't read completely,
+    or one that has stopped syncing, sends and decides nothing. Returns {"ok", "lines", "did", "mode"}."""
+    import tracker
+    from modules import chase_rules as cr
+    now = now or datetime.now()
+    m = mode()
+    if live and m["mode"] == "off":
+        return {"ok": True, "lines": [f"SKIP   automatic Network Rail emails: {m['why']}"], "did": 0,
+                "mode": m["mode"]}
+    if m["mode"] == "shadow":
+        live = False                       # shadow: what it would do, said and nothing more
+    d = tracker.load()
+    recs = [r for r in d["records"] if (r.get("nr_date") or {}).get("state") in OPEN]
+    if not recs:
+        return {"ok": True, "lines": [], "did": 0, "mode": m["mode"]}
+    try:
+        from services import BANK_HOLIDAYS
+        hol = {datetime.strptime(h, "%Y-%m-%d").date() for h in BANK_HOLIDAYS}
+    except Exception:
+        hol = set()
+    if idx is None:
+        import build_drafts as bd
+        import chase_guard as guard
+        ns = ns or bd.get_ns()
+        try:
+            idx = _index(ns, recs)
+        except Exception as e:
+            return {"ok": True, "lines": [f"ABORT  the mailbox couldn't be read - nothing sent or decided ({e})"],
+                    "did": 0, "mode": m["mode"]}
+        if idx.errors:
+            return {"ok": True, "lines": ["ABORT  part of the mailbox couldn't be read, so an answer could be missed "
+                                           "- nothing sent or decided: " + "; ".join(idx.errors[:3])],
+                    "did": 0, "mode": m["mode"]}
+        ok, why = guard.mailbox_fresh(ns, idx, now if cr.in_working_hours(now, hol) else now.replace(hour=0))
+        if not ok:
+            return {"ok": True, "lines": [f"ABORT  {why} - nothing sent or decided"], "did": 0, "mode": m["mode"]}
+    me = set()
+    try:
+        import chase_guard as guard
+        me = set(guard._me())
+    except Exception:
+        pass
+    lines, did, refreshed = [], 0, False
+    for r in recs:
+        j = judge(r, idx.mails, idx.text_of, now, me, hol)
+        orders = " / ".join(r.get("orders") or [])
+        if j["do"] in ("nothing",):
+            continue
+        if not live:
+            would = {"send": "WOULD SEND", "mark_sent": "WOULD MARK SENT", "yes": "WOULD SAY YES",
+                     "no": "WOULD SAY NO", "ack": "WOULD NOTE THANKS", "hold": "WOULD HOLD", "wait": "WAIT"}[j["do"]]
+            extra = ""
+            mail = j.get("mail") or {}
+            if mail.get("said"):
+                extra = f" | {mail.get('who') or mail.get('from')} {mail.get('at')}: \"{mail['said']}\""
+            lines.append(f"{would:<15} {orders} ({r['nr_date']['kind']} {r['nr_date'].get('offered')} -> "
+                         f"{r['nr_date'].get('asked')}): {j['why']}{extra}")
+            continue
+        if j["do"] == "send" and not refreshed and hasattr(idx, "refresh"):
+            # the last look before anything goes: mail that landed since the folders were read (a folder that won't
+            # open now is recorded, not raised - as the chaser, that stops the sends too)
+            try:
+                n_err = len(getattr(idx, "errors", None) or [])
+                idx.refresh()
+                if len(getattr(idx, "errors", None) or []) > n_err:
+                    raise RuntimeError("; ".join(idx.errors[n_err:n_err + 2]))
+            except Exception as e:
+                lines.append(f"ABORT  the last look at the mailbox failed - nothing more sent ({e})")
+                break
+            refreshed = True
+            j = judge(r, idx.mails, idx.text_of, now, me, hol)
+        if j["do"] == "send" and mode()["mode"] != "live":
+            lines.append("STOP   automatic Network Rail emails were switched off mid-run - nothing more sent")
+            break
+        said_ = apply(d, r, j, sender=sender, now=now)
+        if said_:
+            lines.append(said_)
+            did += 1
+    if live and did:
+        tracker.save(d)
+    # ok: nothing failed half way. An ABORT stopped before anything was sent or decided - safe, said by the agent once
+    # a day; a FAIL is an email that wouldn't go, tried again in a few minutes
+    return {"ok": not any(x.startswith("FAIL") for x in lines), "lines": lines, "did": did, "mode": m["mode"]}
 
 
 def main(argv):
@@ -331,8 +1036,28 @@ def main(argv):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    if len(argv) < 3 or argv[1] not in ("send", "answer", "dismiss"):
-        print(__doc__.strip().splitlines()[-3].strip())
+    cmds = ("send", "answer", "dismiss", "seen", "told")
+    if len(argv) >= 2 and argv[1] in ("pause", "resume"):
+        print(json.dumps(set_paused(argv[1] == "pause")))
+        return 0
+    if len(argv) >= 2 and argv[1] == "auto":
+        dry = "--dry" in argv[2:]
+        import outlook_gate as gate
+        if not dry:
+            try:
+                wait = float(os.environ.get("R2_PHASE2_WAIT", "30"))
+            except ValueError:
+                wait = 30.0
+            if gate.named_lock("phase2_tracker", wait=wait) is None:     # a reply check or chase holds the tracker
+                print("SKIP   the reply check is updating the tracker - next time")
+                return gate.SKIPPED
+        out = auto(live=not dry)
+        print("\n".join(out["lines"]) if out["lines"] else "nothing to do")
+        print("NR_RESULT " + json.dumps({k: out[k] for k in ("ok", "did", "mode")}))
+        return 0 if out["ok"] else 1
+    if len(argv) < 3 or argv[1] not in cmds:
+        print("usage: nr_date.py auto [--dry] | pause | resume | send <id> <json> | answer <id> yes|no | dismiss <id> "
+              "| seen <id> | told <id>")
         return 2
     import outlook_gate as gate
     if gate.named_lock("phase2_tracker", wait=30) is None:      # a reply check or chase holds the tracker
@@ -345,6 +1070,10 @@ def main(argv):
         out = send(argv[2], edits if isinstance(edits, dict) else {})
     elif argv[1] == "answer":
         out = answer(argv[2], len(argv) > 3 and argv[3].lower() in ("yes", "y", "allowed", "1", "true"))
+    elif argv[1] == "seen":
+        out = seen(argv[2])
+    elif argv[1] == "told":
+        out = told(argv[2])
     else:
         out = dismiss(argv[2])
     print(json.dumps(out))

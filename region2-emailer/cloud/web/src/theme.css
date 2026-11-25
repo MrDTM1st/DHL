@@ -953,6 +953,15 @@ a.callbtn:hover{ color:var(--red-ink); }
 .nrdate-who { font-size: 12.5px; font-weight: 700; color: var(--red-ink, var(--red)); }
 .nrcard { border-left-color: var(--purple, #7B2CBF); }
 .nrcard .nrdate { margin: 4px 0 0; }
+/* since 25/11 it runs by itself: what's held for him stands out, the rest just says what happened */
+.nrcard.need { border-left-color: var(--red); }
+.nrcard-need { color: var(--red-ink, var(--red)); font-size: 14px; }
+.nrdate.need { border-left-color: var(--red); }
+.nrdate-held { margin-top: 6px; }
+.nrdate-why { font-size: 12.5px; font-weight: 600; color: var(--red-ink, var(--red)); margin-top: 4px; overflow-wrap: anywhere; }
+.nrdate-quote { font-size: 12.5px; color: var(--ink, inherit); margin-top: 2px; padding-left: 8px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
+.nrdate-subj { color: var(--faint); }
+.nrdate-auto { font-size: 12.5px; color: var(--faint); margin-top: 4px; }
 
 /* the Haulier Rejection Form's list on the CTMS page (11/11), in the to-do's look */
 .ctms-todo-kind.noc{ background:var(--ink); color:var(--on-ink); }
