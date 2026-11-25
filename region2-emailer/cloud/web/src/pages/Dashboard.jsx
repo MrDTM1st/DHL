@@ -4,9 +4,30 @@ import { isUrgent, isReady, ordLabel, within3, dateShort } from '../lib/orders.j
 import { fileToB64, getFiles, downloadFile, ctmsRail, ctmsStatus } from '../api.js';
 import FlowPanels from '../components/FlowPanels.jsx';
 import { NrDateCard } from '../components/NrDateBox.jsx';
-import InboxCard from '../components/InboxCard.jsx';
-import AssistCard from '../components/AssistCard.jsx';
-import UpdateReplyCard from '../components/UpdateReplyCard.jsx';
+import { emailSummary } from '../lib/emails.js';
+
+// The front page's one line about mail (his 25/11: the emails get their own page, so they don't clutter this one).
+// It shows only when something needs him - an email, or his reply to the day's Region 2 Updates - and takes him to
+// the Emails page, where the cards that used to sit here are now.
+function EmailsLine({ panel, setPage }) {
+  const m = emailSummary(panel);
+  if (!m.n && !m.update) return null;
+  const bits = [];
+  if (m.n) bits.push(`${m.n} email${m.n === 1 ? '' : 's'} need${m.n === 1 ? 's' : ''} you` + (m.now ? ` · ${m.now} now` : ''));
+  if (m.update) bits.push('your reply to Region 2 Updates is waiting');
+  const go = () => setPage('emails');
+  return (
+    <div className={'card noaddress inbox-card emails-line' + (m.hot ? '' : ' calm')} role="button" tabIndex={0}
+      onClick={go} onKeyDown={(e) => { if (e.key === 'Enter') go(); }}>
+      <div className="noaddress-head">
+        <h3>Emails: {bits.join(' · ')}</h3>
+        <span className="noaddress-why">
+          <button className="btn mini go" onClick={(e) => { e.stopPropagation(); go(); }}>Open Emails</button>
+        </span>
+      </div>
+    </div>
+  );
+}
 
 // ---- Holiday cover / handover card ----
 function HolidayCard({ panel, onCommand }) {
@@ -466,7 +487,7 @@ function NoAddress({ rows, onCommand }) {
 
 export default function Dashboard({
   records, status, panel, setPage, onCommand, onUpload, currentOrder, setCurrentOrder,
-  agentOnline, ttlText, onClearDropped, uploadBusy, onAssistOpen,
+  agentOnline, ttlText, onClearDropped, uploadBusy,
 }) {
   const tracked = records.length;
   const urgent = records.filter(isUrgent).length;
@@ -503,12 +524,7 @@ export default function Dashboard({
         <button className="btn red" onClick={() => onCommand({ action: 'extract_preview', week: '' })}>{I.scan} Scan today&rsquo;s extract</button>
       </div>
 
-      <AssistCard data={panel && panel.assist} onCommand={onCommand} push={panel && panel.push} onOpen={onAssistOpen} />
-      {!(panel && panel.assist && panel.assist.mode && panel.assist.mode !== 'off') && (
-        <InboxCard data={panel && panel.inbox} onCommand={onCommand} />
-      )}
-
-      <UpdateReplyCard data={panel && panel.update_reply} onCommand={onCommand} />
+      <EmailsLine panel={panel} setPage={setPage} />
 
       <NoAddress rows={panel && panel.no_address} onCommand={onCommand} />
 

@@ -4,13 +4,16 @@ import { useClock } from '../hooks.js';
 // Red/yellow DHL top nav: brand, page links, home-PC status pill, clock, bell.
 // The CTMS link carries its own small dot for the work PC's bridge - a second
 // machine, so it does not share the home PC's pill.
-export default function TopNav({ page, setPage, unread, agentOnline, agentText, ctmsOnline, onBell, bellOpen, paused }) {
+export default function TopNav({ page, setPage, unread, agentOnline, agentText, ctmsOnline, onBell, bellOpen, paused,
+  emails }) {
   const clock = useClock();
   const nav = [
     ['dash', 'Dashboard', I.dash],
+    ['emails', 'Emails', I.mail],
     ['map', 'Map', I.map],
     ['tracker', 'Tracker', I.track],
   ];
+  const mail = emails || {};
   return (
     <div className="topbar">
       <div className="brand">
@@ -21,6 +24,8 @@ export default function TopNav({ page, setPage, unread, agentOnline, agentText, 
         {nav.map(([k, label, ic]) => (
           <button key={k} className={'navlink' + (page === k ? ' active' : '')} onClick={() => setPage(k)}>
             {ic}<span>{label}</span>
+            {/* the Emails tab counts what needs him (his 25/11): red when any of it is now or past its time */}
+            {k === 'emails' && mail.n > 0 && <span className={'navbadge' + (mail.hot ? '' : ' calm')}>{mail.n}</span>}
           </button>
         ))}
         <button className={'navlink' + (page === 'ctms' ? ' active' : '')} onClick={() => setPage('ctms')}

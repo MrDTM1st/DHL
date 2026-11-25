@@ -10,6 +10,8 @@ import TrackerPage from './pages/TrackerPage.jsx';
 import Notifications from './pages/Notifications.jsx';
 import CtmsPage from './pages/CtmsPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+import EmailsPage from './pages/EmailsPage.jsx';
+import { emailSummary } from './lib/emails.js';
 import { ToolkitStrip } from './components/Toolkit.jsx';
 import AssistFocus from './components/AssistFocus.jsx';
 import { useStatus, useTracker } from './hooks.js';
@@ -30,7 +32,10 @@ export default function App() {
   const [authed, setAuthed] = useState(!!api.getKey());
   const onAuthFail = useCallback(() => { api.clearKey(); setAuthed(false); }, []);
 
-  const [page, setPage] = useState('dash');
+  // a tap on a phone alert lands on the Emails page (25/11), where that email's list is, with it open over the top
+  const [page, setPage] = useState(() => {
+    try { return new URLSearchParams(window.location.search).has('assist') ? 'emails' : 'dash'; } catch { return 'dash'; }
+  });
   const [bellOpen, setBellOpen] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [pickedHaulier, setPickedHaulier] = useState(null);
@@ -56,7 +61,7 @@ export default function App() {
     if (!('serviceWorker' in navigator)) return undefined;
     const onMsg = (e) => {
       const id = e.data && e.data.type === 'assist-open' ? String(e.data.id || '') : '';
-      if (ASSIST_ID.test(id)) setAssistFocus(id);
+      if (ASSIST_ID.test(id)) { setAssistFocus(id); setPage('emails'); }
     };
     // a phone can bring a sleeping desk back without that message: back at the front, it asks which email was tapped
     const ask = () => {
@@ -227,7 +232,7 @@ export default function App() {
       kind: fresh.some((i) => i.urgency === 'now') ? 'urgent' : 'info',
       title: fresh.length + ' emails need you',
       msg: fresh.slice(0, 3).map((i) => i.from + ': ' + i.ask).join(' · ')
-        + ' - and ' + (fresh.length - 3) + ' more on the Dashboard.',
+        + ' - and ' + (fresh.length - 3) + ' more on the Emails page.',
       createdAt: created,
       read: false,
     }] : fresh.map((i) => ({
@@ -262,7 +267,7 @@ export default function App() {
       kind: fresh.some((i) => i.pri === 'urgent') ? 'urgent' : 'info',
       title: fresh.length + ' emails waiting past their time',
       msg: fresh.slice(0, 3).map((i) => i.from + ': ' + i.subject).join(' · ')
-        + ' - and ' + (fresh.length - 3) + ' more on the Dashboard.',
+        + ' - and ' + (fresh.length - 3) + ' more on the Emails page.',
       createdAt: created,
       read: false,
     }] : fresh.map((i) => ({
@@ -542,6 +547,12 @@ export default function App() {
     setBellOpen(false);
     // its brief opens on the map - the only page a brief stays open on
     if (n.orderId) { setPage('map'); setPickedHaulier(null); setSelectedId(n.orderId); }
+    // an email note ("Needs you", "past its time") opens the Emails page (25/11); one email opens over it as well
+    else if (/^[am]-/.test(String(n.id))) {
+      setPage('emails');
+      const one = String(n.id).slice(2);
+      if (String(n.id).startsWith('a-') && ASSIST_ID.test(one)) setAssistFocus(one);
+    }
   };
   const markAll = () => setNotes((ns) => ns.map((n) => ({ ...n, read: true })));
   const clearAll = () => setNotes([]);
@@ -588,6 +599,7 @@ export default function App() {
         bellOpen={bellOpen}
         onBell={(e) => { e.stopPropagation(); setBellOpen((v) => !v); }}
         paused={agentOnline && toolkitOff}
+        emails={emailSummary(panel)}
       />
       <ToolkitStrip toolkit={toolkit} asked={toolkitAsk} onSet={onToolkit} />
       {bellOpen && (
@@ -600,9 +612,9 @@ export default function App() {
             records={records} status={status} panel={panel} setPage={setPage}
             onCommand={onCommand} onUpload={onUpload} currentOrder={currentOrder} setCurrentOrder={setCurrentOrder}
             agentOnline={agentOnline} ttlText={ttlText} onClearDropped={onClearDropped} uploadBusy={uploadBusy}
-            onAssistOpen={setAssistFocus}
           />
         )}
+        {page === 'emails' && <EmailsPage panel={panel} onCommand={onCommand} onAssistOpen={setAssistFocus} />}
         {page === 'map' && (
           <MapPage records={mapRecords} hauliers={hauliers} onSelect={selectOrder} selectedId={selectedId}
             pickedHaulier={pickedHaulier} status={status} onCall={onCall}

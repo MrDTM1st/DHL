@@ -74,7 +74,8 @@ function Item({ i, onDealt, onOpen }) {
   );
 }
 
-export default function AssistCard({ data, onCommand, push, onOpen }) {
+// full: on the Emails page (25/11) - every email that needs him, grouped Now / Today / This week, nothing folded away
+export default function AssistCard({ data, onCommand, push, onOpen, full }) {
   const [gone, setGone] = useState({});
   const [allNeeds, setAllNeeds] = useState(false);
   const [openFile, setOpenFile] = useState(false);
@@ -108,7 +109,7 @@ export default function AssistCard({ data, onCommand, push, onOpen }) {
   }
   const needs = (data.needs || []).filter((i) => !gone[i.id]);
   const pressing = needs.filter((i) => i.urgency !== 'week' || i.alarm);
-  const shown = allNeeds ? needs : pressing.length ? pressing : needs.slice(0, 3);
+  const shown = full || allNeeds ? needs : pressing.length ? pressing : needs.slice(0, 3);
   const claude = data.claude || {};
   const filing = mode === 'live' ? (data.filed || []) : (data.would_file || []);
   const files = filing.filter((i) => !gone[i.id]);
@@ -144,13 +145,21 @@ export default function AssistCard({ data, onCommand, push, onOpen }) {
           </div>
         </div>
       )}
-      {shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} />)}
-      {needs.length > shown.length && (
+      {full ? Object.keys(URG).map((u) => {
+        const group = needs.filter((i) => (URG[i.urgency] ? i.urgency : 'week') === u);
+        return group.length ? [
+          <div className="noaddress-row assist-group" key={'g' + u}>
+            <div className="noaddress-what"><div className="noaddress-order">{URG[u][0]} · {group.length}</div></div>
+          </div>,
+          ...group.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} />),
+        ] : null;
+      }) : shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} />)}
+      {!full && needs.length > shown.length && (
         <div className="noaddress-row">
           <button className="btn mini" onClick={() => setAllNeeds(true)}>Show all {needs.length}</button>
         </div>
       )}
-      {allNeeds && needs.length > 3 && (
+      {!full && allNeeds && needs.length > 3 && (
         <div className="noaddress-row">
           <button className="btn mini" onClick={() => setAllNeeds(false)}>Show fewer</button>
         </div>
