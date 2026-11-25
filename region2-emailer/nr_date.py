@@ -15,8 +15,10 @@ moved an order itself: the day the site asked for was judged against our own lat
   allowed and whether the stock will be ready - and nothing moves, and CTMS gets no collection before it, until they
   say yes. An order went wrong on 09/11 because it was brought forward without anyone confirming the goods were
   ready (the supplier turned the driver away).
-- Collected AFTER the availability date: the team is told it will be collected later than usual - no permission, just
-  so nobody chases a collection that didn't happen. Collected ON the availability date: nothing to say, it just moves.
+- Collected AFTER the availability date, in a later week (week commencing, Monday-based): the team is told it will be
+  collected later than usual - no permission, just so nobody chases a collection that didn't happen. Collected ON the
+  availability date, or later in its same week: nothing to say, it just moves (his 09/11 rule, kept: "Yes, just a
+  move", 25/11).
 - Not sure (no firm time from the site and the morning/afternoon decides it, no availability date on the order,
   several pick-ups): drafted and held for him, never sent by itself.
 
@@ -248,9 +250,10 @@ def _start(r):
 def collect_plan(r, day, start=None, run=None):
     """His 25/11 rule on the site's day: when it would be collected against when the stock is available.
         {"verdict": "ask" | "tell" | "fine" | "undecided", "collect", "available", "why", "undecided": reason}
-    ask: collected before the availability date. tell: after it. fine: on it. undecided: can't be told - no
-    availability date, the collection can't be worked out, or the site's time isn't firm and morning or afternoon
-    decides it (a morning delivery goes the day before, an afternoon one may go the same day)."""
+    ask: collected before the availability date. tell: after it, in a later week (week commencing). fine: on it, or
+    later in its same week - just a move (his 09/11 rule, kept on his 25/11 "Yes, just a move"). undecided: can't be
+    told - no availability date, the collection can't be worked out, or the site's time isn't firm and morning or
+    afternoon decides it (a morning delivery goes the day before, an afternoon one may go the same day)."""
     import ctms_run_plan as P
     avail, why = available(r)
     start = _start(r) if start is None else start
@@ -275,6 +278,10 @@ def collect_plan(r, day, start=None, run=None):
     if _d(c) == a:
         return {"verdict": "fine", "collect": c, "available": avail,
                 "why": f"collected {_short(c)}, the day it is available from"}
+    if week_of(_d(c)) == week_of(a):
+        return {"verdict": "fine", "collect": c, "available": avail,
+                "why": f"collected {_short(c)}, later than the {_short(avail)} it is available from but the same week "
+                       "- just a move"}
     return {"verdict": "tell", "collect": c, "available": avail,
             "why": f"collected {_short(c)} ({how}), later than the {_short(avail)} it is available from"}
 

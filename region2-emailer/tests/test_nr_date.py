@@ -113,6 +113,13 @@ def test_collected_on_the_availability_day_it_just_moves():
     assert "nr_date" not in r and r["delivery_date"] == "17/11/2026"
 
 
+def test_collected_later_in_the_same_week_it_just_moves():
+    r = _rec(date="16/11/2026")                         # available Monday 16th
+    d = {"records": [r]}
+    assert N.on_new_date(d, r, "19/11/2026", "the site's reply") is True      # Thursday 08:00: collected Wednesday
+    assert "nr_date" not in r and r["delivery_date"] == "19/11/2026"
+
+
 def test_no_em_dashes_in_what_is_written():
     for kind, asked in (("earlier", "07/11/2026"), ("later", "30/11/2026")):
         subject, message = N.draft(_rec(), kind, OFFERED, asked)
@@ -595,11 +602,15 @@ def test_collected_before_the_availability_date_is_asked_after_it_told_on_it_it_
     assert plan(MON, "09:30", road=NEAR)["verdict"] == "fine"   # near, the yard open in time: collected that day
     assert plan(MON, road=NEAR)["verdict"] == "ask"      # ...but not for 08:00: the yard opens 08:00, 40 min away
     assert plan("01/12/2026")["verdict"] == "fine"       # Tuesday 08:00: collected the Monday it's available
-    got = plan("02/12/2026")
-    assert (got["verdict"], got["collect"]) == ("tell", "01/12/2026") and "later than the 30/11" in got["why"]
+    # later in the same week is just a move (his 09/11 rule, kept 25/11: "Yes, just a move")
+    got = plan("04/12/2026")                             # Friday 08:00: collected Thursday 03/12, same week
+    assert (got["verdict"], got["collect"]) == ("fine", "03/12/2026") and "same week" in got["why"]
+    got = plan("08/12/2026")                             # Tuesday 08:00 the week after: collected Monday 07/12
+    assert (got["verdict"], got["collect"]) == ("tell", "07/12/2026") and "later than the 30/11" in got["why"]
     assert plan(MON, "14:00")["verdict"] == "fine"       # an afternoon delivery can be collected that morning
     assert plan(MON, "", sure="low")["undecided"] == "time"        # morning or afternoon decides it, not firm
-    assert plan("02/12/2026", "", sure="low")["verdict"] == "tell"  # ...unless both days are after it anyway
+    assert plan("09/12/2026", "", sure="low")["verdict"] == "tell"  # ...unless both days are a later week anyway
+    assert plan("02/12/2026", "", sure="low")["verdict"] == "fine"  # ...or both the same week, on or after it
     nothing = _site(_rec(date=MON), MON)
     nothing["collections"] = []
     assert N.collect_plan(nothing, MON)["undecided"] == "availability"

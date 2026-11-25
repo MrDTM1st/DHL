@@ -173,7 +173,7 @@ export function NrDateCard({ records, onCommand, auto = null }) {
   const said = !auto
     ? 'A site asked for another day than we offered. Earlier days wait for Network Rail’s yes; later weeks they are told about.'
     : auto.mode === 'live'
-    ? 'Collected before the stock’s availability date: Network Rail are asked; after it: they get a heads-up - by itself in working hours, and their yes or no is read off their reply. Anything it isn’t sure of is held here for you.'
+    ? 'Collected before the stock’s availability date: Network Rail are asked; in a later week than it: they get a heads-up - by itself in working hours, and their yes or no is read off their reply. Anything it isn’t sure of is held here for you.'
     : auto.mode === 'shadow'
       ? `Shadow mode (${auto.why || 'Auto follow-ups'}): it only says what it would do. Send and answer them here.`
       : `Not by itself just now: ${auto.why || 'automatic sending is off'}. Send and answer them here.`;
