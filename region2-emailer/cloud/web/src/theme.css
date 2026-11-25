@@ -997,6 +997,15 @@ a.callbtn:hover{ color:var(--red-ink); }
 .assist-job.done::before { background: var(--go); }
 .assist-job.failed::before, .assist-job.needs_you::before { background: var(--red); }
 .assist-job.needs_you { color: var(--red-ink); }
+/* auto-answers (25/11): Book's answer to a booking question, and what became of it */
+.assist-auto { margin-top: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink2); }
+.assist-auto::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 99px; margin-right: 7px;
+  background: var(--muted); vertical-align: 0; }
+.assist-auto.ready::before { background: var(--go); }
+.assist-auto.unchecked::before { background: var(--yellow-d); }
+.assist-auto.failed::before { background: var(--red); }
+.assist-auto.failed { color: var(--red-ink); }
+.assist-auto.held { font-weight: 500; color: var(--muted); }
 /* the email an alert opened (AssistFocus): a sheet from the bottom on a phone, a panel in the middle on a big screen */
 .af-back { position: fixed; inset: 0; z-index: 150; display: flex; align-items: flex-end; justify-content: center;
   background: rgba(20, 18, 12, .45); animation: fade .2s both; }

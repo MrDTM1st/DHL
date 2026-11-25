@@ -11,10 +11,11 @@ import { emailSummary } from '../lib/emails.js';
 // the Emails page, where the cards that used to sit here are now.
 function EmailsLine({ panel, setPage }) {
   const m = emailSummary(panel);
-  if (!m.n && !m.update) return null;
+  if (!m.n && !m.update && !m.answered) return null;
   const bits = [];
   if (m.n) bits.push(`${m.n} email${m.n === 1 ? '' : 's'} need${m.n === 1 ? 's' : ''} you` + (m.now ? ` · ${m.now} now` : ''));
   if (m.update) bits.push('your reply to Region 2 Updates is waiting');
+  if (m.answered) bits.push(`${m.answered} answered for you today`);
   const go = () => setPage('emails');
   return (
     <div className={'card noaddress inbox-card emails-line' + (m.hot ? '' : ' calm')} role="button" tabIndex={0}

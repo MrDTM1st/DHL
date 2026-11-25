@@ -2328,12 +2328,13 @@ def main():
                 push_panel()
                 report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
             elif action in ("assist_file", "assist_fileall", "assist_putback", "assist_keep", "assist_dealt",
-                            "assist_mode"):
+                            "assist_mode", "assist_auto"):
                 # the Needs-you card (inbox_assist.py): file one or all it would file, put one back, keep one in the
-                # Inbox, dealt with, the off / shadow / live switch. Moves take turns with the other Outlook jobs
+                # Inbox, dealt with, the off / shadow / live switch, and the auto-answers' own (25/11). Moves take
+                # turns with the other Outlook jobs
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
                 sub = action[len("assist_"):]
-                arg = str((d.get("mode") if sub == "mode" else d.get("id")) or "")[:20]
+                arg = str((d.get("mode") if sub in ("mode", "auto") else d.get("id")) or "")[:20]
                 args = ["inbox_assist.py", sub] + ([arg] if arg else [])
                 if sub in ("file", "fileall", "putback"):
                     out = run(["outlook_gate.py", "run", "--wait", "90"] + args, timeout=400)

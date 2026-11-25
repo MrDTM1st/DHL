@@ -22,5 +22,22 @@ export function emailSummary(panel) {
   }
   const u = p.update_reply;
   const update = !!(u && !u.replied && (u.draft_at || u.arrived));
-  return { n, now, hot, update, on };
+  const answered = on ? ((a.auto && a.auto.sent) || []).length : 0;
+  return { n, now, hot, update, on, answered };
+}
+
+// Auto-answers (inbox_assist + auto_answer.py, 25/11): what became of Book's answer to an email whose only question
+// is one Book has answered (booked? when? who? the ref?) - in a line under the email, the card's and the alert's.
+export function autoLine(auto, mode) {
+  if (!auto || !auto.state) return null;
+  if (auto.state === 'ready') {
+    return { cls: 'ready', text: (mode === 'live' ? 'Answering it myself in a moment' : "I'd answer this myself (shadow)")
+      + (auto.said ? ' · ' + auto.said : '') };
+  }
+  if (auto.state === 'unchecked') {
+    return { cls: 'unchecked', text: 'Book’s answer is below, not sent by itself: ' + (auto.why || 'CTMS couldn’t confirm it') };
+  }
+  if (auto.state === 'failed') return { cls: 'failed', text: 'I couldn’t send it myself: ' + (auto.why || 'no reason given') };
+  if (auto.state === 'held') return { cls: 'held', text: 'Not one to answer by itself: ' + (auto.why || '') };
+  return null;
 }

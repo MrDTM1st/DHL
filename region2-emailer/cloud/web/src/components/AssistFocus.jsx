@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { autoLine } from '../lib/emails.js';
 
 // Deal with it (his 24/11: "if anything needs my attention, like immediately, you will tell me what it is because
 // you've read it, and then there will be one button that just says either dealt with or deal with it. The deal with
@@ -64,6 +65,7 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
   const a = (item && item.action) || {};
   const plan = (item && item.deal) || { kind: 'claude', says: '' };
   const job = (item && item.job) || (gone && gone.job) || null;
+  const auto = autoLine(item && item.auto, assist && assist.auto && assist.auto.mode);
   const [text, setText] = useState(a.text || '');
   const [note, setNote] = useState('');
   const [noting, setNoting] = useState(false);
@@ -141,7 +143,8 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
             item.by === 'words' ? 'not read by Claude yet' : ''].filter(Boolean).join(' · ')}
         </div>
         {item.why && <div className="af-why">{item.why}</div>}
-        {a.note && <div className="af-why"><b>To do:</b> {a.note}</div>}
+        {auto && <div className={'assist-auto ' + auto.cls}>{auto.text}</div>}
+        {a.note && !(auto && auto.cls !== 'held') && <div className="af-why"><b>To do:</b> {a.note}</div>}
         {job && <Job job={job} onYes={yes} onNo={no} busy={busy} />}
         {!live && !waiting && (
           <>

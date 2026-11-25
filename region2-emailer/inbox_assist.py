@@ -39,6 +39,8 @@ marked "Dealt with" leaves the list.
     python inbox_assist.py work                 the background Claude takes the oldest queued job (no Outlook gate:
                                                 its tool, assist_tools.py, takes Outlook's turn for each call)
     python inbox_assist.py yes ID N | no ID N   his one tap on something the job held for his yes
+    python inbox_assist.py auto off|shadow|live auto-answers (auto_answer.py): an email whose only question is one
+                                                Book has answered (booked? when? who? the ref?) answered by itself
 
 His 24/11 "Claude sit in Outlook and read my emails, and if anything needs my attention, like immediately, you will
 tell me what it is because you've read it, and then there will be one button that just says either dealt with or deal
@@ -61,6 +63,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
+import auto_answer as aa
 import inbox_watch as iw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -136,6 +139,11 @@ action.text: for reply or forward, the email he would send, ready to go: "Hi <th
   what in action.note.
 action.note: for ctms, call, upload and other, or when text is empty: what to do, in one line.
 file_to: when needs_you is false, the folder it belongs in, one of: {folders}.
+asks_booking: true only when needs_you is true and EVERYTHING the email asks him is one or more of: whether an order
+  is booked or arranged, the day or time it will be delivered, who (which haulier or company) is bringing it, its
+  booking reference (MAN number). false when it asks or tells anything else as well: a change, a new or different
+  date or time, a problem, a complaint, a driver or lorry today, a price or cost, access or offloading, a collection
+  or pick-up, a document; and false when it is written to someone else.
 why: a few words on why it does or doesn't need him.
 
 His standing rules:
@@ -157,9 +165,10 @@ SCHEMA = {
                                   "text": {"type": "string"}, "note": {"type": "string"}},
                    "required": ["type"]},
         "file_to": {"type": "string"},
+        "asks_booking": {"type": "boolean"},
         "why": {"type": "string"},
     },
-    "required": ["needs_you", "urgency", "ask", "action", "why"],
+    "required": ["needs_you", "urgency", "ask", "action", "asks_booking", "why"],
 }
 
 
@@ -217,6 +226,7 @@ def stable_id(m):
 def load():
     d = _json(PATH, {})
     d.setdefault("mode", "shadow")
+    d.setdefault("auto", "shadow")                        # auto-answers (auto_answer.py): off / shadow / live
     d.setdefault("items", {})
     d.setdefault("claude", {"ok": None, "said": "", "at": ""})
     return d
@@ -325,8 +335,9 @@ def role(m, ctx):
     return "outside (a supplier, site or other company)"
 
 
-def order_lines(orders, records, booked):
-    """What the toolkit knows about each order the email names, one line each."""
+def order_lines(orders, records, booked, jobs=None):
+    """What the toolkit knows about each order the email names, one line each - Book's journal too (the manifest,
+    who, when), so a booking question can be seen for one."""
     out = []
     for o in list(orders or ())[:6]:
         base = re.sub(r"-.*$", "", str(o))
@@ -346,6 +357,9 @@ def order_lines(orders, records, booked):
                 bits.append(f"chased {rec.get('chases')}x")
         elif len(bits) == 1:
             bits.append("not on his tracker")
+        b = aa.book_line(o, jobs) if jobs else ""
+        if b:
+            bits.append(b)
         out.append(" - ".join(bits))
     return out
 
@@ -357,8 +371,8 @@ def system_prompt(ctx, cfg=None):
     return RULEBOOK.format(first=_first_name(ctx), managers=managers, folders=", ".join(FOLDERS), extra=extra)
 
 
-def prompt_for(it, ctx, records=(), booked=()):
-    lines = order_lines(it.get("orders"), records, booked)
+def prompt_for(it, ctx, records=(), booked=(), jobs=None):
+    lines = order_lines(it.get("orders"), records, booked, jobs)
     return "\n".join([
         f"From: {it.get('from')} <{it.get('addr')}>",
         f"Who the sender is: {role({'from_name': it.get('from'), 'from_addr': it.get('addr')}, ctx)}",
@@ -442,7 +456,8 @@ def verdict(raw, words=None, from_manager=False):
            "text": EM_DASH.sub(" - ", str(a.get("text") or "")).strip()[:1500],
            "note": str(a.get("note") or "")[:200]}
     out = {"urgency": urgency, "ask": str(raw.get("ask") or "")[:220], "by_when": str(raw.get("by_when") or "")[:60],
-           "action": act, "why": str(raw.get("why") or "")[:160], "by": "claude"}
+           "action": act, "why": str(raw.get("why") or "")[:160], "by": "claude",
+           "asks_booking": bool(raw.get("needs_you")) and raw.get("asks_booking") is True}
     if raw.get("needs_you"):
         out["kind"] = "needs"
     elif from_manager:
@@ -509,7 +524,7 @@ def sweep(ns=None, now=None):
     try:
         d = load()
         if d["mode"] == "off":
-            return d, {"filed": 0, "queued": 0, "new": 0}
+            return d, {"filed": 0, "queued": 0, "new": 0, "answered": 0}
         ns = ns or bd.get_ns()
         root = bd.dhl_store(ns)
         if root is None:
@@ -569,6 +584,7 @@ def sweep(ns=None, now=None):
             if sid not in present and it["state"] in ("open", "answered") and it.get("kind") != "filed":
                 it["state"] = "gone"                      # he filed it, or it's past the week we read
         filed = _file_due(ns, root, d, now) if d["mode"] == "live" else 0
+        answered = _auto_send(d, now, ctx, holidays)       # auto-answers, live: what Book answered, checked in CTMS
         cut = (now - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d %H:%M")
         d["items"] = {k: v for k, v in d["items"].items() if v.get("received", "") >= cut or v["state"] == "open"}
         d.update(at=now.strftime("%d/%m %H:%M"), seconds=round(time.time() - t0, 1), read=len(msgs),
@@ -579,14 +595,24 @@ def sweep(ns=None, now=None):
     finally:
         _unlock(h)
     ring(alerts)                                          # his phone, once the lock is let go
-    if any(it.get("kind") == "pending" and it["state"] == "open" for it in d["items"].values()):
-        _touch(JUDGE_DUE)                                 # also retries Claude once he has signed in
+    if any((it.get("kind") == "pending" and it["state"] == "open")
+           or aa.recheck_due(it, now, d.get("auto"), holidays) for it in d["items"].values()):
+        _touch(JUDGE_DUE)                                 # also retries Claude once he has signed in, and CTMS's check
     _touch(PUSH_DUE)
-    return d, {"filed": filed, "queued": queued, "new": new}
+    return d, {"filed": filed, "queued": queued, "new": new, "answered": answered}
 
 
-def judge(limit=PER_JUDGE, ask=ask_claude, now=None):
-    """Claude reads the queued emails, newest first. No Outlook: everything it needs was read by the sweep."""
+def _auto_action(a, mode):
+    """The card's suggested reply for a booking question: Book's own answer when one was made, with what became of it."""
+    if a.get("text"):
+        return {"type": "reply", "to": "", "text": a["text"], "note": aa.note(a, mode)[:200]}
+    return {"type": "reply", "to": "", "text": "", "note": ""}       # Book's answer no longer holds: the card says why
+
+
+def judge(limit=PER_JUDGE, ask=ask_claude, now=None, check=None):
+    """Claude reads the queued emails, newest first. No Outlook: everything it needs was read by the sweep. An email
+    whose only question Book has answered gets that answer made and checked in CTMS (auto_answer.py: `check` stands in
+    for CTMS in the tests); in live mode one CTMS couldn't confirm is tried again here, half-hourly."""
     now = now or datetime.now()
     try:
         import outlook_gate
@@ -600,27 +626,40 @@ def judge(limit=PER_JUDGE, ask=ask_claude, now=None):
         return 0, str(e)
     try:
         d = load()
+        mode = d.get("auto", "shadow")
         todo = sorted((it for it in d["items"].values() if it.get("kind") == "pending" and it["state"] == "open"),
                       key=lambda it: it["received"], reverse=True)[:limit]
         todo = [dict(it) for it in todo]
+        redo = [dict(it) for it in d["items"].values()
+                if aa.recheck_due(it, now, mode, d.get("holidays") or ())][:limit]
     finally:
         _unlock(h)
-    if not todo:
+    if not todo and not redo:
         return 0, "nothing waiting"
     ctx = iw.context()
     cfg = _json(CFG, {})
     system = system_prompt(ctx, cfg)
     records = _json(os.path.join(HERE, "tracker.json"), {}).get("records") or []
     booked = set(map(str, _json(os.path.join(HERE, "_booked_drops.json"), []) or []))
-    done, said, results = 0, "", {}
+    jobs = aa.load_journal()
+    done, said, results, again = 0, "", {}, {}
     for it in todo:
-        ok, got = ask(system, prompt_for(it, ctx, records, booked), cfg)
+        ok, got = ask(system, prompt_for(it, ctx, records, booked, jobs), cfg)
         if not ok:
             said = got
             break
-        mgr = role({"from_name": it.get("from"), "from_addr": it.get("addr")}, ctx) == "one of his managers"
-        results[it["id"]] = verdict(got, it.get("words"), from_manager=mgr)
+        who = role({"from_name": it.get("from"), "from_addr": it.get("addr")}, ctx)
+        v = verdict(got, it.get("words"), from_manager=who == "one of his managers")
+        if mode != "off" and v.get("kind") == "needs" and v.get("asks_booking"):
+            v["auto"] = aa.answer(it, who, jobs, records, now, check=check)
+            if v["auto"].get("text"):                     # Book's own words, never Claude's, for a booking question
+                v["action"] = _auto_action(v["auto"], mode)
+        results[it["id"]] = v
         done += 1
+    for it in redo:
+        who = role({"from_name": it.get("from"), "from_addr": it.get("addr")}, ctx)
+        again[it["id"]] = aa.answer(it, who, jobs, records, now, check=check,
+                                    tries=(it.get("auto") or {}).get("tries", 0))
     h = _lock(wait=90)
     try:
         d = load()
@@ -630,6 +669,12 @@ def judge(limit=PER_JUDGE, ask=ask_claude, now=None):
                 it.update(v, judged=now.strftime("%Y-%m-%d %H:%M"))
                 for k in ("text", "trail", "to"):
                     it.pop(k, None)                      # the email stays in Outlook, not here (cc stays: the card's Send)
+        for sid, a in again.items():
+            it = d["items"].get(sid)
+            if (it and it["state"] == "open" and it.get("kind") == "needs"
+                    and (it.get("auto") or {}).get("state") == "unchecked"):
+                it["auto"] = a
+                it["action"] = _auto_action(a, d.get("auto", "shadow"))
         d["claude"] = {"ok": not said, "said": said, "at": now.strftime("%d/%m %H:%M")}
         more = any(it.get("kind") == "pending" and it["state"] == "open" for it in d["items"].values())
         alerts = alert_phone(d, now)
@@ -726,6 +771,8 @@ def _alerts_due(d, now):
     for it in d["items"].values():
         if it.get("state") != "open" or it.get("alerted") or _job_live(it):
             continue                                      # a job he gave Claude rings when it ends, not before
+        if d.get("auto") == "live" and (it.get("auto") or {}).get("state") == "ready" and aa.in_hours(now, holidays):
+            continue                                      # answered by itself within the run (rings if that fails)
         if it.get("kind") == "needs":
             urgency = it.get("urgency", "today")
         elif it.get("kind") == "pending" and it.get("words"):
@@ -824,7 +871,7 @@ def reply_checks(mine, people, ours):
     return bad
 
 
-def reply_draft(it, body, outlook=None):
+def reply_draft(it, body, outlook=None, extra=None):
     """The reply to all on the email's own thread - ourselves and DHL Road taken off, `body` on top, Outlook's
     signature under it, the whole trail kept - saved in Drafts and read back. -> (the Outlook handles, the draft as
     mail_ops describes it (id + fingerprint), the people it goes to, what's wrong with it - [] when it may go)."""
@@ -845,7 +892,7 @@ def reply_draft(it, body, outlook=None):
     full = str(m.Body or "")
     k = re.search(r"^\s*From:", full, re.M)
     mine = full[:k.start()] if k else full
-    return o, mail_ops._describe(m), people, reply_checks(mine, people, ours)
+    return o, mail_ops._describe(m), people, reply_checks(mine, people, ours) + (list(extra(people)) if extra else [])
 
 
 def file_answered(o, d, sid, now, by="him", kind="inbox_assist_sent"):
@@ -865,7 +912,7 @@ def file_answered(o, d, sid, now, by="him", kind="inbox_assist_sent"):
         return f" (not filed: {str(e)[:60]})"
 
 
-def send_reply(d, sid, text=None, now=None, outlook=None, by="him"):
+def send_reply(d, sid, text=None, now=None, outlook=None, by="him", extra=None):
     """Reply to all on the email's own thread (ourselves and DHL Road taken off) with the suggested text - or his edit
     of it - Outlook's signature under it and the whole trail kept; checked, sent, and the email filed to Region 2 >
     Completed (his rule: answered = filed). A check that fails leaves the reply in Drafts, unsent, and says why."""
@@ -877,13 +924,44 @@ def send_reply(d, sid, text=None, now=None, outlook=None, by="him"):
     body = clean_reply((it.get("action") or {}).get("text") if text is None else text)
     if not body:
         raise RuntimeError("there's no reply text to send")
-    o, d0, people, bad = reply_draft(it, body, outlook)
+    o, d0, people, bad = reply_draft(it, body, outlook, extra)
     if bad:
         raise RuntimeError("not sent, it's in Drafts: " + "; ".join(bad))
     mail_ops.do_send_draft(o[1], o[2], o[3], {"id": d0["id"], "fingerprint": d0["fingerprint"]})
-    filed = file_answered(o, d, sid, now, by=by)
+    filed = file_answered(o, d, sid, now, by=by, kind="inbox_assist_auto" if by == "assistant" else "inbox_assist_sent")
     it.update(state="answered", sent_at=now.strftime("%Y-%m-%d %H:%M"), sent_to=people, sent_text=body[:1500])
     return "Sent to " + ", ".join(people) + filed + "."
+
+
+def _auto_send(d, now, ctx, holidays=()):
+    """Auto-answers, live (auto_answer.py): each one ready goes, oldest first - reply to all on its own thread, checked
+    like his one tap and for hauliers too, then filed. At most PER_RUN a run and PER_DAY a day; a CTMS check over three
+    hours old is done again first (the judge). One that fails stays on his card with the reason. -> how many went."""
+    mode = d.get("auto", "shadow")
+    if mode != "live" or not aa.in_hours(now, holidays):
+        return 0
+    today = now.strftime("%Y-%m-%d")
+    n_day = sum(1 for it in d["items"].values() if str((it.get("auto") or {}).get("sent_at") or "") >= today)
+    n = 0
+    for sid, it in sorted(d["items"].items(), key=lambda kv: kv[1].get("received") or ""):
+        a = it.get("auto") or {}
+        if it.get("state") != "open" or it.get("kind") != "needs" or a.get("state") != "ready" or _job_live(it):
+            continue
+        if aa.stale(a, now):
+            a.update(state="unchecked", why="checked in CTMS over 3 hours ago: checked again before it goes")
+            it["action"] = _auto_action(a, mode)
+            continue
+        if n >= aa.PER_RUN or n_day + n >= aa.PER_DAY:
+            break
+        try:
+            said = send_reply(d, sid, a["text"], now, by="assistant",
+                              extra=lambda people, who=it.get("addr"): aa.recipient_checks(people, ctx, who))
+            a.update(state="sent", sent_at=now.strftime("%Y-%m-%d %H:%M"), said=said[:300])
+            n += 1
+        except Exception as e:
+            a.update(state="failed", why=str(e)[:200])
+            it["action"] = _auto_action(a, mode)
+    return n
 
 
 # ---------- Deal with it (his 24/11) ----------
@@ -989,7 +1067,7 @@ def work_brief(it, ctx, records=(), booked=()):
     """What the background Claude is told about the job: the email, what was read in it, his note."""
     a = it.get("action") or {}
     job = it.get("job") or {}
-    lines = order_lines(it.get("orders"), records, booked)
+    lines = order_lines(it.get("orders"), records, booked, aa.load_journal())
     out = [
         "The email he wants dealt with:",
         f"From: {it.get('from')} <{it.get('addr')}> ({role({'from_name': it.get('from'), 'from_addr': it.get('addr')}, ctx)})",
@@ -1301,14 +1379,25 @@ def panel(d=None, now=None):
                       "sendable": action.get("type") == "reply" and bool(clean_reply(action.get("text"))),
                       "cc": str(it.get("cc") or "")[:200],
                       # Deal with it (his 24/11): what it will do, said before he taps; and the job, once he has
-                      "deal": deal_plan(dict(it, kind=kind, action=action)), "job": job_view(it.get("job"))})
+                      "deal": deal_plan(dict(it, kind=kind, action=action)), "job": job_view(it.get("job")),
+                      # auto-answers (25/11): Book's answer to a booking question, and what became of it
+                      "auto": ({k: (it.get("auto") or {}).get(k) for k in ("state", "why", "said", "checked_at")}
+                               if (it.get("auto") or {}).get("state") else None)})
     rank = {u: i for i, u in enumerate(URGENCY)}
     needs.sort(key=lambda x: (rank.get(x["urgency"], 3), -x["mins"]))
     would.sort(key=lambda x: x.get("received") or "", reverse=True)
     filed.sort(key=lambda x: x.get("received") or "", reverse=True)
     jobs.sort(key=lambda x: (x["job"] or {}).get("asked_at") or "", reverse=True)
+    sent = sorted(({"id": it["id"], "from": it.get("from", ""), "subject": it.get("subject", ""),
+                    "orders": it.get("orders") or [], "text": (it.get("auto") or {}).get("text", ""),
+                    "to": it.get("sent_to") or [], "at": (it.get("auto") or {}).get("sent_at", "")}
+                   for it in d["items"].values() if str((it.get("auto") or {}).get("sent_at") or "") >= today),
+                  key=lambda x: x["at"], reverse=True)
+    auto = {"mode": d.get("auto", "shadow"), "sent": sent[:30],
+            "ready": sum(1 for x in needs if (x.get("auto") or {}).get("state") == "ready"),
+            "unchecked": sum(1 for x in needs if (x.get("auto") or {}).get("state") == "unchecked")}
     return {"mode": d["mode"], "at": d.get("at", ""), "claude": d.get("claude") or {}, "needs": needs[:30],
-            "would_file": would[:40], "filed": filed[:40], "pending": pending, "jobs": jobs[:20],
+            "would_file": would[:40], "filed": filed[:40], "pending": pending, "jobs": jobs[:20], "auto": auto,
             "alarms": sum(1 for x in needs if x["alarm"]), "now": sum(1 for x in needs if x["urgency"] == "now")}
 
 
@@ -1386,10 +1475,15 @@ def main(argv):
     arg = argv[2] if len(argv) > 2 else ""
     if cmd == "show":
         p = panel()
-        print(f"mode {p['mode']} | read {p['at']} | Claude {p['claude']} | {p['pending']} waiting for Claude")
+        print(f"mode {p['mode']} | auto-answers {p['auto']['mode']} | read {p['at']} | Claude {p['claude']} | "
+              f"{p['pending']} waiting for Claude")
         for x in p["needs"]:
             print(f"  NEEDS {x['urgency']:5} {'BELL' if x['alarm'] else '    '} {x['from'][:24]:24} | {x['ask'][:90]}"
                   f" | {x['action'].get('type')} | {x['by']}")
+            if x.get("auto"):
+                print(f"        AUTO {x['auto']['state']}: {x['auto'].get('why') or x['auto'].get('said') or ''}")
+        for x in p["auto"]["sent"]:
+            print(f"  ANSWERED {x['at'][11:]} {x['from'][:24]:24} | {x['subject'][:60]}")
         for x in p["would_file"]:
             print(f"  FILE? {str(x['dest'])[:28]:28} {x['from'][:24]:24} | {x['subject'][:60]} | {x['why']}")
         for x in p["filed"]:
@@ -1404,7 +1498,8 @@ def main(argv):
         if p["mode"] == "off":
             return _say(True, "The inbox assistant is off.")
         return _say(True, f"{len(p['needs'])} need you ({p['now']} now), {len(p['would_file'])} to file, "
-                          f"{n['filed']} filed, {p['pending']} waiting for Claude.")
+                          f"{n['filed']} filed, {p['pending']} waiting for Claude."
+                          + (f" {n['answered']} answered by itself." if n.get("answered") else ""))
     if cmd == "judge":
         done, said = judge()
         return _say(not said or said in ("nothing waiting", "the toolkit is switched off"),
@@ -1423,6 +1518,23 @@ def main(argv):
         return _say(True, {"off": "The inbox assistant is off.",
                            "shadow": "Shadow mode: it lists what it would file and moves nothing.",
                            "live": "Live: it files what needs nothing from you, and logs every move."}[arg])
+    if cmd == "auto":
+        if arg not in aa.MODES:
+            return _say(False, "auto is off, shadow or live")
+        h = _lock()
+        try:
+            d = load()
+            d["auto"] = arg
+            save(d)
+        finally:
+            _unlock(h)
+        _touch(PUSH_DUE)
+        return _say(True, {"off": "Auto-answers are off: every email waits for you.",
+                           "shadow": "Auto-answers in shadow: the card shows the answer it would send; nothing goes "
+                                     "by itself.",
+                           "live": "Auto-answers live: a question Book has already answered (booked? when? who? the "
+                                   "ref?), checked in CTMS, is answered by itself on weekdays 07:00-19:00 and filed."
+                           }[arg])
     if cmd in ("file", "fileall"):
         try:
             ns, root = _outlook()

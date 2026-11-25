@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { copyText } from '../lib/phone.js';
+import { autoLine } from '../lib/emails.js';
 import PushToggle from './PushToggle.jsx';
 
 // Needs you (inbox_assist.py, 23/11 - his "something like you to sit in my inbox and to notify me when things need to
@@ -9,6 +10,9 @@ import PushToggle from './PushToggle.jsx';
 // Shadow mode lists what it would file and moves nothing; live files it, logged, and Put back undoes one.
 // Each email has his two buttons (24/11): Dealt with, and Deal with it - which opens the email (AssistFocus, as a
 // phone alert does) saying what it will do, and then shows Claude's job as it goes.
+// Auto-answers (25/11, his pick "Auto-answers"): an email whose only question Book has answered - booked? when? who?
+// the ref? - gets his own booking email back by itself once CTMS confirms the manifest (live), or shows the answer it
+// would send (shadow). Its own Off / Shadow / Live, and "Answered for you today" with what went.
 
 const URG = { now: ['Now', 'urgent'], today: ['Today', 'high'], week: ['This week', 'normal'] };
 const ACT = { reply: 'Reply', forward: 'Forward', ctms: 'In CTMS', call: 'Call', upload: 'Upload', file: 'File',
@@ -28,11 +32,13 @@ function jobLine(j) {
   return (JOB[j.state] || j.state) + (j.summary ? ': ' + j.summary : '');
 }
 
-function Item({ i, onDealt, onOpen }) {
+function Item({ i, onDealt, onOpen, autoMode }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
   const a = i.action || {};
   const j = i.job;
+  const auto = autoLine(i.auto, autoMode);
+  const autoNote = auto && auto.cls !== 'held';     // the action's note is the auto line's: said once
   const [label, cls] = URG[i.urgency] || URG.week;
   const copy = () => copyText(a.text || '').then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
   return (
@@ -50,9 +56,10 @@ function Item({ i, onDealt, onOpen }) {
         </div>
         {(a.type && a.type !== 'other') || a.note ? (
           <div className="noaddress-said">
-            <b>{ACT[a.type] || 'To do'}{a.to ? ' to ' + a.to : ''}</b>{a.note ? ': ' + a.note : ''}
+            <b>{ACT[a.type] || 'To do'}{a.to ? ' to ' + a.to : ''}</b>{a.note && !autoNote ? ': ' + a.note : ''}
           </div>
         ) : null}
+        {auto && <div className={'assist-auto ' + auto.cls}>{auto.text}</div>}
         {j && <div className={'assist-job ' + j.state}>{jobLine(j)}</div>}
         {show && a.text && <div className="assist-reply">{a.text}</div>}
       </div>
@@ -80,8 +87,11 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
   const [allNeeds, setAllNeeds] = useState(false);
   const [openFile, setOpenFile] = useState(false);
   const [openJobs, setOpenJobs] = useState(false);
+  const [openSent, setOpenSent] = useState(false);
   if (!data || !data.mode) return null;
   const mode = data.mode;
+  const auto = data.auto || { mode: 'shadow', sent: [] };
+  const answered = auto.sent || [];
   const send = (action, d) => onCommand({ action, data: d || {} });
   const hide = (id) => setGone((g) => ({ ...g, [id]: true }));
   const setMode = (m) => {
@@ -89,6 +99,14 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
     if (m === 'live' && !window.confirm('Live: the assistant files the emails it is sure need nothing from you. '
       + 'Every move is logged, and Put back undoes one. Go live?')) return;
     send('assist_mode', { mode: m });
+  };
+  const setAuto = (m) => {
+    if (m === auto.mode) return;
+    if (m === 'live' && !window.confirm('Live auto-answers: an email whose only question Book has already answered '
+      + '(booked? when? who? the ref?) gets your booking email back by itself, once CTMS confirms the manifest. '
+      + 'Weekdays 07:00-19:00, only to Network Rail and the order\u2019s site contacts, never DHL Road or a haulier, '
+      + 'and filed like every email you answer. Go live?')) return;
+    send('assist_auto', { mode: m });
   };
   const modes = (
     <span className="assist-modes">
@@ -151,9 +169,9 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
           <div className="noaddress-row assist-group" key={'g' + u}>
             <div className="noaddress-what"><div className="noaddress-order">{URG[u][0]} · {group.length}</div></div>
           </div>,
-          ...group.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} />),
+          ...group.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} autoMode={auto.mode} />),
         ] : null;
-      }) : shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} />)}
+      }) : shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} autoMode={auto.mode} />)}
       {!full && needs.length > shown.length && (
         <div className="noaddress-row">
           <button className="btn mini" onClick={() => setAllNeeds(true)}>Show all {needs.length}</button>
@@ -164,6 +182,40 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
           <button className="btn mini" onClick={() => setAllNeeds(false)}>Show fewer</button>
         </div>
       )}
+      <div className="noaddress-row">
+        <div className="noaddress-what">
+          <div className="noaddress-order">
+            {auto.mode === 'live' ? `Answered for you today: ${answered.length}`
+              : auto.mode === 'shadow' ? `Auto-answers in shadow${auto.ready ? ` · I'd answer ${auto.ready} myself` : ''}`
+                : 'Auto-answers are off'}
+          </div>
+          <div className="noaddress-said">
+            Questions Book has already answered (booked? when? who? the ref?), checked in CTMS before anything goes.
+          </div>
+        </div>
+        <div className="noaddress-fix">
+          {answered.length > 0 && (
+            <button className="btn mini" onClick={() => setOpenSent((o) => !o)}>{openSent ? 'Hide' : 'Show'}</button>
+          )}
+          <span className="assist-modes">
+            {Object.keys(MODE).map((m) => (
+              <button key={m} className={'btn mini' + (m === auto.mode ? ' go' : '')} onClick={() => setAuto(m)}>
+                {MODE[m]}</button>
+            ))}
+          </span>
+        </div>
+      </div>
+      {openSent && answered.map((x) => (
+        <div className="noaddress-row assist-file" key={'s' + x.id}>
+          <div className="noaddress-what">
+            <div className="noaddress-said">
+              <b>{x.from}</b> · {x.subject} · {String(x.at || '').slice(11)}
+              {x.to && x.to.length ? ' · to ' + x.to.join(', ') : ''}
+            </div>
+            <div className="assist-reply">{x.text}</div>
+          </div>
+        </div>
+      ))}
       {jobs.length > 0 && (
         <div className="noaddress-row">
           <div className="noaddress-what">
