@@ -2301,6 +2301,8 @@ def main():
                             f.write(v[:6000])
                         tmps.append(tmp)
                         extra += [flag, tmp]
+                if d.get("group"):
+                    extra.append("--group")                # the card's Deal with it: every email about the order
                 try:
                     out = run(["inbox_assist.py", "deal", sid] + extra, timeout=400) if sid else ""
                 finally:
@@ -2328,14 +2330,15 @@ def main():
                 push_panel()
                 report("done" if res.get("ok") else "error", "Inbox: " + res.get("said", ""), tail(out, 3))
             elif action in ("assist_file", "assist_fileall", "assist_putback", "assist_keep", "assist_dealt",
-                            "assist_mode", "assist_auto"):
+                            "assist_mode", "assist_auto", "assist_list"):
                 # the Needs-you card (inbox_assist.py): file one or all it would file, put one back, keep one in the
                 # Inbox, dealt with, the off / shadow / live switch, and the auto-answers' own (25/11). Moves take
                 # turns with the other Outlook jobs
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
                 sub = action[len("assist_"):]
                 arg = str((d.get("mode") if sub in ("mode", "auto") else d.get("id")) or "")[:20]
-                args = ["inbox_assist.py", sub] + ([arg] if arg else [])
+                args = ["inbox_assist.py", sub] + ([arg] if arg else []) + (
+                    ["--group"] if sub == "dealt" and d.get("group") else [])   # a card's Dealt with: the lot (26/11)
                 if sub in ("file", "fileall", "putback"):
                     out = run(["outlook_gate.py", "run", "--wait", "90"] + args, timeout=400)
                 else:

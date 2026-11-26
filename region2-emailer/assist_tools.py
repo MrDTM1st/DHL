@@ -30,6 +30,9 @@ down) and his desk shows it with Yes / No.
                                                     his yes), or with no route something only he can do
     python assist_tools.py say "..."                a line on his desk saying what you're doing
 
+    python assist_tools.py --email ID COMMAND ...   (a card's job, his 26/11) the same, on another email of the card:
+                                                    email, thread, reply, forward, file - each on ITS own thread
+
 R2_ASSIST_DRY=1 (a trial run): nothing is sent, filed or committed - each is written down as what it would have done.
 Exit codes: 0 done, 2 refused.
 """
@@ -60,6 +63,9 @@ class Stop(Exception):
     """Refused: said to Claude, nothing done."""
 
 
+_TARGET = ""                                              # --email ID: another email on the job's card
+
+
 def _dry():
     return bool(os.environ.get("R2_ASSIST_DRY"))
 
@@ -71,30 +77,40 @@ def _sid():
     return sid
 
 
-def _check(it, states):
-    if it is None:
+def _check(d, states):
+    """The email worked on - the job's own, or with --email another on its card - once the job is running and that
+    email is still in one of `states`. -> (the email, the job's email)."""
+    lead = d["items"].get(_sid())
+    if lead is None:
         raise Stop("That email is no longer on his list - stop here.")
-    if (it.get("job") or {}).get("state") != "working":
+    if (lead.get("job") or {}).get("state") != "working":
         raise Stop("This job isn't running any more - stop here.")
+    it = lead
+    if _TARGET and _TARGET != lead.get("id"):
+        if _TARGET not in (lead["job"].get("group") or []):
+            raise Stop("That email isn't on this job's card - only the emails the brief lists.")
+        it = d["items"].get(_TARGET)
+        if it is None:
+            raise Stop("That email is no longer on his list - leave it.")
     if it.get("state") not in states:
         said = {"dealt": "He has marked it dealt with", "gone": "It has left his Inbox (he filed it)",
                 "answered": "It's answered already", "filed": "It's filed already"}.get(it.get("state"), "It's closed")
-        raise Stop(f"{said} - stop here.")
-    return it
+        raise Stop(f"{said} - stop here." if it is lead else f"{said} - leave that one.")
+    return it, lead
 
 
 def _peek(states=READING):
-    """The job's email as the store has it now (a read: no lock)."""
-    return _check(A.load()["items"].get(_sid()), states)
+    """The email worked on, as the store has it now (a read: no lock)."""
+    return _check(A.load(), states)[0]
 
 
 def _change(fn, states=READING):
-    """fn(d, item, job) under the store's lock, saved; the desk told."""
+    """fn(d, the email worked on, the job) under the store's lock, saved; the desk told."""
     h = A._lock(wait=60)
     try:
         d = A.load()
-        it = _check(d["items"].get(_sid()), states)
-        out = fn(d, it, it["job"])
+        it, lead = _check(d, states)
+        out = fn(d, it, lead["job"])
         A.save(d)
         return out
     finally:
@@ -120,9 +136,12 @@ def log(line, did=False):
 
 
 def hold(ask):
-    """Something for his yes, written on the job: his desk shows it with Yes / No."""
+    """Something for his yes, written on the job: his desk shows it with Yes / No. One held on another email of the
+    card says which, so his yes files that one."""
     def go(d, it, job):
         ask.update(state="open", at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+        if it.get("id") != _sid():
+            ask["email"] = it.get("id")
         job.setdefault("asks", []).append(ask)
         _note(job, "held for his yes: " + ask.get("what", ""))
         return len(job["asks"]) - 1
@@ -482,7 +501,9 @@ def cmd_say(a):
 
 
 def main(argv=None):
+    global _TARGET
     p = argparse.ArgumentParser(prog="assist_tools.py", add_help=False)
+    p.add_argument("--email", default="")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("help")
     sub.add_parser("email")
@@ -526,6 +547,12 @@ def main(argv=None):
     if a.cmd in (None, "help"):
         print(__doc__)
         return 0
+    _TARGET = ""
+    if a.email:
+        if not re.fullmatch(r"[0-9a-f]{12}", a.email):
+            print("REFUSED: --email takes the id the brief gives (12 letters and digits).")
+            return 2
+        _TARGET = a.email
     try:
         {"email": cmd_email, "thread": cmd_thread, "search": cmd_search, "read": cmd_read, "order": cmd_order,
          "rules": cmd_rules, "ctms": cmd_ctms, "ctms-commit": cmd_ctms_commit, "reply": cmd_reply, "draft": cmd_draft,

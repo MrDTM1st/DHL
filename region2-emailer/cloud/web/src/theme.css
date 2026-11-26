@@ -1006,6 +1006,18 @@ a.callbtn:hover{ color:var(--red-ink); }
 .assist-auto.failed::before { background: var(--red); }
 .assist-auto.failed { color: var(--red-ink); }
 .assist-auto.held { font-weight: 500; color: var(--muted); }
+/* one card per order (26/11): the card's other emails, folded under it */
+.assist-more { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--muted); }
+.assist-more-who { line-height: 1.4; }
+.assist-other { margin-top: 6px; padding: 7px 9px; border-radius: 8px; background: var(--seg); font-size: 12.5px;
+  color: var(--ink2); line-height: 1.4; }
+.assist-other-ask { margin: 2px 0 5px; color: var(--ink); }
+.af-others { margin-top: 10px; padding: 9px 11px; border-radius: 10px; background: var(--seg); font-size: 12.5px; }
+.af-others b { display: block; margin-bottom: 4px; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); }
+.af-other { padding: 4px 0; color: var(--ink2); line-height: 1.4; }
+.af-other span { display: block; color: var(--ink); }
 /* the email an alert opened (AssistFocus): a sheet from the bottom on a phone, a panel in the middle on a big screen */
 .af-back { position: fixed; inset: 0; z-index: 150; display: flex; align-items: flex-end; justify-content: center;
   background: rgba(20, 18, 12, .45); animation: fade .2s both; }

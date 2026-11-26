@@ -41,6 +41,16 @@ marked "Dealt with" leaves the list.
     python inbox_assist.py yes ID N | no ID N   his one tap on something the job held for his yes
     python inbox_assist.py auto off|shadow|live auto-answers (auto_answer.py): an email whose only question is one
                                                 Book has answered (booked? when? who? the ref?) answered by itself
+    python inbox_assist.py list ID              a site reply moved to the CTMS to-do, back on his list for good
+    python inbox_assist.py dealt ID --group     dealt with, and every other email on its card (the same order)
+
+Two tap-savers (his 26/11 "Yes, build both"):
+  - A site's reply the CTMS to-do already has - phase2 took it in and put "<who> replied dd/mm - update the order from
+    it" on the to-do - leaves his list (it's the Run's job now), unless it asks him something. Once that to-do item is
+    done, the email is filed to Regions/Region 2/Completed like every email he answers (live; shadow lists it). His X
+    on the to-do leaves it in the Inbox.
+  - Emails about the same order are one card: one Dealt with, or one Deal with it - the background Claude then takes
+    every email on the card, each answered on its own thread.
 
 His 24/11 "Claude sit in Outlook and read my emails, and if anything needs my attention, like immediately, you will
 tell me what it is because you've read it, and then there will be one button that just says either dealt with or deal
@@ -87,6 +97,12 @@ ACTIONS = ("reply", "forward", "ctms", "call", "upload", "file", "other")
 # where no-action mail goes, under the DHL Inbox - his own folders ([[inbox-cleanup]])
 FOLDERS = ("Regions/Region 2/Completed", "DHL", "ADHOC/Synergy Upload", "IT", "CTMS", "NR")
 BELL_AFTER = {"now": 0, "today": 60, "week": 240}         # working minutes before the bell
+TODO = os.path.join(HERE, "_ctms_todo.json")              # the CTMS to-do (ctms_todo.py): a site reply's update
+TODO_WINDOW = (timedelta(minutes=-5), timedelta(hours=36))   # the to-do item comes a few minutes after the reply
+ASKS_HIM = ("reply", "call", "forward")                   # a verdict that asks him something: never off his list
+DESK_TAKEN = "the desk has taken it in"
+GROUP_MAX_ORDERS = 2                                      # an email naming more orders (a batch, an extract) has its
+                                                          # own card
 WORDS_URGENCY = {"urgent": "now", "high": "today", "normal": "week", "low": "week"}
 PER_JUDGE = 6                                             # emails Claude reads in one judge run
 CLAUDE_WAIT = 150                                         # seconds for one email
@@ -279,7 +295,7 @@ def rule(m, ctx, ext_ids=()):
     if BOUNCE.search(f"{who} {subject}"):
         return {"kind": "desk", "why": "a bounce (the bounce escalation deals with it)"}
     if ctx["handled"](m):
-        return {"kind": "desk", "why": "the desk has taken it in"}
+        return {"kind": "desk", "why": DESK_TAKEN}
     if iw.SKIP_SUBJECT.search(subject):
         return {"kind": "file", "dest": "Regions/Region 2/Completed", "why": "an out-of-office or automatic reply"}
     managers = [x for x in ctx.get("managers") or () if x]
@@ -534,6 +550,7 @@ def sweep(ns=None, now=None):
         msgs, sent = iw.collect(ns, now, ctx["me"])
         ext_ids = _json(SEEN, {}).get("ext_ids") or []
         old_dealt = set((iw.load().get("dealt") or {}).keys())    # "Dealt with" on the older Emails-waiting card
+        todo = _json(TODO, {}).get("items") or []
         present, new, queued = set(), 0, 0
         for m in msgs:
             sid = stable_id(m)
@@ -573,7 +590,9 @@ def sweep(ns=None, now=None):
                     v = rule(m if m.get("atts") else dict(m, atts=_attachments(ns, store_id, m["eid"])), ctx, ext_ids)
                     if v is not None:
                         it.update(v)
-            if it["state"] == "open" and it.get("kind") in ("needs", "pending"):
+            if it["state"] == "open":
+                todo_step(it, todo)                       # a site reply the CTMS to-do has: the Run's, then filed
+            if it["state"] == "open" and it.get("kind") in ("needs", "pending", "todo"):
                 if replied(m, sent):                      # answered: off the list, and filed like the rest
                     it.update(kind="file", dest=FOLDERS[0], why="you've answered it")
                     for k in ("text", "trail", "to", "cc"):
@@ -607,6 +626,131 @@ def _auto_action(a, mode):
     if a.get("text"):
         return {"type": "reply", "to": "", "text": a["text"], "note": aa.note(a, mode)[:200]}
     return {"type": "reply", "to": "", "text": "", "note": ""}       # Book's answer no longer holds: the card says why
+
+
+# ---------- a site reply the CTMS to-do has (his 26/11) ----------
+def _keys(orders):
+    """An email's orders as one card knows them: 1234567-1-1 -> 1234567; any other ref whole, in capitals."""
+    out = []
+    for o in orders or ():
+        o = re.sub(r"\s+", "", str(o)).upper()
+        m = re.fullmatch(r"(\d{7})(?:-\d+)*(?:_\w+)?", o)
+        if o:
+            out.append(m.group(1) if m else o)
+    return list(dict.fromkeys(out))
+
+
+def todo_links(it, todo):
+    """The CTMS to-do items this very email made: an update from a site's reply (phase2 -> ctms_todo.replied), named
+    after whoever wrote it ("<who> replied dd/mm - update the order from it"), about one of its orders, put on the to-do
+    a few minutes after it landed."""
+    orders = set(_keys(it.get("orders")))
+    who = str(it.get("from") or "").strip().lower()
+    t0 = _when(it.get("received"))
+    if not orders or not who or t0 is None:
+        return []
+    out = []
+    for t in todo:
+        if not isinstance(t, dict) or t.get("kind") != "update" or t.get("source") != "reply":
+            continue
+        if not orders & set(_keys(t.get("orders"))) or not str(t.get("what") or "").lower().startswith(who + " replied"):
+            continue
+        added = _when(t.get("added"))
+        if added is not None and t0 + TODO_WINDOW[0] <= added <= t0 + TODO_WINDOW[1]:
+            out.append(t)
+    return out
+
+
+def todo_step(it, todo):
+    """One open email against the CTMS to-do: a site reply it has leaves his list (kind "todo") unless it asks him
+    something; once every one of its to-do items is done, it's for filing; his X on the to-do leaves it in the Inbox."""
+    kind = it.get("kind")
+    if it.get("listed") or it.get("kept") or _job_live(it) or it.get("job_of"):
+        return
+    if kind not in ("needs", "pending", "desk", "todo"):
+        return
+    if kind == "needs" and (it.get("action") or {}).get("type") in ASKS_HIM:
+        return                                            # it asks him something: his, whatever the to-do has
+    if kind == "desk" and it.get("why") != DESK_TAKEN:
+        return                                            # a bounce, his own email, an extract: not a site's reply
+    links = todo_links(it, todo)
+    if not links:
+        return
+    if kind != "todo":
+        it["was"] = kind
+    if any(t.get("dismissed") for t in links):
+        it.update(kind="quiet", why="you took its CTMS update off the to-do, so it stays in your Inbox")
+    elif all(t.get("done_at") for t in links):
+        it.update(kind="file", dest=FOLDERS[0], why="its update is in CTMS (done on the CTMS to-do)")
+    else:
+        it.update(kind="todo", todo=[t.get("id") for t in links],
+                  todo_what=str(links[0].get("what") or "")[:160],
+                  why="on the CTMS to-do: the Run puts its details in CTMS")
+
+
+# ---------- one card per order (his 26/11) ----------
+def _groups(entries):
+    """{id: group} - emails that share an order, one card. An email naming more than GROUP_MAX_ORDERS orders (a batch,
+    an extract) has its own."""
+    parent = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for e in entries:
+        node = "e:" + e["id"]
+        find(node)
+        keys = _keys(e.get("orders"))
+        if 0 < len(keys) <= GROUP_MAX_ORDERS:
+            for k in keys:
+                a, b = find(node), find("o:" + k)
+                if a != b:
+                    parent[b] = a
+    return {e["id"]: find("e:" + e["id"]) for e in entries}
+
+
+def _cards(needs, rank):
+    """The needs list as cards: each group's lead (the most urgent, then the newest) carries the others; the rest are
+    kept in the list, each marked with its lead, for the email view."""
+    gid = _groups(needs)
+    by = {}
+    for x in needs:
+        by.setdefault(gid[x["id"]], []).append(x)
+    cards = []
+    for xs in by.values():
+        xs.sort(key=lambda x: x.get("at") or "", reverse=True)
+        xs.sort(key=lambda x: rank.get(x["urgency"], 3))
+        lead = xs[0]
+        about = []
+        for x in xs:
+            about += [k for k in _keys(x.get("orders")) if k not in about]
+        lead.update(lead=True, group_n=len(xs), about=" / ".join(about[:3]),
+                    others=[{k: x.get(k) for k in ("id", "from", "ask", "received", "waited", "urgency", "subject")}
+                            for x in xs[1:]])
+        if len(xs) > 1:
+            mins = max(x["mins"] for x in xs)
+            lead.update(alarm=any(x["alarm"] for x in xs), mins=mins, waited=iw.waited_text(mins))
+        for x in xs[1:]:
+            x.update(lead=False, group=lead["id"])
+        cards.append(xs)
+    cards.sort(key=lambda xs: (rank.get(xs[0]["urgency"], 3), -xs[0]["mins"]))
+    return cards
+
+
+def group_members(d, sid, now=None):
+    """The other emails on sid's card, as the desk shows it now (none when sid isn't a card's lead) - never one with a
+    job of its own."""
+    p = panel(d, now)
+    return [x["id"] for x in p["needs"] if x.get("group") == sid and not _job_live(d["items"].get(x["id"]) or {})]
+
+
+def _covered(d, it):
+    """An email on a card whose job Claude has (Deal with it on the card): it rings with the job, not before."""
+    lead = d["items"].get(it.get("job_of") or "")
+    return bool(lead) and _job_live(lead)
 
 
 def judge(limit=PER_JUDGE, ask=ask_claude, now=None, check=None):
@@ -769,7 +913,7 @@ def _alerts_due(d, now):
     holidays = set(d.get("holidays") or ())
     out = []
     for it in d["items"].values():
-        if it.get("state") != "open" or it.get("alerted") or _job_live(it):
+        if it.get("state") != "open" or it.get("alerted") or _job_live(it) or _covered(d, it):
             continue                                      # a job he gave Claude rings when it ends, not before
         if d.get("auto") == "live" and (it.get("auto") or {}).get("state") == "ready" and aa.in_hours(now, holidays):
             continue                                      # answered by itself within the run (rings if that fails)
@@ -982,9 +1126,10 @@ def deal_plan(it):
                                       "needs. Money, cancelling and anyone new to email come back to you as a Yes."}
 
 
-def deal(d, sid, text=None, note=None, now=None, outlook=None):
+def deal(d, sid, text=None, note=None, now=None, outlook=None, group=False):
     """His "Deal with it": the reply sent (his edit, if he made one), a no-action email filed, or - for anything
-    bigger, or when he wrote Claude a note - the job queued for the background Claude (`work`). -> what happened."""
+    bigger, or when he wrote Claude a note - the job queued for the background Claude (`work`). On a card of several
+    emails about one order (group), Claude takes them all, each answered on its own thread. -> what happened."""
     now = now or datetime.now()
     it = d["items"].get(sid)
     if it is None or it.get("state") != "open":
@@ -992,7 +1137,18 @@ def deal(d, sid, text=None, note=None, now=None, outlook=None):
     if (it.get("job") or {}).get("state") in ("queued", "working"):
         return "Claude is on it already."
     note = str(note or "").strip()[:600]
+    members = group_members(d, sid, now) if group else []
     plan = deal_plan(it)
+    if members:
+        edited = clean_reply(text) if text is not None else ""
+        it["job"] = {"state": "queued", "asked_at": now.strftime("%Y-%m-%d %H:%M"), "note": note,
+                     "reply": edited[:1500], "group": members, "log": [], "asks": [], "did": [], "now": "",
+                     "summary": ""}
+        for m in members:
+            d["items"][m]["job_of"] = sid
+        _touch(WORK_DUE)
+        return (f"Claude is on all {len(members) + 1} emails about this order - your phone hears when it's done, or "
+                "when something needs your yes.")
     if plan["kind"] == "send" and not note:
         return send_reply(d, sid, text, now=now, outlook=outlook)
     if plan["kind"] == "file" and not note:
@@ -1089,6 +1245,20 @@ def work_brief(it, ctx, records=(), booked=()):
                 *("    " + x for x in str(job["reply"]).splitlines())]
     if job.get("note"):
         out += ["", f"His note to you - do this: {job['note']}"]
+    others = it.get("_group") or []
+    if others:
+        out += ["", f"This job is the whole card: {len(others) + 1} emails about the same order, all on his list. "
+                    "The one above, and these:"]
+        for x in others:
+            out += [f"  --email {x.get('id')}: from {x.get('from')} <{x.get('addr')}> "
+                    f"({role({'from_name': x.get('from'), 'from_addr': x.get('addr')}, ctx)}), received "
+                    f"{x.get('received')}, subject {x.get('subject')!r}",
+                    f"      read earlier: {x.get('ask') or x.get('subject')}"]
+        out += ["Deal with each one. Put `--email ID` straight after `assist_tools.py` to work on one of these: "
+                "`python assist_tools.py --email ID email` reads it, `... --email ID thread` its conversation, "
+                "`... --email ID reply --text \"...\"` answers on ITS own thread, `... --email ID file` files it. "
+                "A reply on one thread never answers another email's sender; one that needs nothing more once the "
+                "others are dealt with can be filed."]
     out += ["", "Start with `python assist_tools.py email`."]
     return "\n".join(out)
 
@@ -1118,13 +1288,31 @@ def ask_worker(prompt, sid, system, cfg=None, run=subprocess.run):
     return _claude_answer(p)
 
 
-def _settle(it, now):
-    """Once nothing waits for his yes any more: the job is done, and the email off his list."""
+def _settle(it, now, d=None):
+    """Once nothing waits for his yes any more: the job is done, and the email off his list (its card's others too)."""
     job = it.get("job") or {}
     if job.get("state") == "needs_you" and not any(a.get("state") in ("open", "running") for a in job.get("asks") or []):
         job["state"] = "done"
         if it.get("state") == "open":
             it.update(state="dealt", dealt_at=now.strftime("%Y-%m-%d %H:%M"), dealt_by="claude")
+    if d is not None:
+        _end_group(d, it, now)
+
+
+def _end_group(d, it, now):
+    """A card's job over: done - its other emails are dealt with too (each answered or filed by Claude already, or
+    needing nothing more); failed or dropped - back on his list as they were. Waiting for his yes - they wait with it."""
+    job = it.get("job") or {}
+    state = job.get("state")
+    if state not in ("done", "failed", "dropped"):
+        return
+    for m in job.get("group") or []:
+        x = d["items"].get(m)
+        if not x or x.get("job_of") != it.get("id"):
+            continue
+        x.pop("job_of", None)
+        if state == "done" and x.get("state") == "open":
+            x.update(state="dealt", dealt_at=now.strftime("%Y-%m-%d %H:%M"), dealt_by="claude")
 
 
 def _unstick(d, now):
@@ -1137,6 +1325,7 @@ def _unstick(d, now):
         if job.get("state") == "working" and str(job.get("started") or "") < cut:
             job.update(state="failed", now="", said="It stopped without finishing (the home PC may have restarted) - "
                                                     "deal with it again, or by hand.")
+            _end_group(d, it, now)
             n += 1
     return n
 
@@ -1166,6 +1355,8 @@ def work(ask=ask_worker, now=None):
         start = fixed or datetime.now()
         it["job"].update(state="working", started=start.strftime("%Y-%m-%d %H:%M"), now="Reading the email")
         mine = json.loads(json.dumps(it))
+        mine["_group"] = [json.loads(json.dumps(d["items"][m])) for m in it["job"].get("group") or []
+                          if m in d["items"] and d["items"][m].get("state") == "open"]
         save(d)
     finally:
         _unlock(h)
@@ -1200,6 +1391,7 @@ def work(ask=ask_worker, now=None):
         job.update(ended=end.strftime("%Y-%m-%d %H:%M"), now="")
         if job["state"] == "done" and it.get("state") == "open":
             it.update(state="dealt", dealt_at=end.strftime("%Y-%m-%d %H:%M"), dealt_by="claude")
+        _end_group(d, it, end)
         who = str(it.get("from") or "")
         if job["state"] == "done":
             alert = ("Done: " + who, job.get("summary") or "Claude dealt with it.")
@@ -1294,10 +1486,12 @@ def yes_end(d, sid, n, ok, said, now=None, outlook=None):
     again = not ok and a.get("kind") == "route"
     a.update(state="open" if again else "done" if ok else "failed", said=str(said)[:300],
              at=now.strftime("%Y-%m-%d %H:%M"))
-    if ok and a.get("kind") == "send" and a.get("thread") and it.get("state") == "open" and outlook is not None:
-        said += file_answered(outlook, d, sid, now, by="him", kind="inbox_assist_sent")
-        it.update(state="answered", sent_at=now.strftime("%Y-%m-%d %H:%M"))
-    _settle(it, now)
+    tid = a.get("email") or sid                          # a reply held on one of the card's other emails
+    t = d["items"].get(tid) or it
+    if ok and a.get("kind") == "send" and a.get("thread") and t.get("state") == "open" and outlook is not None:
+        said += file_answered(outlook, d, t["id"], now, by="him", kind="inbox_assist_sent")
+        t.update(state="answered", sent_at=now.strftime("%Y-%m-%d %H:%M"))
+    _settle(it, now, d)
     return said
 
 
@@ -1310,7 +1504,7 @@ def no(d, sid, n, now=None):
         raise RuntimeError("that isn't waiting for you any more")
     asks[n].update(state="declined", at=now.strftime("%Y-%m-%d %H:%M"),
                    said="Left undone." + (" The draft is still in Drafts." if asks[n].get("kind") == "send" else ""))
-    _settle(it, now)
+    _settle(it, now, d)
     return asks[n]["said"]
 
 
@@ -1338,7 +1532,7 @@ def panel(d=None, now=None):
     d = d or load()
     now = now or datetime.now()
     holidays = set(d.get("holidays") or ())
-    needs, would, filed, pending, jobs = [], [], [], 0, []
+    needs, would, filed, pending, jobs, todo = [], [], [], 0, [], []
     today = now.strftime("%Y-%m-%d")
     for it in d["items"].values():
         if it["state"] == "filed" and it.get("filed_at", "") >= today:
@@ -1364,11 +1558,15 @@ def panel(d=None, now=None):
         elif kind == "file" and not it.get("kept"):
             would.append({k: it.get(k) for k in ("id", "from", "subject", "received", "dest", "why")})
             continue
+        elif kind == "todo":
+            todo.append(dict({k: it.get(k) for k in ("id", "from", "subject", "received", "orders")},
+                             what=it.get("todo_what") or "", back=it.get("was") in ("needs", "pending")))
+            continue
         else:
             continue
         mins = _mins(it, now, holidays)
-        live = _job_live(it)
-        needs.append({"id": it["id"], "from": it["from"], "subject": it["subject"],
+        live = _job_live(it) or _covered(d, it)
+        needs.append({"id": it["id"], "from": it["from"], "subject": it["subject"], "at": it["received"],
                       "received": it["received"][8:10] + "/" + it["received"][5:7] + " " + it["received"][11:16],
                       "urgency": urgency, "ask": ask, "by_when": it.get("by_when", ""), "action": action,
                       "why": why, "by": by, "unread": it.get("unread"), "orders": it.get("orders") or [],
@@ -1384,7 +1582,9 @@ def panel(d=None, now=None):
                       "auto": ({k: (it.get("auto") or {}).get(k) for k in ("state", "why", "said", "checked_at")}
                                if (it.get("auto") or {}).get("state") else None)})
     rank = {u: i for i, u in enumerate(URGENCY)}
-    needs.sort(key=lambda x: (rank.get(x["urgency"], 3), -x["mins"]))
+    cards = _cards(needs, rank)                           # one card per order (his 26/11)
+    needs = [x for xs in cards[:30] for x in xs]
+    todo.sort(key=lambda x: x.get("received") or "", reverse=True)
     would.sort(key=lambda x: x.get("received") or "", reverse=True)
     filed.sort(key=lambda x: x.get("received") or "", reverse=True)
     jobs.sort(key=lambda x: (x["job"] or {}).get("asked_at") or "", reverse=True)
@@ -1396,9 +1596,11 @@ def panel(d=None, now=None):
     auto = {"mode": d.get("auto", "shadow"), "sent": sent[:30],
             "ready": sum(1 for x in needs if (x.get("auto") or {}).get("state") == "ready"),
             "unchecked": sum(1 for x in needs if (x.get("auto") or {}).get("state") == "unchecked")}
-    return {"mode": d["mode"], "at": d.get("at", ""), "claude": d.get("claude") or {}, "needs": needs[:30],
+    leads = [xs[0] for xs in cards[:30]]
+    return {"mode": d["mode"], "at": d.get("at", ""), "claude": d.get("claude") or {}, "needs": needs,
+            "cards": len(leads), "todo": todo[:40],
             "would_file": would[:40], "filed": filed[:40], "pending": pending, "jobs": jobs[:20], "auto": auto,
-            "alarms": sum(1 for x in needs if x["alarm"]), "now": sum(1 for x in needs if x["urgency"] == "now")}
+            "alarms": sum(1 for x in leads if x["alarm"]), "now": sum(1 for x in leads if x["urgency"] == "now")}
 
 
 # ---------- commands ----------
@@ -1478,12 +1680,15 @@ def main(argv):
         print(f"mode {p['mode']} | auto-answers {p['auto']['mode']} | read {p['at']} | Claude {p['claude']} | "
               f"{p['pending']} waiting for Claude")
         for x in p["needs"]:
-            print(f"  NEEDS {x['urgency']:5} {'BELL' if x['alarm'] else '    '} {x['from'][:24]:24} | {x['ask'][:90]}"
-                  f" | {x['action'].get('type')} | {x['by']}")
+            print(f"  {'NEEDS' if x.get('lead', True) else '  +  '} {x['urgency']:5} {'BELL' if x['alarm'] else '    '} "
+                  f"{x['from'][:24]:24} | {x['ask'][:90]} | {x['action'].get('type')} | {x['by']}"
+                  + (f" | card of {x['group_n']} about {x['about']}" if x.get("group_n", 1) > 1 else ""))
             if x.get("auto"):
                 print(f"        AUTO {x['auto']['state']}: {x['auto'].get('why') or x['auto'].get('said') or ''}")
         for x in p["auto"]["sent"]:
             print(f"  ANSWERED {x['at'][11:]} {x['from'][:24]:24} | {x['subject'][:60]}")
+        for x in p["todo"]:
+            print(f"  TO-DO {x['from'][:24]:24} | {x['subject'][:60]} | {x['what'][:60]}")
         for x in p["would_file"]:
             print(f"  FILE? {str(x['dest'])[:28]:28} {x['from'][:24]:24} | {x['subject'][:60]} | {x['why']}")
         for x in p["filed"]:
@@ -1497,7 +1702,7 @@ def main(argv):
         p = panel(d)
         if p["mode"] == "off":
             return _say(True, "The inbox assistant is off.")
-        return _say(True, f"{len(p['needs'])} need you ({p['now']} now), {len(p['would_file'])} to file, "
+        return _say(True, f"{p['cards']} need you ({p['now']} now), {len(p['would_file'])} to file, "
                           f"{n['filed']} filed, {p['pending']} waiting for Claude."
                           + (f" {n['answered']} answered by itself." if n.get("answered") else ""))
     if cmd == "judge":
@@ -1577,15 +1782,17 @@ def main(argv):
             text, note = _flag(argv, "--text"), _flag(argv, "--note")
         except Exception as e:
             return _say(False, f"What you typed couldn't be read ({e}) - nothing done.")
-        it = load()["items"].get(arg)
+        d0 = load()
+        it = d0["items"].get(arg)
         if it is None:
             return _say(False, "That email isn't on the list any more - nothing done.")
+        group = "--group" in argv and bool(group_members(d0, arg))     # the card's Deal with it: Claude takes them all
         try:
-            if deal_plan(it)["kind"] in ("send", "file") and not str(note or "").strip():
+            if not group and deal_plan(it)["kind"] in ("send", "file") and not str(note or "").strip():
                 with _outlook_turn():                         # Outlook's turn first, then the list (as the gate's jobs)
                     out, _ = _with_item(arg, lambda d, it: deal(d, arg, text, note))
             else:
-                out, _ = _with_item(arg, lambda d, it: deal(d, arg, text, note))
+                out, _ = _with_item(arg, lambda d, it: deal(d, arg, text, note, group=group))
         except Exception as e:
             return _say(False, f"Not done: {e}")
         return _say(out is not None, out or "That email isn't on the list any more - nothing done.")
@@ -1634,21 +1841,39 @@ def main(argv):
             return _say(False, f"It couldn't be put back ({e}).")
         return _say(out is not None, "Back in the Inbox, and it stays there." if out else "That email isn't known.")
     if cmd in ("keep", "dealt"):
+        many = cmd == "dealt" and "--group" in argv
+
         def mark(d, it):
             if cmd == "keep":
                 it.update(kept=True, kind="quiet", why="you said keep it - never filed by the assistant")
-            else:
-                it.update(state="dealt", dealt_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
-                job = it.get("job") or {}
+                return 1
+            now = datetime.now()
+            ids = [it["id"]] + (group_members(d, it["id"], now) if many else [])
+            for sid in ids:
+                x = d["items"][sid]
+                x.update(state="dealt", dealt_at=now.strftime("%Y-%m-%d %H:%M"))
+                job = x.get("job") or {}
                 for a in job.get("asks") or []:           # what Claude held for his yes is moot now (drafts stay)
                     if a.get("state") == "open":
                         a.update(state="declined", said="You said it's dealt with.")
                 if job.get("state") in ("queued", "needs_you"):
                     job["state"] = "done" if job.get("state") == "needs_you" else "dropped"
-            return True
+                _end_group(d, x, now)
+            return len(ids)
         out, _ = _with_item(arg, mark)
-        return _say(bool(out), ("Kept in the Inbox." if cmd == "keep" else "Taken off - dealt with.") if out
-                    else "That email isn't on the list any more.")
+        if not out:
+            return _say(False, "That email isn't on the list any more.")
+        return _say(True, "Kept in the Inbox." if cmd == "keep" else "Taken off - dealt with." if out == 1
+                    else f"All {out} emails about it taken off - dealt with.")
+    if cmd == "list":
+        def back(d, it):
+            if it.get("kind") != "todo" or it.get("was") not in ("needs", "pending"):
+                return False
+            it.update(kind=it.pop("was"), listed=True)    # the to-do never takes it off his list again
+            return True
+        out, _ = _with_item(arg, back)
+        return _say(bool(out), "Back on your list - it stays there." if out
+                    else "That one can't go back on the list (it isn't on the CTMS to-do).")
     print(__doc__)
     return 2
 

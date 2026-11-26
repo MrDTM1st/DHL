@@ -10,7 +10,7 @@ export function emailSummary(panel) {
   let now = 0;
   let hot = false;
   if (on) {
-    const needs = a.needs || [];
+    const needs = (a.needs || []).filter((i) => i.lead !== false);   // one card per order (26/11): count cards
     n = needs.length;
     now = needs.filter((i) => i.urgency === 'now').length;
     hot = needs.some((i) => i.urgency === 'now' || i.alarm);

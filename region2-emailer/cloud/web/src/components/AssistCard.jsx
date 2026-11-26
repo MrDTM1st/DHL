@@ -13,6 +13,8 @@ import PushToggle from './PushToggle.jsx';
 // Auto-answers (25/11, his pick "Auto-answers"): an email whose only question Book has answered - booked? when? who?
 // the ref? - gets his own booking email back by itself once CTMS confirms the manifest (live), or shows the answer it
 // would send (shadow). Its own Off / Shadow / Live, and "Answered for you today" with what went.
+// His 26/11 "Yes, build both": emails about the same order are ONE card - Dealt with takes them all off, Deal with it
+// gives Claude the lot - and a site's reply already on the CTMS to-do waits there, not here ("On the CTMS to-do").
 
 const URG = { now: ['Now', 'urgent'], today: ['Today', 'high'], week: ['This week', 'normal'] };
 const ACT = { reply: 'Reply', forward: 'Forward', ctms: 'In CTMS', call: 'Call', upload: 'Upload', file: 'File',
@@ -32,9 +34,11 @@ function jobLine(j) {
   return (JOB[j.state] || j.state) + (j.summary ? ': ' + j.summary : '');
 }
 
-function Item({ i, onDealt, onOpen, autoMode }) {
+function Item({ i, onDealt, onDealtOne, onOpen, autoMode }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [more, setMore] = useState(false);
+  const others = i.others || [];
   const a = i.action || {};
   const j = i.job;
   const auto = autoLine(i.auto, autoMode);
@@ -60,6 +64,24 @@ function Item({ i, onDealt, onOpen, autoMode }) {
           </div>
         ) : null}
         {auto && <div className={'assist-auto ' + auto.cls}>{auto.text}</div>}
+        {others.length > 0 && (
+          <div className="assist-more">
+            <button className="btn mini" onClick={() => setMore((m) => !m)}>
+              {more ? 'Hide' : `+${others.length} more about ${i.about || 'this order'}`}</button>
+            {!more && <span className="assist-more-who">{others.map((o) => o.from).join(' · ')}</span>}
+          </div>
+        )}
+        {more && others.map((o) => (
+          <div className="assist-other" key={o.id}>
+            <div>
+              <span className={'inbox-pri ' + (URG[o.urgency] || URG.week)[1]}>{(URG[o.urgency] || URG.week)[0]}</span>
+              <b>{o.from}</b> · came {o.received}
+            </div>
+            <div className="assist-other-ask">{o.ask}</div>
+            <button className="btn mini" onClick={() => onDealtOne(o)}
+              title="Just this one - the rest of the card stays">Dealt with</button>
+          </div>
+        ))}
         {j && <div className={'assist-job ' + j.state}>{jobLine(j)}</div>}
         {show && a.text && <div className="assist-reply">{a.text}</div>}
       </div>
@@ -70,12 +92,13 @@ function Item({ i, onDealt, onOpen, autoMode }) {
         )}
         {a.text && show && <button className="btn mini" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>}
         <button className="btn mini" onClick={() => onDealt(i)}
-          title="Answered or done another way - it stays off unless they write again">Dealt with</button>
+          title="Answered or done another way - it stays off unless they write again">
+          {others.length ? `Dealt with all ${others.length + 1}` : 'Dealt with'}</button>
         {/* his 24/11: "one button that just says either dealt with or deal with it" - it opens the email with what it
             will do said first, and the job as it goes */}
         <button className={'btn mini ' + (j && j.state === 'needs_you' ? 'red' : 'go')} onClick={() => onOpen(i.id)}>
           {j && j.state === 'needs_you' ? 'Your yes' : j && (j.state === 'working' || j.state === 'queued')
-            ? 'Watch' : 'Deal with it'}</button>
+            ? 'Watch' : others.length ? `Deal with all ${others.length + 1}` : 'Deal with it'}</button>
       </div>
     </div>
   );
@@ -88,6 +111,7 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
   const [openFile, setOpenFile] = useState(false);
   const [openJobs, setOpenJobs] = useState(false);
   const [openSent, setOpenSent] = useState(false);
+  const [openTodo, setOpenTodo] = useState(false);
   if (!data || !data.mode) return null;
   const mode = data.mode;
   const auto = data.auto || { mode: 'shadow', sent: [] };
@@ -125,13 +149,25 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
       </div>
     );
   }
-  const needs = (data.needs || []).filter((i) => !gone[i.id]);
+  const all = (data.needs || []).filter((i) => !gone[i.id]);
+  // one card per order (26/11): the lead of each card carries the others
+  const needs = all.filter((i) => i.lead !== false)
+    .map((i) => ({ ...i, others: (i.others || []).filter((o) => !gone[o.id]) }));
+  const todo = (data.todo || []).filter((i) => !gone[i.id]);
   const pressing = needs.filter((i) => i.urgency !== 'week' || i.alarm);
   const shown = full || allNeeds ? needs : pressing.length ? pressing : needs.slice(0, 3);
   const claude = data.claude || {};
   const filing = mode === 'live' ? (data.filed || []) : (data.would_file || []);
   const files = filing.filter((i) => !gone[i.id]);
-  const dealt = (i) => { send('assist_dealt', { id: i.id }); hide(i.id); };
+  const dealtOne = (i) => { send('assist_dealt', { id: i.id }); hide(i.id); };
+  const dealt = (i) => {
+    const others = i.others || [];
+    if (!others.length) { dealtOne(i); return; }
+    if (!window.confirm(`Take all ${others.length + 1} emails about ${i.about || 'this order'} off - dealt with?`)) return;
+    send('assist_dealt', { id: i.id, group: true });
+    hide(i.id);
+    others.forEach((o) => hide(o.id));
+  };
   const open = (id) => onOpen && onOpen(id);
   const jobs = data.jobs || [];
   const fileAll = () => {
@@ -144,7 +180,8 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
   return (
     <div className={'card noaddress inbox-card' + (needs.some((i) => i.alarm) ? '' : ' calm')}>
       <div className="noaddress-head">
-        <h3>{needs.length ? `${needs.length} email${needs.length === 1 ? '' : 's'} need${needs.length === 1 ? 's' : ''} you`
+        <h3>{needs.length ? `${needs.length} need${needs.length === 1 ? 's' : ''} you`
+          + (all.length > needs.length ? ` (${all.length} emails)` : '')
           + (data.now ? ` · ${data.now} now` : '') : 'Nothing in the Inbox needs you'}</h3>
         <span className="noaddress-why">
           Read {data.at || 'not yet'}{data.pending ? ` · Claude still to read ${data.pending}` : ''}. {modes}
@@ -169,9 +206,37 @@ export default function AssistCard({ data, onCommand, push, onOpen, full }) {
           <div className="noaddress-row assist-group" key={'g' + u}>
             <div className="noaddress-what"><div className="noaddress-order">{URG[u][0]} · {group.length}</div></div>
           </div>,
-          ...group.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} autoMode={auto.mode} />),
+          ...group.map((i) => <Item key={i.id} i={i} onDealt={dealt} onDealtOne={dealtOne} onOpen={open}
+            autoMode={auto.mode} />),
         ] : null;
-      }) : shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onOpen={open} autoMode={auto.mode} />)}
+      }) : shown.map((i) => <Item key={i.id} i={i} onDealt={dealt} onDealtOne={dealtOne} onOpen={open}
+        autoMode={auto.mode} />)}
+      {todo.length > 0 && (
+        <div className="noaddress-row">
+          <div className="noaddress-what">
+            <div className="noaddress-order">On the CTMS to-do: {todo.length}</div>
+            <div className="noaddress-said">
+              Site replies whose details the Run puts in CTMS - each filed once its update is in.
+            </div>
+          </div>
+          <div className="noaddress-fix">
+            <button className="btn mini" onClick={() => setOpenTodo((o) => !o)}>{openTodo ? 'Hide' : 'Show'}</button>
+          </div>
+        </div>
+      )}
+      {openTodo && todo.map((x) => (
+        <div className="noaddress-row assist-file" key={'t' + x.id}>
+          <div className="noaddress-what">
+            <div className="noaddress-said"><b>{x.from}</b> · {x.subject} · {x.what}</div>
+          </div>
+          <div className="noaddress-fix">
+            {x.back && (
+              <button className="btn mini" onClick={() => { send('assist_list', { id: x.id }); hide(x.id); }}
+                title="Back on your list - the to-do never takes it off again">Keep on my list</button>
+            )}
+          </div>
+        </div>
+      ))}
       {!full && needs.length > shown.length && (
         <div className="noaddress-row">
           <button className="btn mini" onClick={() => setAllNeeds(true)}>Show all {needs.length}</button>

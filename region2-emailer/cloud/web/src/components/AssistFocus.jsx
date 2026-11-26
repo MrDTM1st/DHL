@@ -63,7 +63,13 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
   const item = needs.find((x) => x.id === id) || null;
   const gone = !item && ((assist && assist.jobs) || []).find((x) => x.id === id);
   const a = (item && item.action) || {};
-  const plan = (item && item.deal) || { kind: 'claude', says: '' };
+  // a card of several emails about one order (26/11): Claude takes the lot, each answered on its own thread
+  const others = (item && item.lead && item.others) || [];
+  const plan = others.length ? {
+    kind: 'claude',
+    says: `Claude takes on all ${others.length + 1} emails about ${item.about || 'this order'} with your toolkit - `
+      + 'each answered on its own thread. Money, cancelling and anyone new to email come back to you as a Yes.',
+  } : (item && item.deal) || { kind: 'claude', says: '' };
   const job = (item && item.job) || (gone && gone.job) || null;
   const auto = autoLine(item && item.auto, assist && assist.auto && assist.auto.mode);
   const [text, setText] = useState(a.text || '');
@@ -95,10 +101,16 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
     send('assist_deal', {
       ...(edited ? { text } : {}),
       ...(n ? { note: n } : {}),
+      ...(others.length ? { group: true } : {}),
       ctms: plan.kind === 'claude' || !!n,          // the background Claude may need CTMS: Look mum on for it
     }, 'deal');
   };
-  const dealt = () => { send('assist_dealt', {}, 'dealt'); setTimeout(onClose, 600); };
+  const dealt = () => {
+    if (others.length && !window.confirm(`Take all ${others.length + 1} emails about ${item.about || 'this order'} `
+      + 'off - dealt with?')) return;
+    send('assist_dealt', others.length ? { group: true } : {}, 'dealt');
+    setTimeout(onClose, 600);
+  };
   const yes = (x) => send('assist_yes', { n: x.n, ctms: x.kind === 'route' }, 'yes' + x.n);
   const no = (x) => send('assist_no', { n: x.n }, 'no' + x.n);
 
@@ -143,6 +155,14 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
             item.by === 'words' ? 'not read by Claude yet' : ''].filter(Boolean).join(' · ')}
         </div>
         {item.why && <div className="af-why">{item.why}</div>}
+        {others.length > 0 && (
+          <div className="af-others">
+            <b>Also about {item.about || 'this order'} ({others.length})</b>
+            {others.map((o) => (
+              <div className="af-other" key={o.id}>{o.from} · came {o.received}<span>{o.ask}</span></div>
+            ))}
+          </div>
+        )}
         {auto && <div className={'assist-auto ' + auto.cls}>{auto.text}</div>}
         {a.note && !(auto && auto.cls !== 'held') && <div className="af-why"><b>To do:</b> {a.note}</div>}
         {job && <Job job={job} onYes={yes} onNo={no} busy={busy} />}
@@ -170,7 +190,7 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
         <div className="af-btns">
           <button className="btn" disabled={!!busy} onClick={dealt}
             title="Done another way (a call, Teams) - it stays off unless they write again">
-            {busy === 'dealt' ? 'Taking it off…' : 'Dealt with'}</button>
+            {busy === 'dealt' ? 'Taking it off…' : others.length ? `Dealt with all ${others.length + 1}` : 'Dealt with'}</button>
           {live ? (
             <button className="btn red" disabled>{STATE[job.state]}…</button>
           ) : waiting ? (
@@ -178,7 +198,8 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
           ) : (
             <button className="btn red" disabled={!!busy || (plan.kind === 'send' && !text.trim() && !note.trim())}
               onClick={deal}>
-              {busy === 'deal' ? 'On it…' : again ? 'Deal with it again' : 'Deal with it'}</button>
+              {busy === 'deal' ? 'On it…' : again ? 'Deal with it again'
+                : others.length ? `Deal with all ${others.length + 1}` : 'Deal with it'}</button>
           )}
         </div>
       </>
