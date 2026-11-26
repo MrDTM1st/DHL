@@ -154,7 +154,7 @@ class FakeCtms:
             els.append({"r": "label", "nm": f"Level 0 05/11/26 08:00 {man}  ({status})", "lv": 2, "at": [53, 228 + 23 * n, 284, 23],
                         "st": ["selected"] if man == self.selected else None})
         for i, r in enumerate(self.rows_shown()):
-            for col in ("cust_ref", "booking_ref", "deliver", "del_type", "weight", "to_reg"):
+            for col in ("cust_ref", "booking_ref", "deliver", "del_type", "weight", "to_reg") + (("collect",) if "collect" in r else ()):
                 els.append(dict(_cell(col, i, r.get(col, "")), lv=2))
         if "Planning" in skip:                  # a card's read: Planning named, nothing inside it
             els = els[:1]
@@ -1398,6 +1398,27 @@ def test_a_night_delivery_sits_on_the_next_days_schedule():
     assert B.sched_for_delivery("30/11/26 20:00") == "261201"
     assert B.sched_for_delivery("") is None
     assert B.sched_for_day("05/11/2026") == "261105"
+
+
+def test_a_collection_more_than_a_day_before_its_delivery_stops_before_anything_is_made():
+    # 12/11 and 24/11: CTMS won't plan one trip over a weekend - it puts the drop on the collection evening. Since 26/11
+    # Book OKs its "Missed delivery window", so a collection days before the drop must stop before the trip is made
+    ctms = FakeCtms([dict(_row("9100001-1-1", deliver="06/11/26 08:30"), collect="03/11/26 09:00")])
+    job = _job(ctms)
+    try:
+        job.book(["9100001"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)
+        raise AssertionError("booked")
+    except B.Stop as e:
+        assert "waits more than a day" in str(e) and "Nothing was booked" in str(e)
+    assert job.trips == [] and ctms.next_man == 1000100 and ctms.saves == []
+
+
+def test_a_collection_the_day_before_still_books():
+    ctms = FakeCtms([dict(_row("9100001-1-1"), collect="05/11/26 16:00")])
+    assert _book(ctms).trips[0]["status"] == "ACCEPTED"
+    assert B.wait_days("27/11/26 09:00", "30/11/26 09:00") == 3
+    assert B.wait_days("28/11/26 18:00 - 28/11/26 22:00", "29/11/26 01:00") == 1
+    assert B.wait_days("", "30/11/26 09:00") is None and B.wait_days("27/11/26", None) is None
 
 
 if __name__ == "__main__":

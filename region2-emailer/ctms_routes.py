@@ -503,6 +503,34 @@ def base_ref(ref):
     return m.group(1) if m else str(ref).strip()
 
 
+GONE = ("CANCELLED", "ABORTED")      # a line CTMS has finished with: never changed (his 24/11)
+
+
+def pick_line(rows, ref, gone=False):
+    """Order Summary's row for `ref`. A Customer Ref can be on two lines - a CANCELLED one and the live one (a line on
+    26/11: the cancelled one was listed first, and it was the one updated): the live line, unless `gone` (a restore wants
+    the cancelled one). None when no row has that ref."""
+    want = str(ref).strip().lower()
+    exact = [r for r in rows if str(r.get("ref") or "").strip().lower() == want]
+    done = [r for r in exact if str(r.get("status") or "").strip().upper() in GONE]
+    live = [r for r in exact if r not in done]
+    order = done + live if gone else live + done
+    return order[0] if order else None
+
+
+# his 26/11: "we don't do 75% cancellations ... we don't mention the price [in] special instructions either. We don't
+# mention the price of the nonconformance either" - a 23/11 comment carried a haulier's 75% and its price, and he
+# was told off for it
+PRICE = re.compile(r"£|\bGBP\b|\bpounds?\b|\d\s*%|\bper ?cent\b", re.I)
+
+
+def no_price(text, what):
+    """A comment, note or non-conformance going into CTMS never carries a price, a charge or a percentage."""
+    if PRICE.search(str(text or "")):
+        raise Fail(f"no prices, charges or percentages in {what} (his 26/11 rule: we don't mention the price) - say it "
+                   "without them")
+
+
 def _row_text(r):
     return (f"{r.get('ref', ''):18} {r.get('status', ''):13} sched {r.get('sched', ''):7} {r.get('type', ''):10} "
             f"ready {r.get('ready', ''):15} deliver by {r.get('deliver_by', '')}")
@@ -512,16 +540,20 @@ def details_frame(s):
     return next((f for f in s.frames() if clean(f.get("nm")).startswith("Order details for")), None)
 
 
-def open_order(ref, modify_scheduled=False):
+def open_order(ref, modify_scheduled=False, gone_ok=False):
     """The order's own window from Order Summary: its row found by its exact Cust Ref, its Status cell double-clicked
     (his tip: the most reliable cell). A scheduled order asks "already scheduled on a trip ... modify it?": without
-    modify_scheduled that is answered Cancel and the route stops - nothing opened, nothing changed."""
+    modify_scheduled that is answered Cancel and the route stops - nothing opened, nothing changed. A ref on two lines
+    opens the live one (pick_line); a CANCELLED or ABORTED line is never opened unless gone_ok (the routes that only
+    read)."""
     rows, s = order_search(ref)
-    exact = [r for r in rows if r["ref"].lower() == str(ref).strip().lower()]
-    if not exact:
+    row = pick_line(rows, ref)
+    if row is None:
         lines = ", ".join(r["ref"] for r in rows) or "none"
         raise Fail(f"no line {ref} in Order Summary (lines found: {lines})")
-    row = exact[0]
+    if str(row.get("status") or "").strip().upper() in GONE and not gone_ok:
+        raise Fail(f"{ref} is {row.get('status')} in CTMS - left alone, nothing opened (his rule: a cancelled or aborted "
+                   "line is never touched)")
     card = s.frame("Order Search")
     steps = []
     if card is not None:                                  # it floats over the order's tabs once that opens: shut it first
@@ -1644,6 +1676,7 @@ def run_item(item, commit):
 @route("order-note", "add a note to the end of a line's Special Instructions, e.g. \" - Emailed DO 24/11\" "
                      "(dry run unless --commit)")
 def r_order_note(a):
+    no_price(a.note, "Special Instructions")
     note = a.note if a.note.startswith((" - ", "- ")) else " - " + a.note.strip()
     if note.startswith("- "):
         note = " " + note
@@ -1695,6 +1728,7 @@ def r_order_update(a):
     if a.deliver:
         s["deliver"] = a.deliver
     if a.comments:
+        no_price(a.comments, "a CTMS comment")
         s["comments"] = a.comments.replace(",", "")          # CTMS's own rule on these: no commas
     if a.veh:
         s["veh"] = a.veh
@@ -1882,6 +1916,7 @@ def r_trip_resend(a):
 def r_order_nc(a):
     if "," in a.comment:
         raise Fail("no commas in a CTMS comment (his rule) - say it without them")
+    no_price(a.comment, "a non-conformance comment")
     if len(a.comment) > 250:
         raise Fail(f"the comment is {len(a.comment)} characters - CTMS cuts it silently at about 255")
     close_orders()
@@ -1938,7 +1973,7 @@ def r_order_split(a):
         raise Fail("a split is into 2 or more parts")
     exit_split()                                          # one left from before
     rows, s = order_search(a.ref)
-    row = next((r for r in rows if r["ref"].upper() == a.ref.upper()), None)
+    row = pick_line(rows, a.ref)                          # a ref on two lines: the live one (26/11)
     if row is None:
         raise Fail(f"no line {a.ref} in Order Summary (lines: {', '.join(r['ref'] for r in rows) or 'none'})")
     if row["status"] != "UNSCHEDULED":
@@ -2256,7 +2291,7 @@ def r_order_item(a):
                        "read each time (the button toggles); answered Cancel unless --commit")
 def r_order_cancel(a):
     rows, s = order_search(a.ref)
-    row = next((r for r in rows if r["ref"].upper() == a.ref.upper()), None)
+    row = pick_line(rows, a.ref, gone=a.restore)          # a ref on two lines: the live one, or the cancelled one to restore
     if row is None:
         raise Fail(f"no line {a.ref} in Order Summary (lines: {', '.join(r['ref'] for r in rows) or 'none'})")
     was = row["status"]
@@ -2271,7 +2306,9 @@ def r_order_cancel(a):
         act([click(s.one("the search card's Close", role="push button", name="Close", within=card), after=0.8)],
             "close the card")
         s = read()
-        row = next(r for r in summary_rows(s) if r["ref"].upper() == a.ref.upper())
+        row = pick_line(summary_rows(s), a.ref, gone=a.restore)
+        if row is None:
+            raise Fail(f"{a.ref} wasn't in Order Summary once its search card closed - nothing pressed")
     summ = s.frame("Order Summary")
     btn = s.one("Cancel/Restore", role="push button", name="Cancel/Restore", within=summ)
     clear_to(row["cells"]["ref"], s, f"{a.ref}'s row")
@@ -2311,7 +2348,7 @@ def r_order_copy(a):
     (d1, d2) = window_ends(a.deliver, "--deliver")
     exit_box(COPY_BOX)                                    # one left from before
     rows, s = order_search(a.ref)
-    row = next((r for r in rows if r["ref"].upper() == a.ref.upper()), None)
+    row = pick_line(rows, a.ref)                          # a ref on two lines: the live one (26/11)
     if row is None:
         raise Fail(f"no line {a.ref} in Order Summary (lines: {', '.join(r['ref'] for r in rows) or 'none'})")
     before = {r["ref"] for r in rows}
@@ -2683,7 +2720,7 @@ def r_order_close(a):
 @route("order-read", "open an order by its line ref, read it all back (Detail, header), close it again - changes nothing")
 def r_order_read(a):
     close_orders()
-    f, s, row = open_order(a.ref, modify_scheduled=a.modify)
+    f, s, row = open_order(a.ref, modify_scheduled=a.modify, gone_ok=True)
     d = read_detail(s, f)
     print_detail(d)
     words = list(TABS) if a.all else [w.strip() for w in (a.tabs or "").split(",") if w.strip()]
@@ -2708,7 +2745,7 @@ def r_order_find(a):
 
 @route("order-open", "open an order's own window by its line ref (e.g. 1234567-1-1) and read it back")
 def r_order_open(a):
-    f, s, row = open_order(a.ref, modify_scheduled=a.modify)
+    f, s, row = open_order(a.ref, modify_scheduled=a.modify, gone_ok=True)
     print(f"Open: {clean(f.get('nm'))} ({row.get('status')})")
     return {"window": clean(f.get("nm")), "line": {k: v for k, v in row.items() if k != "cells"}}
 
@@ -2867,7 +2904,7 @@ def _args(name):
         p.add_argument("ref", help="the line, e.g. 1234567-1-1_S1")
         p.add_argument("--reason", required=True, help="the Reason Code exactly as CTMS spells it")
         p.add_argument("--activity", default="Load", help="the Activity (Load unless he says otherwise)")
-        p.add_argument("--comment", required=True, help="no commas, under 250 characters")
+        p.add_argument("--comment", required=True, help="no commas, no prices, under 250 characters")
         p.add_argument("--modify", action="store_true", help="the line is scheduled: open it anyway (CTMS asks)")
         p.add_argument("--commit", action="store_true", help="add it (his go-ahead for this one)")
     elif name == "order-note":

@@ -295,3 +295,60 @@ def test_every_route_has_its_arguments():
     for name in C.ROUTES:
         assert C._args(name).prog.endswith(name)
     assert C.main(["list"]) == 0
+
+
+def _never(*a, **k):
+    raise AssertionError("CTMS was touched")
+
+
+def test_a_ref_on_two_lines_picks_the_live_one_never_the_cancelled_one():
+    # 26/11: a line's cancelled twin was listed first in Order Summary, and it was the one updated
+    rows = [{"ref": "9100001-1-1", "status": "CANCELLED"}, {"ref": "9100001-1-1", "status": "UNSCHEDULED"},
+            {"ref": "9100001-2-1", "status": "UNSCHEDULED"}]
+    assert C.pick_line(rows, "9100001-1-1") is rows[1]
+    assert C.pick_line(rows, "9100001-1-1", gone=True) is rows[0]          # a restore wants the cancelled one
+    assert C.pick_line(rows[:1], "9100001-1-1") is rows[0]                 # only a cancelled one: open_order refuses it
+    assert C.pick_line(rows, "9100009-1-1") is None
+
+
+def test_no_route_opens_a_cancelled_or_aborted_line(monkeypatch):
+    monkeypatch.setattr(C, "act", _never)
+    for status in ("CANCELLED", "ABORTED"):
+        monkeypatch.setattr(C, "order_search", lambda ref, s=None, st=status: ([{"ref": ref, "status": st, "cells": {}}], None))
+        try:
+            C.open_order("9100001-1-1", modify_scheduled=True)
+            raise AssertionError("opened")
+        except C.Fail as e:
+            assert "left alone, nothing opened" in str(e) and status in str(e)
+
+
+def test_no_price_charge_or_percentage_goes_into_ctms():
+    # his 26/11: "we don't do 75% cancellations ... we don't mention the price" (a 23/11 comment carried both)
+    for bad in ("Haulier charge 75% = £123.45 per load", "charge 75 % agreed", "cost 500 GBP", "500 pounds", "ten per cent"):
+        try:
+            C.no_price(bad, "a non-conformance comment")
+            raise AssertionError(bad)
+        except C.Fail as e:
+            assert "no prices" in str(e)
+    for fine in ("Site postponed to 10/02/2027 (access issues - J Bloggs 20/11). Re-ordered for 10/02/2027.",
+                 "30/11/26 12:00-14:00 - Sam 07700900000 - HIAB required - W3W ///index.home.raft",
+                 "Cancelled 23/11: site postponed (J Bloggs)", "No cancellation charges"):
+        C.no_price(fine, "a comment")
+
+
+def test_the_comment_routes_refuse_a_price_before_ctms_is_touched(monkeypatch):
+    import argparse
+    monkeypatch.setattr(C, "run_item", _never)
+    monkeypatch.setattr(C, "close_orders", _never)
+    update = argparse.Namespace(refs=["9100001-1-1"], collect=None, deliver=None, comments="Haulier charge 75% per load",
+                                veh=None, service=None, no_service=None, storage=None, anyway=False, same_day=False,
+                                commit=True)
+    note = argparse.Namespace(ref="9100001-1-1", note="Cancelled 23/11 - charge £123.45", modify=False, commit=True)
+    nc = argparse.Namespace(ref="9100001-1-1", comment="Site postponed. Haulier charge 75% = £123.45 per load",
+                            reason="SUPP", activity="Load", modify=False, commit=True)
+    for fn, a in ((C.r_order_update, update), (C.r_order_note, note), (C.r_order_nc, nc)):
+        try:
+            fn(a)
+            raise AssertionError(fn.__name__)
+        except C.Fail as e:
+            assert "no prices" in str(e)

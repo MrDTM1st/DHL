@@ -756,3 +756,18 @@ def test_dealt_with_drops_what_claude_held(monkeypatch, tmp_path):
     assert [a["state"] for a in d["items"]["h1"]["job"]["asks"]] == ["declined", "done"]
     assert d["items"]["h1"]["job"]["state"] == "done" and d["items"]["q1"]["job"]["state"] == "dropped"
     assert A.work(ask=lambda *a: (True, {}), now=NOW) == (None, "nothing queued")   # a dropped job never runs
+
+
+def test_his_signatures_own_dash_never_stops_a_reply(monkeypatch, tmp_path):
+    # 26/11: the DHL signature's "Tell us how we did" line has an en dash, and every one-tap reply was refused
+    ours = "me@example.com"
+    mine = "Hi Sam,\nYes.\nKind regards\nPat Planner\nOut of Hours\n0000\nTell us how we did – feedback please\n"
+    assert A.reply_checks(mine, ["sam@example.net"], ours, body="Hi Sam,\nYes.") == []
+    for dash in ("—", "–"):
+        assert "an em dash crept in" in A.reply_checks(mine, ["sam@example.net"], ours, body=f"Hi Sam,\nYes {dash} fine.")
+    monkeypatch.setattr(A, "LOG", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(A, "SEEN", str(tmp_path / "seen.json"))
+    monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED1")
+    reply = _Reply(["sam@example.net"], SIGNED.replace("0000</div>", "0000<br>Tell us how we did – feedback please</div>"))
+    A.send_reply(_one(), "x1", outlook=_outlook_with(reply))
+    assert reply.sent

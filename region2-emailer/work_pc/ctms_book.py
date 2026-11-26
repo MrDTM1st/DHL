@@ -149,6 +149,17 @@ def lines_of(rows, orders, date=""):
     return sorted((r for r in got if not date or ctms_orders.day(r.get("deliver")) == date), key=lambda r: r["cust_ref"])
 
 
+def wait_days(collect, deliver):
+    """Whole days from a line's collection day to its delivery day ("27/11/26 09:00", "30/11/26 09:00" -> 3); None when
+    either can't be read."""
+    try:
+        c = datetime.strptime(str(collect or "").strip()[:8], "%d/%m/%y")
+        d = datetime.strptime(str(deliver or "").strip()[:8], "%d/%m/%y")
+    except ValueError:
+        return None
+    return (d - c).days
+
+
 def sched_for_day(date):
     """The tree's yymmdd for a dd/mm/yyyy."""
     return datetime.strptime(date, "%d/%m/%Y").strftime("%y%m%d")
@@ -1823,6 +1834,14 @@ class Booking:
                        "Nothing was booked.")
         self.stage("the order")
         refs = [r["cust_ref"] for r in lines]
+        # CTMS won't plan one trip that waits more than a day (Friday to Monday 12/11, Friday to a Sunday night 24/11): it
+        # puts the drop on the collection evening, and its "Missed delivery window" is OK'd since 26/11 - so never that far
+        for r in lines:
+            gap = wait_days(r.get("collect"), r.get("deliver"))
+            if gap is not None and gap > 1:
+                raise Stop(f"{r['cust_ref']} collects {r.get('collect')} for a {r.get('deliver')} delivery: CTMS won't plan "
+                           "one trip that waits more than a day - it puts the drop on the collection evening (12/11, "
+                           "24/11). Move the collection nearer the delivery, then press Book again. Nothing was booked.")
         self.halt("before anything was changed on the order")
         wants = line_wants(refs, orders, qty or {})
         if sum([self.prepare_line(ref, wants.get(ref)) for ref in refs]):

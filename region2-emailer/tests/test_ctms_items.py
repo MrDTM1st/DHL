@@ -758,6 +758,19 @@ def test_a_same_day_collection_after_the_delivery_time_stops_with_nothing_typed(
         assert "same-day collection at its 10:00" in str(e)
 
 
+def test_a_price_is_never_typed_into_a_line():
+    # his 26/11: no price, charge or percentage in Special Instructions or a comment
+    for item in ({"kind": "note", "lines": ["9100001-1-1"], "set": {"note": " - Cancelled: charge 75% = £123.45 per load"}},
+                 {"kind": "update", "lines": ["9100001-1-1"], "set": dict(SET, comments="Haulier quoted £500")}):
+        o = FakeOrder()
+        try:
+            _items(o).do(item)
+            raise AssertionError("typed")
+        except I.Stop as e:
+            assert "no prices" in str(e)
+        assert o.typed == [] and o.saved == 0
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

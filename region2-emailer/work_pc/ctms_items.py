@@ -76,6 +76,8 @@ class Held(Exception):
 
 
 GONE = ("CANCELLED", "ABORTED")    # a line CTMS has finished with: never updated (his 24/11)
+# his 26/11: no price, charge or percentage in a line's Special Instructions or comments ("we don't do 75% cancellations")
+PRICE = re.compile(r"£|\bGBP\b|\bpounds?\b|\d\s*%|\bper ?cent\b", re.I)
 
 
 class Gone(Exception):
@@ -497,6 +499,9 @@ class Items:
         return "; ".join(saved + alone)
 
     def note(self, ref, note, dry=False):
+        if PRICE.search(note or ""):
+            raise Stop(f"{ref}: no prices, charges or percentages in Special Instructions (his 26/11 rule) - nothing "
+                       "typed.")
         self.open(ref)
         self.stage("opened")
         before = special_instructions(self.els)
@@ -535,6 +540,8 @@ class Items:
         return next((k for k, (tpl, _) in VEH_SHOWS.items() if self.seen(tpl, VEH_BOX)), None)
 
     def update(self, ref, s, dry=False):
+        if PRICE.search(str(s.get("comments") or "")):
+            raise Stop(f"{ref}: no prices, charges or percentages in a CTMS comment (his 26/11 rule) - nothing typed.")
         self.open(ref, read_line=True)
         line = self.line
         fix = collection_fix(ref, s, line)

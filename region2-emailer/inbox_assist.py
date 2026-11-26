@@ -999,8 +999,10 @@ def _smtp(recipient):
     return str(a or "").strip().lower()
 
 
-def reply_checks(mine, people, ours):
-    """What must be true of a one-tap reply before it goes - [] when it may (the checks every send of his has had)."""
+def reply_checks(mine, people, ours, body=None):
+    """What must be true of a one-tap reply before it goes - [] when it may (the checks every send of his has had). The
+    dash check reads `body`, what we wrote, when it's given: his DHL signature's "Tell us how we did" line has an en dash
+    of its own, and on 26/11 it refused every reply."""
     bad = []
     if not people:
         bad.append("nobody to send it to")
@@ -1010,7 +1012,8 @@ def reply_checks(mine, people, ours):
         bad.append("you are on it")
     if mine.count("Out of Hours") != 1:
         bad.append(f"{mine.count('Out of Hours')} signatures above the trail, not one")
-    if "—" in mine or "–" in mine:
+    own = mine if body is None else body
+    if "—" in own or "–" in own:
         bad.append("an em dash crept in")
     return bad
 
@@ -1036,7 +1039,7 @@ def reply_draft(it, body, outlook=None, extra=None):
     full = str(m.Body or "")
     k = re.search(r"^\s*From:", full, re.M)
     mine = full[:k.start()] if k else full
-    return o, mail_ops._describe(m), people, reply_checks(mine, people, ours) + (list(extra(people)) if extra else [])
+    return o, mail_ops._describe(m), people, reply_checks(mine, people, ours, body=body) + (list(extra(people)) if extra else [])
 
 
 def file_answered(o, d, sid, now, by="him", kind="inbox_assist_sent"):
