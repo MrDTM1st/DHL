@@ -1254,6 +1254,8 @@ class Bridge:
             if cmd.get("first"):
                 job.begin()
             said, ok = job.do(item, dry=bool(cmd.get("dry"))), True
+            if job.notices:                               # what CTMS said that the item OK'd and went past (26/11)
+                said = f"{said} CTMS said: {'; '.join(job.notices)} (OK'd)."
         except ctms_items.Held as e:
             said, held = str(e), True
         except ctms_items.Busy as e:
@@ -1753,7 +1755,11 @@ class Bridge:
                 if not self.win:
                     raise RuntimeError("Reading fields works on CTMS's own window, and it is not open in your "
                                        "Edge - open CTMS there as normal.")
-                p = ctms_jab.read_fields(self.win)
+                # what the home PC's route says it needn't read (26/11, the faster CTMS): the windows behind an
+                # order card, as the Run skips them - names and roles only, a few of them
+                skip = tuple(str(x)[:60] for x in (cmd.get("skip") or []) if isinstance(x, str))[:8]
+                roles = tuple(str(x)[:20] for x in (cmd.get("skip_roles") or []) if isinstance(x, str))[:6]
+                p = ctms_jab.read_fields(self.win, skip=skip, skip_roles=roles)
                 return done(True, ctms_jab.summary(p), dict(p, kind="fields", title=self.win["title"]))
             if action in ("form_read", "form_fill"):
                 return self.form(action, cmd, done)

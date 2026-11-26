@@ -666,6 +666,7 @@ def push_panel():
             "rejections": _rejections(),
             "inbox": _inbox(),
             "assist": _assist(),
+            "ctms_queue": _ctms_queue(),
             "push": _push(),
             "update_reply": _update_reply(),
             "home_code": _home_code(),
@@ -689,6 +690,15 @@ def _inbox():
     try:
         import inbox_watch
         return inbox_watch.panel()
+    except Exception:
+        return {}
+
+
+def _ctms_queue():
+    """The CTMS job queue (ctms_queue) - the CTMS page's "CTMS jobs" card."""
+    try:
+        import ctms_queue
+        return ctms_queue.panel()
     except Exception:
         return {}
 
@@ -756,6 +766,31 @@ def _judge_tick(proc):
     except Exception as e:
         print(f"inbox assistant: Claude's read could not start: {e}")
         return None
+
+
+def _queue_tick(proc, last):
+    """The CTMS job queue (ctms_queue.py, his 26/11 faster CTMS): its runner - one at a time, outside the Outlook gate -
+    the moment a job is added, and a minute after the last try while jobs wait for CTMS to be ready. -> (proc, last)."""
+    if proc is not None and proc.poll() is None:
+        return proc, last
+    due = os.path.exists(CTMS_QUEUE_DUE)
+    if not due and time.time() - last < 60:
+        return None, last
+    try:
+        import ctms_queue
+        if due:
+            os.remove(CTMS_QUEUE_DUE)
+        if not ctms_queue.waiting():
+            return None, time.time()
+        with open(os.path.join(HERE, "_ctms_queue.txt"), "a", encoding="utf-8", errors="replace") as log:
+            log.write(f"\n=== {time.strftime('%d/%m %H:%M:%S')} run\n")
+            log.flush()
+            return subprocess.Popen([sys.executable, "ctms_queue.py", "run"], cwd=HERE, stdout=log,
+                                    stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                                    creationflags=0x08000000), time.time()
+    except Exception as e:
+        print(f"CTMS queue: could not start: {e}")
+        return None, time.time()
 
 
 def _work_tick(proc):
@@ -983,6 +1018,7 @@ PHASE2_DUE = os.path.join(HERE, "_phase2_due")   # monitor_tick: new mail, check
 PUSH_DUE = os.path.join(HERE, "_push_due")       # monitor_tick: an ad hoc went on the map - push its CSV and pin now
 ASSIST_PUSH_DUE = os.path.join(HERE, "_assist_push_due")    # inbox_assist: the Needs-you card changed - push it now
 ASSIST_JUDGE_DUE = os.path.join(HERE, "_assist_judge_due")  # inbox_assist: emails queued for Claude to read
+CTMS_QUEUE_DUE = os.path.join(HERE, "_ctms_queue_due")      # ctms_queue: a CTMS job was added - run the queue now
 ASSIST_WORK_DUE = os.path.join(HERE, "_assist_work_due")    # inbox_assist: a "Deal with it" queued for the worker
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
 NR_DATE_EVERY = 900     # the Network Rail date emails (nr_date.py auto): a look this often, and straight after a check
@@ -1449,6 +1485,7 @@ def main():
         assist_pushed = 0.0
     judge_proc = None
     work_proc = None
+    queue_proc, queue_last = None, 0.0
     bg = None
     if IS_LOCAL:                    # the cloud agent runs no timer jobs
         try:
@@ -2398,6 +2435,15 @@ def main():
                     pass
                 report("done" if res.get("ok") else "error", "Haulier rejection forms: " + res.get("said", "") + ".",
                        tail(out, 6))
+            elif action == "ctms_queue":
+                # the CTMS page's CTMS jobs card: a waiting job taken off, or a stopped one run again from where it
+                # stopped (his tap, after a look)
+                d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
+                do, jid = str(d.get("do") or ""), str(d.get("id") or "")[:20]
+                out = run(["ctms_queue.py", do, jid], timeout=60) if do in ("drop", "again") and jid else ""
+                res = _last_json(out) or {"ok": False, "said": "The CTMS queue didn't answer - try again."}
+                push_panel()
+                report("done" if res.get("ok") else "error", "CTMS jobs: " + res.get("said", ""), tail(out, 3))
             elif action == "book_clear":
                 # the Bookings card's Done by hand / Clear: he has looked in CTMS or done the step himself
                 d = cmd.get("data") if isinstance(cmd.get("data"), dict) else {}
@@ -2658,6 +2704,10 @@ def main():
                 work_proc = _work_tick(work_proc)
             except Exception as e:
                 print(f"inbox assistant: {e}")
+            try:                               # CTMS jobs, one after another while CTMS is ready (26/11)
+                queue_proc, queue_last = _queue_tick(queue_proc, queue_last)
+            except Exception as e:
+                print(f"CTMS queue: {e}")
         if not IS_LOCAL and time.time() - last_ctms > 60:   # CTMS captures come home
             pull_ctms_captures()
             last_ctms = time.time()

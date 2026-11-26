@@ -230,13 +230,68 @@ def connect():
         R.BASE, R.KEY = R._desk()
 
 
+# ---------- fewer reads (his 26/11 "Yes, build it", the faster CTMS) ----------
+# Most of a read's time is the windows behind: the Run has skipped "Planning" and the main "OPOKUD" window on every
+# read of an order card since 02/11 (ctms_items.NOT_READ). A route that works on an order card asks the bridge for the
+# same; a menu (open_menu) is always read whole. A bridge older than 26/11 ignores the ask and reads everything, as
+# before. Off until it has been timed live on the work PC: the home flag file _ctms_fast_reads.on switches it on.
+FAST_FLAG = os.path.join(HERE, "_ctms_fast_reads.on")
+CARD_ROUTES = ("order-find", "order-read", "order-open", "order-close", "order-note", "order-qty", "order-item",
+               "order-deltype", "order-services", "order-nc", "order-split", "order-cancel", "order-copy")
+CARD_SKIP = {"skip": ["Planning", "OPOKUD"]}
+PROFILE = {}                                              # what this route's reads may skip (main() sets it)
+_WHOLE = [0]                                              # > 0: inside a menu - every read whole
+
+
+def _skips():
+    return dict(PROFILE) if PROFILE and not _WHOLE[0] and os.path.exists(FAST_FLAG) else {}
+
+
 def read(wait=150):
     """CTMS as the Access Bridge sees it now."""
     connect()
-    result, payload = R.ask("fields", wait_total=wait)
+    result, payload = R.ask("fields", wait_total=wait, **_skips())
     if not result.get("ok") or not payload or payload.get("kind") != "fields":
         raise Fail(f"CTMS couldn't be read: {result.get('detail')}")
     return Screen(payload)
+
+
+# ---------- CTMS's harmless notices (his 26/11 "Yes, build it", the faster CTMS) ----------
+# Notices that only inform - one OK button, nothing decided by pressing it. 25/11's resend stopped on "Missed
+# delivery window: Order N stop 2." and was finished by hand: now it is OK'd, the window's Save pressed again ONCE if
+# it is still there to press (the press the notice interrupted), and the job carries on - the notice's words go in
+# the route's answer (ROUTE_RESULT "notices"), so he still hears what CTMS said. Anything else still stops the route.
+HARMLESS = re.compile(r"missed delivery window|FRM-41091", re.I)
+NOTICES = []                                              # what this run OK'd, for its answer
+_RESAVED = set()                                          # the windows whose Save was pressed again: never a third
+
+
+def harmless(q):
+    """A Forms notice that is only information: its words known, OK its one button."""
+    return (q is not None and "ok" in q["buttons"] and set(q["buttons"]) <= {"ok"}
+            and bool(HARMLESS.search(q["words"])))
+
+
+def settle(s, frame=None):
+    """After a press: each harmless notice up now OK'd - its own OK, clicked where it is (the Access Bridge can list
+    Planning over it when it isn't, 25/11) - then `frame`'s Save pressed again once, if it is enabled. -> (the
+    screen, the question still up or None)."""
+    oked = False
+    for _ in range(3):
+        q = s.question()
+        if not harmless(q):
+            break
+        act([click(q["buttons"]["ok"], after=0.8)], "OK the notice: " + q["words"][:60])
+        NOTICES.append(re.sub(r"\s+", " ", q["words"]).strip()[:160])
+        oked = True
+        s = read()
+    if oked and frame and frame not in _RESAVED:
+        save = s.find(name="Save", role="push button", within=s.frame(frame), enabled=True)
+        if save:
+            _RESAVED.add(frame)
+            act([click(save[0], after=1.2)], f"{frame} Save again (the notice stopped the first)")
+            return settle(read(), None)                   # a notice it raises is OK'd too, never a third Save
+    return s, s.question()
 
 
 def act(steps, name="route"):
@@ -311,7 +366,15 @@ def open_menu(path, s=None):
     parts = [p.strip() for p in re.split(r">|/", path) if p.strip()]
     if not parts:
         raise Fail("no menu given")
-    s = s or read()
+    partial = bool(_skips())                              # this route's reads skip things: a menu needs a whole one
+    _WHOLE[0] += 1                                        # a menu is read whole, whatever the route skips
+    try:
+        _open_menu(path, parts, read() if partial or s is None else s)
+    finally:
+        _WHOLE[0] -= 1
+
+
+def _open_menu(path, parts, s):
     top = s.one(f"menu '{parts[0]}'", name=parts[0], role="menu", window=1)
     act([click(top, after=0.6)], f"menu {parts[0]}")
     for depth, part in enumerate(parts[1:], 1):
@@ -1144,7 +1207,7 @@ def set_status(man, target, commit, near_ok=False):
     if save:
         act([click(save[0], after=1.0)], "Planning Save")
     for _ in range(5):
-        s = read()
+        s, _q = settle(read(), "Planning")               # "Missed delivery window": OK'd, saved again once
         now = next((r for r in tree_rows(s) if man_number(r["man"]) == man_number(man)), None)
         if now and now["status"].lower() == target:
             return {"status": now["status"], "changed": True, "said": f"{now['man']} is now {now['status']}"}
@@ -1759,8 +1822,7 @@ def r_trip_price(a):
     if not now:
         raise Fail(f"the amount didn't read back as {new:.2f} - not OK'd, left up for a look")
     act([click(s.one("the payment's OK", role="push button", name="OK", within=box_win), after=2.0)], "OK")
-    s = read()
-    q = s.question()
+    s, q = settle(read())
     if q is not None:
         raise Fail(f"CTMS asks after OK: {q['words'][:160]} - left up for a look")
     rows, total = payment_lines(s)
@@ -1938,6 +2000,7 @@ def r_trip_unschedule(a):
         if not save:
             raise Fail(f"{row['ref']} unscheduled but Planning's Save isn't there to press - SAVE PLANNING BY HAND NOW")
         act([click(save[0], after=1.2)], "Planning Save (at once)")
+        settle(read(), "Planning")
         done.append(row["ref"])
     rows, s = planned_orders()
     left = [r["ref"] for r in rows]
@@ -2046,6 +2109,9 @@ def r_order_qty(a):
             break
         if "schedule" in q["words"].lower() and "ok" in q["buttons"]:
             act([click(q["buttons"]["ok"], after=1.2)], "schedule OK")
+            continue
+        if harmless(q):                                   # OK'd, the order saved again once (settle)
+            settle(s, name)
             continue
         raise Fail(f"order Save asked: {q['words'][:150]} - left up, nothing answered")
     d = read_detail(s, s.frame(name))
@@ -2165,6 +2231,9 @@ def r_order_item(a):
             break
         if "schedule" in q["words"].lower() and "ok" in q["buttons"]:
             act([click(q["buttons"]["ok"], after=1.2)], "schedule OK")
+            continue
+        if harmless(q):                                   # OK'd, the order saved again once (settle)
+            settle(s, name)
             continue
         raise Fail(f"order Save asked: {q['words'][:150]} - left up, nothing answered")
     d = read_detail(s, s.frame(name))
@@ -2326,6 +2395,9 @@ def r_order_deltype(a):
         if "schedule" in q["words"].lower() and "ok" in q["buttons"]:
             act([click(q["buttons"]["ok"], after=1.2)], "schedule OK")
             continue
+        if harmless(q):                                   # OK'd, the order saved again once (settle)
+            settle(s, name)
+            continue
         raise Fail(f"order Save asked: {q['words'][:150]} - left up, nothing answered")
     close_window(name)
     rows, _ = order_search(a.ref)
@@ -2365,6 +2437,7 @@ def r_trip_deltype(a):
     if q is not None and "lov" in q["words"].lower() and set(q["buttons"]) <= {"ok"}:
         act([click(q["buttons"]["ok"], after=0.8)], "OK the FRM-41091 notice (harmless, 10/11)")
         s = read()
+    s, _q = settle(s)
     t, s = tab("Trip Detail", "Planning", s)
     got = next((str(e.get("v") or "").strip() for e in s.children(t) if "Delivery Type" in str(e.get("nm") or "")), "")
     if got != code:
@@ -2372,6 +2445,7 @@ def r_trip_deltype(a):
     save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
     if save:
         act([click(save[0], after=1.2)], "Planning Save")
+        s, _q = settle(read(), "Planning")
     refresh = s.find(name="Refresh Trip", role="push button", within=s.frame("Planning"), enabled=True)
     if refresh:
         act([click(refresh[0], after=2.0)], "Refresh Trip")
@@ -2421,13 +2495,13 @@ def r_trip_trailer(a):
     if box is None or str((s.first(name="Trailer Type", role="text", within=box) or {}).get("v") or "").strip() != a.code:
         raise Fail(f"the Trailer Type box doesn't read {a.code} - not OK'd, left up for a look")
     act([click(s.one("its OK", role="push button", name="OK", within=box), after=1.5)], "OK")
-    s = read()
-    q = s.question()
+    s, q = settle(read())
     if q is not None:
         raise Fail(f"CTMS asks after OK: {q['words'][:150]} - left up for a look")
     save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
     if save:
         act([click(save[0], after=1.2)], "Planning Save")
+        settle(read(), "Planning")
     t, s = tab("Stops", "Planning")
     got = [str(e.get("v") or "").strip() for e in sorted((e for e in s.children(t) if on_screen(e)
            and clean(e.get("nm")) == "Trailer Type" and e.get("r") == "text"), key=lambda e: e["at"][1])]
@@ -2463,13 +2537,13 @@ def r_trip_apply(a):
     act([click(cell, after=0.5), click(cell, right=True, after=0.7),
          tpl_find("well-apply-trip", _menu_box(cell), click=True, after=1.5),
          {"action": "settle", "quiet": 0.5, "timeout": 15}], f"Apply {a.ref} to Trip")
-    s = read()
-    q = s.question()
+    s, q = settle(read())
     if q is not None:
         raise Fail(f"CTMS asks after Apply to Trip: {q['words'][:150]} - left up for a look")
     save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
     if save:
         act([click(save[0], after=1.2)], "Planning Save")
+        settle(read(), "Planning")
     rows, s = planned_orders()
     on = [r["ref"] for r in rows]
     close_x(PLANNED, s)
@@ -2827,6 +2901,8 @@ def main(argv):
         return 2
     fn, _ = ROUTES[name]
     a = _args(name).parse_args(argv[1:])
+    if name in CARD_ROUTES:
+        PROFILE.update(CARD_SKIP)                         # its reads skip the windows behind (once switched on)
     t0 = time.time()
     try:
         out = fn(a) or {}
@@ -2838,9 +2914,12 @@ def main(argv):
         out, ok, said = {}, False, str(e)
         print("STOPPED: " + said)
     secs = round(time.time() - t0, 1)
+    for n in NOTICES:
+        print(f"OK'd CTMS's notice: {n}")
     print(f"{'DONE' if ok else 'STOPPED'} {name} in {secs}s")
-    print("ROUTE_RESULT " + json.dumps(dict(out, ok=ok, said=said, route=name, seconds=secs), ensure_ascii=False,
-                                       default=str))
+    extra = {"notices": list(NOTICES)} if NOTICES else {}
+    print("ROUTE_RESULT " + json.dumps(dict(out, ok=ok, said=said, route=name, seconds=secs, **extra),
+                                       ensure_ascii=False, default=str))
     return 0 if ok else 3
 
 

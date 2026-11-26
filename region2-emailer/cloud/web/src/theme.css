@@ -1018,6 +1018,13 @@ a.callbtn:hover{ color:var(--red-ink); }
   color: var(--muted); }
 .af-other { padding: 4px 0; color: var(--ink2); line-height: 1.4; }
 .af-other span { display: block; color: var(--ink); }
+/* the CTMS job queue (26/11): its card on the CTMS page */
+.ctms-queue { margin-bottom: 12px; }
+.ctmsq-state { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  border-radius: 6px; padding: 2px 6px; margin-right: 8px; vertical-align: 1px; background: var(--seg); color: var(--ink2); }
+.ctmsq-state.running { background: var(--yellow-d); color: #1a1a1a; }
+.ctmsq-state.done { background: var(--go); color: #fff; }
+.ctmsq-state.stopped { background: var(--red); color: #fff; }
 /* the email an alert opened (AssistFocus): a sheet from the bottom on a phone, a panel in the middle on a big screen */
 .af-back { position: fixed; inset: 0; z-index: 150; display: flex; align-items: flex-end; justify-content: center;
   background: rgba(20, 18, 12, .45); animation: fade .2s both; }

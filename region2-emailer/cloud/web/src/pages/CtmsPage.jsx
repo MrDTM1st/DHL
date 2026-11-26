@@ -3,6 +3,7 @@ import { I } from '../icons.jsx';
 import * as api from '../api.js';
 import { SetupPanel } from '../components/WorkPcSetup.jsx';
 import RejectionList from '../components/RejectionsCard.jsx';
+import CtmsQueueCard from '../components/CtmsQueueCard.jsx';
 
 // The CTMS page: CTMS as the work PC's bridge (work_pc/ctms_bridge.py) sees
 // it, and "Look mum, no hands" - the switch that lets the haulage desk run it.
@@ -101,7 +102,8 @@ function HeldCheck({ item, c, onAnswer, busy }) {
   );
 }
 
-export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], onSettings, rejections, onCommand }) {
+export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], onSettings, rejections, onCommand,
+  queue }) {
   const visible = usePageVisible();
   const [st, setSt] = useState(null);
   const [shot, setShot] = useState(null);
@@ -434,7 +436,10 @@ export default function CtmsPage({ onAuthFail, pushToast, todo = [], plan = [], 
               {attached && s.error ? <span className="ctms-err">{shotMeta ? ' · ' : ''}{deskWords(s.error)}</span> : null}
             </div>
           </div>
-          <div className="ctms-todo-desk">{todoCard}{rejectCard}</div>
+          <div className="ctms-todo-desk">
+            <CtmsQueueCard data={queue} onCommand={onCommand} />
+            {todoCard}{rejectCard}
+          </div>
         </div>
 
         <div className="ctms-col">

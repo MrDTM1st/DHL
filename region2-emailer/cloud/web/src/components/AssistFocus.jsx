@@ -17,7 +17,8 @@ const STATE = {
 
 function Job({ job, onYes, onNo, busy }) {
   const open = (job.asks || []).filter((a) => a.state === 'open' || a.state === 'running');
-  const closed = (job.asks || []).filter((a) => a.state !== 'open' && a.state !== 'running');
+  const queued = (job.asks || []).filter((a) => a.state === 'queued');       // his yes, in the CTMS queue (26/11)
+  const closed = (job.asks || []).filter((a) => !['open', 'running', 'queued'].includes(a.state));
   const lines = job.state === 'working' || job.state === 'queued' ? job.log || [] : job.did || [];
   return (
     <div className="af-job">
@@ -47,6 +48,9 @@ function Job({ job, onYes, onNo, busy }) {
             )}
           </div>
         </div>
+      ))}
+      {queued.map((a) => (
+        <div className="af-said" key={'q' + a.n}>In the CTMS queue: {a.what} - it runs when CTMS is ready</div>
       ))}
       {closed.map((a) => (
         <div className="af-said" key={'c' + a.n}>

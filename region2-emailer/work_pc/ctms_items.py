@@ -277,6 +277,7 @@ class Items:
         self.run, self.read, self.seen, self.t = run, read, seen, t
         self.els = []
         self.refs = []             # the lines of the item in hand: the only cards ever discarded
+        self.notices = []          # CTMS's harmless notices OK'd on the way (26/11), for the item's answer
         self.stages = []
         self._t = time.time()
 
@@ -371,9 +372,15 @@ class Items:
         """Save (the schedule question OK'd: a delivery moved to another day asks "Change schedule to"), Close. A plain save
         CTMS answers by moving the cursor, no message, so a Close that asks nothing is what says it saved."""
         self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.3), ANCHOR, _click(ORDER_SAVE, react=True, quiet=1, timeout=15)])
-        for _ in range(SCHEDULE_READS):
+        resaved = False
+        for _ in range(SCHEDULE_READS + 1):
             if self.answer_schedule():
                 break
+            if self.answer_notice() and not resaved:      # OK'd (26/11): the Save it interrupted, once more
+                resaved = True
+                self.run([{"action": "anchor"}, _click(MENU_BAR, after=0.3), ANCHOR,
+                          _click(ORDER_SAVE, react=True, quiet=1, timeout=15)])
+                continue
             time.sleep(0.4)
         try:
             self.close_quietly()
@@ -384,6 +391,16 @@ class Items:
         asked = question(self.look())
         if asked and DISCARD_WORDS in asked[0]:
             raise Stop(f"{ref}: the save did not go through, so nothing of this line was kept.")
+
+    def answer_notice(self):
+        """A notice CTMS gives only for information (ctms_rows.harmless: "Missed delivery window", 25/11) pressed OK and
+        noted for the item's answer. True if one was up."""
+        asked = question(self.look())
+        if not ctms_rows.harmless(asked):
+            return False
+        self.press(asked[1].get("ok"))
+        self.notices.append(re.sub(r"\s+", " ", asked[0]).strip()[:160])
+        return True
 
     def answer_schedule(self):
         """CTMS's "Change schedule to ...?" pressed OK, where the Access Bridge places it: it sits in the middle of CTMS's

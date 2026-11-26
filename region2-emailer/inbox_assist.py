@@ -1291,7 +1291,8 @@ def ask_worker(prompt, sid, system, cfg=None, run=subprocess.run):
 def _settle(it, now, d=None):
     """Once nothing waits for his yes any more: the job is done, and the email off his list (its card's others too)."""
     job = it.get("job") or {}
-    if job.get("state") == "needs_you" and not any(a.get("state") in ("open", "running") for a in job.get("asks") or []):
+    if job.get("state") == "needs_you" and not any(a.get("state") in ("open", "running", "queued")
+                                                   for a in job.get("asks") or []):
         job["state"] = "done"
         if it.get("state") == "open":
             it.update(state="dealt", dealt_at=now.strftime("%Y-%m-%d %H:%M"), dealt_by="claude")
@@ -1495,6 +1496,35 @@ def yes_end(d, sid, n, ok, said, now=None, outlook=None):
     return said
 
 
+def queue_yes(d, sid, n, a, now=None):
+    """His yes to a held CTMS change (under the store's lock): it goes to the CTMS queue (ctms_queue.py) instead of
+    holding the agent for minutes, and the ask waits there "queued" until the queue says how it went (ctms_done)."""
+    import ctms_queue
+    now = now or datetime.now()
+    job = ctms_queue.add([held_route(a.get("route")) + ["--commit"]], what=a.get("what") or "", by="his yes",
+                         assist={"sid": sid, "n": n}, now=now)
+    asks = d["items"][sid]["job"]["asks"]
+    asks[n].update(state="queued", at=now.strftime("%Y-%m-%d %H:%M"), queue=job["id"],
+                   said="In the CTMS queue - it runs when CTMS is ready.")
+    n_wait = len(ctms_queue.waiting())
+    return (f"In the CTMS queue ({n_wait} waiting) - it runs when CTMS is ready, and your phone hears how it went.")
+
+
+def ctms_done(sid, n, ok, said, now=None):
+    """The CTMS queue's answer for a change he said yes to: the ask done (or not), the job settled."""
+    now = now or datetime.now()
+
+    def go(d, it):
+        asks = (it.get("job") or {}).get("asks") or []
+        if not 0 <= n < len(asks) or asks[n].get("state") != "queued":
+            return False
+        asks[n].update(state="done" if ok else "failed", said=str(said or "")[:300], at=now.strftime("%Y-%m-%d %H:%M"))
+        _settle(it, now, d)
+        return True
+    out, _ = _with_item(sid, go)
+    return bool(out)
+
+
 def no(d, sid, n, now=None):
     """His no to something the job held: it's left undone (a held email stays in Drafts)."""
     now = now or datetime.now()
@@ -1518,7 +1548,7 @@ def job_view(job):
             "did": list(job.get("did") or [])[-10:], "log": list(job.get("log") or [])[-8:],
             "asks": [{"n": i, "what": a.get("what", ""), "kind": a.get("kind", ""), "state": a.get("state", ""),
                       "said": a.get("said", ""), "to": a.get("to", ""), "text": str(a.get("text") or "")[:1500],
-                      "route": " ".join(a.get("route") or [])}
+                      "route": " ".join(a.get("route") or []), "queue": a.get("queue", "")}
                      for i, a in enumerate(job.get("asks") or [])]}
 
 
@@ -1823,6 +1853,9 @@ def main(argv):
                     o = mail_ops._outlook()
                     ok, said = yes_do(a, outlook=o)
                     out, _ = _with_item(arg, lambda d, it: yes_end(d, arg, n, ok, said, outlook=o))
+            elif a.get("kind") == "route":                # the CTMS queue takes it (26/11): no minutes on the agent
+                out, _ = _with_item(arg, lambda d, it: queue_yes(d, arg, n, a))
+                return _say(True, out or "Queued.")
             else:
                 ok, said = yes_do(a)
                 out, _ = _with_item(arg, lambda d, it: yes_end(d, arg, n, ok, said))

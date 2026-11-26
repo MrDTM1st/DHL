@@ -117,6 +117,20 @@ def merge(seen, page):
     return len(new)
 
 
+# CTMS's notices that only inform - one OK, nothing decided by pressing it (his 26/11 "Yes, build it", the faster CTMS:
+# 25/11's "Missed delivery window: Order N stop 2." stopped a booking and a resend). Book and the Run OK them, say what
+# CTMS said, and carry on; any other question still stops them.
+HARMLESS = re.compile(r"missed delivery window|FRM-41091", re.I)
+
+
+def harmless(q):
+    """A question (words, buttons) that is only information: its words known, OK its one button."""
+    if not q:
+        return False
+    words, buttons = q
+    return bool(HARMLESS.search(words or "")) and "ok" in buttons and set(buttons) <= {"ok"}
+
+
 def question(els):
     """A Forms question up on the screen: (its words, {its buttons' first word, lower case: element}), or None. It comes
     as a window with an option pane straight under it. Its words sit in the window's name (Confirm Create Trip, the

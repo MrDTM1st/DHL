@@ -491,12 +491,26 @@ class Booking:
         nothing everywhere else. asking: a question of CTMS's is expected on this read (Confirm Create Trip, "discard
         your changes?") - any other one stops the booking, answered the way that changes nothing. card: an order's card
         is what's wanted - Planning behind it isn't read (850 things, 03/11)."""
-        self.els = self.read(tree, CARD_SKIP if card else PLANNING_SKIP)
-        self.has_tree = tree
-        self.reads += 1
+        for _ in range(3):
+            self.els = self.read(tree, CARD_SKIP if card else PLANNING_SKIP)
+            self.has_tree = tree
+            self.reads += 1
+            if not self.notice():                         # CTMS's harmless notice: OK'd, read again
+                break
         if not asking:
             self.unasked()
         return self.els
+
+    def notice(self):
+        """A notice CTMS gives only for information (ctms_rows.harmless: "Missed delivery window", 25/11) OK'd where the
+        Access Bridge places its OK, and said - the booking carries on. True if one was up."""
+        q = ctms_rows.question(self.els)
+        if not ctms_rows.harmless(q) or not placed(q[1]["ok"]):
+            return False
+        self.run([{"action": "click", "screen": _at(q[1]["ok"]), "after": 0.6}])
+        said = re.sub(r"\s+", " ", q[0]).strip()
+        self.said.append(f'CTMS said "{said[:160]}": OK\'d it and carried on')
+        return True
 
     def unasked(self):
         """A Forms question nobody asked for (03/11, live: "A schedule must be selected." when a list ran off its end):
