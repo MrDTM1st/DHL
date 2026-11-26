@@ -28,6 +28,7 @@ import sys
 import time
 
 import ctms_remote as R
+import order_ledger as L
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUFFIX = re.compile(r"\s+(?:mnemonic|ALT)\s+\S+$")       # "Orders mnemonic O" -> "Orders", "Action ALT A" -> "Action"
@@ -497,6 +498,26 @@ def order_search(ref, s=None):
     return summary_rows(s), s
 
 
+def all_order_rows(ref, s=None):
+    """Every line Order Summary finds for ref, past the PAGE_ROWS it shows at once: a full screen's last row clicked, then
+    Down a screen at a time - moving the cursor, nothing typed - and read again until no new line comes (26/11: an order's
+    17 lines, 15 on the screen). -> (rows, screen)."""
+    rows, s = order_search(ref, s)
+    seen = {r["ref"]: r for r in rows}
+    for _ in range(12):
+        if len(rows) < PAGE_ROWS:
+            break
+        last = rows[-1]["cells"].get("ref") or rows[-1]["cells"].get("status")
+        act([click(last, after=0.4)] + [key("down", after=0.2)] * PAGE_ROWS, "Order Summary: the next lines")
+        s = read()
+        rows = summary_rows(s)
+        new = [r for r in rows if r["ref"] not in seen]
+        if not new:
+            break
+        seen.update((r["ref"], r) for r in new)
+    return list(seen.values()), s
+
+
 def base_ref(ref):
     """1234567-1-1_S2 -> 1234567; an ad hoc or DTS ref is searched whole."""
     m = re.match(r"(\d{7})(?:-\d+-\d+)?(?:_S\d+)?$", str(ref).strip())
@@ -522,6 +543,46 @@ def pick_line(rows, ref, gone=False):
 # mention the price of the nonconformance either" - a 23/11 comment carried a haulier's 75% and its price, and he
 # was told off for it
 PRICE = re.compile(r"£|\bGBP\b|\bpounds?\b|\d\s*%|\bper ?cent\b", re.I)
+
+
+PAGE_ROWS = 15                       # the lines Order Summary shows at once (26/11: an order had 17)
+
+
+def qty_of(v):
+    """'1,250.000' -> 1250.0; None when it isn't a number."""
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def adds(ref, row_status, extra, nc=None):
+    """Why a copy of this line would add to its order - "" when it doesn't: it replaces a line CTMS has finished with
+    (cancelled, aborted) or one non-conformed here, or he has said why the order needs more (--extra)."""
+    if extra or str(row_status or "").strip().upper() in GONE or (L.non_conformed(ref) if nc is None else nc):
+        return ""
+    return (f"copying {ref} adds to order {L.order_of(ref)}: it is {row_status or 'live'}, not cancelled or non-conformed, "
+            "so the copy and the line would both be there to deliver. A copy only replaces a line (order-nc it first), or "
+            "say why the order needs more with --extra \"why\" (his 26/11: never leave more in the well than the order "
+            "holds)")
+
+
+def audit_sum(lines, original=None):
+    """An order's lines added up: lines [{ref, status, qty}] - the cancelled and aborted ones left out - against the
+    quantity it was ordered as. -> {total, original, over, under, extra}: extra names what would leave more in the well
+    than ordered - the copies and re-uploads, and the unscheduled lines - when the total is over."""
+    live = [ln for ln in lines if str(ln.get("status") or "").strip().upper() not in GONE]
+    total = sum(qty_of(ln.get("qty")) or 0 for ln in live)
+    out = {"total": total, "original": original, "over": 0.0, "under": 0.0, "extra": []}
+    if original is None:
+        return out
+    if total > original:
+        out["over"] = total - original
+        out["extra"] = [ln["ref"] for ln in live
+                        if L.ADDED.search(ln["ref"]) or str(ln.get("status") or "").upper() == "UNSCHEDULED"]
+    elif total < original:
+        out["under"] = original - total
+    return out
 
 
 def no_price(text, what):
@@ -1963,6 +2024,7 @@ def r_order_nc(a):
         s = ok_known_questions()
     close_window(clean(details_frame(s).get("nm")), s)
     print(f"ADDED: {said}")
+    L.log("nc", a.ref, f"{a.reason}: {a.comment}")
     return {"ref": a.ref, "row": said, "changed": True}
 
 
@@ -2001,6 +2063,8 @@ def r_order_split(a):
     rows, s = order_search(a.ref)
     new = [r for r in rows if r["ref"] not in before]
     print(f"SPLIT {a.ref} into {a.parts}: new lines " + ", ".join(f"{r['ref']} ({r['status']})" for r in new))
+    L.log("split", a.ref, f"into {a.parts} equal parts: {', '.join(r['ref'] for r in new) or 'parts not listed'}",
+          new=[r["ref"] for r in new])
     return {"ref": a.ref, "parts": a.parts, "changed": True, "new": [r["ref"] for r in new]}
 
 
@@ -2113,6 +2177,12 @@ def r_order_qty(a):
     box, now = item_box_values(s)
     print(f"{a.ref} item {now.get('Identifier', '?')}: ordered {now.get('Ordered', '?').strip()}, delivered "
           f"{now.get('Delivered', '').strip() or '(blank)'}, weight {now.get('Weight', '?').strip()}")
+    was = qty_of(now.get("Ordered"))
+    if was is not None and a.qty > was and not a.extra:
+        exit_item_box(s)
+        close_window(name)
+        raise Fail(f"raising {a.ref} from {was:g} to {a.qty} adds {a.qty - was:g} to order {L.order_of(a.ref)} - say why "
+                   "the order needs more with --extra \"why\" (his 26/11: never more in the well than the order holds)")
     if not a.commit:
         exit_item_box(s)
         close_window(name)
@@ -2161,6 +2231,7 @@ def r_order_qty(a):
     close_window(name)
     line = (d["items"] or [{}])[0]
     print(f"SET {a.ref}: qty {line.get('Qty', '?').strip()}, weight {line.get('Weight', '?').strip()} (CTMS's)")
+    L.log("qty", a.ref, f"ordered {now.get('Ordered', '?').strip()} -> {a.qty}", why=a.extra or None)
     return {"ref": a.ref, "changed": True, "after": line}
 
 
@@ -2338,6 +2409,7 @@ def r_order_cancel(a):
     print(f"{a.ref}: {was} -> {now}")
     if not ok:
         raise Fail(f"{a.ref} reads {now} after OK - look at it (not retried)")
+    L.log("restore" if a.restore else "cancel", a.ref, f"{was} -> {now}")
     return {"ref": a.ref, "status": now, "changed": True}
 
 
@@ -2351,6 +2423,10 @@ def r_order_copy(a):
     row = pick_line(rows, a.ref)                          # a ref on two lines: the live one (26/11)
     if row is None:
         raise Fail(f"no line {a.ref} in Order Summary (lines: {', '.join(r['ref'] for r in rows) or 'none'})")
+    why_not = adds(a.ref, row.get("status"), a.extra)
+    if why_not:
+        raise Fail(why_not)
+    replaces = str(row.get("status") or "").upper() in GONE or L.non_conformed(a.ref)
     before = {r["ref"] for r in rows}
     summary_menu(row, "os-copy-orders", s)
     _, s = until(lambda sc: sc.frame(COPY_BOX), "the Copy Order window", tries=5)
@@ -2389,6 +2465,7 @@ def r_order_copy(a):
     new = [r for r in rows if r["ref"] not in before]
     print(f"COPIED {plan}: new " + ", ".join(f"{r['ref']} ({r['status']}, ready {r.get('ready', '')})" for r in new)
           + " - check its Order Items (product, weight) and the delivery time (it once came across as 00:00)")
+    L.log("copy", a.ref, plan, new=[r["ref"] for r in new], replaces=a.ref if replaces else None, why=a.extra or None)
     return {"ref": a.ref, "plan": plan, "changed": True, "new": [r["ref"] for r in new]}
 
 
@@ -2735,6 +2812,46 @@ def r_order_read(a):
     return {"order": d}
 
 
+@route("order-audit", "an order's live lines added up against what it was ordered as: each line's quantity read off its "
+                      "own card, cancelled and aborted lines left out - exact, under or OVER, naming the lines that would "
+                      "leave extra in the well (reads only; --original N the first time, kept after)")
+def r_order_audit(a):
+    order = L.order_of(a.ref)
+    rows, s = all_order_rows(order)
+    rows = [r for r in rows if L.order_of(r["ref"]) == order]
+    if not rows:
+        raise Fail(f"no lines for {order} in Order Summary")
+    if a.original:
+        L.remember_original(order, a.original, said=f"ordered {a.original:g} (given to order-audit)")
+    want = a.original or L.original(order)
+    lines = []
+    for r in rows:
+        if str(r.get("status") or "").upper() in GONE:
+            lines.append({"ref": r["ref"], "status": r["status"], "qty": None})
+            print(f"  {r['ref']:20} {r['status']:12} left out")
+            continue
+        close_orders()
+        f, s, _row = open_order(r["ref"], modify_scheduled=True, gone_ok=True)
+        d = read_detail(s, f)
+        close_window(d["window"])
+        q = sum(qty_of(i.get("Qty")) or 0 for i in d.get("items") or [])
+        lines.append({"ref": r["ref"], "status": r["status"], "qty": q})
+        print(f"  {r['ref']:20} {r['status']:12} {q:g}")
+    got = audit_sum(lines, want)
+    if want is None:
+        said = f"{order}: {got['total']:g} on its live lines - give --original N to check it against the order"
+    elif got["over"]:
+        said = (f"{order}: OVER by {got['over']:g} - {got['total']:g} on its live lines, {want:g} ordered. Would leave "
+                f"extra in the well: {', '.join(got['extra']) or 'no unscheduled line - look at what was booked'}")
+    elif got["under"]:
+        said = f"{order}: {got['total']:g} on its live lines, {want:g} ordered - {got['under']:g} not on any line yet"
+    else:
+        said = f"{order}: exact - {got['total']:g} on its live lines, as ordered"
+    print(said)
+    L.log("audit", order, said)
+    return dict(got, order=order, lines=lines, said=said)
+
+
 @route("order-find", "every line of an order in Order Summary: status, schedule, type, ready, deliver by (reads only)")
 def r_order_find(a):
     rows, _ = order_search(a.ref)
@@ -2875,6 +2992,8 @@ def _args(name):
         p.add_argument("--collect", required=True, help='"DD/MM/YY HH:MM - HH:MM" (or with a second date)')
         p.add_argument("--deliver", required=True, help='"DD/MM/YY HH:MM - HH:MM"')
         p.add_argument("--copies", type=int, default=1, help="how many copies (CTMS's No of Orders is this + 1)")
+        p.add_argument("--extra", default="", help="why the order needs more: only then may a copy of a live line be made "
+                                                   "(a copy otherwise replaces a cancelled or non-conformed line)")
         p.add_argument("--commit", action="store_true", help="make the copy (his go-ahead)")
     elif name == "order-cancel":
         p.add_argument("ref", help="one line, e.g. 1234567-2-1 (every line is its own order)")
@@ -2883,6 +3002,7 @@ def _args(name):
     elif name == "order-qty":
         p.add_argument("ref", help="the line, e.g. 1234567-1-1_S4")
         p.add_argument("qty", type=int, help="the line's new quantity")
+        p.add_argument("--extra", default="", help="why the order needs more, when the quantity goes up")
         p.add_argument("--item", help="the item's Identifier, when the line has several")
         p.add_argument("--modify", action="store_true", help="the line is scheduled: open it anyway (CTMS asks)")
         p.add_argument("--commit", action="store_true", help="set it (his go-ahead)")
@@ -2896,6 +3016,9 @@ def _args(name):
         p.add_argument("--ident", action="store_true", help="take the Identifier from Ctrl+L's list again")
         p.add_argument("--modify", action="store_true", help="the line is scheduled: open it anyway (CTMS asks)")
         p.add_argument("--commit", action="store_true", help="type it in and save it (his go-ahead)")
+    elif name == "order-audit":
+        p.add_argument("ref", help="the order, e.g. 1234567 (or any of its lines)")
+        p.add_argument("--original", type=float, help="what the order was for, e.g. 1250 - kept for next time")
     elif name == "order-split":
         p.add_argument("ref", help="the unscheduled line, e.g. 1234567-1-1")
         p.add_argument("parts", type=int, help="how many equal parts")

@@ -20,3 +20,10 @@ os.environ["R2_NO_PUSH"] = "1"
 @pytest.fixture
 def tmp(tmp_path):
     return str(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _order_ledger_in_tmp(tmp_path, monkeypatch):
+    """What the routes keep of an order's lines (order_ledger) goes to a test's own folder, never his real ledger."""
+    import order_ledger
+    monkeypatch.setattr(order_ledger, "PATH", str(tmp_path / "order_ledger.jsonl"))

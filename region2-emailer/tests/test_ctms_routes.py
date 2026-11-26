@@ -352,3 +352,76 @@ def test_the_comment_routes_refuse_a_price_before_ctms_is_touched(monkeypatch):
             raise AssertionError(fn.__name__)
         except C.Fail as e:
             assert "no prices" in str(e)
+
+
+def test_a_copy_that_would_add_to_its_order_is_refused_before_anything_is_pressed(monkeypatch):
+    # his 26/11: "make sure ... you don't leave extra left in the order well" - a hand-made copy was a load over
+    import argparse
+    import order_ledger as L
+    assert "adds to order 9100001" in C.adds("9100001-1-1_S3", "SCHEDULED", "")
+    assert C.adds("9100001-1-1_S3", "CANCELLED", "") == "" and C.adds("9100001-1-1_S3", "ABORTED", "") == ""
+    assert C.adds("9100001-1-1_S3", "SCHEDULED", "the site asked for one more load") == ""
+    L.log("nc", "9100001-1-1_S4", "SUPP: not ready")
+    assert C.adds("9100001-1-1_S4", "SCHEDULED", "") == ""          # non-conformed here: the copy replaces it
+    monkeypatch.setattr(C, "exit_box", lambda *a, **k: None)
+    monkeypatch.setattr(C, "order_search", lambda ref, s=None: ([{"ref": "9100001-1-1_S3", "status": "SCHEDULED",
+                                                                   "cells": {}}], None))
+    monkeypatch.setattr(C, "summary_menu", _never)
+    a = argparse.Namespace(ref="9100001-1-1_S3", collect="30/11/26 08:00 - 15:45", deliver="30/11/26 12:00 - 18:00",
+                           copies=1, extra="", commit=True)
+    try:
+        C.r_order_copy(a)
+        raise AssertionError("copied")
+    except C.Fail as e:
+        assert "adds to order 9100001" in str(e) and "--extra" in str(e)
+
+
+def test_an_orders_lines_are_added_up_against_what_it_was_ordered_as():
+    lines = [{"ref": "9100001-1-1_S3", "status": "SCHEDULED", "qty": 900},
+             {"ref": "9100001-1-1_S16", "status": "SCHEDULED", "qty": 250},
+             {"ref": "9100001-1-1_C1", "status": "UNSCHEDULED", "qty": 100},
+             {"ref": "9100001-1-1_S2", "status": "CANCELLED", "qty": None}]
+    got = C.audit_sum(lines, 1150)
+    assert got["total"] == 1250 and got["over"] == 100 and got["extra"] == ["9100001-1-1_C1"]
+    lines[2]["status"] = "CANCELLED"
+    assert C.audit_sum(lines, 1150) == {"total": 1150, "original": 1150, "over": 0.0, "under": 0.0, "extra": []}
+    assert C.audit_sum(lines, 1400)["under"] == 250 and C.audit_sum(lines)["total"] == 1150
+    assert C.qty_of("1,250.000") == 1250 and C.qty_of("") is None
+
+
+def test_every_line_is_found_past_the_rows_order_summary_shows_at_once(monkeypatch):
+    # live 26/11: an order had 17 lines, Order Summary showed 15
+    refs = [f"9100001-1-1_S{n}" for n in range(3, 20)]
+    pages = [refs[:15], refs[2:]]
+    shown = {"page": 0}
+    rows = lambda names: [{"ref": r, "status": "SCHEDULED", "cells": {"ref": {"at": [1, 1, 1, 1]}}} for r in names]  # noqa: E731
+    monkeypatch.setattr(C, "order_search", lambda ref, s=None: (rows(pages[0]), "screen"))
+    acted = []
+
+    def act(steps, what):
+        acted.append(what)
+        shown["page"] = 1
+    monkeypatch.setattr(C, "act", act)
+    monkeypatch.setattr(C, "read", lambda: "screen")
+    monkeypatch.setattr(C, "summary_rows", lambda s: rows(pages[shown["page"]]))
+    got, _ = C.all_order_rows("9100001")
+    # the end of the list still shows a full screen, so one more page is looked at to be sure nothing else comes
+    assert sorted(r["ref"] for r in got) == sorted(refs) and acted == ["Order Summary: the next lines"] * 2
+
+
+def test_the_audit_says_over_and_names_what_would_leave_extra_in_the_well(monkeypatch):
+    import argparse
+    import order_ledger as L
+    lines = {"9100001-1-1_S3": "900", "9100001-1-1_S16": "250", "9100001-1-1_C1": "100"}
+    monkeypatch.setattr(C, "all_order_rows", lambda ref, s=None: (
+        [{"ref": r, "status": "UNSCHEDULED" if r.endswith("C1") else "SCHEDULED"} for r in lines]
+        + [{"ref": "9100001-1-1_S2", "status": "CANCELLED"}], None))
+    monkeypatch.setattr(C, "close_orders", lambda *a, **k: 0)
+    monkeypatch.setattr(C, "open_order", lambda ref, modify_scheduled=False, gone_ok=False: ({"nm": ref}, ref, {}))
+    monkeypatch.setattr(C, "read_detail", lambda s, f: {"window": s, "items": [{"Qty": lines[s]}]})
+    monkeypatch.setattr(C, "close_window", lambda *a, **k: True)
+    got = C.r_order_audit(argparse.Namespace(ref="9100001", original=1150))
+    assert got["over"] == 100 and "OVER by 100" in got["said"] and "9100001-1-1_C1" in got["said"]
+    assert L.original("9100001") == 1150 and [e["action"] for e in L.events("9100001")] == ["original", "audit"]
+    again = C.r_order_audit(argparse.Namespace(ref="9100001-1-1_S3", original=None))     # the kept original used
+    assert again["original"] == 1150 and again["over"] == 100

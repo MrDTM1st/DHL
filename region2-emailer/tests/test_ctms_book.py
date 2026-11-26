@@ -1466,6 +1466,22 @@ def test_order_summary_over_planning_is_shut_and_one_under_it_left_there():
     assert not any(s.get("name") == "os-close" for s in st.steps)
 
 
+def test_a_copy_nobody_here_made_is_never_booked():
+    # 26/11: a sleeper order's copy, made by hand, was a load over the order - Book stops before touching it
+    ctms = FakeCtms([_row("9100001-1-1_C1")])
+    job = _job(ctms)
+    try:
+        job.book(["9100001-1-1_C1"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1)    # a press naming the copy
+        raise AssertionError("booked")
+    except B.Stop as e:
+        assert "9100001-1-1_C1 is a copy" in str(e) and "order-audit" in str(e) and "Nothing was booked" in str(e)
+    assert job.trips == [] and ctms.next_man == 1000100
+    ctms = FakeCtms([_row("9100001-1-1_C1")])
+    job = _job(ctms)
+    job.book(["9100001-1-1_C1"], "06/11/2026", "DHL_NOC", "NR_ARTIC_FL", None, 1, known=["9100001-1-1_C1"])
+    assert job.trips[0]["status"] == "ACCEPTED"
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

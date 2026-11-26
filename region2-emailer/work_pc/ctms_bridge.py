@@ -1181,7 +1181,8 @@ class Bridge:
             job.book(orders, date, carrier, str(cmd.get("trailer") or "").strip(), cmd.get("haulage"),
                      int(cmd.get("vehicles") or 1), qty=cmd.get("qty") if isinstance(cmd.get("qty"), dict) else None,
                      region=str(cmd.get("region") or "").strip() or None,
-                     strategy=str(cmd.get("strategy") or "").strip() or None)
+                     strategy=str(cmd.get("strategy") or "").strip() or None,
+                     known=[str(x) for x in cmd.get("known") or []])
         except Exception as e:
             stopped = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
             pressed = stopped if isinstance(e, ctms_book.StopPressed) else ""

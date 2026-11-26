@@ -85,6 +85,8 @@ MANIFEST = re.compile(r"(MAN-\d+)\s*\((\w+)\)")
 SCHEDULED_ON = re.compile(r"scheduled on trip:\s*(\d+)\s*/\s*(MAN-\d+)", re.I)
 TYPE_ROW = re.compile(r"[^:\t]+:([^\t]*)")   # a list's row as the Access Bridge names it: "Column:value" (live 03/11)
 ANCHOR = {"action": "anchor", "window": True}
+# a copied line or a re-upload: a line that adds to its order unless it replaces one (his 26/11, a sleeper order's copy)
+ADDED = re.compile(r"_(?:C\d+|RB\d*)$", re.I)
 # What a read leaves out (03/11, measured live): Planning's Stops and Resources tab pages, never read by Book; with an
 # order's card up, Planning and the OPOKUD window behind it altogether - the card is all that's wanted then
 PLANNING_SKIP = ("Stops", "Resources")
@@ -1810,8 +1812,9 @@ class Booking:
         except (Stop, RuntimeError) as e:
             self.said.append(str(e))
 
-    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, region=None, strategy=None):
-        """The whole booking. self.trips says what was made, however it ended."""
+    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, region=None, strategy=None, known=None):
+        """The whole booking. self.trips says what was made, however it ended. known: the copies and re-uploads of these
+        orders the home PC's ledger knows of (made there, or cleared by him) - any other is never booked."""
         self.of = max(1, int(vehicles or 1))
         self.start()
         self.set_filters(region, strategy)
@@ -1861,6 +1864,12 @@ class Booking:
                        "Nothing was booked.")
         self.stage("the order")
         refs = [r["cust_ref"] for r in lines]
+        # a copy or a re-upload nobody here made can add to the order: a sleeper order's copy (26/11) was a load over
+        odd = [r for r in refs if ADDED.search(r) and r not in set(known or ())]
+        if odd:
+            raise Stop(f"{', '.join(odd)} is a copy (or a re-upload) the toolkit didn't make, so it may add to the order: "
+                       f"check the order isn't over (ctms_routes.py order-audit {odd[0]}), then clear it (order_ledger.py "
+                       "allow LINE \"why\") and press Book again. Nothing was booked.")
         # CTMS won't plan one trip that waits more than a day (Friday to Monday 12/11, Friday to a Sunday night 24/11): it
         # puts the drop on the collection evening, and its "Missed delivery window" is OK'd since 26/11 - so never that far
         for r in lines:

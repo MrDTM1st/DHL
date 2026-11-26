@@ -1164,6 +1164,13 @@ def book(job, R=None, now=None):
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
     rec = record_of(job.get("record")) or job.get("record_copy") or {}     # a record already off the map, carried
+    try:                               # the copies the ledger knows of: Book books no other (his 26/11)
+        import order_ledger
+        known = order_ledger.known_lines(orders)
+    except Exception:
+        known = []
+    if known:
+        args["known"] = known
     qty = quantities(rec)
     if qty:
         args["qty"] = qty
