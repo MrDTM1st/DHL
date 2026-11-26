@@ -108,26 +108,60 @@ def _ran(answers):
     return run, calls
 
 
-def test_ctms_must_show_the_manifest_accepted_when_book_booked_it():
-    ok = {"ok": True, "found": "selected", "man": "MAN-00000001", "day": "30/11/26", "time": "08:00",
-          "status": "ACCEPTED"}
+def _stops(dl_day="01/12/26", dl_time="10:01"):
+    """The Stops tab as trip-read gives it (the shape read 24/11): a start, then the delivery."""
+    return [{"Stop": "30/11/26", "Type": "SU", "P Arr": "07:40", "P Dep": "08:20", "Location": "MADE UP DEPOT"},
+            {"Stop": "2", "Date": dl_day, "Type": "DL", "P Arr": dl_time, "P Dep": "10:41", "Location": "MADE UP SITE"}]
+
+
+def test_ctms_must_show_the_manifest_accepted_delivering_when_book_booked_it():
+    """26/11 live: Planning's list showed a booked trip at 16:00 - neither its 08:00 collection nor its 23:30 delivery -
+    so the check reads the trip's own delivery stop, found by its order line."""
+    ok = {"ok": True, "found": "selected", "man": "MAN-00000001", "day": "30/11/26", "time": "16:00",
+          "status": "ACCEPTED", "stops": _stops()}
     run, calls = _ran([dict(ok)])
-    assert aa.ctms_check(job(), NOW, run=run, lock=lambda: True)[0] is True
-    assert calls == [["trip-find", "MAN-00000001"]]
-    for bad, why in ((dict(ok, status="PLANNED"), "PLANNED in CTMS"), (dict(ok, time="09:30"), "Book booked it for"),
+    got = aa.ctms_check(job(), NOW, run=run, lock=lambda: True)
+    assert got[0] is True and "MAN-00000001 delivering 01/12 10:01" in got[1]
+    assert calls == [["trip-read", "--order", "1234567-1-1", "--tabs", "stops"]]       # never the EFX ref first
+    for bad, why in ((dict(ok, status="PLANNED"), "PLANNED in CTMS"),
+                     (dict(ok, stops=_stops(dl_time="13:30")), "CTMS delivers at 01/12 13:30, Book booked 01/12 10:00"),
+                     (dict(ok, stops=_stops(dl_day="02/12/26")), "CTMS delivers at 02/12 10:01"),
+                     (dict(ok, stops=_stops()[:1]), "no delivery stop"),
                      (dict(ok, man="MAN-00000009"), "not MAN-00000001"), ({"ok": True, "found": "list"}, "more than"),
                      ({"ok": False, "said": "Look mum, no hands is off"}, "couldn't be read")):
         run, _ = _ran([bad])
         got = aa.ctms_check(job(), NOW, run=run, lock=lambda: True)
         assert got[0] is False and why in got[1], (bad, got)
-    # a trip made today has no EFX ref yet: found by its line instead
-    run, calls = _ran([{"ok": False, "said": "Find by EFX Ref (Trip) = OM-MAN-00000001 found nothing"}, dict(ok)])
+    # CTMS plans the arrival a minute or so off the booked window: that's still as booked
+    run, _ = _ran([dict(ok, stops=_stops(dl_time="09:31"))])
     assert aa.ctms_check(job(), NOW, run=run, lock=lambda: True)[0] is True
-    assert calls[1] == ["trip-find", "--order", "1234567-1-1"]
     # a booking running in CTMS: never driven over it
     run, calls = _ran([dict(ok)])
     assert aa.ctms_check(job(), NOW, run=run, lock=lambda: None) == (False, "a booking is running in CTMS")
     assert calls == []
+    # no order line in Book's journal to find it by: held
+    t = dict(job()["trips"][0], lines=[])
+    assert "no order line" in aa.ctms_check(job(trips=[t]), NOW, run=run, lock=lambda: True)[1]
+
+
+def test_a_single_drop_closes_the_trip_and_its_wait_counts():
+    """26/11 live, a booked rails trip: SU at the supplier 16:00, then CL at the site 17:06 with a 06:24 wait - 23:30, the
+    time Book booked. (Made-up names here.)"""
+    stops = [{"Stop": "1", "Date": "30/11/26", "Type": "SU", "P Arr": "16:00", "P Dep": "16:40", "Location": "SUPPLIER"},
+             {"Stop": "2", "Date": "30/11/26", "Type": "CL", "P Arr": "17:06", "P Dep": "00:10", "Wait": "06:24",
+              "Location": "MADE UP SITE"}]
+    ok, at = aa.delivery_matches(stops, "30/11/26 23:30")
+    assert ok and at == datetime(2026, 11, 30, 23, 30)
+    ok, why = aa.delivery_matches(stops, "30/11/26 17:30")          # moved earlier in CTMS: it no longer matches
+    assert not ok and "CTMS delivers at 30/11 23:30" in why
+    assert aa.delivery_matches(stops[:1], "30/11/26 23:30") == (False, "CTMS shows no delivery stop on the trip")
+
+
+def test_a_delivery_stop_is_read_even_when_its_number_cell_is_missing():
+    stops = [{"Stop": "01/12/26", "Date": None, "Type": "DL", "P Arr": "10:00"}]
+    ok, at = aa.delivery_matches(stops, "01/12/26 10:00")
+    assert ok and at == datetime(2026, 12, 1, 10, 0)
+    assert aa.delivery_matches(stops, "not a time")[0] is False
 
 
 def test_the_answer_kept_on_the_email():

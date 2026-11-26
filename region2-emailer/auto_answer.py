@@ -9,7 +9,9 @@ assistant answers by itself. Only those, and only when all of this holds:
     day after today (on the day, where a lorry is is his to answer), and not split over pick-ups or days;
   - it's from Network Rail (a site, a requester, a materials team) or one of the order's own site contacts - never a
     manager, DHL Road, a DHL colleague, a haulier or a supplier;
-  - CTMS, read there and then (trip-find, reads only), still shows each manifest ACCEPTED at the time Book booked it.
+  - CTMS, read there and then (trip-read by its order line, the Stops tab only - reads only), still shows each
+    manifest ACCEPTED, delivering on the day Book booked and within the hour of its time (CTMS plans the arrival a
+    minute or so off the booked window: 22:31 for a 22:30 booking, seen 24/11).
 
 The words are never Claude's: they are his own booking email (book_run.words, "This order has been arranged with ...
 for <day>, delivering between ... Here is the ref number MAN-..."), filled from Book's journal. Never a price.
@@ -46,7 +48,12 @@ TRIES = 8
 PER_RUN = 5
 PER_DAY = 40
 MAX_PEOPLE = 12                                           # a reply to all that would go wider than this is his
-CHECK_WAIT = 150                                          # seconds for one CTMS read
+CHECK_WAIT = 180                                          # seconds for one CTMS read
+DRIFT = timedelta(minutes=60)                             # CTMS's planned arrival against Book's booked time
+# The stops a delivery can be (read live 24/11 and 26/11): DL a drop; CL the stop that closes the trip - on a single
+# drop it IS the site (a rails trip, 26/11: SU at the supplier 16:00, CL at the site 17:06 with a 06:24 wait = 23:30,
+# the time Book booked)
+DROP_TYPES = ("DL", "CL")
 STAMP = "%Y-%m-%d %H:%M"
 ORDER = re.compile(r"\d{7}")
 MAN = re.compile(r"MAN-\d{8}")
@@ -239,10 +246,42 @@ def _let_go(h):
             pass
 
 
+def _stop_at(st):
+    """When a Stops row's work starts: its planned arrival plus any Wait (a lorry early for its window waits there),
+    as a datetime, or None. The first row's number cell can be missing, so its date lands in Stop (seen 24/11)."""
+    day = str(st.get("Date") or "").strip()
+    if not re.fullmatch(r"\d{2}/\d{2}/\d{2}", day):
+        day = str(st.get("Stop") or "").strip()
+    try:
+        at = datetime.strptime(f"{day} {str(st.get('P Arr') or '').strip()}", "%d/%m/%y %H:%M")
+    except ValueError:
+        return None
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(st.get("Wait") or "").strip())
+    return at + timedelta(hours=int(m.group(1)), minutes=int(m.group(2))) if m else at
+
+
+def delivery_matches(stops, deliver):
+    """(True, the delivery stop's time) when one of the trip's delivery stops (DROP_TYPES) - its arrival plus its wait -
+    is within DRIFT of the time Book booked; (False, what CTMS has)."""
+    try:
+        want = datetime.strptime(str(deliver or "")[:14], "%d/%m/%y %H:%M")
+    except ValueError:
+        return False, "Book's journal has no delivery time for it"
+    drops = [_stop_at(s) for s in stops or () if str(s.get("Type") or "").strip().upper() in DROP_TYPES]
+    if not drops:
+        return False, "CTMS shows no delivery stop on the trip"
+    near = [at for at in drops if at is not None and abs(at - want) <= DRIFT]
+    if near:
+        return True, near[0]
+    got = ", ".join(f"{at:%d/%m %H:%M}" for at in drops if at is not None) or "no time"
+    return False, f"CTMS delivers at {got}, Book booked {want:%d/%m %H:%M}"
+
+
 def ctms_check(job, now, run=subprocess.run, lock=_booking_lock):
-    """Each manifest found in Planning (trip-find, reads only; by the order's line when it has no EFX ref yet): the
-    trip CTMS selects is that manifest, ACCEPTED, at the day and time Book booked it. -> (True, what was seen) or
-    (False, why not)."""
+    """Each manifest found in Planning by its order line (trip-read --order LINE --tabs stops, reads only - by line,
+    because a trip can have no EFX ref to find it by: 26/11's 52 seconds for nothing): the trip CTMS selects is that
+    manifest, ACCEPTED, and one of its delivery stops is on the day Book booked, within the hour of its time.
+    -> (True, what was seen) or (False, why not)."""
     try:
         import outlook_gate
         if outlook_gate._toolkit_off():
@@ -256,22 +295,23 @@ def ctms_check(job, now, run=subprocess.run, lock=_booking_lock):
         seen = []
         for t in job["trips"]:
             man = t["manifest"]
-            got = _route(["trip-find", man], run)
-            if not got.get("ok") and "found nothing" in str(got.get("said")) and t.get("lines"):
-                got = _route(["trip-find", "--order", str(t["lines"][0])], run)
+            line = next((str(x) for x in t.get("lines") or () if str(x).strip()), "")
+            if not line:
+                return False, f"Book's journal has no order line to find {man} by"
+            got = _route(["trip-read", "--order", line, "--tabs", "stops"], run)
             if not got.get("ok"):
                 return False, "CTMS couldn't be read: " + str(got.get("said") or "no answer")[:140]
             if got.get("found") != "selected":
-                return False, f"CTMS lists more than one trip for {man}"
+                return False, f"CTMS lists more than one trip for {line}"
             if _num(got.get("man")) != _num(man):
-                return False, f"CTMS has {got.get('man')} there, not {man}"
+                return False, f"CTMS has {got.get('man')} for {line}, not {man}"
             if str(got.get("status") or "").upper() != "ACCEPTED":
                 return False, f"{man} is {got.get('status') or 'not known'} in CTMS, not ACCEPTED"
-            at = f"{got.get('day') or ''} {got.get('time') or ''}".strip()
-            if at != str(t.get("collect") or "")[:14]:
-                return False, f"CTMS has {man} at {at or '?'}, Book booked it for {t.get('collect')}"
-            seen.append(man)
-        return True, f"CTMS {now:%d/%m %H:%M}: {', '.join(seen)} ACCEPTED as booked"
+            ok, at = delivery_matches(got.get("stops"), t.get("deliver"))
+            if not ok:
+                return False, f"{man}: {at}"
+            seen.append(f"{man} delivering {at:%d/%m %H:%M}")
+        return True, f"CTMS {now:%d/%m %H:%M}: {', '.join(seen)}, ACCEPTED as booked"
     finally:
         _let_go(h)
 

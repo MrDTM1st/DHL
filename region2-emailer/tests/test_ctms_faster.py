@@ -273,3 +273,19 @@ def test_his_yes_on_a_held_ctms_change_goes_to_the_queue_and_the_job_hears_how_i
           is_ready=lambda: (True, ""), ring=lambda t, b: None)
     it = A.load()["items"][sid]
     assert it["job"]["asks"][0]["state"] == "done" and it["job"]["state"] == "done" and it["state"] == "dealt"
+
+
+def test_trip_read_reads_only_the_tabs_asked_for(monkeypatch, capsys):
+    monkeypatch.setattr(C, "r_trip_find", lambda a: {"found": "selected", "man": "MAN-00000001", "day": "30/11/26",
+                                                       "time": "16:00", "status": "ACCEPTED"})
+    asked = []
+    monkeypatch.setattr(C, "trip_tabs", lambda words: asked.append(list(words)) or {
+        "stops": [{"Stop": "2", "Date": "01/12/26", "Type": "DL", "P Arr": "10:01"}]})
+    a = C._args("trip-read").parse_args(["--order", "9100001-1-1", "--tabs", "stops"])
+    got = C.r_trip_read(a)
+    assert asked == [["stops"]] and got["stops"][0]["Type"] == "DL" and "stop 2 DL" in capsys.readouterr().out
+    try:
+        C.r_trip_read(C._args("trip-read").parse_args(["--order", "9100001-1-1", "--tabs", "money"]))
+        raise AssertionError("a tab that isn't there was read")
+    except C.Fail:
+        pass

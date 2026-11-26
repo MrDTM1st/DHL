@@ -1734,21 +1734,29 @@ def r_trip_find(a):
     return {"found": "selected", "man": row["man"], "day": row["day"], "time": row["time"], "status": row["status"]}
 
 
+TRIP_TABS = ("detail", "stops", "status", "finance")
+
+
 @route("trip-read", "find a manifest and read it back: carrier, status, stops and times, trailer, status history, "
                     "cost and revenue (reads only)")
 def r_trip_read(a):
+    tabs = [t.strip() for t in str(getattr(a, "tabs", "") or ",".join(TRIP_TABS)).split(",") if t.strip()]
+    if not tabs or any(t not in TRIP_TABS for t in tabs):
+        raise Fail(f"--tabs takes {', '.join(TRIP_TABS)}")
     found = r_trip_find(a)
     if found.get("found") != "selected":
         return found
-    got = trip_tabs(["detail", "stops", "status", "finance"])
-    d, f = got["detail"], got["finance"]
-    print(f"  carrier {d.get('Carrier', '?')}  status {d.get('Status', '?')}  trip ref {d.get('Trip Ref', '')}  "
-          f"delivery type {d.get('Delivery Type', '')}  cost centre {d.get('Cost Centre', '')}")
-    for st in got["stops"]:
+    got = trip_tabs(tabs)
+    d, f = got.get("detail"), got.get("finance")
+    if d is not None:
+        print(f"  carrier {d.get('Carrier', '?')}  status {d.get('Status', '?')}  trip ref {d.get('Trip Ref', '')}  "
+              f"delivery type {d.get('Delivery Type', '')}  cost centre {d.get('Cost Centre', '')}")
+    for st in got.get("stops") or []:
         print(f"  stop {st.get('Stop', '?')} {st.get('Type', ''):3} {st.get('Date', '')} {st.get('P Arr', '')}-"
               f"{st.get('P Dep', '')}  {st.get('Location', '')}  {st.get('Trailer Type', '')}")
-    print(f"  cost {f.get('Trip Cost', '?')} (+VAT {f.get('Cost VAT', '?')})  revenue {f.get('Trip Revenue', '?')}")
-    hist = got["status"].get("history") or []
+    if f is not None:
+        print(f"  cost {f.get('Trip Cost', '?')} (+VAT {f.get('Cost VAT', '?')})  revenue {f.get('Trip Revenue', '?')}")
+    hist = (got.get("status") or {}).get("history") or []
     if hist:
         last = hist[-1]
         print(f"  last status change: {last.get('Action', '')} -> {last.get('Trip Status', '')} by "
@@ -2796,6 +2804,9 @@ def _args(name):
             p.add_argument("--near-start", action="store_true",
                            help=f"he has said yes although it starts within {NEAR_START} min")
         p.add_argument("--order", help="find it by an order line's Customer Ref instead")
+        if name == "trip-read":
+            p.add_argument("--tabs", default="", help="only these tabs, e.g. stops (default: "
+                                                      "detail,stops,status,finance)")
     elif name == "order-services":
         p.add_argument("ref", help="the line")
         p.add_argument("--add", action="append", help="a service code to add, e.g. NIGHT, SAT, SUN, HIAB (repeatable)")
