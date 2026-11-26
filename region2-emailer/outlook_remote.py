@@ -163,6 +163,11 @@ def run(a):
 
 def main(argv=None):
     global BASE, KEY
+    for stream in (sys.stdout, sys.stderr):      # 26/11: a read died printing a character cp1252 has no room for
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="The DHL mailbox through the home PC's Outlook.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")

@@ -287,6 +287,38 @@ def test_a_date_change_on_a_sheet_someone_has_open_waits():
         assert _read(p)[2][5] == datetime(2026, 11, 20) and sorted(os.listdir(d)) == ["DTS.xlsx", "b"]
 
 
+def test_a_dts_book_booked_is_due_on_the_day_its_trip_collects():
+    # 26/11, a DTS Book booked: the tracker's booked list never had it, and its form said Friday - its trip collects Monday
+    store = {"NN1": {"date": "27/11/2026"}, "NN2": {"date": "01/11/2026"}, "NN3": {"date": "02/11/2026"}}
+    assert S.due(store, [], {"NN3"}, by_book={"NN1": "30/11/2026", "NN9": "01/12/2026"}) == ["NN1", "NN3"]
+    assert store["NN1"]["date"] == "30/11/2026" and store["NN3"]["date"] == "02/11/2026"
+
+
+def test_books_own_bookings_are_read_off_its_journal():
+    import json
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "journal.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"jobs": {
+                "NN1@30/11/2026": {"state": "done", "orders": ["NN1"],
+                                   "trips": [{"manifest": "MAN-1", "status": "ACCEPTED", "collect": "30/11/26 09:00"}]},
+                "NN2@01/12/2026": {"state": "half", "orders": ["NN2"],
+                                   "trips": [{"status": "PLANNED", "collect": "01/12/26 09:00"}]},
+                "NN3@02/12/2026": {"state": "booked", "orders": ["NN3"], "trips": [{"status": "ACCEPTED", "collect": ""}]}}},
+                f)
+        assert S.booked_by_book(p) == {"NN1": "30/11/2026", "NN3": ""}
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert S._day("01/12/2026 08:00") == "01/12/2026" and S._day("") == ""
+
+
+def test_a_drive_the_work_pc_cant_reach_is_told_apart_from_a_busy_sheet():
+    # 26/11: "[WinError 53] The network path was not found" was the work PC's VPN being off
+    assert S.no_share("Not added: [WinError 53] The network path was not found: 'X:/DTS.xlsx'")
+    assert not S.no_share("the sheet is open on another PC")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

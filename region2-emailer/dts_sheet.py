@@ -117,9 +117,41 @@ def _on_map():
         return []
 
 
-def due(store, on_map, booked, now=None):
+def _day(when):
+    """'30/11/26 09:00' (a trip's collection, as Book's journal keeps it) -> '30/11/2026'; '' when it isn't a date."""
+    m = re.match(r"\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\b", str(when or ""))
+    if not m:
+        return ""
+    d, mo, y = m.groups()
+    return f"{int(d):02d}/{int(mo):02d}/{int(y) + (2000 if len(y) == 2 else 0)}"
+
+
+def booked_by_book(path=None):
+    """{order: the day its trip collects, dd/mm/yyyy} for every order Book has ACCEPTED, off its journal. A DTS Book booked
+    never reached the tracker's booked list (26/11, a supplier's DTS), and the day its trip collects is the one for the sheet:
+    CTMS's after any move, not the form's (that one moved from Friday to Monday)."""
+    import book_journal as J
+    out = {}
+    for e in (J.load(path).get("jobs") or {}).values():
+        if e.get("state") not in ("booked", "done"):
+            continue
+        trips = [t for t in e.get("trips") or [] if str(t.get("status") or "").upper() == "ACCEPTED"]
+        if trips:
+            for o in e.get("orders") or []:
+                out[str(o)] = _day(trips[0].get("collect"))
+    return out
+
+
+def no_share(why):
+    """The work PC can't reach the sheet's drive at all - its VPN is off (26/11) - rather than the sheet being busy."""
+    return bool(re.search(r"network path|network name|WinError (?:53|67)\b", str(why or ""), re.I))
+
+
+def due(store, on_map, booked, now=None, by_book=None):
     """Which jobs want adding now: booked and off the map, not yet on the sheet. The map's collection date - moved since the DTS
-    came in, as often as not - is carried over while the job is on it (changes `store`)."""
+    came in, as often as not - is carried over while the job is on it, and one Book booked goes on the day its trip collects
+    (changes `store`)."""
+    by_book = by_book or {}
     showing = {}
     for rec in on_map:
         for o in rec.get("orders") or []:
@@ -133,7 +165,9 @@ def due(store, on_map, booked, now=None):
             if rec.get("collection_date"):
                 job["date"] = rec["collection_date"]
             continue
-        if ref in booked:
+        if ref in booked or ref in by_book:
+            if by_book.get(ref):
+                job["date"] = by_book[ref]
             out.append(ref)
     return out
 
@@ -170,7 +204,7 @@ def run(now=None):
     now = now or datetime.now()
     store = _load()
     booked = {str(o) for o in tracker.booked_drops()}
-    refs = due(store, _on_map(), booked, now)
+    refs = due(store, _on_map(), booked, now, booked_by_book())
     if not refs:
         _save(store)
         return 0
@@ -193,6 +227,10 @@ def run(now=None):
             got, why = None, str(e)
         if got is None:
             print(f"{ref}: not yet ({why[:200]})")
+            if no_share(why) and not job.get("told_share"):
+                _tell(R, f"DTS sheet: {ref} is booked, but the work PC can't reach the DTS sheet's drive - is its VPN on? "
+                         "It tries again every few minutes.")
+                job["told_share"] = True
             hours = (now - datetime.fromisoformat(job["booked_seen"])).total_seconds() / 3600
             if hours >= STUCK_HOURS and not job.get("told"):
                 _tell(R, f"DTS sheet: {ref} still isn't on the sheet after {STUCK_HOURS} hours ({why[:120]}). It keeps trying.")

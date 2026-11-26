@@ -593,6 +593,27 @@ def adhoc_address(src, name):
     return address_in_text(src.Body, words_)
 
 
+def oneoff_to(rec, job, src, raised, ours):
+    """Who an ad hoc's or a DTS's booking email goes to, and the name it greets: (address, name).
+    A DTS: the people who booked it in, on its form - its upload's raised-by (his 26/11: "you just contact these people
+    that has been booked in", naming the supplier's own address) - never whoever sent it on to us. An ad hoc: the delivery
+    contact on the request or its upload, else whoever asked for it (his 24/11), else who raised it."""
+    contact = ((rec.get("details") or {}).get("contact") or {}).get("name") or ""
+    usable = [a for a in raised if not left_off_site(a, ours) and not _NOBODY.search(a)]
+    if job.get("site_to"):
+        return job["site_to"], first_name(contact)
+    if rec.get("kind") == "dts" and usable:
+        return usable[0], ""
+    to = (adhoc_address(src, contact) if src is not None else "") or contact_in(raised, contact)
+    greet = first_name(contact)
+    if not to and src is not None:      # nobody on the request to email: whoever asked for it is told (his 24/11)
+        to, who = requester(src, ours)
+        greet = first_name(who)
+    if not to:                          # no request email kept on the job: who raised it, as its upload says
+        to, greet = (usable[0] if usable else ""), ""
+    return to, greet
+
+
 def left_off_site(address, ours):
     """Who never stays on a site email: ourselves, and the DHL Road mailbox (his 03/11), whatever the chain had on it."""
     return address == ours or "dhlroad" in address
@@ -659,17 +680,7 @@ def site_email(rec, job, trips, send=True):
         entry = (rec.get("mail") or {}).get("entryid")
         src = ns.GetItemFromID(entry) if entry else None
         contact = ((rec.get("details") or {}).get("contact") or {}).get("name") or ""
-        raised = raised_by(rec)          # the upload's "raised by" - the site contact is often there (his 24/11)
-        ours = bd.DHL_SMTP.lower()
-        to = (job.get("site_to") or (adhoc_address(src, contact) if src is not None else "")
-              or contact_in(raised, contact))
-        greet = first_name(contact)
-        if not to and src is not None:   # nobody on the request to email: whoever asked for it is told (his 24/11)
-            to, who = requester(src, ours)
-            greet = first_name(who)
-        if not to:                       # no request email kept on the job: who raised it, as its upload says
-            to = next((a for a in raised if not left_off_site(a, ours) and not _NOBODY.search(a)), "")
-            greet = ""
+        to, greet = oneoff_to(rec, job, src, raised_by(rec), bd.DHL_SMTP.lower())
         if not to:
             return False, (f"no address for {contact or 'the delivery contact'} on the request or its upload, and "
                            "nobody who asked")
@@ -981,10 +992,13 @@ def follow(k, R=None, now=None, auto=False, only=None):
                     break
             left_ = [t for t in todo if t["manifest"] not in set(((J.get(k) or {}).get("steps") or {})
                                                                   .get("digihaul", {}).get("written") or [])]
-            J.step(k, name, not left_, why)
+            # a row put on by hand after a try that stopped is still "left" here: a Retry would paste it twice (26/11)
+            look = (f" Before a Retry, look at the tracker: if {and_list([t['manifest'] for t in left_])} is on it "
+                    "already, press Done by hand instead." if left_ else "")
+            J.step(k, name, not left_, why + look if left_ else why)
             said.append(f"DigiHaul: {rows} row(s) written" + (f", but {why}." if why else ".") if not left_ else
                         f"DigiHaul: {rows} of {len(todo)} row(s) written, {why}. Retry, or by hand: "
-                        + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in left_) + ".")
+                        + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in left_) + "." + look)
         elif name == "pass_email":
             def go():
                 if (tried or started) and sent_already(mans, to_has=PASS_DOMAIN):

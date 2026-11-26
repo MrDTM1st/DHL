@@ -76,6 +76,7 @@ CURRENT_ROW = "#FFCC00"            # the well's current row, from its From Loc a
 
 RANK = {"STANDARD": 0, "NEXT DAY": 1, "EMERGENCY": 2}
 NOC = "DHL_NOC"
+PICK_DOWNS = 30                         # Down presses after a list's first letter, looking for the row wanted (26/11)
 CONFIRM_READS, CONFIRM_PAUSE = 5, 0.4   # the Confirm Create Trip box read again while its words aren't in (16/11)
 NIGHT_FROM = 20                    # a delivery starting this late sits on the next day's schedule (seen 30/10, 02/11)
 PAGES = 6                          # pages of the well looked through
@@ -594,6 +595,7 @@ class Booking:
         else:
             self.unasked()
         if not any(f.startswith("Planning") for f in frames(self.els)):
+            self.summary_away()            # first: once Planning opens over it, its Close can't be seen (26/11)
             self.run([{"action": "anchor"}, _click((121, 36), react=True, box=[60, 45, 300, 150], quiet=0.2, timeout=5),
                       _click((128, 87), react=True, box=[280, 60, 460, 300], quiet=0.2, timeout=5),
                       _click((249, 258), after=0.3), ANCHOR])                      # Trip Management > Planning
@@ -613,12 +615,21 @@ class Booking:
                     self.run([{"action": "click", "screen": _at(cancel), "after": 0.5}])
                 raise Stop("An order is open in CTMS with changes not saved. Nothing was touched: save or close it and "
                            "press Book again.")
-        if any(f.startswith("Order Summary") for f in frames(self.els)):       # the to-do's Run leaves it up, and its card
-            if self.seen("os-card", ctms_orders.CARD_BOX) or ctms_orders.card_up(self.els):
-                self.run(ctms_orders.card_close_at(self.els))
-            self.run(ctms_orders.close_summary(self.t))
-            self.look()
+        self.summary_away()
         self.carrier_window_away()
+
+    def summary_away(self):
+        """Order Summary left up - the routes and the to-do's Run leave it, with its search card - shut by its own Close,
+        the card first, while nothing but that card is in front of it. Under Planning its Close can't be seen (26/11:
+        Book opened Planning over one and stopped on 'os-close'), and there it hides nothing Book needs: left alone."""
+        names = frames(self.els)
+        at = next((i for i, f in enumerate(names) if f.startswith("Order Summary")), None)
+        if at is None or any(not f.startswith("Order Search") for f in names[:at]):
+            return
+        if self.seen("os-card", ctms_orders.CARD_BOX) or ctms_orders.card_up(self.els):
+            self.run(ctms_orders.card_close_at(self.els))
+        self.run(ctms_orders.close_summary(self.t))
+        self.look()
 
     def carrier_window_away(self):
         """A carrier window up in front is closed by its own Exit, which changes nothing. One behind Planning is left for
@@ -1210,6 +1221,8 @@ class Booking:
                 if rows:
                     break
             keys = ctms_filters.moves(rows or [], want or "")
+            if keys is None and rows and want and self.pick_by_letter(window, name, want):
+                keys = []                      # its first letter and Down got there: Enter is all that's left
             if keys is None:
                 if rows:
                     self.run([_key("escape", 0.3)])
@@ -1217,6 +1230,20 @@ class Booking:
             self.run([_key(k, 0.04) for k in keys] + [_key("enter", 0.3), {"action": "settle", "quiet": 0.4, "timeout": 10}])
         got = (ctms_filters.boxes(self.look(), window) or {}).get(name)
         return got is not None and ctms_filters.value(got) == want
+
+    def pick_by_letter(self, window, name, want, tries=PICK_DOWNS):
+        """An open list brought to want when want isn't among the rows it shows - a long list opens on its last row (26/11:
+        Strategy 1 sat above the rows Business Type's list showed, and Book stopped) - the routes' way, which reached it
+        live: its first letter typed, then Down a row at a time until the picked row reads want. True when it does; the
+        list is left open for the caller's Enter or Escape."""
+        self.run([{"action": "type", "text": want[0], "after": 0.5}])
+        for _ in range(tries):
+            box = (ctms_filters.boxes(self.look(), window) or {}).get(name)
+            rows = (ctms_filters.list_rows(self.els, box) or ctms_filters.frame_rows(self.els, window, box)) if box else None
+            if next((n for n, on in rows or [] if on), None) == want:
+                return True
+            self.run([_key("down", 0.3)])
+        return False
 
     def apply_filters(self, window):
         """The window's own button that puts its filters on the well: Advanced's Search, the panel's Refresh. Advanced's

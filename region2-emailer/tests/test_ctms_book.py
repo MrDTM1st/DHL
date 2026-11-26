@@ -1421,6 +1421,51 @@ def test_a_collection_the_day_before_still_books():
     assert B.wait_days("", "30/11/26 09:00") is None and B.wait_days("27/11/26", None) is None
 
 
+class _Stack:
+    """CTMS's windows front first, for Book's start: Order Summary's Close (its picture, 'os-close') is only found while
+    it is in front, and Trip Management > Planning opens Planning on top of whatever is up."""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.steps = []
+
+    def read(self, tree=True, skip=(), menus=False):
+        return [{"r": "internal frame", "nm": n, "lv": 0, "at": [10, 10, 900, 700]} for n in self.frames]
+
+    def run(self, steps):
+        for s in steps:
+            self.steps.append(s)
+            if s.get("action") == "find" and s.get("name") == "os-close":
+                if not self.frames or not self.frames[0].startswith("Order Summary"):
+                    raise RuntimeError("'os-close' is not on the screen where it should be (looked for 5s).")
+                self.frames.pop(0)
+            elif s.get("action") == "click" and list(s.get("px") or []) == [249, 258]:
+                self.frames.insert(0, "Planning")
+
+
+def _start(frames):
+    st = _Stack(frames)
+    B.Booking(st.run, st.read, lambda name, box: False, T).start()
+    return st
+
+
+def test_order_summary_left_up_is_shut_before_planning_opens_over_it():
+    # live 26/11: Order Summary left up by the routes, no Planning - Book opened Planning over it, and then "'os-close'
+    # is not on the screen" stopped the booking
+    st = _start(["Order Summary", "OPOKUD on INDTPRD"])
+    assert st.frames == ["Planning", "OPOKUD on INDTPRD"]
+    shut = [i for i, s in enumerate(st.steps) if s.get("name") == "os-close"]
+    opened = [i for i, s in enumerate(st.steps) if list(s.get("px") or []) == [249, 258]]
+    assert shut and opened and shut[0] < opened[0]
+
+
+def test_order_summary_over_planning_is_shut_and_one_under_it_left_there():
+    assert _start(["Order Summary", "Planning", "OPOKUD on INDTPRD"]).frames == ["Planning", "OPOKUD on INDTPRD"]
+    st = _start(["Planning", "Order Summary", "OPOKUD on INDTPRD"])       # nothing of it to press: it hides nothing
+    assert st.frames == ["Planning", "Order Summary", "OPOKUD on INDTPRD"]
+    assert not any(s.get("name") == "os-close" for s in st.steps)
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

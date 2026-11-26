@@ -22,7 +22,7 @@ class Filters:
     """Planning with Order Filters and Advanced Order Filters: drop-downs that only move by their keys."""
 
     def __init__(self, business="", delivery="All", show_all=True, weight="", stuck=(), region=None, named_by_value=False,
-                 dead_search=False):
+                 dead_search=False, visible=None):
         self.vals = {"Business Type": business, "Delivery Type": delivery, "Show All Orders": show_all, "Weight": weight}
         if region is not None:
             self.vals["To Plan Reg"] = region
@@ -34,6 +34,7 @@ class Filters:
         self.focus = None
         self.applied = []
         self.dead_search = dead_search    # a Search click that only gives CTMS the focus, every time
+        self.visible = visible            # an open list shows only this many rows, round the picked one (26/11)
 
     def _boxes(self):
         return {"Delivery Type": ("combo box", [506, 319, 225, 27], ADV_AT, "Delivery Type"),
@@ -70,8 +71,11 @@ class Filters:
                     els += [{"r": "label", "nm": row, "lv": 1, "at": [bat[0] - 9, bat[1] + 22 * (k - k0), 70, 22],
                              "st": ["selected"] if k == k0 else None} for k, row in enumerate(self.lists[n]) if row]
                 elif self.open_list and self.open_list[0] == n:
-                    els += [{"r": "label", "nm": row, "lv": 2, "at": [bat[0], bat[1] + 23 * (k + 1), 200, 22],
-                             "st": ["selected"] if k == self.open_list[1] else None} for k, row in enumerate(self.lists[n])]
+                    rows, k0 = self.lists[n], self.open_list[1]
+                    lo = min(max(0, k0 - self.visible + 1), max(0, len(rows) - self.visible)) if self.visible else 0
+                    hi = lo + self.visible if self.visible else len(rows)
+                    els += [{"r": "label", "nm": row, "lv": 2, "at": [bat[0], bat[1] + 23 * (k - lo + 1), 200, 22],
+                             "st": ["selected"] if k == k0 else None} for k, row in enumerate(rows) if lo <= k < hi]
             els += [{"r": "push button", "nm": b, "lv": 1, "at": bat} for b, bat in btns]
         return els
 
@@ -82,8 +86,19 @@ class Filters:
                 self.click(s.get("screen"))
             elif a == "key":
                 self.key(s["key"])
+            elif a == "type" and self.open_list:
+                self.jump(s["text"])
             elif a == "type" and self.focus:
                 self.vals[self.focus] = s["text"]
+
+    def jump(self, letter):
+        """A letter typed into an open list: the next row after the picked one that starts with it, round from the top."""
+        n, i = self.open_list
+        rows = self.lists[n]
+        for k in list(range(i + 1, len(rows))) + list(range(0, i + 1)):
+            if rows[k][:1].lower() == letter[:1].lower():
+                self.open_list = (n, k)
+                return
 
     def click(self, sc):
         if not sc:
@@ -296,3 +311,22 @@ def test_a_region_that_wont_take_stops_the_booking():
     job = _job(f)
     with pytest.raises(B.Stop, match="wouldn't go to To Plan Reg PR4"):
         job.set_filters("R4")
+
+
+def test_a_strategy_the_open_list_doesnt_show_is_reached_by_its_first_letter():
+    # live 26/11: Business Type's list opened on its last rows and Strategy 1 sat above them - "The well's filters wouldn't
+    # go to Business Type Strategy 1 - Flats & Hiabs". Its first letter, then Down, got there (the routes' way)
+    f = Filters(business="Strategy 6 - Ad-Hoc/Projects", region="PR2", named_by_value=True, visible=2)
+    _job(f).set_filters("R2", "Strategy 1 - Flats & Hiabs")
+    assert f.vals["Business Type"] == "Strategy 1 - Flats & Hiabs" and f.applied == ["Search"] and not f.open_list
+    f = Filters(business="Strategy 6 - Ad-Hoc/Projects", region="PR2", named_by_value=True, visible=1)
+    _job(f).set_filters("R2", "Strategy 3 - Rails")
+    assert f.vals["Business Type"] == "Strategy 3 - Rails"
+
+
+def test_a_strategy_the_list_hasnt_got_still_stops_with_the_list_shut_and_nothing_changed():
+    import pytest
+    f = Filters(business="Strategy 6 - Ad-Hoc/Projects", region="PR2", named_by_value=True, visible=2)
+    with pytest.raises(B.Stop, match="wouldn't go to"):
+        _job(f).set_filters("R2", "Strategy 9 - Nowhere")
+    assert f.vals["Business Type"] == "Strategy 6 - Ad-Hoc/Projects" and not f.open_list

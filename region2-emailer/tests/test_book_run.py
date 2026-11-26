@@ -339,6 +339,25 @@ def test_his_map_comes_first_then_the_match_then_what_the_contact_list_has():
     assert carriers.book_code({"name": "Hotel"}, data) == ""
 
 
+def test_a_dts_booking_email_goes_to_whoever_booked_it_in_on_its_form():
+    """His 26/11 (a supplier's DTS sent on to us by a colleague): "you just contact these people that has been booked in"
+    - the form's raised-by, never whoever forwarded it. An ad hoc keeps its delivery contact first, as before."""
+    import types
+    ours = "me@example.net"
+    fwd = types.SimpleNamespace(SenderEmailAddress="jo.forwarder@example.org", SenderName="Jo Forwarder", Sender=None,
+                                Body="Please can you sort this")
+    dts = {"kind": "dts", "details": {"contact": {"name": "Ian Site"}}}
+    raised = ["orders@supplier.example.com"]
+    assert B.oneoff_to(dts, {}, None, raised, ours) == ("orders@supplier.example.com", "")
+    assert B.oneoff_to(dts, {}, fwd, raised, ours)[0] == "orders@supplier.example.com"
+    assert B.oneoff_to(dts, {"site_to": "chosen@example.com"}, fwd, raised, ours)[0] == "chosen@example.com"
+    assert B.oneoff_to(dts, {}, None, [ours, "noreply@example.com"], ours) == ("", "")
+    adhoc = {"kind": "adhoc", "details": {"contact": {"name": "Robin Field"}}}
+    assert B.oneoff_to(adhoc, {}, None, ["sam.asker@example.net", "robin.field@site.example.com"], ours) == \
+        ("robin.field@site.example.com", "Robin")
+    assert B.oneoff_to(adhoc, {}, None, ["sam.asker@example.net"], ours) == ("sam.asker@example.net", "")
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
