@@ -263,6 +263,50 @@ def quantities(rec):
     return {orders[0]: float(m.group(1))} if m else {}
 
 
+LOADS_FROM = 3      # the work PC bridge's version whose Book sets each part of a split to its load (27/11)
+
+
+def plan_loads(job, rec):
+    """His 10 + 20 (27/11): bagged ballast going on more than one vehicle is shared out the ballast_loads way - each
+    vehicle full before the next, what's left on a rigid when it is 10 bags or fewer - never halved ("You don't ever
+    split it down into 15s to put on 2 Arctics because you're just wasting space. Unless I explicitly say so").
+    Loads the job brings (the Book form's) are checked against the order's bags instead, and "equal": true is his
+    say-so for halving it. Sets job["loads"] and job["vehicles"]. -> the plan in words ("" when there's none), or
+    ValueError saying why it can't be booked as asked."""
+    import ballast_loads as BL
+    import ctms_run_plan
+    n = int(job.get("vehicles") or 1)
+    # a record flagged loose (the map's own flag) is tipped whatever its words say - never bags
+    bags = None if (rec or {}).get("loose_ballast") else (ctms_run_plan.ballast_bags(rec or {}) or None)
+    if job.get("loads"):
+        plan = BL.check(job["loads"], bags)
+        if n not in (1, len(plan)):
+            raise ValueError(f"{len(plan)} loads ({BL.said(plan)}) for {n} vehicles")
+        job["loads"], job["vehicles"] = BL.as_job(plan), len(plan)
+        return "Loads as given: " + BL.said(plan)
+    if job.get("equal") or n < 2 or not bags:
+        return ""
+    plan = BL.loads(bags, job.get("trailer"), job.get("carrier"))
+    if plan is None:
+        return ""                          # a trailer the rule doesn't know: split as asked
+    if len(plan) != n:
+        raise ValueError(f"{bags} bags on {job.get('trailer')} fill {len(plan)} vehicle(s), each full before the next "
+                         f"({BL.said(plan)}), not {n}: book {len(plan)}, pick the other trailer, or tick Split equally")
+    job["loads"] = BL.as_job(plan)
+    return f"Loads: {BL.said(plan)}, each vehicle full before the next (his 10 + 20)"
+
+
+def bridge_takes_loads(R):
+    """Whether the work PC's bridge is on a version whose Book sets each part's load. An older one would drop the
+    loads and halve the line, so they're never sent to it."""
+    try:
+        code, st = R.http("GET", "/api/ctms/status")
+        v = str(((st or {}).get("state") or {}).get("version") or "").strip()
+        return code == 200 and v.isdigit() and int(v) >= LOADS_FROM
+    except Exception:
+        return False
+
+
 def is_urgent(collect, now):
     """The tracker's Urgent: "If Collecting Today/Tomorrow Morning". collect as the well shows it, dd/mm/yy HH:MM."""
     try:
@@ -1230,8 +1274,22 @@ def book(job, R=None, now=None):
             e = J.get(k)
             out.update(ok=True, said=" ".join(said), trips=J.accepted(e), resumed=True, total=round(time.time() - t0, 1))
             return out
+    try:                               # his 10 + 20 (27/11): worked out before anything in CTMS is touched
+        planned = plan_loads(job, record_of(job.get("record")) or job.get("record_copy") or {})
+    except ValueError as x:
+        out["said"] = f"{x}. Nothing was booked."
+        out["refused"] = True
+        return out
+    if job.get("loads"):
+        R = R or _client()
+        if not bridge_takes_loads(R):
+            out["said"] = (f"The work PC's Book can't set the loads yet ({planned}): its bridge needs the update that "
+                           "brings them, or it would halve the line. Book the parts on their own, or tick Split "
+                           "equally. Nothing was booked.")
+            out["refused"] = True
+            return out
     first = owed_first(orders)
-    before = []
+    before = [planned + "."] if planned else []
     if first and not dry:
         # his 03/11: what's missing on a line is dealt with, not gone past - the to-do's update (times, the delivery
         # comment, services, the Veh Type) is typed in first, by the same run the to-do's Run button uses
@@ -1244,6 +1302,8 @@ def book(job, R=None, now=None):
     args = {k_: job[k_] for k_ in ("orders", "date", "carrier", "trailer", "vehicles", "dry") if job.get(k_) not in (None, "")}
     if job.get("haulage") not in (None, ""):
         args["haulage"] = float(job["haulage"])
+    if job.get("loads"):
+        args["loads"] = job["loads"]
     rec = record_of(job.get("record")) or job.get("record_copy") or {}     # a record already off the map, carried
     try:                               # the copies the ledger knows of: Book books no other (his 26/11)
         import order_ledger
@@ -1269,7 +1329,8 @@ def book(job, R=None, now=None):
             before.append(f"Its Business Type read off its card in CTMS ({strategy}), so another's can't hide it.")
     if strategy:
         args["strategy"] = strategy
-    wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders)))
+    wait = min(780, 150 + 90 * int(job.get("vehicles") or 1) + 30 * max(1, len(orders))
+               + 60 * len(job.get("loads") or []))          # each part's card set to its load
     numbered = []
     if not dry:
         if rec.get("id") and not job.get("record_copy"):
@@ -1325,7 +1386,8 @@ def book(job, R=None, now=None):
                      + (f" (cost {made[0].get('total') or made[0].get('cost')}, revenue {made[0].get('revenue')})"
                         if len(made) == 1 else "") + "."]
     fixed = [n for n in payload.get("notes") or []
-             if "put right" in n or "put up to" in n or "PUT BACK BY HAND" in n or "split into" in n]
+             if "put right" in n or "put up to" in n or "PUT BACK BY HAND" in n or "split into" in n
+             or "set to their loads" in n]
     if fixed:
         said.append("On the lines first: " + "; ".join(fixed) + ".")
     priced = [str(n) for n in payload.get("priced") or []]    # a quote is the TOTAL: the haulier's own lines came off it

@@ -113,7 +113,9 @@ CONFIG = os.path.join(HERE, "ctms_bridge.json")        # gitignored - holds the 
 LOG = os.path.join(HERE, "ctms_bridge_log.jsonl")       # every command, every result
 CRASH = os.path.join(HERE, "ctms_bridge_crash.txt")     # the last thing that stopped it
 OUTDIR = os.path.join(HERE, "ctms_capture")
-VERSION = "2"
+# 3 (27/11): Book takes a load a vehicle ("loads") - the home PC sends them only to a bridge on 3 or later, since an older
+# one would drop them and halve the line
+VERSION = "3"
 DEFAULT_DESK = "https://dhlbutbetter.up.railway.app"
 # The toolkit's single-instance locks run 8785-8791; the bridge takes the next
 # one, so it can share the machine with the engine once the work PC runs it.
@@ -1182,7 +1184,8 @@ class Bridge:
                      int(cmd.get("vehicles") or 1), qty=cmd.get("qty") if isinstance(cmd.get("qty"), dict) else None,
                      region=str(cmd.get("region") or "").strip() or None,
                      strategy=str(cmd.get("strategy") or "").strip() or None,
-                     known=[str(x) for x in cmd.get("known") or []])
+                     known=[str(x) for x in cmd.get("known") or []],
+                     loads=cmd.get("loads") if isinstance(cmd.get("loads"), list) else None)
         except Exception as e:
             stopped = str(e) if isinstance(e, (ctms_drive.Refused, ctms_drive.NeedsCommit, RuntimeError)) else friendly(e)
             pressed = stopped if isinstance(e, ctms_book.StopPressed) else ""
@@ -1196,7 +1199,8 @@ class Bridge:
             pass
         took = round(time.time() - t0, 1)
         made = [x for x in job.trips if x.get("manifest")]
-        fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n)
+        fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n
+                          or "set to their loads" in n)
         by_hand = "; ".join(n for n in job.said if n.startswith(("PUT BACK BY HAND", "CLOSE BY HAND", "CHECK BY HAND",
                                                                   "CHECK THE COST BY HAND")))
         if pressed:

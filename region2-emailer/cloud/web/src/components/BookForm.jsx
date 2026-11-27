@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { jobOf, RANK_LABEL } from '../lib/orders.js';
-import { TRAILERS, rankOf, defaultTrailer, defaultVehicles, propose, notReady } from '../lib/bookQueue.js';
+import {
+  TRAILERS, rankOf, defaultTrailer, defaultVehicles, propose, notReady, bookLoads, loadsText,
+} from '../lib/bookQueue.js';
 
 // The brief's Book (his design 02/11): "book with who?", the price per vehicle if they're a tier 2, and the work PC books
 // it in CTMS. His press of Book it is the go-ahead for this one order. What follows the booking - the DigiHaul row for a
@@ -22,13 +24,16 @@ export default function BookForm({ record: r, hauliers, recs, run, onBook, onCan
   const [trailer, setTrailer] = useState(() => proposal.trailer || defaultTrailer(r, job));
   const guess = defaultVehicles(r, job, trailer);
   const [vehicles, setVehicles] = useState(null);       // null: what the weight says
+  const [equal, setEqual] = useState(false);            // his say-so to halve bagged ballast after all
   const [price, setPrice] = useState('');
   const [siteTo, setSiteTo] = useState('');
   const oneOff = r.kind === 'adhoc' || r.kind === 'dts';
   const contactName = (((r.details || {}).contact) || {}).name;
   const h = fits.concat(others).find((x) => x.name === name);
   const rank = h ? rankOf(h) : null;
-  const n = vehicles === null ? guess.n : vehicles;
+  // bagged ballast is shared out by his 10 + 20 (27/11): the loads, and the vehicles they need, follow the trailer
+  const plan = bookLoads(r, job, trailer, code, equal);
+  const n = plan ? plan.length : (vehicles === null ? guess.n : vehicles);
   const going = run && run.state === 'running';
 
   const pick = (e) => {
@@ -43,6 +48,8 @@ export default function BookForm({ record: r, hauliers, recs, run, onBook, onCan
     needPrice && !(Number(price) > 0) && 'the price'].filter(Boolean);
   const jobNow = () => ({
     orders: r.orders || [], date: r.delivery_date, carrier: code.trim(), haulier: h.name, trailer, vehicles: n,
+    ...(plan ? { loads: plan } : {}),
+    ...(equal && job.ballastBags ? { equal: true } : {}),
     ...(Number(price) > 0 ? { haulage: Number(price) } : {}),
     ...(siteTo.trim() ? { site_to: siteTo.trim() } : {}),
   });
@@ -99,15 +106,28 @@ export default function BookForm({ record: r, hauliers, recs, run, onBook, onCan
       </label>
       <label className="pf-row">
         <span>Vehicles</span>
-        <select value={n} onChange={(e) => setVehicles(Number(e.target.value))}>
+        <select value={n} disabled={!!plan} onChange={(e) => setVehicles(Number(e.target.value))}>
           {Array.from({ length: Math.max(12, n) }, (_, i) => i + 1).map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
       </label>
-      {n > 1 && (
+      {plan && (
+        <div className="pf-note">
+          {loadsText(plan)}: each vehicle full before the next, what&rsquo;s left on a rigid (your 10 + 20). The line is
+          split, each part set to its load and booked on its own trailer. A rigid picked as the trailer makes rigids of 10.
+        </div>
+      )}
+      {!plan && n > 1 && (
         <div className="pf-note">
           {guess.why && vehicles === null ? `${guess.why}. ` : ''}One line gets split equally, and CTMS shares the weight out.
-          Unequal loads aren't built in yet: split those by hand first and I'll book each part.
+          {job.ballastBags ? '' : ' Unequal loads of anything but bagged ballast aren\'t built in yet: split those by hand first and I\'ll book each part.'}
         </div>
+      )}
+      {job.ballastBags > 0 && (plan || equal) && (
+        <label className="pf-row">
+          <span>Split equally</span>
+          <input type="checkbox" checked={equal} onChange={(e) => setEqual(e.target.checked)} />
+          <span className="pf-hint">only when you say so - {job.ballastBags} bags halved over the vehicles</span>
+        </label>
       )}
       {h && (rank === 0 ? (
         <div className="pf-note">Our own fleet: the haulage stays 0.</div>

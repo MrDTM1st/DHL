@@ -457,6 +457,27 @@ def split_window(els):
     return parts if all(v is not None for v in parts.values()) else None
 
 
+def load_plan(loads, vehicles):
+    """A booking's loads ([{"qty", "trailer"}], a vehicle each) as [(qty, trailer)], or None when there are none. Wrong
+    ones stop the booking before CTMS is touched: one for every vehicle, each a whole number over 0 on a trailer."""
+    if not loads:
+        return None
+    try:
+        plan = [(float(x["qty"]), str(x["trailer"]).strip()) for x in loads]
+    except (KeyError, TypeError, ValueError):
+        raise Stop(f"The loads ({loads!r}) aren't a quantity and a trailer each. Nothing was booked.")
+    n = max(1, int(vehicles or 1))
+    if len(plan) != n or n < 2 or any(q <= 0 or q != int(q) or not t for q, t in plan):
+        raise Stop(f"The loads ({loads_said(plan)}) don't fit a booking of {n} vehicle(s): one load a vehicle, two or "
+                   "more, each a whole quantity on a trailer. Nothing was booked.")
+    return plan
+
+
+def loads_said(plan):
+    """Loads in a line: "20 on NR_ARTIC_FL, 10 on NR_FLAT_RIG"."""
+    return ", ".join(f"{q:g} on {t}" for q, t in plan or [])
+
+
 def line_wants(refs, orders, qty):
     """Each line's quantity as the desk knows the order's: an order of one line has the order's whole quantity; an order
     over several lines has no figure a line (only the total could be checked, and which line is short can't be told), so
@@ -1850,9 +1871,13 @@ class Booking:
         except (Stop, RuntimeError) as e:
             self.said.append(str(e))
 
-    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, region=None, strategy=None, known=None):
+    def book(self, orders, date, carrier, trailer, haulage, vehicles, qty=None, region=None, strategy=None, known=None,
+             loads=None):
         """The whole booking. self.trips says what was made, however it ended. known: the copies and re-uploads of these
-        orders the home PC's ledger knows of (made there, or cleared by him) - any other is never booked."""
+        orders the home PC's ledger knows of (made there, or cleared by him) - any other is never booked. loads: a load
+        a vehicle ([{"qty", "trailer"}], his 10 + 20 of 27/11) for one line going on several - it is split, each part set
+        to its load and booked on its own trailer, never halved and all on one."""
+        plan = load_plan(loads, vehicles)
         self.of = max(1, int(vehicles or 1))
         self.start()
         self.set_filters(region, strategy)
@@ -1900,6 +1925,11 @@ class Booking:
         if vehicles > 1 and len(lines) > 1 and len(lines) != vehicles:
             raise Stop(f"{named} has {len(lines)} lines to share over {vehicles} vehicles: the button can't split that yet. "
                        "Nothing was booked.")
+        if plan and len(lines) != 1:
+            # which of several lines takes which load can't be told from the well: loads are for the one line Book splits
+            raise Stop(f"{named} has {len(lines)} lines on {date}, and the loads ({loads_said(plan)}) are for one line "
+                       "that Book splits itself: book each part on its own, or put the order back on one line. "
+                       "Nothing was booked.")
         self.stage("the order")
         refs = [r["cust_ref"] for r in lines]
         # a copy or a re-upload nobody here made can add to the order: a sleeper order's copy (26/11) was a load over
@@ -1924,16 +1954,34 @@ class Booking:
             self.stage("the lines checked")
         if vehicles > 1 and len(lines) == 1:
             if self.dry:
-                self.said.append(f"{refs[0]} would be split into {vehicles}: rehearsing one of them")
-                self.trip(refs, carrier, trailer, haulage)
+                self.said.append(f"{refs[0]} would be split into {vehicles}"
+                                 + (f", the parts set to {loads_said(plan)}" if plan else "") + ": rehearsing one of them")
+                self.trip(refs, carrier, plan[0][1] if plan else trailer, haulage)
                 return self.trips
             self.halt(f"before {refs[0]} was split")
             refs = self.split(refs[0], vehicles, orders, date)
             self.stage("the split")
+            if plan:
+                self.set_loads(refs, plan)
+                self.stage("the loads")
         if vehicles > 1:
-            for ref in refs:
-                self.trip([ref], carrier, trailer, haulage)
+            for i, ref in enumerate(refs):
+                self.trip([ref], carrier, plan[i][1] if plan else trailer, haulage)
                 self.look()
         else:
             self.trip(refs, carrier, trailer, haulage)
         return self.trips
+
+    def set_loads(self, refs, plan):
+        """Each part of a split set to its vehicle's load - CTMS's Split Orders only halves a line (his recipe, 02/11:
+        "update the quantity and the weight on each individual order to make one say 20 and then the other one say 10").
+        The quantity goes on the part's card as any put-right does (Order Items' Ordered, its Weight cleared for CTMS
+        to fill from it, the Detail tab's Qty, Save). The parts going down are set first, so the order never shows more
+        than it holds on the way. Part i takes load i, the trip after it the same load's trailer."""
+        if len(refs) != len(plan):
+            raise Stop(f"The split made {len(refs)} parts ({', '.join(refs)}), not the {len(plan)} loads "
+                       f"({loads_said(plan)}): look at Order Summary before anything else. Nothing was booked.")
+        for i in sorted(range(len(refs)), key=lambda i: plan[i][0]):
+            self.prepare_line(refs[i], float(plan[i][0]))
+        self.said.append("the parts set to their loads: " + ", ".join(f"{ref} {q:g} for {t}"
+                                                                     for ref, (q, t) in zip(refs, plan)))

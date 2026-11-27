@@ -469,7 +469,9 @@ export function jobOf(r) {
       checks.push("No HIAB: rigid or artic is open - the most a rigid takes without a HIAB isn't set");
     }
   }
-  return { need: out, rails, metres, rearSteer: out.includes(REAR_STEER), kg, byWeight, notes, checks };
+  // ballastBags: the 1 t bags when the order is nothing but bagged ballast - the Book form shares them out by his 10 + 20
+  return { need: out, rails, metres, rearSteer: out.includes(REAR_STEER), kg, byWeight, notes, checks,
+    ballastBags: bagKg ? bagKg / BAG_KG : 0 };
 }
 
 // What a job needs from a haulier - [{label, any[]}], each met by ANY of its

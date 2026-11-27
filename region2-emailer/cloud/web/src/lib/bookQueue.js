@@ -40,6 +40,39 @@ export function defaultVehicles(r, job, trailer) {
   return { n, why: `${Math.round(job.kg).toLocaleString('en-GB')} kg at ${max.toLocaleString('en-GB')} kg a vehicle` };
 }
 
+// Bagged ballast onto vehicles (his 27/11, ballast_loads.py): "put 10 on a rigid and 20 on an Arctic. You don't ever split
+// it down into 15s to put on 2 Arctics because you're just wasting space. Unless I explicitly say so." Each vehicle full
+// before the next - an artic HIAB 20 bags, a rigid 10 - and what's left on a rigid when it is 10 or fewer. A rigid picked
+// means rigids of 10. [{qty, trailer}] a vehicle, or null when the rule doesn't cover it (no bags, or a trailer that is
+// neither the artic nor the rigid flat). carrier: kept for a haulier whose artic takes fewer - none is set.
+export const TRAILER_RIGID = 'NR_FLAT_RIG';
+export const TRAILER_ARTIC = 'NR_ARTIC_FL';
+const RIGID_BAGS = 10;
+const ARTIC_BAGS = 20;
+export function ballastLoads(bags, trailer, carrier) {      // eslint-disable-line no-unused-vars
+  const n = Math.floor(Number(bags) || 0);
+  const cap = trailer === TRAILER_RIGID ? RIGID_BAGS : trailer === TRAILER_ARTIC ? ARTIC_BAGS : null;
+  if (n <= 0 || cap === null) return null;
+  const out = Array.from({ length: Math.floor(n / cap) }, () => ({ qty: cap, trailer }));
+  const rest = n % cap;
+  if (rest) out.push({ qty: rest, trailer: rest <= RIGID_BAGS ? TRAILER_RIGID : trailer });
+  return out;
+}
+
+// "20 bags on NR_ARTIC_FL and 10 on NR_FLAT_RIG"
+export function loadsText(plan) {
+  const bits = (plan || []).map((l, i) => `${l.qty}${i === 0 ? ' bags' : ''} on ${l.trailer}`);
+  return bits.length > 1 ? bits.slice(0, -1).join(', ') + ' and ' + bits[bits.length - 1] : (bits[0] || '');
+}
+
+// The loads a Book press sends: his rule's when the order is bagged ballast going on more than one vehicle - null when
+// it isn't, or he ticked Split equally.
+export function bookLoads(r, job, trailer, carrier, equal) {
+  if (equal || !job || !job.ballastBags) return null;
+  const plan = ballastLoads(job.ballastBags, trailer, carrier);
+  return plan && plan.length > 1 ? plan : null;
+}
+
 const baseOf = (o) => String(o || '').trim().toUpperCase().replace(/[-_/][A-Z0-9]{1,3}$/, '');
 const journalKey = (orders, date) => [...new Set((orders || []).map((o) => String(o).replace(/\s+/g, '').toUpperCase())
   .filter(Boolean))].sort().join('|') + '@' + String(date || '').trim();
@@ -84,9 +117,12 @@ export function propose(r, fits, asks = {}) {
   const trailer = defaultTrailer(r, job);
   const veh = defaultVehicles(r, job, trailer);
   const rank = h ? rankOf(h) : null;
+  const code = h ? (h.book || h.ctms || '') : '';
+  const loads = bookLoads(r, job, trailer, code, false);      // bagged ballast: his 10 + 20, never halved
   return {
-    name: h ? h.name : '', code: h ? (h.book || h.ctms || '') : '', rank, trailer,
-    vehicles: veh.n, vehiclesWhy: veh.why, price: '',
+    name: h ? h.name : '', code, rank, trailer,
+    vehicles: loads ? loads.length : veh.n, vehiclesWhy: loads ? loadsText(loads) : veh.why, price: '',
+    ...(loads ? { loads } : {}),
     why: lined ? 'asked already' : h ? 'first who fits' : '',
   };
 }
@@ -102,6 +138,7 @@ export function jobFor(r, p) {
   return {
     record: r.id, orders: r.orders || [], date: r.delivery_date, carrier: String(p.code || '').trim(), haulier: p.name,
     trailer: p.trailer, vehicles: Number(p.vehicles) || 1,
+    ...(p.loads ? { loads: p.loads } : {}),
     ...(Number(p.price) > 0 ? { haulage: Number(p.price) } : {}),
     ...(String(p.siteTo || '').trim() ? { site_to: String(p.siteTo).trim() } : {}),
   };
