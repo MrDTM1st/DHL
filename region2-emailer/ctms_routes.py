@@ -225,6 +225,31 @@ def describe(e):
     return " ".join(bits)
 
 
+def own_buttons(s, f, name, enabled=None):
+    """A window's own buttons of that name (its bar's Save, say), never one inside one of its tab pages: an order's
+    Services tab has a Save of its own beside the order's, and with that tab up it comes first in the read (24/11 and
+    again 27/11: order-services stopped at "2 of the order's Save" with the service typed in and not saved); Planning's
+    Services tab has one too. The window's own sit one level under it (order card and Planning read so 24/11); a window
+    with none there keeps the old search. enabled: only those that can be pressed - the window's own greyed out is none,
+    never a tab page's instead."""
+    every = s.find(name=name, role="push button", within=f)
+    pool = [e for e in every if e.get("lv", 0) == (f or {}).get("lv", 0) + 1] or every
+    if enabled is None:
+        return pool
+    return [e for e in pool if ("disabled" in (e.get("st") or [])) != enabled]
+
+
+def own_button(s, f, name, what=""):
+    """The one own button of that name on the window f - see own_buttons."""
+    got = own_buttons(s, f, name)
+    if len(got) == 1:
+        return got[0]
+    desc = what or f"{clean((f or {}).get('nm'))}'s own {name}"
+    if not got:
+        raise Fail(f"CTMS shows no {desc} ({s.summary()})")
+    raise Fail(f"CTMS shows {len(got)} of {desc}: " + "; ".join(describe(e) for e in got[:5]))
+
+
 # ---------- talking to the bridge ----------
 def connect():
     if not R.BASE:
@@ -287,7 +312,7 @@ def settle(s, frame=None):
         oked = True
         s = read()
     if oked and frame and frame not in _RESAVED:
-        save = s.find(name="Save", role="push button", within=s.frame(frame), enabled=True)
+        save = own_buttons(s, s.frame(frame), "Save", enabled=True)
         if save:
             _RESAVED.add(frame)
             act([click(save[0], after=1.2)], f"{frame} Save again (the notice stopped the first)")
@@ -1296,7 +1321,7 @@ def set_status(man, target, commit, near_ok=False):
     planning = s.frame("Planning")
     act([click(q["buttons"]["ok"], react=True, timeout=20, after=0.8)], "OK (once)")
     s = read()
-    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    save = own_buttons(s, s.frame("Planning"), "Save", enabled=True)
     if save:
         act([click(save[0], after=1.0)], "Planning Save")
     for _ in range(5):
@@ -1773,7 +1798,7 @@ def r_order_note(a):
     after = str(next(e for e in s.children(f) if clean(e.get("nm")) == "Special Instructions").get("v") or "")
     if not after.rstrip().endswith(note.strip()) or not after.startswith(before[:40]):
         raise Fail(f"Special Instructions read ...{after[-60:]!r} - not saved, left open for a look")
-    act([click(s.one("the order's Save", role="push button", name="Save", within=f), after=2.0)], "order Save")
+    act([click(own_button(s, f, "Save", "the order's Save"), after=2.0)], "order Save")
     s = ok_known_questions()
     close_window(name, s)
     print(f"ADDED to {a.ref}: '{note}'")
@@ -2018,7 +2043,7 @@ def r_order_nc(a):
     act([click(s.one("the box's OK", role="push button", name="OK", within=box), after=1.5)], "OK")
     s = ok_known_questions()
     f = details_frame(s)
-    save = s.find(name="Save", role="push button", within=f, enabled=True)
+    save = own_buttons(s, f, "Save", enabled=True)
     if save:
         act([click(save[0], after=1.5)], "order Save")
         s = ok_known_questions()
@@ -2103,7 +2128,7 @@ def r_trip_unschedule(a):
             raise Fail(f"after Unschedule Order CTMS shows: {q and q['words'][:150]} - left up for a look")
         act([click(q["buttons"]["ok"], after=0.8)], "OK")
         s = read()
-        save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+        save = own_buttons(s, s.frame("Planning"), "Save", enabled=True)
         if not save:
             raise Fail(f"{row['ref']} unscheduled but Planning's Save isn't there to press - SAVE PLANNING BY HAND NOW")
         act([click(save[0], after=1.2)], "Planning Save (at once)")
@@ -2213,7 +2238,7 @@ def r_order_qty(a):
         raise Fail("the Detail tab's Qty box isn't there - the item is saved, the order isn't: look at it")
     act(fill(qty[0], str(a.qty)) + [key("tab", after=0.5)], "Detail Qty")
     s = read()
-    save = s.one("the order's Save", role="push button", name="Save", within=s.frame(name))
+    save = own_button(s, s.frame(name), "Save", "the order's Save")
     act([click(save, after=2.0)], "order Save")
     for _ in range(4):
         s = read()
@@ -2336,7 +2361,7 @@ def r_order_item(a):
         raise Fail(f"the item box closed, but Order Items shows no item - look at {a.ref} (left open)")
     print("Order Items now: " + "; ".join(", ".join(f"{k} {v}" for k, v in r.items()) for r in got))
     t, s = tab("Detail", name)
-    act([click(s.one("the order's Save", role="push button", name="Save", within=s.frame(name)), after=2.0)],
+    act([click(own_button(s, s.frame(name), "Save", "the order's Save"), after=2.0)],
         "order Save")
     for _ in range(4):
         s = read_patiently()
@@ -2507,7 +2532,7 @@ def r_order_deltype(a):
     got = next((str(e.get("v") or "").strip() for e in s.children(t) if clean(e.get("nm")) == "Delivery Type"), "")
     if got != code:
         raise Fail(f"Delivery Type reads {got!r}, not {code} - not saved, left open for a look")
-    save = s.one("the order's Save", role="push button", name="Save", within=s.frame(name))
+    save = own_button(s, s.frame(name), "Save", "the order's Save")
     act([click(save, after=2.0)], "order Save")
     for _ in range(4):
         s = read()
@@ -2564,7 +2589,7 @@ def r_trip_deltype(a):
     got = next((str(e.get("v") or "").strip() for e in s.children(t) if "Delivery Type" in str(e.get("nm") or "")), "")
     if got != code:
         raise Fail(f"Trip Detail's Delivery Type reads {got!r}, not {code} - not saved, look at it")
-    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    save = own_buttons(s, s.frame("Planning"), "Save", enabled=True)
     if save:
         act([click(save[0], after=1.2)], "Planning Save")
         s, _q = settle(read(), "Planning")
@@ -2620,7 +2645,7 @@ def r_trip_trailer(a):
     s, q = settle(read())
     if q is not None:
         raise Fail(f"CTMS asks after OK: {q['words'][:150]} - left up for a look")
-    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    save = own_buttons(s, s.frame("Planning"), "Save", enabled=True)
     if save:
         act([click(save[0], after=1.2)], "Planning Save")
         settle(read(), "Planning")
@@ -2662,7 +2687,7 @@ def r_trip_apply(a):
     s, q = settle(read())
     if q is not None:
         raise Fail(f"CTMS asks after Apply to Trip: {q['words'][:150]} - left up for a look")
-    save = s.find(name="Save", role="push button", within=s.frame("Planning"), enabled=True)
+    save = own_buttons(s, s.frame("Planning"), "Save", enabled=True)
     if save:
         act([click(save[0], after=1.2)], "Planning Save")
         settle(read(), "Planning")
@@ -2736,7 +2761,7 @@ def r_order_services(a):
     want = [c for c in ids if c not in todo_rm] + todo_add
     if sorted(now) != sorted(want):
         raise Fail(f"the Services list reads {now}, not {want} - not saved, the order left open for a look")
-    act([click(s.one("the order's Save", role="push button", name="Save", within=s.frame(name)), after=2.0)],
+    act([click(own_button(s, s.frame(name), "Save", "the order's Save"), after=2.0)],
         "order Save")
     s = ok_known_questions()
     close_window(name)

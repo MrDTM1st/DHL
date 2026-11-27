@@ -213,6 +213,73 @@ def test_named_and_header_grids():
     assert C.named_grid(s, t2, ("Trip ID", "Carrier ID")) == [{"Trip ID": "MAN-01000001", "Carrier ID": "HAUL_DH"}]
 
 
+def _card_with_services_up():
+    """An order card read with its Services tab up, as live 24/11 and 27/11: the tab's own New and Save (level 3) come
+    BEFORE the card's Save (level 2) in the read."""
+    card = el("internal frame", "Order details for 11111111", at=(0, 59, 1240, 700), lv=1)
+    services = el("page tab", "Services", at=(697, 182, 76, 23), lv=2)
+    tab_new = el("push button", "New", at=(310, 652, 118, 32), lv=3)
+    tab_save = el("push button", "Save", at=(428, 652, 118, 32), lv=3)
+    own_save = el("push button", "Save", at=(286, 737, 84, 30), lv=2)
+    close = el("push button", "Close", at=(373, 737, 83, 30), lv=2)
+    return card, services, tab_new, tab_save, own_save, close
+
+
+def test_the_order_s_own_save_never_the_services_tabs():
+    card, services, tab_new, tab_save, own_save, close = _card_with_services_up()
+    s = screen(card, services, tab_new, tab_save, own_save, close)
+    assert C.own_button(s, card, "Save", "the order's Save") is own_save
+    assert C.own_buttons(s, card, "Save", enabled=True) == [own_save]
+    # a window whose one Save is its own: found as before
+    s = screen(card, own_save, close)
+    assert C.own_button(s, card, "Save") is own_save
+    # Planning with its own Save greyed and its Services tab's enabled: nothing to press, never the tab's
+    planning = el("internal frame", "Planning", at=(5, 70, 1648, 807), lv=1)
+    p_save = el("push button", "Save", at=(1296, 102, 64, 30), lv=2, st=["disabled"])
+    p_tab = el("page tab", "Services", at=(893, 143, 81, 23), lv=2)
+    p_tab_save = el("push button", "Save", at=(900, 400, 80, 25), lv=3)
+    s = screen(planning, p_save, p_tab, p_tab_save)
+    assert C.own_buttons(s, planning, "Save", enabled=True) == []
+    # none of its own at all: a Fail that says so, nothing guessed
+    s = screen(card, services, tab_new)
+    try:
+        C.own_button(s, card, "Save", "the order's Save")
+        assert False, "should have stopped"
+    except C.Fail as e:
+        assert "no the order's Save" in str(e)
+
+
+def test_order_services_saves_the_card_not_its_services_tab(monkeypatch):
+    # live 27/11: order-services --add HIAB --commit typed HIAB, then stopped at "2 of the order's Save" - unsaved
+    import argparse
+    card, services, tab_new, tab_save, own_save, close = _card_with_services_up()
+    s = screen(card, services, tab_new, tab_save, own_save, close)
+    added = []
+    acted = []
+
+    def act(steps, what):
+        acted.append((what, steps))
+        if what.startswith("add "):
+            added.append(what[4:])
+    monkeypatch.setattr(C, "act", act)
+    monkeypatch.setattr(C, "read", lambda: s)
+    monkeypatch.setattr(C, "close_orders", lambda s=None: 0)
+    monkeypatch.setattr(C, "open_order", lambda ref, modify_scheduled=False: (card, s, {"status": "UNSCHEDULED"}))
+    monkeypatch.setattr(C, "read_detail", lambda s, f: {})
+    monkeypatch.setattr(C, "service_rails", lambda adds, d: None)
+    monkeypatch.setattr(C, "tab", lambda name, frame, s=None: (services, s))
+    monkeypatch.setattr(C, "service_rows",
+                        lambda s, t: [{"id": c, "cell": {"at": [83, 291, 152, 24]}} for c in added])
+    monkeypatch.setattr(C, "ok_known_questions", lambda tries=4: s)
+    monkeypatch.setattr(C, "close_window", lambda name, s=None: True)
+    got = C.r_order_services(argparse.Namespace(ref="9100001-1-1", add=["hiab"], remove=None, modify=False,
+                                                commit=True))
+    assert got == {"ref": "9100001-1-1", "services": ["HIAB"], "changed": True}
+    saves = [steps for what, steps in acted if what == "order Save"]
+    assert len(saves) == 1 and saves[0][0]["screen"] == C.centre(own_save)
+    assert C.centre(tab_save) not in [st.get("screen") for _, steps in acted for st in steps]
+
+
 def test_trip_detail_read_by_place_under_owning_depot():
     t = el("page tab", "Trip Detail", at=(426, 132, 86, 23), lv=2)
     x = 531
