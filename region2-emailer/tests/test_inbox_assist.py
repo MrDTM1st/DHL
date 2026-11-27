@@ -817,13 +817,13 @@ def test_a_plan_is_checked_and_flagged_before_he_sees_it():
 def test_a_ctms_step_may_only_name_lines_and_manifests_the_toolkit_knows(monkeypatch):
     # 24/11 trial: the planner took a courier's QUE number off the subject for a CTMS line, and planned order-update on
     # a booked line - both now stop the plan before he sees it
-    known = ({"1234567", "1234567-1-1", "AH24/11/26ABC"}, {"MAN-01000100"}, {"AH24/11/26ABC"})
+    known = ({"1234567", "1234567-1-1", "AH24/11/35ABC"}, {"MAN-01000100"}, {"AH24/11/35ABC"})   # 2035: never past
     assert A.route_ok(["order-note", "1234567-1-1", "Emailed 24/11"], known)
     assert A.route_ok(["order-note", "1234567-2-1", "x"], known)                 # another line of a known order
-    assert A.route_ok(["trip-price", "MAN-01000100", "440", "--order", "AH24/11/26ABC"], known)
+    assert A.route_ok(["trip-price", "MAN-01000100", "440", "--order", "AH24/11/35ABC"], known)
     for route, said in ((["order-note", "QUE5550001", "x"], "isn't an order line the toolkit knows"),
                         (["trip-price", "MAN-09999999", "440"], "isn't a manifest the toolkit or the email knows"),
-                        (["order-update", "AH24/11/26ABC", "--deliver", "25/11/26 08:00 - 10:00"], "is booked")):
+                        (["order-update", "AH24/11/35ABC", "--deliver", "25/11/35 08:00 - 10:00"], "is booked")):
         try:
             A.route_ok(route, known)
             raise AssertionError(f"{route} should be refused")
@@ -839,6 +839,48 @@ def test_a_ctms_step_may_only_name_lines_and_manifests_the_toolkit_knows(monkeyp
     assert "step 2: 7654321 isn't an order the toolkit knows to book" in p["why_not"]
 
 
+def test_each_jobs_day_comes_from_the_tracker_the_map_and_books_journal(monkeypatch, tmp_path):
+    import tracker
+    import pins
+    from datetime import date
+    monkeypatch.setattr(A, "HERE", str(tmp_path))
+    monkeypatch.setattr(tracker, "load", lambda *a, **k: {"records": [{"orders": ["1234567-1-1"],
+                                                                        "delivery_date": "08/12/2026"}]})
+    monkeypatch.setattr(pins, "load", lambda *a, **k: [])
+    (tmp_path / "_adhocs.json").write_text(json.dumps([{"orders": ["AH20/11/26ABC"], "delivery_date": "21/11/2026"}]),
+                                           encoding="utf-8")
+    (tmp_path / "_book_journal.json").write_text(json.dumps({"jobs": {
+        "a": {"orders": ["1112223"], "date": "10/11/2026", "trips": [{"manifest": "MAN-01000100", "status": "ACCEPTED"}]},
+        "b": {"orders": ["1112223"], "date": "12/11/2026", "trips": []}}}), encoding="utf-8")
+    days = A.known_refs()[3]
+    assert days["1234567"] == date(2026, 12, 8) and days["1234567-1-1"] == date(2026, 12, 8)
+    assert days["AH20/11/26ABC"] == date(2026, 11, 21)                        # the map's day beats the ref's own
+    assert days["1112223"] == date(2026, 11, 12) and days["MAN-01000100"] == date(2026, 11, 10)   # the latest
+
+
+def test_a_plan_never_changes_a_job_whose_day_has_gone(monkeypatch):
+    # 27/11, the first live plan: resend the manifest of a 10/11 ad hoc - a job long gone. Its day comes from the
+    # toolkit (the latest it has) or the ad hoc's own ref; a job with no known day isn't held up
+    from datetime import date
+    today = date.today()
+    assert A.date_in_ref("AH10/11/26ABC") == date(2026, 11, 10) and A.date_in_ref("1234567-1-1") is None
+    assert A.date_in_ref("RDC4/12/XY/Z1", today=date(2026, 11, 27)) == date(2026, 12, 4)
+    assert A.date_in_ref("RDC4/1/XY/Z1", today=date(2026, 12, 20)) == date(2027, 1, 4)     # the nearest year
+    gone, ahead = date(2020, 1, 6), date(2035, 1, 8)
+    known = ({"1234567", "7654321", "AH10/11/20OLD", "AH10/11/35NEW"}, {"MAN-01000100", "MAN-01000200"}, set(),
+             {"1234567": gone, "MAN-01000100": gone, "7654321": ahead})
+    for route in (["trip-resend", "--order", "AH10/11/20OLD"], ["order-note", "1234567-1-1", "x"],
+                  ["trip-price", "MAN-01000100", "440"]):
+        try:
+            A.route_ok(route, known)
+            raise AssertionError(f"{route} should be refused")
+        except RuntimeError as e:
+            assert "gone by: a plan never changes a past job" in str(e), (route, str(e))
+    assert A.route_ok(["order-note", "7654321-1-1", "x"], known)                 # its day is ahead
+    assert A.route_ok(["trip-resend", "--order", "AH10/11/35NEW"], known)
+    assert A.route_ok(["trip-price", "MAN-01000200", "440"], known)              # no day known: not held up
+
+
 def test_what_the_toolkit_knows_comes_from_the_tracker_the_map_books_journal_and_the_email(monkeypatch, tmp_path):
     import tracker
     import pins
@@ -849,13 +891,14 @@ def test_what_the_toolkit_knows_comes_from_the_tracker_the_map_books_journal_and
     (tmp_path / "_book_journal.json").write_text(json.dumps({"jobs": {"k": {"orders": ["1112223"], "trips": [
         {"manifest": "MAN-01000100", "status": "ACCEPTED"}]}}}), encoding="utf-8")
     (tmp_path / "_booked_drops.json").write_text(json.dumps(["4445556"]), encoding="utf-8")
-    lines, mans, booked = A.known_refs({"orders": ["9990001"], "ask": "Kim asks for 40 more on man-01000200",
+    lines, mans, booked, days = A.known_refs({"orders": ["9990001"], "ask": "Kim asks for 40 more on man-01000200",
                                         "subject": "QUE7778889 Delivery - RE: RD123456",
                                         "text": "It's ad hoc AH25/11/26XYZ and line 2223334-1-1 (RDC3/12/WA/M2)."})
     assert {"1234567", "1234567-1-1", "7654321", "AH24/11/26ABC", "1112223", "9990001"} <= lines
     assert {"AH25/11/26XYZ", "2223334-1-1", "2223334", "RDC3/12/WA/M2"} <= lines        # named in the email itself
     assert not {"7778889", "QUE7778889", "RD123456"} & lines                  # a courier's or NR's own number: never
     assert mans == {"MAN-01000100", "MAN-01000200"} and booked == {"1112223", "4445556"}
+    assert days == {}                                                         # none of the made-up records had a day
 
 
 def test_a_booking_step_is_the_job_the_book_button_sends(monkeypatch):
@@ -906,6 +949,17 @@ def test_the_planner_plans_the_most_pressing_email_reading_only(monkeypatch, tmp
     assert "w1" not in [it["id"] for it in A.plan_due(A.load(), NOW + timedelta(hours=1))]   # keeps failing: left
 
 
+def test_the_planner_has_its_own_off_switch(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch, n1={"kind": "needs", "urgency": "now", "ask": "Now one"})
+    with open(A.CFG, "w", encoding="utf-8") as f:
+        json.dump({"planner": "off"}, f)
+    assert A.plan(ask=lambda *a: (_ for _ in ()).throw(AssertionError("planned")), now=NOW) == (
+        None, "the planner is switched off")
+    assert "rules" not in A.load() and not A.load()["items"]["n1"].get("plan")
+    r = A.plan_rules(ctx())
+    assert "a step that finds nothing to change stops the whole" in r and "NRADHOC_NS" in r and "day has gone" in r
+
+
 def test_the_planner_is_held_to_reading(tmp_path):
     exe = tmp_path / "claude.exe"
     exe.write_text("")
@@ -945,6 +999,7 @@ def test_a_plan_runs_straight_through_and_stops_at_the_first_step_that_fails(mon
                                               "job": {"state": "working", "asks": [], "log": [], "did": []}})
     monkeypatch.setattr(A, "_outlook_turn", lambda wait=90: __import__("contextlib").nullcontext())
     monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED-1")
+    monkeypatch.setattr(A, "known_refs", lambda it=None: KNOWN)                  # each step is checked again as it runs
     steps = _checked({"ready": True, "summary": "x", "steps": _steps()})["steps"]
     ran = []
 
@@ -969,6 +1024,32 @@ def test_a_plan_runs_straight_through_and_stops_at_the_first_step_that_fails(mon
     assert got["status"] == "failed" and ran == [1]
     assert got["summary"] == "Stopped at step 1 (Set MAN-01000100 to 440): CTMS isn't open. Nothing was done before it. " \
                              "3 not run."
+
+
+def test_a_ctms_step_that_changes_nothing_stops_the_plan_before_anything_follows(monkeypatch, tmp_path):
+    # 27/11, the first live plan: "remove NS" found nothing to take off and called it success - the plan would then
+    # have resent an old manifest and told the sender it was done. Nothing changed = the plan was wrong: it stops there
+    _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "action": {"type": "ctms"},
+                                         "job": {"state": "working", "asks": [], "log": [], "did": []}})
+    monkeypatch.setattr(A, "known_refs", lambda it=None: KNOWN)
+    steps = A.check_plan({"ready": True, "summary": "x", "steps": [
+        {"do": "ctms", "says": "Take NS off 1234567-1-1", "route": ["order-services", "1234567-1-1", "--remove", "NS"]},
+        {"do": "ctms", "says": "Resend", "route": ["trip-resend", "MAN-01000100"]},
+        {"do": "reply", "says": "Tell Sam", "text": "Hi Sam,\nNon Standard has been removed."}]}, known=KNOWN)["steps"]
+    ran = []
+
+    def run(args, **kw):
+        ran.append(args[2:])
+        return _proc('1234567-1-1 (SCHEDULED) has: HIAB\nROUTE_RESULT {"ok": true, "changed": false, '
+                     '"said": "nothing to change"}')
+    ok, got = A.run_plan("a1", steps, run=run, outlook=_outlook_with(_Reply(["sam@example.net"], SIGNED)))
+    assert got["status"] == "failed" and len(ran) == 1                          # no resend, no reply
+    assert "CTMS had nothing to change (nothing to change) - so nothing after it was run" in got["summary"]
+    assert A.load()["items"]["a1"]["state"] == "open"                            # Sam wasn't told anything
+    assert A.unchanged('ROUTE_RESULT {"ok": true, "said": "already that total"}')
+    assert A.unchanged('ROUTE_RESULT {"ok": true, "changed": false}')
+    assert not A.unchanged('ROUTE_RESULT {"ok": true, "changed": true, "said": "MAN-01000100 is now ACCEPTED"}')
+    assert not A.unchanged("no result line at all")
 
 
 def test_a_booking_step_runs_book_and_a_todo_is_left_for_him(monkeypatch, tmp_path):

@@ -1518,6 +1518,20 @@ def _route_result(out):
     return bool(r.get("ok")), str(r.get("said") or ("done" if r.get("ok") else "stopped"))[:300]
 
 
+NO_CHANGE = re.compile(r"nothing to change|already that total|\bis already\b|there already|\balready has\b", re.I)
+
+
+def unchanged(out):
+    """A route that went but changed nothing in CTMS: its ROUTE_RESULT says changed false, or its words say there was
+    nothing to do (trip-price's "already that total" has no changed flag)."""
+    line = next((ln for ln in reversed(str(out or "").splitlines()) if ln.startswith("ROUTE_RESULT ")), "")
+    try:
+        r = json.loads(line[len("ROUTE_RESULT "):]) if line else {}
+    except ValueError:
+        r = {}
+    return r.get("changed") is False or bool(NO_CHANGE.search(str(r.get("said") or "")))
+
+
 def held_route(route):
     """A CTMS route the job held for his yes, checked before it runs with --commit: never a raw click, never a route
     that doesn't exist, the arguments plain words."""
@@ -1739,6 +1753,12 @@ An email says only what the plan's own steps do, or what you read is already tru
 DigiHaul, no tracker, no Teams, no phone call: if one of those is needed, it's a todo step for him, and no email claims
 it was done.
 
+Plan a CTMS change only when you have read that CTMS needs it: a step that finds nothing to change stops the whole
+plan, and nothing after it runs. Never plan a change to a job whose day has gone by - those are his, by hand. Non
+Standard (NS, the NRADHOC_NS upload) is an order's account and strategy, set at upload: never a service, and never
+changed (his rule: leave the order's strategy as is) - a question about it is a todo for him. When you aren't sure
+what CTMS holds or what he would do, set ready false: a plan that isn't sure is worse than no plan.
+
 If a complete plan needs something you can't know without CTMS or him (a figure, a choice), set ready false and say in
 why_not, in one line, exactly what's missing; give the steps that can be planned now, if any.
 summary: one line saying what Deal with it will do.
@@ -1795,7 +1815,7 @@ def plan_brief(it, ctx, records=(), booked=()):
     (24/11: a planner that looked everything up itself ran past seven minutes): the email and the start of its thread
     as the reader took them from Outlook, what Claude read in it, the tracker and Book's journal on its orders, and the
     lines and manifests a CTMS step may name."""
-    lines, mans, _ = known_refs(it)
+    lines, mans = known_refs(it)[:2]
     ask_mans = {m.upper() for m in re.findall(r"MAN-\d{6,}", " ".join(str(it.get(k) or "") for k in (
         "subject", "ask", "why", "text", "trail")), re.I)}
     mine = sorted(r for r in lines if _base_ref(r) in {_base_ref(o) for o in it.get("orders") or []})
@@ -1844,39 +1864,73 @@ def refs_in_text(text):
     return {m.group(0).upper() for m in REF_IN_TEXT.finditer(str(text or ""))}
 
 
+def _ddmmyyyy(s):
+    try:
+        return datetime.strptime(str(s or "").strip()[:10], "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def date_in_ref(ref, today=None):
+    """The day an ad hoc's own ref names - AH10/11/26ABC is 10/11/2026; RDC4/12/XY/Z1 is 4/12, the year the one
+    nearest today - or None."""
+    ref = str(ref or "").strip().upper()
+    m = re.match(r"AH(\d{1,2})/(\d{1,2})/(\d{2})", ref)
+    try:
+        if m:
+            return datetime(2000 + int(m.group(3)), int(m.group(2)), int(m.group(1))).date()
+        m = re.match(r"RD[A-Z](\d{1,2})/(\d{1,2})/", ref)
+        if m:
+            today = today or datetime.now().date()
+            got = [datetime(y, int(m.group(2)), int(m.group(1))).date() for y in (today.year - 1, today.year,
+                                                                                  today.year + 1)]
+            return min(got, key=lambda x: abs((x - today).days))
+    except ValueError:
+        return None
+    return None
+
+
 def known_refs(it=None):
     """Every order line, manifest and booked order the toolkit knows - the tracker, the map's ad hocs and pins, Book's
     journal, the booked list - and the ones the email itself names. A plan's CTMS step may only name these (24/11
-    trial: the planner took a courier's QUE number off the subject for a CTMS line). -> (lines, manifests, booked)."""
-    lines, mans, booked = set(), set(), set()
+    trial: the planner took a courier's QUE number off the subject for a CTMS line). And each one's day, the latest
+    the toolkit has (27/11: a plan wanted to resend a 10/11 job's manifest). -> (lines, manifests, booked, days)."""
+    lines, mans, booked, days = set(), set(), set(), {}
 
-    def add(o):
+    def add(o, when=None):
         o = str(o or "").strip().upper()
         if o:
             lines.update((o, _base_ref(o)))
+            if when:
+                for k in (o, _base_ref(o)):
+                    days[k] = max(days.get(k, when), when)
     try:
         import tracker
         for r in tracker.load().get("records") or []:
             for o in r.get("orders") or []:
-                add(o)
+                add(o, _ddmmyyyy(r.get("delivery_date")))
     except Exception:
         pass
     for r in _json(os.path.join(HERE, "_adhocs.json"), []) or []:
         for o in (r.get("orders") or []) if isinstance(r, dict) else []:
-            add(o)
+            add(o, _ddmmyyyy(r.get("delivery_date")))
     try:
         import pins
         for p in pins.load() or []:
             for o in p.get("orders") or []:
-                add(o)
+                add(o, _ddmmyyyy(p.get("delivery_date")))
     except Exception:
         pass
     for e in ((_json(os.path.join(HERE, "_book_journal.json"), {}) or {}).get("jobs") or {}).values():
+        when = _ddmmyyyy(e.get("date"))
         for o in e.get("orders") or []:
-            add(o)
+            add(o, when)
         for t in e.get("trips") or []:
             if t.get("manifest"):
-                mans.add(str(t["manifest"]).upper())
+                man = str(t["manifest"]).upper()
+                mans.add(man)
+                if when:
+                    days[man] = max(days.get(man, when), when)
             if t.get("manifest") and str(t.get("status") or "").upper() == "ACCEPTED":
                 booked.update(_base_ref(o) for o in e.get("orders") or [])
     booked.update(_base_ref(o) for o in _json(os.path.join(HERE, "_booked_drops.json"), []) or [])
@@ -1887,7 +1941,13 @@ def known_refs(it=None):
         for o in refs_in_text(said):                      # the lines the email itself names
             add(o)
         mans.update(m.upper() for m in re.findall(r"MAN-\d{6,}", said, re.I))
-    return lines, mans, booked
+    return lines, mans, booked, days
+
+
+def job_day(ref, days, today=None):
+    """The day of the job a ref names: the latest the toolkit has, else the day an ad hoc's own ref names."""
+    r = str(ref or "").strip().upper()
+    return days.get(r) or days.get(_base_ref(r)) or date_in_ref(r, today)
 
 
 def route_ok(route, known=None):
@@ -1918,7 +1978,10 @@ def route_ok(route, known=None):
     if hasattr(ns, "man") and not (ns.man or getattr(ns, "order", None)):
         raise RuntimeError(f"{' '.join(route)}: which manifest? (MAN-..., or --order with a line)")
     if known is not None:
-        lines, mans, booked = known
+        lines, mans, booked = known[:3]
+        days = known[3] if len(known) > 3 else {}
+        today = datetime.now().date()
+        named = []
         for attr in ("ref", "refs", "line", "order"):
             v = getattr(ns, attr, None)
             for r in ([v] if isinstance(v, str) else list(v or [])):
@@ -1928,9 +1991,15 @@ def route_ok(route, known=None):
                 if r and route[0] == "order-update" and _base_ref(r) in booked:
                     raise RuntimeError(f"{r} is booked: order-update can't change a booked line - change its trip, "
                                        "or it's a todo for him")
+                named.append(r)
         m = str(getattr(ns, "man", "") or "").upper()
         if m and m not in mans:
             raise RuntimeError(f"{m} isn't a manifest the toolkit or the email knows")
+        for r in named + ([m] if m else []):              # 27/11: a plan wanted to resend a 10/11 job's manifest
+            when = job_day(r, days, today)
+            if when and when < today:
+                raise RuntimeError(f"{r} is a job for {when:%d/%m} - gone by: a plan never changes a past job, "
+                                   "that's his by hand")
     return route
 
 
@@ -2060,6 +2129,8 @@ def plan(ask=None, now=None):
             return None, "the toolkit is switched off"
     except Exception:
         pass
+    if str(_json(CFG, {}).get("planner") or "").strip().lower() == "off":
+        return None, "the planner is switched off"        # the home-only switch: {"planner": "off"} (27/11)
     h = _lock()
     try:
         d = load()
@@ -2095,7 +2166,7 @@ def plan(ask=None, now=None):
         d = load()
         it = d["items"].get(sid)
         if it is None or (it.get("plan") or {}).get("state") != "planning":
-            return sid, "it went off his list while it was planned"
+            return sid, "dropped: its plan was paused, or it left his list, while it was planned"
         p = check_plan(got, it) if ok else {"state": "failed", "said": str(got)[:300], "steps": []}
         p.update(made=end.strftime("%Y-%m-%d %H:%M"), tries=tries)
         it["plan"] = p
@@ -2153,10 +2224,17 @@ def _run_step(sid, s, run=subprocess.run, outlook=None):
     import mail_ops
     do = s.get("do")
     if do == "ctms":
-        p = run([sys.executable, os.path.join(HERE, "ctms_routes.py")] + route_ok(s["route"]) + ["--commit"],
+        # checked again as it runs - a plan made yesterday can name a job whose day has gone since (27/11)
+        route = route_ok(s["route"], known_refs(load()["items"].get(sid)))
+        p = run([sys.executable, os.path.join(HERE, "ctms_routes.py")] + route + ["--commit"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, cwd=HERE,
                 creationflags=0x08000000 if os.name == "nt" else 0)
-        return _route_result(p.stdout)
+        ok, said = _route_result(p.stdout)
+        if ok and unchanged(p.stdout):
+            # 27/11: "remove NS" found nothing to take off and called it success, so the plan went on to resend an
+            # old manifest and tell the sender it was done. Nothing changed = the plan was wrong about CTMS: stop here
+            return False, f"CTMS had nothing to change ({said}) - so nothing after it was run"
+        return ok, said
     if do == "book":
         job = dict(book_ok(s["book"]), dry=False)
         p = run([sys.executable, os.path.join(HERE, "book_run.py"), "run", json.dumps(job)], capture_output=True,
