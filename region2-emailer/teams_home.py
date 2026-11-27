@@ -44,7 +44,8 @@ UNREAD = "Unread message "
 KINDS = ("Group chat", "Meeting chat", "Chat")          # longest first: "Group chat X" is not a "Chat"
 STATUSES = ("Available", "Away", "Busy", "Do not disturb", "Offline", "Out of office", "Be right back", "Appear away",
             "Appear offline", "In a meeting", "In a call", "Presenting", "Focusing", "Off work", "(You)")
-FLAGS = ("Has external participants", "Has pinned messages", "Has context menu", "Has draft", "Muted", "Pinned")
+FLAGS = ("Has external participants", "Has pinned messages", "Has context menu", "Has draft", "Muted", "Pinned",
+         "Personal at mention")
 DAYS = r"(?:Today|Yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\d{1,2}/\d{1,2}(?:/\d{2,4})?)"
 WHEN = re.compile(r"^" + DAYS + r"(?: at)? \d{1,2}:\d{2}\.?$")
 DASHES = ("—", "–")                           # em and en dash: never in a message (his rule for NOC)
@@ -293,6 +294,20 @@ def read(want, n=15):
     return chat, msgs[-n:] if n else msgs
 
 
+def locked():
+    """Is this PC's screen locked? Windows' lock screen then has the keyboard, so a paste into Teams goes nowhere - though
+    Teams can still be read (27/11: a send from home while he was at work). True when the desktop can't be switched to."""
+    import ctypes
+    u = ctypes.windll.user32
+    h = u.OpenInputDesktop(0, False, 0x0100)              # DESKTOP_SWITCHDESKTOP
+    if not h:
+        return True
+    try:
+        return not u.SwitchDesktop(h)
+    finally:
+        u.CloseDesktop(h)
+
+
 def person_of(title):
     """"Pat Jones (Example Ltd)" -> "Pat Jones": the name a one-to-one chat is titled with, its company dropped."""
     return re.sub(r"\s*\([^)]*\)\s*$", "", _squash(title)).strip()
@@ -332,25 +347,47 @@ def send(want, text, dry=True):
     _, ctms_teams = _teams()
     text = check_text(text)
     hwnd, _ = main_window()
+    if locked():
+        raise Stop("This PC is locked, so nothing can be typed into Teams until it's unlocked (reading still works) - "
+                   "nothing sent.")
     with _Uia() as s:
         entries = _chat_entries(s, hwnd)
         if not entries:                                  # the first look switches Teams' accessibility on
             time.sleep(1.0)
             entries = _chat_entries(s, hwnd)
-    chat = pick_chat([c for _, c in entries], want)
-    if chat["kind"] != "Chat":
-        raise Stop(f"{chat['title']!r} is a {chat['kind'].lower()} - sending to a group or meeting chat isn't built yet "
-                   "(reading it is): nothing sent.")
+        chat = pick_chat([c for _, c in entries], want)
+        if chat["kind"] != "Chat":
+            raise Stop(f"{chat['title']!r} is a {chat['kind'].lower()} - sending to a group or meeting chat isn't built "
+                       "yet (reading it is): nothing sent.")
+        me = next((c["title"] for _, c in entries if c["status"] == "(You)"), "")
     email = email_for(chat["title"])
     if not email:
         raise Stop(f"{chat['title']!r} isn't in the Outlook address book as one person, so Teams' link for the chat "
                    "can't be made: nothing sent.")
     import ctms_window
     ctms_window.dpi_aware()
-    try:
-        out = ctms_teams.send(email, person_of(chat["title"]), text, dry=dry)
-    except ctms_teams.Stop as e:
-        raise Stop(str(e))
+    if me and me != chat["title"]:
+        # Teams' link must MOVE to the chat for the box to get the keyboard: a chat already showing, or one reached
+        # after anything was selected in the list, swallows the paste (27/11, twice). His own chat by its link first -
+        # opening it marks nothing read - then the person's link moves Teams to theirs.
+        mine = email_for(me)
+        if mine:
+            os.startfile(ctms_teams.chat_link(mine))
+            end = time.time() + OPEN_SECONDS
+            while time.time() < end and not title_is(ctms_window._text(hwnd), me):
+                time.sleep(0.3)
+            time.sleep(1.0)
+    for attempt in (1, 2):
+        try:
+            out = ctms_teams.send(email, person_of(chat["title"]), text, dry=dry)
+            break
+        except ctms_teams.Stop as e:
+            # left idle, this PC puts Windows' lock screen over the desktop: the first keys only dismiss it, so the first
+            # paste lands nowhere (27/11, three times; the next try went straight through). The box was read back empty,
+            # so nothing went - one more try, and then it stops.
+            if attempt == 2 or not str(e).startswith("The paste left the message box"):
+                raise Stop(str(e))
+            time.sleep(1.5)
     out.pop("payload", None)                             # the work PC's picture of the chat: not wanted here
     return out
 
