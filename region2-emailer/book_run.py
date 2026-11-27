@@ -46,14 +46,24 @@ PLANNER = "Delali"
 NOC = "DHL_NOC"
 BLOCKS = ("update", "booking")     # what has to go on before a booking; a note can follow it
 
-# The DigiHaul tracker as the work PC shows it, on the picture (1910 x 915, 02/11): the highlighted row number and column
-# heading say where the cursor is; the yellow columns are read by where they sit.
+# The DigiHaul tracker as the work PC shows it, on the picture (1910 x 915 since 02/11, 1709 x 1275 at times): the
+# highlighted row number says which row the cursor is on, and the column headings above the rows where each column is -
+# found on every picture, never kept from an earlier one. Column A's width changes under us (24/11 and 27/11: 65 px, then
+# 16 px a booking later), and every column with it: B to G read where they had once sat took in the black borders between
+# the cells, and every empty row read as written in ("no empty row where one should be").
 GUTTER_X = 8
 ROW_TOP, ROW_END = 358, 832
-PICKED = (202, 234, 216)           # a highlighted heading
-HEAD_Y, HEAD_A, HEAD_B, HEAD_C = 295, 100, 150, 360
-CELL_B = (140, 320)
-CELLS = {"C": (332, 544), "D": (556, 669), "E": (682, 835), "F": (848, 1595), "G": (1608, 1890)}
+PICKED = (202, 234, 216)           # a highlighted row number or column heading
+PARTING = ((224, 224, 224), (160, 216, 185))   # the 1-px line between two column headings; green-grey edging a highlighted one
+PARTING_YS = (286, 303)            # the heading strip above and under its letters (they run across 289-300)
+UNDERLINE_Y = 306                  # the strip's foot, clear of the Name Box's tooltip: the cursor's column(s) underlined dark green
+INSET = 6                          # a cell's border, and the cursor's green frame on it, stay outside what is read in it
+A_SHOWS = 10                       # column A's cell, plain white on the cursor's row between the row numbers and B: 16 px
+                                   # at its narrowest (27/11). A view scrolled sideways shows no A (03/11: C first, after
+                                   # a 4-px sliver)
+B_LEFT_MAX = 230                   # column B starts after the row numbers and column A...
+B_WIDE = (100, 400)                # ...and is a manifest's width: never A's, nor F's or G's
+G_MIDDLE = 280                     # G's Y or N, in the middle of the column, is this far in from its left
 SCROLLBAR, SHEET_FOOT = 20, 83     # what the page keeps on its right and under the rows, whatever the window's size (03-04/11)
 NAME_BOX = [80, 250]               # Excel's Name Box, over column A's heading (seen 23/11)
 SHEET_END = "B1048576"             # column B's last row: Ctrl+Up from it stops on the last manifest, wherever the view was
@@ -321,11 +331,6 @@ def _near(c, want, tol=12):
     return all(abs(int(a) - int(b)) <= tol for a, b in zip(c, want))
 
 
-def _on_picture(im, xs):
-    """Those columns of pixels as far as the picture goes, short of the page's own scrollbar: the window can be any size."""
-    return xs[0], min(xs[1], im.size[0] - SCROLLBAR)
-
-
 def picked_row(im):
     """(top, bottom) of the row whose number is highlighted, or None."""
     ys = [y for y in range(ROW_TOP, max(ROW_END, im.size[1] - SHEET_FOOT)) if _near(im.getpixel((GUTTER_X, y)), PICKED)]
@@ -336,30 +341,78 @@ def _dark(im, xs, ys):
     return sum(1 for y in range(*ys) for x in range(*xs) if sum(im.getpixel((x, y))[:3]) < 240)
 
 
+def _underline(c):
+    """The dark green under the cursor's column heading - a shade darker where the Name Box's tooltip shadows it."""
+    r, g, b = c[:3]
+    return r < 100 and g - r > 40 and g - b > 30
+
+
+def _parting(im, x):
+    """Whether one of the 1-px lines between two column headings is at x: on the strip above its letters and under them,
+    with the strip's own shade either side - not the edge of a shadow or a letter."""
+    return all(any(_near(im.getpixel((x, y)), p) for p in PARTING)
+               and not any(_near(im.getpixel((x + d, y)), p) for p in PARTING for d in (-2, 2)) for y in PARTING_YS)
+
+
+def yellow_columns(im, row, one=True):
+    """Where B to G are on the picture, from the column headings: {"B": (left, right), ... "G": (left, right or the
+    window's edge)}. B is the column the cursor's heading is underlined in - where the underline starts - and each one
+    after it runs to the next line between two headings. It must have column A's cell to its left on the cursor's row
+    (row: its (top, bottom)) - never a view scrolled sideways, where the first column shown can be any. one: the cursor
+    is on one cell - only B underlined, at a place and width B can have (the Name Box can't be read). None when any of
+    that, or B to F and the start of G, can't be told."""
+    edge = im.size[0] - SCROLLBAR
+    left = next((x for x in range(GUTTER_X, edge) if _underline(im.getpixel((x, UNDERLINE_Y)))), None)
+    if left is None:
+        return None
+    end = left
+    while end + 1 < edge and _underline(im.getpixel((end + 1, UNDERLINE_Y))):
+        end += 1
+    lines = [x for x in range(left + 5, edge) if _parting(im, x)][:6]
+    if len(lines) < 5:                 # B|C, C|D, D|E, E|F and F|G: the yellow cells up to G have to show
+        return None
+    spans = dict(zip("BCDEFG", zip([left] + lines, lines + [edge])))
+    b0, b1 = spans["B"]
+    y, a = (row[0] + row[1]) // 2, 0
+    while b0 - 1 - a > GUTTER_X and min(im.getpixel((b0 - 1 - a, y))[:3]) >= 250:
+        a += 1                         # A's cell, from the cursor's frame back towards the row numbers
+    if a < A_SHOWS:
+        return None
+    if one and (abs(end - b1) > 3 or b0 > B_LEFT_MAX or not B_WIDE[0] <= b1 - b0 <= B_WIDE[1]):
+        return None
+    return spans
+
+
+def _inside(span):
+    """What is read of a cell: its span short of its own borders and the cursor's frame."""
+    return span[0] + INSET, span[1] - INSET
+
+
 def row_state(im):
     """Where the tracker's cursor is on a picture: None when it can't be told it is on one cell of column B; else
-    {"blank": the row's yellow cells are empty, "above": the row above has a manifest}."""
+    {"blank": the row's yellow cells are empty, "above": the row above has a manifest}. Anything dark inside a cell
+    counts as writing, so a colleague's half-typed row never reads as blank (nor does a row a dark avatar of theirs
+    covers: it is stepped over, like their writing)."""
     row = picked_row(im)
-    if not row or not _near(im.getpixel((HEAD_B, HEAD_Y)), PICKED) or _near(im.getpixel((HEAD_C, HEAD_Y)), PICKED):
+    spans = yellow_columns(im, row) if row else None
+    if not spans or row[1] - row[0] < 8:
         return None
-    if _near(im.getpixel((HEAD_A, HEAD_Y)), PICKED):
-        return None                    # scrolled sideways: another column's wide heading is sitting where B's belongs
     top, bottom = row
-    if bottom - top < 8 or im.size[0] - SCROLLBAR < CELLS["F"][1]:     # the yellow cells, up to G's edge, have to show
-        return None
     band = (top + 4, bottom - 3)
-    return {"blank": not any(_dark(im, _on_picture(im, xs), band) for xs in CELLS.values()) and not _dark(im, CELL_B, band),
-            "above": bool(_dark(im, CELL_B, (top - 20, top - 4)))}
+    return {"blank": not any(_dark(im, _inside(xs), band) for xs in spans.values()),
+            "above": bool(_dark(im, _inside(spans["B"]), (top - 20, top - 4)))}
 
 
 def row_filled(im):
-    """Whether the row just pasted shows in every yellow cell that should have something (F, Notes, stays blank)."""
+    """Whether the row just pasted shows in every yellow cell that should have something (F, Notes, stays blank). The
+    paste leaves the cursor on the whole row, B to G."""
     row = picked_row(im)
-    if not row:
+    spans = yellow_columns(im, row, one=False) if row else None
+    if not spans:
         return False
     band = (row[0] + 4, row[1] - 3)
-    shown = "CDEG" if im.size[0] - SCROLLBAR >= CELLS["G"][1] else "CDE"     # G's middle is off a narrower window
-    return bool(_dark(im, CELL_B, band)) and all(_dark(im, CELLS[c], band) for c in shown)
+    shown = "BCDEG" if spans["G"][0] + G_MIDDLE <= im.size[0] - SCROLLBAR else "BCDE"   # G's middle is off a narrower window
+    return all(_dark(im, _inside(spans[c]), band) for c in shown)
 
 
 def _changed(a, b, box):

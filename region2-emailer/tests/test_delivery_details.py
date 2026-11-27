@@ -118,6 +118,19 @@ def test_a_bare_starting_hour_is_the_start_of_the_window_not_lost():
     assert D.parse_time_window("Unit 4 to 8am") == ("08:00", "10:00", D.HIGH)
 
 
+def test_a_choice_of_days_is_told_from_days_that_each_need_a_delivery():
+    # 27/11: "Would 30/11/26 or 01/12/26 be ok?" is one delivery on either day - "flexible" is set for any reply with two
+    # dates, so it can't tell this from an order staged over both days
+    for said in ("Hi, would 30/11/26 or 01/12/26 be ok? Thanks", "Monday 30th November or Tuesday 1st December",
+                 "30/11/26 at 08:00 or 01/12/26 at 08:00", "30/11/2026, failing that 01/12/2026",
+                 "Delivery 30/11/26. If that is not possible, 01/12/26 please", "30/11/26\nor 01/12/26"):
+        assert D.either_or(said) is True, said
+    for said in ("X70 18/11/26 X70 19/11/26", "11th & 13th November", "6 on 30/11/26 and 4 on 01/12/26",
+                 "X40 30/11/26 (HIAB or Moffett) X40 01/12/26",            # an "or" that isn't between the days
+                 "Delivery 30/11/26. HIAB or Moffett fine. Second load 01/12/26", "30/11/26", "", None):
+        assert D.either_or(said) is False, said
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

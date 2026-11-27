@@ -69,6 +69,8 @@ def test_only_an_accepted_booking_for_a_later_day_and_not_a_split_one():
     assert "split" in aa.check_job(job(record_copy=split), NOW)                # several pick-ups
     days = {"details": {"date": {"options": ["01/12/2026", "02/12/2026"]}}}
     assert "split" in aa.check_job(job(record_copy=days), NOW)                 # several days
+    choice = {"details": {"date": {"options": ["01/12/2026", "02/12/2026"], "raw": "Would 01/12/26 or 02/12/26 suit?"}}}
+    assert aa.check_job(job(record_copy=choice), NOW) == ""                    # a choice of days: one delivery
     rec = {"orders": ["1234567"], "delivery_date": "03/12/2026"}  # the tracker moved it after Book booked it
     assert "the tracker has it on 03/12/2026" in aa.check_job(job(), NOW, [rec])
 

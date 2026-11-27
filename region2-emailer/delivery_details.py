@@ -307,6 +307,25 @@ def parse_date(text, consolidatable=None):
     return d, flexible, ds, (conf if not vague else AMBER)
 
 
+# Between two of a reply's dates: an "or" (or its like), with no more than a time or a few words before it and only small
+# words - "the", "on", a day's name - after it, up to the next date
+_CHOICE = re.compile(r"[\s\S]{0,30}?\b(?:or|otherwise|alternatively|failing\s+that|if\s+not|not\s+possible|instead)\b"
+                     r"(?:[\s,;:()-]|\b(?:the|on|at|a|either|maybe|perhaps|possibly|even|else|we|could|can|would|do|"
+                     r"also|day|date|delivery|" + "|".join(DAYNAMES) + r")\b)*")
+
+
+def either_or(text):
+    """Whether the text offers its dates as a choice of one day - "Would 30/11/26 or 01/12/26 be ok?", "Monday 30th
+    November or Tuesday 1st December", "30/11/26, failing that 01/12/26" - rather than naming days that each need a
+    delivery ("X70 18/11/26 X70 19/11/26", "11th & 13th November"). The "or" is only looked for between two of its
+    dates, so a "HIAB or Moffett" elsewhere in the reply never makes it a choice. parse_date's "flexible" can't tell
+    the two apart: it is set for any reply with more than one date (27/11: a choice of two days was taken as two
+    delivery days, and the site was told the rest was booked for the other one)."""
+    s = _clean(text).lower()
+    spans = sorted(m.span() for p in (_DATE_TOKEN, _ORDINAL_DATE) for m in p.finditer(s))
+    return any(_CHOICE.fullmatch(s[a[1]:b[0]]) for a, b in zip(spans, spans[1:]))
+
+
 # ---------------------------------------------------------------- offloading
 _NEGATED = re.compile(r"\b(?:not|no|don[’']?t|doesn[’']?t|won[’']?t|isn[’']?t|aren[’']?t)\s+(?:[a-z]+\s+){0,2}?"
                       r"(?:need|needed|require|required|necessary)\b|\bno\s+need\b")

@@ -17,24 +17,86 @@ import carriers  # noqa: E402
 NOW = datetime(2026, 11, 2, 15, 0)
 TRIP = {"manifest": "MAN-01000001", "cost": "450.00", "revenue": "600", "collect": "06/11/26 07:30", "deliver": "06/11/26 08:30"}
 
+# The tracker as Excel draws it in Edge at 100% (as on the work PC's pictures, 24-27/11): the row numbers' strip, then
+# column A - its width changes, 65 px one booking and 16 px the next - then B to G, each this wide from line to line.
+GUTTER = 65
+WIDE = {"B": 194, "C": 225, "D": 125, "E": 166, "F": 760, "G": 526}
+SHADE, LINE, EDGE = (245, 245, 245), (224, 224, 224), (160, 216, 185)   # a heading, the line between two, a highlighted one's
+FRAME = (16, 124, 65)                  # the cursor's green frame, and the underline under its column's heading
+WRITING = {"B": 120, "C": 80, "D": 70, "E": 60, "F": 200, "G": 10}      # how wide what's typed in each cell is, centred
+GOLD, DARK = (152, 111, 11), (11, 80, 40)                                # a colleague's avatar: as on 27/11, and a dark one
 
-def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked_head=True, wide=True, size=None, name="B6",
-           formula="MAN-01000000"):
-    """The tracker as the work PC pictures it: the cursor's row number highlighted, and whichever yellow cells hold something;
-    over them the Name Box's text and the formula bar's, each as long as its words."""
+
+def _columns(a=65, gutter=GUTTER, start="A", lead=0):
+    """{letter: (left, right)} as the view lays the columns out from `start` (the view scrolled sideways when it isn't A,
+    `lead` px of white before it), each one's right its line with the next."""
+    x, out = gutter + 1 + lead, {}
+    for c in "ABCDEFGHIJKL"["ABCDEFGHIJKL".index(start):]:
+        w = a if c == "A" else WIDE.get(c, 100)
+        out[c] = (x, x + w)
+        x += w
+    return out
+
+
+def _sheet(row_top=807, row_bottom=831, filled=(), above=True, picked="B", wide=True, size=None, name="B6",
+           formula="MAN-01000000", a=65, gutter=GUTTER, start="A", lead=0, tooltip=True, bubbles=(), picked_head=True):
+    """The tracker as the work PC pictures it: the Name Box's text and the formula bar's, each as long as its words; the
+    column headings, the cursor's (picked) highlighted and underlined, and the Name Box's tooltip over A's and B's when
+    the mouse was left on it; the cursor's row number highlighted; every cell edged in black, the cursor's framed in
+    green with its fill handle; whichever yellow cells hold something, the manifest above, colleagues' avatars."""
     im = Image.new("RGB", size or (1910 if wide else 900, 915), (255, 255, 255))
+    w, h = im.size
     d = ImageDraw.Draw(im)
     d.rectangle((B.NAME_AT[0] + 4, 245, B.NAME_AT[0] + 4 + 9 * len(name), 257), fill=(30, 30, 30))
     if formula:
         d.rectangle((305, 245, 305 + 9 * len(formula), 257), fill=(30, 30, 30))
-    d.rectangle((0, 358, 64, 831), fill=(245, 245, 245))
-    d.rectangle((0, row_top, 64, row_bottom), fill=B.PICKED)
-    d.rectangle((B.HEAD_B - 20, B.HEAD_Y - 8, B.HEAD_B + 20, B.HEAD_Y + 8), fill=B.PICKED if picked_head else (245, 245, 245))
-    if above:
-        d.rectangle((170, row_top - 16, 290, row_top - 6), fill=(0, 0, 0))
+    cols = _columns(a, gutter, start, lead)
+    picked = picked if picked_head else ""
+    # the headings: a line between each two, each one's letter in its middle, the cursor's highlighted and underlined
+    d.rectangle((0, 284, w, 305), fill=SHADE)
+    d.line((0, 307, w, 307), fill=(189, 189, 189))
+    for c, (x0, x1) in cols.items():
+        if c in picked:
+            d.rectangle((x0 + 1, 284, x1 - 1, 305), fill=B.PICKED)
+            d.rectangle((x0, 306, x1, 307), fill=FRAME)
+        nxt = chr(ord(c) + 1)
+        d.line((x1, 284, x1, 305), fill=EDGE if c in picked or nxt in picked else LINE)
+        mid = (x0 + x1) // 2
+        d.rectangle((mid - 3, 289, mid + 3, 299), fill=(15, 112, 59) if c in picked else (97, 97, 97))
+    if tooltip:
+        d.rectangle((38, 274, 137, 305), fill=(255, 255, 255), outline=(200, 198, 196))
+        d.rectangle((52, 286, 122, 296), fill=(37, 36, 35))
+        for x in range(38, 138):
+            if im.getpixel((x, 306)) == FRAME:                       # its shadow on the underline
+                im.putpixel((x, 306), (13, 102, 53))
+    # the row numbers, the cursor's highlighted
+    d.rectangle((0, B.ROW_TOP, gutter - 1, h), fill=SHADE)
+    d.line((gutter, B.ROW_TOP, gutter, h), fill=(189, 189, 189))
+    d.rectangle((0, row_top, gutter - 1, row_bottom), fill=B.PICKED)
+    # every cell edged in black: a line down each column's edge, one between each two rows
+    for c, (x0, x1) in cols.items():
+        d.line((x1, B.ROW_TOP - 25, x1, h), fill=(0, 0, 0))
+    pitch = row_bottom - row_top + 2
+    for y in list(range(row_top - 1, B.ROW_TOP - 1, -pitch)) + list(range(row_bottom + 1, h, pitch)):
+        d.line((gutter + 1, y, w, y), fill=(0, 0, 0))
+    on = [cols[c] for c in picked if c in cols]
+    if on:                                                             # the cursor's frame, round what's picked on its row
+        x0, x1 = on[0][0], max(r for _, r in on)
+        if len(picked) > 1:
+            d.rectangle((x0 + 2, row_top, min(x1, w) - 2, row_bottom - 1), fill=(232, 242, 236))
+        d.rectangle((x0, row_top - 2, x1 + 1, row_bottom + 1), outline=FRAME, width=2)
+        d.rectangle((x1 - 1, row_bottom - 1, x1 + 3, row_bottom + 3), fill=FRAME)
+    if above and "B" in cols:
+        mid = sum(cols["B"]) // 2
+        d.rectangle((mid - 60, row_top - 17, mid + 60, row_top - 7), fill=(0, 0, 0))
     for c in filled:
-        xs = B.CELL_B if c == "B" else B.CELLS[c]
-        d.rectangle((xs[0] + 20, row_top + 6, xs[0] + 60, row_bottom - 6), fill=(0, 0, 0))
+        x0, x1 = cols[c]
+        mid = x0 + 263 if c == "G" else (x0 + x1) // 2                 # G's Y or N sits in its middle, 263 px in
+        d.rectangle((mid - WRITING[c] // 2, row_top + 7, mid + WRITING[c] // 2, row_bottom - 6), fill=(0, 0, 0))
+    for x, y, colour in bubbles:                                       # a colleague's avatar: a disc with white initials
+        d.ellipse((x - 14, y - 14, x + 14, y + 14), fill=colour)
+        d.rectangle((x - 7, y - 4, x - 2, y + 4), fill=(255, 255, 255))
+        d.rectangle((x + 2, y - 4, x + 7, y + 4), fill=(255, 255, 255))
     return im
 
 
@@ -43,9 +105,39 @@ def test_the_sheet_reads_the_same_in_the_narrower_taller_window():
     assert B.row_state(_sheet(size=big)) == {"blank": True, "above": True}
     assert B.row_state(_sheet(row_top=1100, row_bottom=1124, size=big)) == {"blank": True, "above": True}    # lower down
     assert B.row_state(_sheet(filled="CDE", size=big))["blank"] is False
-    assert B.row_filled(_sheet(filled="BCDE", size=big)) is True                                             # G is off it
-    assert B.row_filled(_sheet(filled="BCD", size=big)) is False
+    assert B.row_filled(_sheet(filled="BCDE", picked="BCDEFG", size=big)) is True                            # G is off it
+    assert B.row_filled(_sheet(filled="BCD", picked="BCDEFG", size=big)) is False
     assert B.row_state(_sheet(size=(1200, 915))) is None                                                     # too narrow to tell
+
+
+def test_an_empty_row_reads_blank_wherever_column_a_leaves_the_columns():
+    # 27/11 17:15 (and 24/11 14:18): column A went from 65 px to 16, every column 49 px left, and the black borders
+    # between the cells fell inside the spans B to G had been read at - four empty rows read as written in, "no empty
+    # row where one should be". The columns are found on each picture now: from the headings, whatever A's width, the
+    # row numbers' (wider from row 10000) or the Name Box's tooltip.
+    for a, gutter, tip in ((65, GUTTER, True), (16, GUTTER, True), (16, GUTTER, False), (53, GUTTER, True), (65, 78, True)):
+        assert B.row_state(_sheet(a=a, gutter=gutter, tooltip=tip)) == {"blank": True, "above": True}, (a, gutter, tip)
+        assert B.row_state(_sheet(a=a, gutter=gutter, tooltip=tip, above=False))["above"] is False
+        for c in "BCDEFG":                                    # anything typed in any one of its cells: never blank
+            assert B.row_state(_sheet(a=a, gutter=gutter, tooltip=tip, filled=c))["blank"] is False, (a, gutter, c)
+    for im, c, want in ((_sheet(a=16), "B", (82, 276)), (_sheet(), "C", (325, 550)),
+                        (_sheet(gutter=103), "B", (169, 363))):             # row 1048576's seven digits (23/11)
+        assert B.yellow_columns(im, B.picked_row(im))[c] == want
+
+
+def test_the_cursors_frame_and_a_colleagues_avatar_over_the_rows_above_are_not_writing():
+    # 27/11: a colleague's avatar sat over the line between C and D on the filled rows above, the cursor's green frame
+    # and fill handle on the row looked at
+    over = [(_columns(16)["C"][1], 807 - 26 - 1, GOLD), (_columns(16)["C"][1], 807 - 52 - 1, DARK)]
+    assert B.row_state(_sheet(a=16, bubbles=over)) == {"blank": True, "above": True}
+    assert B.row_state(_sheet(a=16, bubbles=over, filled="CDE"))["blank"] is False     # a half-typed row stays so
+
+
+def test_the_tracker_row_goes_on_the_first_empty_row_under_a_narrow_column_a(tmp_path):
+    over = [(_columns(16)["C"][1], 807 - 26 - 1, GOLD)]
+    R = _Walk(str(tmp_path), [_sheet(a=16, bubbles=over)])
+    assert B.tracker_rows(R, [TRIP], "ACME_DH", NOW) == (1, "") and len(R.pasted) == 1
+    assert [n for n, _ in R.batches].count("tracker-row") == 1
 
 
 def test_the_first_empty_row_under_the_last_manifest_reads_as_blank():
@@ -61,20 +153,27 @@ def test_a_row_with_no_manifest_above_it_is_not_where_the_list_ends():
 
 
 def test_a_sheet_left_scrolled_sideways_means_no_telling():
-    im = _sheet()
-    ImageDraw.Draw(im).rectangle((70, B.HEAD_Y - 8, 297, B.HEAD_Y + 8), fill=B.PICKED)     # column C's heading where B's belongs
-    assert B.row_state(im) is None
+    # 03/11: the view scrolled sideways, C first after a 4-px sliver, the cursor on C under a filled C - the right place
+    # and width for B, an empty row under writing. No column A to its left: it can't be told for B
+    assert B.row_state(_sheet(start="C", picked="C", lead=4)) is None
+    assert B.row_state(_sheet(start="B", picked="B")) is None              # B first: A scrolled off, so no telling either
+    assert B.row_filled(_sheet(start="C", picked="CDEFGH", lead=4, filled="CDEFG")) is False
+    assert B.row_state(_sheet(start="F", picked="F")) is None              # F's wide heading at the left, where B's belongs
+    assert B.row_state(_sheet(a=300)) is None                              # the cursor's column too far right to be B
 
 
 def test_the_cursor_not_plainly_on_column_b_means_no_telling():
     assert B.row_state(_sheet(picked_head=False)) is None
+    assert B.row_state(_sheet(picked="BC")) is None                        # on two cells, B and C
     assert B.row_state(_sheet(wide=False)) is None
     assert B.row_state(Image.new("RGB", (1910, 915), (255, 255, 255))) is None
 
 
 def test_a_pasted_row_shows_in_every_yellow_cell_but_the_notes():
-    assert B.row_filled(_sheet(filled="BCDEG")) is True
-    assert B.row_filled(_sheet(filled="BCDE")) is False
+    for a in (65, 16):
+        assert B.row_filled(_sheet(a=a, filled="BCDEG", picked="BCDEFG")) is True
+        assert B.row_filled(_sheet(a=a, filled="BCDE", picked="BCDEFG")) is False
+        assert B.row_filled(_sheet(a=a, picked="BCDEFG")) is False         # the cells' borders are not the row
 
 
 def test_the_tracker_row_is_the_yellow_cells_in_their_order_with_notes_blank():
@@ -105,8 +204,8 @@ class _Tracker:
             return 1
         if name == "tracker-address":
             im = {"name": _sheet(name=B.SHEET_END), "cell": _sheet(formula=B.SHEET_END), "nowhere": _sheet()}[self.typed_in]
-        else:
-            im = _sheet(filled="BCDEG" if self.pasted else ())
+        else:                          # after the paste the cursor is on the whole row, B to G
+            im = _sheet(filled="BCDEG", picked="BCDEFG", tooltip=False) if self.pasted else _sheet()
         im.save(os.path.join(self.OUT, "latest.png"))
         return 0
 

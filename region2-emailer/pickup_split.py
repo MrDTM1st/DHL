@@ -1,7 +1,8 @@
 """
 An order with several pick-ups and/or several delivery days (his rule 02/11): the update goes on the earliest day, the
 rest is kept on the tracker record (its `collections`, each with its date, and the reply's date options), anyone we email
-is told it is separate pick-ups, and Book splits it down by day.
+is told it is separate pick-ups, and Book splits it down by day. A reply offering a choice of days ("30/11 or 01/12")
+is not several days: it is one delivery, on the day booked.
 
 What is here is the wording; ctms_run_plan.py sets the earliest day, book_run.py tells the site and the planner.
 """
@@ -23,8 +24,15 @@ def pickups(rec):
 
 
 def days(rec):
-    """Every delivery day the reply named, earliest first ("dd/mm/yyyy")."""
-    opts = (((rec or {}).get("details") or {}).get("date") or {}).get("options") or []
+    """Every day the reply needs a delivery on, earliest first ("dd/mm/yyyy"). A reply that only offers a choice of days
+    ("Would 30/11/26 or 01/12/26 be ok?") is one delivery, on whichever of them it's booked for: no days of its own
+    (27/11: a load booked whole for 01/12 had the site told "The rest is booked for 30/11/2026 separately")."""
+    import delivery_details
+    cell = ((rec or {}).get("details") or {}).get("date")
+    cell = cell if isinstance(cell, dict) else {}
+    if delivery_details.either_or(cell.get("raw")):
+        return []
+    opts = cell.get("options") or []
     got = set()
     for o in opts:
         try:
