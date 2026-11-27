@@ -541,6 +541,30 @@ def _ctms_args(action, data):
                 qty[str(k)] = n
         if qty:
             out["qty"] = qty
+        # the copies and re-uploads the home PC's ledger knows of (his 26/11 "never more in the well than ordered"):
+        # Book books no other. Dropped here until 27/11, so Book refused every copy - the toolkit's own too. The home
+        # PC works this list out itself; one coming from the dashboard is never used
+        known = [str(x) for x in (data.get("known") if isinstance(data.get("known"), list) else [])[:20]
+                 if _CHECK_REF.fullmatch(str(x))]
+        if known:
+            out["known"] = known
+        # a load a vehicle (his 10 + 20, 27/11): [{"qty", "trailer"}], each a whole number over 0 on a trailer code -
+        # all of them or none, never some (book_run checked them against the order before they were sent)
+        raw = data.get("loads") if isinstance(data.get("loads"), list) else []
+        loads = []
+        for x in raw[:20]:
+            try:
+                q = float(x.get("qty"))
+                t = str(x.get("trailer") or "")
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                break
+            if not (0 < q <= 100000 and q == int(q) and _CARRIER.fullmatch(t)):
+                break
+            loads.append({"qty": int(q), "trailer": t})
+        if raw and len(loads) == len(raw):
+            out["loads"] = loads
+        if data.get("equal") is True:              # his say-so to halve bagged ballast after all
+            out["equal"] = True
     if action == "book_recall":
         # what a Book made, asked again from the work PC's own record: which orders, which day, which command
         out["orders"] = [str(o) for o in (data.get("orders") if isinstance(data.get("orders"), list) else [])[:8]

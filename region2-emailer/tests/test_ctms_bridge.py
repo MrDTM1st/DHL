@@ -3808,6 +3808,14 @@ def test_the_panels_book_switches_acting_on_for_itself_and_puts_it_back():
         # what goes to the work PC goes through the same gate
         args = S._ctms_args("ctms_book", dict(job, vehicles=99, haulage=-1))
         assert "vehicles" not in args and "haulage" not in args and args["orders"] == ["9100001"]
+        # the copies the home PC's ledger knows of, and a load a vehicle (27/11): dropped by this gate until then
+        loads = [{"qty": 20, "trailer": "NR_ARTIC_FL"}, {"qty": 10, "trailer": "NR_FLAT_RIG"}]
+        args = S._ctms_args("ctms_book", dict(job, known=["9100001-1-1_C1", "bad ref!"], loads=loads, equal=True))
+        assert args["known"] == ["9100001-1-1_C1"] and args["loads"] == loads and args["equal"] is True
+        for bad in ([{"qty": 20, "trailer": "NR_ARTIC_FL"}, {"qty": 0, "trailer": "NR_FLAT_RIG"}],
+                    [{"qty": 20.5, "trailer": "NR_ARTIC_FL"}], [{"qty": 20, "trailer": "no trailer!"}], ["20"]):
+            assert "loads" not in S._ctms_args("ctms_book", dict(job, loads=bad))      # all of them or none
+        assert "equal" not in S._ctms_args("ctms_book", dict(job, equal="yes"))
         # it ends: what it made is kept for the panel, and the switch goes back off
         done = {"run": r["run"], "ok": True, "said": "MAN-01000001 ACCEPTED", "seconds": 41,
                 "trips": [{"manifest": "MAN-01000001", "status": "ACCEPTED", "revenue": "600", "cost": "450"}]}
