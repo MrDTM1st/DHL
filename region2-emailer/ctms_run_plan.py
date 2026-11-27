@@ -660,7 +660,7 @@ def plan_update(it, rec, found):
             on = off_weekend(first, drop)[0]
             said = ("Network Rail said no to an early collection: agree a later delivery with the site, or an "
                     "afternoon one collected the same day" if nd_.get("state") == "not_allowed" else
-                    "Network Rail have to say yes first - it's on the Network Rail card")
+                    "Network Rail have to say yes first - the order's Network Rail box says where that stands")
             checks.append({"field": "nr_collect", "label": "Collection", "quote": "", "options": [], "text": False,
                            "why": f"Collected {on:%d/%m}, before the {avail:%d/%m} the stock is available from. {said} "
                                   "(your 25/11 rule)"})

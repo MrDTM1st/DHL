@@ -649,6 +649,29 @@ def test_what_the_rule_cant_settle_is_drafted_and_held_never_sent():
     assert r["nr_date"]["his"] == "availability" and r["nr_date"]["kind"] == "earlier"
 
 
+def test_a_later_week_with_no_one_availability_date_is_a_heads_up_that_goes_by_itself():
+    # his 27/11: "Anything after the availability date, we don't ask them. We just let them know because we know
+    # it's already available" - with no one availability date to judge it by, a later week is still only a heads-up:
+    # drafted to go by itself, never held for him (an earlier day still is: that one is an ask)
+    r = _site(_rec(date=OFFERED), "01/12/2026")          # the Tuesday of the week after the one offered
+    r["collections"] = []
+    d = {"records": [r]}
+    N.on_new_date(d, r, "01/12/2026", "the site's reply")
+    nd = r["nr_date"]
+    assert nd["kind"] == "later" and nd["state"] == "to_send" and not nd.get("his") and not nd.get("held")
+    assert r["delivery_date"] == "01/12/2026"           # a later week moves the order at once, as ever
+    # one held that way before 27/11 (a later week moved the order already): the audit puts it to the rule again,
+    # judged from the day offered, not the one it moved to - and it goes
+    old = _site(_rec(order="9100901", date="01/12/2026"), "01/12/2026")
+    old["collections"] = []
+    old["nr_date"] = {"kind": "later", "offered": OFFERED, "asked": "01/12/2026", "state": "to_send",
+                      "his": "availability", "held": {"why": "No availability date", "at": "2026-11-26 09:00"},
+                      "why": "the site's reply"}
+    changed = N.audit({"records": [old]}, now=NOW)
+    assert changed and old["nr_date"]["state"] == "to_send" and not old["nr_date"].get("his")
+    assert not old["nr_date"].get("held")
+
+
 def test_the_audit_puts_replies_from_before_the_rule_to_it():
     old = _site(_rec(order="9100801", date=MON), MON)                 # replied before 25/11: 08:00 Monday, far
     fine = _site(_rec(order="9100802", date="01/12/2026", avail=MON), "01/12/2026")

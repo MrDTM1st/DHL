@@ -951,11 +951,6 @@ a.callbtn:hover{ color:var(--red-ink); }
 .nrdate-said { overflow-wrap: anywhere; }
 .nrdate-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .nrdate-who { font-size: 12.5px; font-weight: 700; color: var(--red-ink, var(--red)); }
-.nrcard { border-left-color: var(--purple, #7B2CBF); }
-.nrcard .nrdate { margin: 4px 0 0; }
-/* since 25/11 it runs by itself: what's held for him stands out, the rest just says what happened */
-.nrcard.need { border-left-color: var(--red); }
-.nrcard-need { color: var(--red-ink, var(--red)); font-size: 14px; }
 .nrdate.need { border-left-color: var(--red); }
 .nrdate-held { margin-top: 6px; }
 .nrdate-why { font-size: 12.5px; font-weight: 600; color: var(--red-ink, var(--red)); margin-top: 4px; overflow-wrap: anywhere; }

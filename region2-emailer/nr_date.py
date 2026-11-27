@@ -298,6 +298,8 @@ def on_new_date(d, r, new, why, reply_eid=None):
         return tracker.move_date(d, r, new, why) if _d(new) else False
     offered = str(r.get("delivery_date") or "").strip()
     cur = r.get("nr_date") or {}
+    if cur.get("state") == "to_send" and cur.get("asked") == new and _d(cur.get("offered")):
+        offered = str(cur["offered"])   # this day's draft again: a later week's moved the order already, so the day offered
     if cur.get("asked") == new and cur.get("kind") == "earlier":
         if cur.get("state") == "allowed":
             return tracker.move_date(d, r, new, why)
@@ -306,9 +308,12 @@ def on_new_date(d, r, new, why, reply_eid=None):
     plan = collect_plan(r, new)
     his, held_why = "", ""
     if plan["verdict"] == "undecided" and plan.get("undecided") == "availability":
-        # no availability date to judge it by: the delivery days, as before 25/11 - and it is his to send or not
+        # no one availability date to judge it by: the delivery days, as before 25/11. A later week is only ever a
+        # heads-up, the stock being there already (his 27/11: "Anything after the availability date, we don't ask
+        # them. We just let them know"), so it goes by itself; an earlier day is an ask, his to check first
         kind = classify(offered, new)
-        his, held_why = "availability", plan["why"].capitalize() + " - check it before anything goes to Network Rail"
+        if kind == "earlier":
+            his, held_why = "availability", plan["why"].capitalize() + " - check it before anything goes to Network Rail"
     elif plan["verdict"] == "undecided":
         kind = "earlier"
         his, held_why = "time", plan["why"].capitalize() + " - ask them, or press No email needed"
@@ -381,7 +386,11 @@ def audit(d, now=None):
         if not _d(day) or _d(day).date() < now.date():
             continue
         cur = r.get("nr_date") or {}
-        if cur and not (cur.get("state") == "to_send" and cur.get("his") == "time" and cur.get("asked") == day):
+        # a draft held on the site's time, or a later week's heads-up held for want of one availability date (held
+        # until 27/11, when those started going by themselves): put to the rule again
+        again = cur.get("state") == "to_send" and cur.get("asked") == day and (
+            cur.get("his") == "time" or (cur.get("his") == "availability" and cur.get("kind") == "later"))
+        if cur and not again:
             continue                     # the rule was put to it when the site's day landed
         before = json.dumps(cur, sort_keys=True)
         on_new_date(d, r, day, cur.get("why") or "the site's reply (his 25/11 rule)",
