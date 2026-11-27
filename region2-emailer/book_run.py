@@ -334,9 +334,76 @@ def in_name_box(before, after):
 
 
 def row_text(trip, carrier, now):
-    """B manifest, C the carrier code, D the cost, E the planner, F left blank, G Urgent."""
-    return "\t".join([trip["manifest"], carrier, str(trip.get("cost") or ""), PLANNER, "",
+    """B manifest, C the carrier code, D the cost, E the planner, F left blank, G Urgent. The cost is what CTMS charges
+    once the trip is accepted, read back off its Payments, when the work PC could read it - not the Create Trip box's
+    figure, which leaves out what CTMS adds (his 27/11: a third of the real charge went on the tracker that way)."""
+    return "\t".join([trip["manifest"], carrier, str(trip.get("total") or trip.get("cost") or ""), PLANNER, "",
                       "Y" if is_urgent(trip.get("collect"), now) else "N"])
+
+
+# -- the cost, checked once the trip is accepted (his 27/11)
+LIFT = ("HIAB", "MOFF")         # a payment line for lifting gear: CTMS's HIAB, or the Moffett service
+
+
+def _money(v):
+    try:
+        return round(float(str(v).replace(",", "").replace("£", "").strip()), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def lifting_needed(rec):
+    """The lifting gear the job's details ask for: "HIAB", "MOFFETT", "BOTH" (either), or "" when none is said."""
+    off = str((((rec or {}).get("details") or {}).get("offloading") or {}).get("value") or "").strip().upper()
+    return off if off in ("HIAB", "MOFFETT", "BOTH") else ""
+
+
+def _gear(lift):
+    return {"HIAB": "HIAB", "MOFFETT": "Moffett"}.get(lift, "HIAB or Moffett")
+
+
+def cost_check(rec, job, trips):
+    """(ok, words): each accepted trip's charges - as CTMS has them once it is accepted, read back by the work PC -
+    checked against the job. His 27/11, "double check the costs at the end of you accepting something": an artic HIAB
+    job went on as an artic flat with no HIAB on the order, CTMS charged a third of the real price, and the DigiHaul
+    row carried that to the haulier, who asked why.
+      * a quote typed: the charges come to it
+      * the job needs lifting gear (offloading HIAB, a Moffett, or either): a HIAB or Moffett charge is on it - without
+        one CTMS has priced the trip as if none were wanted
+      * charges that couldn't be read back fail it only when there is something above to check them against
+    The words give each trip's charges either way, so the figure is in front of him."""
+    quote = _money(job.get("haulage"))
+    quote = quote if quote and quote > 0 else None
+    lift = lifting_needed(rec)
+    wrong, told = [], []
+    for t in trips or []:
+        man = t.get("manifest") or "?"
+        charges = t.get("charges") or []
+        total = _money(t.get("total"))
+        if not charges:
+            if quote is not None or lift:
+                wrong.append(f"{man}'s charges weren't read back from CTMS (its Create Trip box said {t.get('cost') or '?'})"
+                             + (f": check they come to the {quote:g} quote" if quote is not None else "")
+                             + (" and" if quote is not None and lift else ":" if lift else "")
+                             + (f" check a {_gear(lift)} charge is on it" if lift else "") + " - its Payments in CTMS")
+            else:
+                told.append(f"{man} {t.get('cost') or '?'} (its Create Trip box's figure - not read back)")
+            continue
+        lines = ", ".join(f"{c.get('kind')} {c.get('amount') or '?'}" for c in charges)
+        kinds = " ".join(str(c.get("kind") or "").upper() for c in charges)
+        if total is None:
+            wrong.append(f"{man}: a charge line couldn't be read ({lines}) - look at its Payments in CTMS")
+            continue
+        if quote is not None and abs(total - quote) > 0.005:
+            wrong.append(f"{man}'s charges come to {total:.2f} ({lines}), not the {quote:g} quote")
+        if lift and not any(g in kinds for g in LIFT):
+            wrong.append(f"{man} has no {_gear(lift)} charge ({lines}), yet the job needs one (offloading {lift}): CTMS "
+                         "has priced it without - put the service on the order, then send the manifest again (Planned, "
+                         "then Accepted)")
+        told.append(f"{man} {total:.2f} ({lines})" + ("" if quote is not None else ", CTMS's own price"))
+    if wrong:
+        return False, "; ".join(wrong)
+    return True, "; ".join(told)
 
 
 def tracker_rows(R, trips, carrier, now=None, look_only=False):
@@ -968,10 +1035,24 @@ def follow(k, R=None, now=None, auto=False, only=None):
         steps = (J.get(k) or {}).get("steps") or {}
         tried = int((steps.get(name) or {}).get("tries") or 0)
         started = bool((steps.get(name) or {}).get("started"))     # begun by a run that may have died after the Send
+        if name == "cost":
+            ok, how = _step(k, name, lambda: cost_check(rec, job, made), auto)
+            said.append(f"Cost checked: {how}." if ok else
+                        f"COST CHECK FAILED: {how}. Nothing carries that price on: once CTMS has it right, press Done on "
+                        "the cost check and type the DigiHaul row by hand with the right price.")
+            continue
         if name == "digihaul":
             have = set((steps.get("digihaul") or {}).get("written") or [])
             todo = [t for t in made if t["manifest"] not in have]
-            nocost = [t["manifest"] for t in todo if t.get("cost") in (None, "")]
+            if "cost" in steps and not (steps.get("cost") or {}).get("ok"):
+                # the cost check didn't pass (his 27/11): the haulier reads the tracker, so CTMS's figure isn't written -
+                # not even once the check is Done by hand, the price having been put right in CTMS since it was read
+                J.step(k, name, False, "held: the cost check didn't pass - typed by hand with the right price")
+                said.append("DigiHaul NOT written: the cost check didn't pass, so CTMS's figure isn't put in front of "
+                            "the haulier. By hand, with the right price: "
+                            + " | ".join(row_text(t, carrier, now).replace("\t", ", ") for t in todo) + ".")
+                continue
+            nocost = [t["manifest"] for t in todo if t.get("total") in (None, "") and t.get("cost") in (None, "")]
             if nocost:
                 J.step(k, name, False, f"the cost of {and_list(nocost)} isn't known here: type the row by hand")
                 said.append(f"DigiHaul NOT written: the cost of {and_list(nocost)} isn't known here. By hand: "
@@ -1220,7 +1301,7 @@ def book(job, R=None, now=None):
         return out
     payload = payload or {}
     trips = payload.get("trips") or []
-    out.update(trips=[{k_: t.get(k_) for k_ in ("manifest", "status", "revenue", "cost")} for t in trips],
+    out.update(trips=[{k_: t.get(k_) for k_ in ("manifest", "status", "revenue", "cost", "total")} for t in trips],
                seconds=payload.get("seconds"), stages=payload.get("stages"), ctms=result.get("detail"))
     if dry:
         out.update(ok=bool(result.get("ok")), said=str(result.get("detail") or "The work PC didn't answer."))
@@ -1241,7 +1322,8 @@ def book(job, R=None, now=None):
         return out
     said = before + [f"{and_list([t['manifest'] for t in made])} ACCEPTED with {job['carrier']} in "
                      f"{payload.get('seconds')} seconds"
-                     + (f" (cost {made[0].get('cost')}, revenue {made[0].get('revenue')})" if len(made) == 1 else "") + "."]
+                     + (f" (cost {made[0].get('total') or made[0].get('cost')}, revenue {made[0].get('revenue')})"
+                        if len(made) == 1 else "") + "."]
     fixed = [n for n in payload.get("notes") or []
              if "put right" in n or "put up to" in n or "PUT BACK BY HAND" in n or "split into" in n]
     if fixed:
@@ -1249,7 +1331,8 @@ def book(job, R=None, now=None):
     priced = [str(n) for n in payload.get("priced") or []]    # a quote is the TOTAL: the haulier's own lines came off it
     if priced:
         said.append("Price: " + "; ".join(priced) + ".")
-    by_hand = [str(n) for n in payload.get("notes") or [] if str(n).startswith(("CLOSE BY HAND", "CHECK BY HAND"))]
+    by_hand = [str(n) for n in payload.get("notes") or []
+               if str(n).startswith(("CLOSE BY HAND", "CHECK BY HAND", "CHECK THE COST BY HAND"))]
     if by_hand and result.get("ok"):                          # a stop's own words carry them already
         said.append("; ".join(by_hand) + ".")
     if not result.get("ok"):

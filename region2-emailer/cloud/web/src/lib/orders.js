@@ -445,6 +445,8 @@ export function jobOf(r) {
   if (!vi.need && /luton|tail\s*-?\s*lift/.test(said)) out.push(SMALL);
   if (!out.length) out.push(GENERAL);
   const notes = [], checks = [];
+  const counted = ctmsCount(r);          // CTMS's weight against the extract's count (his 27/11): the NOT CERTAIN box
+  if (counted) checks.push(counted.said);
   if (byWeight === 'rigid') notes.push(`${whence()} - a rigid HIAB (up to ${kgText(RIGID_HIAB_KG)})`);
   if (byWeight === 'artic') {
     notes.push(`${whence()} - ` + (kg > ARTIC_HIAB_KG
@@ -800,6 +802,57 @@ export function journeyFor(repo, leg) {
   };
 }
 
+
+// A count told by CTMS's own weight (his 27/11: an ask to NOC said 6 rails on a delivery CTMS holds 4 for - the 6 was
+// the extract's, CTMS's lines weighed 2 + 2). Rails weigh their profile's kg a metre times their length; bagged ballast a
+// tonne a bag. Mirrors ask_quantities.py. kg a metre by profile, as the rail codes name them:
+const RAIL_KG_M = { '56E1': 56.0, '60E2': 60.03, '113A': 56.4, CEN56: 56.0, CEN60: 60.0, UIC60: 60.0 };
+
+function railUnits(r) {
+  const out = [];
+  for (const raw of (r && r.product_codes) || []) {
+    const code = String(raw || '').toUpperCase();
+    if (!/\bRAIL\b/.test(code) || /S&C|SWITCH|CROSSING/.test(code)) continue;
+    const prof = Object.keys(RAIL_KG_M).find((p) => new RegExp('\\b' + p + '\\b').test(code));
+    const len = code.match(/(\d+(?:\.\d+)?)\s*M\b/);
+    if (!prof || !len) return null;                     // a rail whose weight can't be worked out: no count from it
+    out.push(RAIL_KG_M[prof] * parseFloat(len[1]));
+  }
+  return out;
+}
+
+// {count, what, said} - what CTMS's weight says this job holds, when it can tell and it isn't what the extract says;
+// null when they agree, or CTMS hasn't been looked at, or the weight can't tell (sleepers, mixed loads).
+export function ctmsCount(r) {
+  const kg = Number(r && r.ctms_weight);
+  const m = String((r && r.materials) || '').match(/^(\d+)x (rails|ballast)$/);
+  if (!kg || !m) return null;
+  const said = Number(m[1]);
+  if (m[2] === 'ballast') {
+    if (r.loose_ballast || /\bloose\b|100500\/001/i.test(`${r.materials} ${(r.product_codes || []).join(' ')}`)) return null;
+    const count = Math.round(kg / 1000);
+    return count !== said ? { count, what: 'ballast', said: `CTMS weighs it ${kgText(kg)}: ${count} bags of ballast, `
+      + `not the ${said} the extract says - check the count in CTMS before you ask` } : null;
+  }
+  const units = railUnits(r);
+  if (!units || !units.length) return null;
+  const lo = Math.min(...units), hi = Math.max(...units);
+  if (lo === hi) {
+    const count = Math.round(kg / lo);
+    return count !== said ? { count, what: 'rails', said: `CTMS weighs them ${kgText(kg)}: ${count} rails, not the ${said} `
+      + 'the extract says - check the count in CTMS before you ask' } : null;
+  }
+  // rails of more than one length: how many of each can't be told, only whether the weight fits the extract's count
+  return kg < said * lo * 0.95 || kg > said * hi * 1.05 ? { count: null, what: 'rails', said: `CTMS weighs them `
+    + `${kgText(kg)}, which isn't ${said} rails (they'd weigh ${kgText(said * lo)} to ${kgText(said * hi)}) - check the `
+    + 'count in CTMS before you ask' } : null;
+}
+
+// The Materials an ask states: CTMS's count when its weight tells it and the extract's differs, else the extract's.
+export function askMaterials(r) {
+  const c = ctmsCount(r);
+  return c && c.count !== null ? `${c.count}x ${c.what}` : String((r && r.materials) || '');
+}
 
 // What a haulier needs to know about the RAILS on a job (his ask 24/11, after Gundel had to ask "What rails are they
 // please ... if it is NOT zinoco it can be load & go"): profile, grade, length, drilling and Zinoco or not, read off

@@ -3,7 +3,7 @@ import {
   ordLabel, statusLabel, dueText, dateShort, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
   fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, omAltContact, siteContactOf, stamp, answerText,
-  emailedBack, railDetails, mailInText,
+  emailedBack, railDetails, mailInText, askMaterials, ctmsCount,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
@@ -85,7 +85,8 @@ function coverRequest(r) {
     `Collection date/time: ${collWhen}`,
     `Delivery date/time: ${when}`,
     returnLine,
-    `Materials: ${[r.materials, r.weight || (r.ctms_weight ? `approx ${Math.round(r.ctms_weight).toLocaleString('en-GB')} kg total (CTMS)` : '')].filter(Boolean).join(' — ')}`,
+    // the count CTMS's weight tells, when it differs from the extract's (his 27/11) - askMaterials
+    `Materials: ${[askMaterials(r), r.weight || (r.ctms_weight ? `approx ${Math.round(r.ctms_weight).toLocaleString('en-GB')} kg total (CTMS)` : '')].filter(Boolean).join(' — ')}`,
     // rails: profile, grade, length, drilling, Zinoco or not - Gundel asked "What rails are they please" (24/11)
     railDetails(r).length ? `Rails: ${railDetails(r).join(' + ')}` : null,
     `Vehicle: ${(() => {
@@ -397,6 +398,9 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
   const siteLabels = callLabels(site.calls);
   const siteWho = (c) => c.name || site.name || r.worksite || r.site || 'the site';
 
+  // CTMS's weight against the extract's count (his 27/11: NOC was told 6 rails for a delivery CTMS holds 4 for)
+  const countCheck = ctmsCount(r);
+
   // the inline cover-request compose, shared by the haulier rows and the
   // Parcel Pass card - one open compose at a time, keyed by name
   const composeBox = (h) => composing === h.name && (
@@ -413,6 +417,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
       <label>Message
         <textarea rows={11} value={draft.message} onChange={edit('message')} />
       </label>
+      {kind === 'haulier' && countCheck && <div className="hcompose-kept">{countCheck.said}</div>}
       {remembered && kind === 'haulier' && (
         <div className="hcompose-kept">
           Using your edited wording for this order.
@@ -795,6 +800,7 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
                   <textarea rows={12} value={teams.message}
                     onChange={(e) => setTeams({ ...teams, message: e.target.value, copied: false, sent: false, said: '' })} />
                 </label>
+                {countCheck && <div className="hcompose-kept">{countCheck.said}</div>}
                 <div className="hcompose-foot">
                   <span className="hint-sig">{teams.said || 'Sent from your Teams on the work PC - no email.'}</span>
                   <button className="btn mini" onClick={() => setTeams(null)}>Close</button>

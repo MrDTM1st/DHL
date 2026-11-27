@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "_book_journal.jsonl")
 KEEP = 400                       # lines kept: weeks of bookings
 FOUND_MAX = 6
-TRIP_KEYS = ("manifest", "status", "revenue", "cost", "collect", "deliver", "lines", "took")
+TRIP_KEYS = ("manifest", "status", "revenue", "cost", "collect", "deliver", "lines", "took", "total", "charges")
 
 
 def _norm(o):

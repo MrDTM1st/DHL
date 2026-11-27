@@ -938,11 +938,43 @@ def test_payments_that_open_for_another_trip_are_closed_untouched():
     assert ctms.payments["MAN-01000100"][0] == ["Trip Haul Ma", 900.0] and ctms.pay_up is None
 
 
-def test_a_matrix_price_is_left_as_ctms_makes_it():
+def test_a_matrix_price_is_left_as_ctms_makes_it_and_its_charges_are_read_back_once_accepted():
+    # his 27/11: an artic HIAB job went at an artic flat's matrix price and the Create Trip box's figure was all anyone
+    # kept - so an accepted trip with no quote has its own charge lines read back, nothing changed, for the home PC's check
     ctms = _quoted(cost="400.00")
     job = _book(ctms, carrier="ACME")                                      # tier 1: no price typed, nothing to take off
     man = job.trips[0]["manifest"]
-    assert ctms.opened == [] and ctms.lines_total(man) == 740.0 and job.priced == []
+    assert ctms.lines_total(man) == 740.0 and job.priced == [] and ctms.typed == []
+    assert ctms.opened == ["carrier"] and ctms.statuses == [(man, "ACCEPTED")]   # read once, after Accepted
+    t = job.trips[0]
+    assert t["total"] == "740.00" and t["cost"] == "400.00"
+    assert t["charges"] == [{"kind": "Trip Haul Ma", "amount": "400.00"}, {"kind": "HIAB", "amount": "70.00"},
+                            {"kind": "NIGHT", "amount": "110.00"}, {"kind": "SUN/BANK HOL", "amount": "160.00"}]
+    assert ctms.pay_up is None and ctms.planning_tab == "Stops"           # its Payments closed again
+
+
+def test_charges_that_cant_be_read_back_are_said_and_the_booking_stands():
+    ctms = _quoted(cost="400.00", finance_gone=True)
+    job = _book(ctms, carrier="ACME")
+    t = job.trips[0]
+    assert t["status"] == "ACCEPTED" and "charges" not in t and "total" not in t
+    assert [n for n in job.said if n.startswith("CHECK THE COST BY HAND")] == [
+        f"CHECK THE COST BY HAND: {t['manifest']}'s charges couldn't be read back once it was ACCEPTED (Planning's "
+        "Finance tab couldn't be found) - look at its Payments in CTMS"]
+
+
+def test_a_quoted_trip_keeps_the_lines_it_was_made_up_from():
+    ctms = _quoted()
+    job = _book(ctms, carrier="ACME", haulage=900)
+    assert job.trips[0]["charges"] == [{"kind": "Trip Haul Ma", "amount": "560.00"}, {"kind": "HIAB", "amount": "70.00"},
+                                       {"kind": "NIGHT", "amount": "110.00"}, {"kind": "SUN/BANK HOL", "amount": "160.00"}]
+    assert ctms.opened == ["carrier"]                                      # no second read: the quote's look was it
+
+
+def test_our_own_fleet_has_nothing_read_back():
+    ctms = FakeCtms([_row("9100001-1-1")])
+    job = _book(ctms)
+    assert "charges" not in job.trips[0] and ctms.opened == []
 
 
 def test_payment_lines_are_read_by_place_an_amount_and_its_vat_a_line():

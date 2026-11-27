@@ -39,17 +39,21 @@ PATH = os.path.join(HERE, "_book_journal.json")
 
 ACCEPTED = "ACCEPTED"
 # what follows a booking, in the order book_run does them
-STEPS = ("digihaul", "pass_email", "site_email", "filed", "off_map")
-# the ones the home PC's timer may try again on its own: Outlook only. The DigiHaul row is typed on the work PC, which
-# needs Look mum, no hands on - only his press (Retry) switches that on
-AUTO = ("pass_email", "site_email", "filed", "off_map")
+# "cost" first (his 27/11): the trip's charges checked against the job before anything carries the price on - the
+# DigiHaul row above all, where the haulier reads it
+STEPS = ("cost", "digihaul", "pass_email", "site_email", "filed", "off_map")
+FLEET = "DHL_NOC"              # our own fleet: CTMS's cost stays 0, nothing to check
+# the ones the home PC's timer may try again on its own: the cost check (it only reads what the work PC sent back) and
+# Outlook's. The DigiHaul row is typed on the work PC, which needs Look mum, no hands on - only his press (Retry)
+# switches that on
+AUTO = ("cost", "pass_email", "site_email", "filed", "off_map")
 TRIES = 3                      # by the timer; after that it waits for his Retry
 BACKOFF = (0, 180, 600)        # seconds before the 1st, 2nd, 3rd try: a busy Outlook is usually free in minutes
 LOST_AFTER = 20 * 60           # asked this long ago and still nothing back: the answer is looked for again
 KEEP_DONE = 14 * 86400         # finished jobs are forgotten after a fortnight
 HISTORY = 30
 
-LABEL = {"digihaul": "DigiHaul row", "pass_email": "Parcel Pass email", "site_email": "site email",
+LABEL = {"cost": "cost checked", "digihaul": "DigiHaul row", "pass_email": "Parcel Pass email", "site_email": "site email",
          "filed": "chain filed", "off_map": "off the map"}
 
 
@@ -146,7 +150,7 @@ def accepted(e):
 def needs(carrier):
     """What follows a booking with this carrier."""
     c = str(carrier or "").strip().upper()
-    want = []
+    want = [] if c == FLEET else ["cost"]     # our own fleet charges nothing: no cost to check
     if c.endswith("_DH"):
         want.append("digihaul")
     if c == "PASS_DH":
@@ -188,7 +192,8 @@ def asked(k, ask_id, path=None, now=None):
 
 
 def _trip(t):
-    keep = ("manifest", "status", "revenue", "cost", "collect", "deliver", "lines", "took")
+    # total and charges: what CTMS charges once it is accepted, read back off the trip's Payments - the cost check's
+    keep = ("manifest", "status", "revenue", "cost", "collect", "deliver", "lines", "took", "total", "charges")
     return {x: t.get(x) for x in keep if t.get(x) not in (None, "")}
 
 

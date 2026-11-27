@@ -46,13 +46,14 @@ def test_nothing_on_file_books_and_an_accepted_trip_makes_it_booked_with_its_ste
     assert J.verdict(J.get(k)) == "recall"
     e = J.answered(k, True, "Booked", [TRIP], JOB["carrier"])
     assert e["state"] == "booked"
-    assert J.left(e) == ["digihaul", "site_email", "filed", "off_map"]      # a _DH carrier's row, not Parcel Pass
+    assert J.left(e) == ["cost", "digihaul", "site_email", "filed", "off_map"]   # cost first; a _DH row, not Parcel Pass
     assert J.verdict(e) == "resume"
 
 
 def test_parcel_pass_is_told_and_our_own_fleet_has_no_digihaul_row():
-    assert J.needs("PASS_DH") == ["digihaul", "pass_email", "site_email", "filed", "off_map"]
-    assert J.needs("DHL_NOC") == ["site_email", "filed", "off_map"]
+    assert J.needs("PASS_DH") == ["cost", "digihaul", "pass_email", "site_email", "filed", "off_map"]
+    assert J.needs("DHL_NOC") == ["site_email", "filed", "off_map"]          # our fleet charges nothing to check
+    assert J.needs("LAWS_SF") == ["cost", "site_email", "filed", "off_map"]
 
 
 def test_a_stop_after_the_first_vehicle_is_still_booked_and_says_what_was_left_short(jpath):
@@ -79,7 +80,8 @@ def test_a_failed_outlook_step_comes_round_again_on_the_timer_then_waits_for_him
     J.asking(JOB)
     J.answered(k, True, "Booked", [TRIP], JOB["carrier"], now=1000.0)
     J.step(k, "site_email", False, "Outlook busy", now=1000.0)
-    assert J.due(now=1000.0 + J.BACKOFF[1] - 1) == [(k, ["filed", "off_map"])]   # the email not yet; the rest straight on
+    # the email not yet; the rest straight on - the cost check too, which only reads what the work PC sent back
+    assert J.due(now=1000.0 + J.BACKOFF[1] - 1) == [(k, ["cost", "filed", "off_map"])]
     assert ("site_email" in dict(J.due(now=1000.0 + J.BACKOFF[1]))[k])
     J.step(k, "site_email", False, "busy", now=2000.0)
     J.step(k, "site_email", False, "busy", now=3000.0)
@@ -643,3 +645,74 @@ def test_a_stop_during_a_batchs_booking_ends_the_batch_there(steps, monkeypatch)
     R = BatchR([_stopped([])])                               # before anything was made: still the end of it
     res = B.batch(_jobs("9000004", "9000005"), R=R)
     assert not res["ok"] and "you pressed Stop during 9000004, 1 not started" in res["said"] and len(res["results"]) == 1
+
+
+# -- the cost, checked once a trip is accepted (his 27/11: "double check the costs at the end of you accepting
+# something" - an artic HIAB job went on as an artic flat with no HIAB on the order, at a third of the real price, and
+# the DigiHaul row carried that figure to the haulier). Made-up prices.
+HIAB_JOB = {"orders": ["9000001"], "to": "site@example.com", "details": {"offloading": {"value": "HIAB"}}}
+
+
+def _charged(*lines, **kw):
+    charges = [{"kind": k, "amount": f"{a:.2f}"} for k, a in lines]
+    return dict(TRIP, charges=charges, total=f"{sum(a for _, a in lines):.2f}", **kw)
+
+
+def test_a_trip_whose_charges_fit_the_job_passes_and_its_charges_are_said():
+    ok, said = B.cost_check(HIAB_JOB, {}, [_charged(("Trip Haul Ma", 300.0), ("HIAB", 70.0))])
+    assert ok and said == "MAN-01000001 370.00 (Trip Haul Ma 300.00, HIAB 70.00), CTMS's own price"
+    ok, said = B.cost_check(HIAB_JOB, {"haulage": "370"}, [_charged(("Trip Haul Ma", 300.0), ("HIAB", 70.0))])
+    assert ok and said == "MAN-01000001 370.00 (Trip Haul Ma 300.00, HIAB 70.00)"
+
+
+def test_a_lifting_job_priced_without_its_lifting_gear_fails():
+    ok, said = B.cost_check(HIAB_JOB, {}, [_charged(("Trip Haul Ma", 300.0))])
+    assert not ok and "MAN-01000001 has no HIAB charge (Trip Haul Ma 300.00), yet the job needs one" in said
+    assert "put the service on the order, then send the manifest again" in said
+    either = dict(HIAB_JOB, details={"offloading": {"value": "BOTH"}})
+    assert B.cost_check(either, {}, [_charged(("Trip Haul Ma", 300.0), ("MOFFETT", 90.0))])[0]   # his Moffett call
+    assert B.cost_check({"orders": ["9000001"]}, {}, [_charged(("Trip Haul Ma", 300.0))])[0]       # none asked for
+
+
+def test_charges_that_dont_come_to_the_quote_fail():
+    ok, said = B.cost_check({}, {"haulage": 900}, [_charged(("Trip Haul Ma", 900.0), ("NIGHT", 50.0))])
+    assert not ok and said == "MAN-01000001's charges come to 950.00 (Trip Haul Ma 900.00, NIGHT 50.00), not the 900 quote"
+
+
+def test_charges_not_read_back_fail_only_with_something_to_check_them_against():
+    ok, said = B.cost_check({"orders": ["9000001"]}, {}, [TRIP])
+    assert ok and said == "MAN-01000001 450.00 (its Create Trip box's figure - not read back)"
+    ok, said = B.cost_check(HIAB_JOB, {}, [TRIP])
+    assert not ok and "weren't read back from CTMS (its Create Trip box said 450.00): check a HIAB charge is on it" in said
+    ok, said = B.cost_check({}, {"haulage": 900}, [TRIP])
+    assert not ok and "check they come to the 900 quote" in said
+    two = [_charged(("Trip Haul Ma", 300.0), ("HIAB", 70.0)), dict(TRIP, manifest="MAN-01000002", charges=[
+        {"kind": "Trip Haul Ma", "amount": "300.00"}, {"kind": "HIAB", "amount": None}])]
+    ok, said = B.cost_check(HIAB_JOB, {}, two)
+    assert not ok and said == "MAN-01000002: a charge line couldn't be read (Trip Haul Ma 300.00, HIAB ?) - look at its Payments in CTMS"
+
+
+def test_a_failed_cost_check_holds_the_digihaul_row_and_the_rest_goes_on(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(HIAB_JOB))
+    res = B.book(dict(JOB), R=FakeR(_answer([_charged(("Trip Haul Ma", 300.0))])))
+    assert res["ok"] and "COST CHECK FAILED: MAN-01000001 has no HIAB charge" in res["said"]
+    assert "DigiHaul NOT written: the cost check didn't pass" in res["said"]
+    assert "MAN-01000001, ABCHAULAGE_DH, 300.00" in res["said"]                 # the row to type, with the price to fix
+    assert not any(s[0] == "row" for s in steps)                                # CTMS's figure never on the tracker
+    assert ("site", "MAN-01000001") in steps and ("off",) in steps               # the site and the map aren't held
+    e = J.get(J.key(JOB["orders"], DATE))
+    assert J.left(e) == ["cost", "digihaul"] and e["trips"][0]["charges"] == [{"kind": "Trip Haul Ma", "amount": "300.00"}]
+
+
+def test_a_passed_cost_check_writes_the_row_at_what_ctms_charges(steps, monkeypatch):
+    monkeypatch.setattr(B, "record_of", lambda ident: dict(HIAB_JOB))
+    res = B.book(dict(JOB), R=FakeR(_answer([_charged(("Trip Haul Ma", 300.0), ("HIAB", 70.0), cost="300.00")])))
+    assert "Cost checked: MAN-01000001 370.00 (Trip Haul Ma 300.00, HIAB 70.00), CTMS's own price." in res["said"]
+    assert ("row", "MAN-01000001") in steps and J.get(J.key(JOB["orders"], DATE))["state"] == "done"
+    assert "cost 370.00" in res["said"]                                          # the booking's own line says it too
+    assert B.row_text(_charged(("Trip Haul Ma", 300.0), ("HIAB", 70.0), cost="300.00"), "ABCHAULAGE_DH",
+                      __import__("datetime").datetime(2026, 11, 1)).split("\t")[2] == "370.00"
+
+
+def test_our_own_fleet_has_no_cost_check():
+    assert "cost" not in J.needs("DHL_NOC")

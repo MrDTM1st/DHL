@@ -1197,7 +1197,8 @@ class Bridge:
         took = round(time.time() - t0, 1)
         made = [x for x in job.trips if x.get("manifest")]
         fixed = "; ".join(n for n in job.said if "put right" in n or "put up to" in n or " split into " in n)
-        by_hand = "; ".join(n for n in job.said if n.startswith(("PUT BACK BY HAND", "CLOSE BY HAND", "CHECK BY HAND")))
+        by_hand = "; ".join(n for n in job.said if n.startswith(("PUT BACK BY HAND", "CLOSE BY HAND", "CHECK BY HAND",
+                                                                  "CHECK THE COST BY HAND")))
         if pressed:
             said = stopped_by_you(made, getattr(job, "of", 1), pressed, took)
         else:

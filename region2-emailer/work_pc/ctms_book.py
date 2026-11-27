@@ -399,6 +399,17 @@ def line_kind(row):
     return next((c for c in row["cells"] if c and not DATE.match(c)), "?")
 
 
+def charges_of(rows, changed=None):
+    """A trip's payment lines as the home PC checks them (his 27/11: costs checked once a trip is accepted) -
+    [{"kind", "amount"}], top first; `changed` gives a line's new amount by id(row), for one just typed over."""
+    changed = changed or {}
+    out = []
+    for r in rows:
+        a = changed.get(id(r), r["amount"])
+        out.append({"kind": line_kind(r), "amount": None if a is None else f"{a:.2f}"})
+    return out
+
+
 def price_plan(rows, quote):
     """How the trip's lines come to the quote: (the haulage line, the other lines' sum, the haulage's new amount). The other
     lines stay as CTMS made them; only the haulage moves. Stop unless there is one haulage line and the others leave it
@@ -1644,11 +1655,13 @@ class Booking:
                 raise Stop(f"the amount on its {', '.join(unread)} line couldn't be read.")
             total = round(sum(r["amount"] for r in rows), 2)
             trip["total"] = f"{total:.2f}"
+            trip["charges"] = charges_of(rows)
             if abs(total - quote) < 0.005:
                 return False
             line, others, new = price_plan(rows, quote)
             self.set_haulage(line, new, quote)
-            trip.update(total=f"{quote:.2f}", extras=f"{others:.2f}", haulage=f"{new:.2f}")
+            trip.update(total=f"{quote:.2f}", extras=f"{others:.2f}", haulage=f"{new:.2f}",
+                        charges=charges_of(rows, {id(line): new}))
             kinds = ", ".join(f"{line_kind(r)} {r['amount']:.2f}" for r in rows if r is not line)
             self.priced.append(f"{man}: the haulier's own lines ({kinds}) taken off the {quote:g} quote - haulage "
                                f"{new:.2f}, total {quote:.2f}")
@@ -1660,6 +1673,28 @@ class Booking:
                        f"made the {quote:g} quote: {str(e).rstrip('.')}. By hand: Finance > Payments, the haulage line "
                        f"set so the lines add up to {quote:g}" + (", then Planned and Accepted to send it again." if accepted
                                                                   else ", then accept it.")) from e
+        finally:
+            self.payments_away()
+
+    def read_charges(self, trip):
+        """His 27/11: "double check the costs at the end of you accepting something". An artic HIAB job went on as an
+        artic flat with no HIAB on the order, CTMS charged the flat's matrix price, and the toolkit kept the Create Trip
+        box's figure - a third of the real charge - for the DigiHaul row; the haulier asked why. So an accepted trip with
+        no quote to make it up to has its own charge lines read back off its Payments and kept on it ("charges" and
+        "total") for the home PC to check against the job. Never in the way: one that can't be read is said, and the
+        booking goes on."""
+        man = trip["manifest"]
+        try:
+            self.select_trip(man)
+            rows = self.open_payments(man)
+            trip["charges"] = charges_of(rows)
+            if all(r["amount"] is not None for r in rows):
+                trip["total"] = f"{round(sum(r['amount'] for r in rows), 2):.2f}"
+        except StopPressed:
+            raise
+        except RuntimeError as e:                     # a Stop, or a step the work PC couldn't take
+            self.said.append(f"CHECK THE COST BY HAND: {man}'s charges couldn't be read back once it was ACCEPTED "
+                             f"({str(e).rstrip('.')}) - look at its Payments in CTMS")
         finally:
             self.payments_away()
 
@@ -1806,6 +1841,9 @@ class Booking:
             self.resend(done, quote)       # CTMS put the haulier's lines on only with Accepted: it goes again, right
             self.priced[-1] += ", then sent to the haulier again (Planned, then Accepted)"
             self.stage("sent again")
+        if "charges" not in done and str(carrier).upper() != NOC:
+            self.read_charges(done)        # no quote read them: what CTMS charges, for the home PC to check (27/11)
+            self.stage("the charges read")
         try:                               # the booking's carrier window goes too, if it's in front
             self.look()
             self.carrier_window_away()
