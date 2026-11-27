@@ -34,6 +34,17 @@ function jobLine(j) {
   return (JOB[j.state] || j.state) + (j.summary ? ': ' + j.summary : '');
 }
 
+// the plan Claude made before he taps (his 24/11 "pre-plan what to do ... one-shot execution"), in a line
+function planLine(p) {
+  if (!p) return '';
+  if (p.state === 'planning') return 'Claude is preparing the steps…';
+  if (p.state === 'ready') {
+    const n = (p.steps || []).length;
+    return `Ready to run: ${n} step${n === 1 ? '' : 's'}` + (p.summary ? ' - ' + p.summary : '');
+  }
+  return '';
+}
+
 function Item({ i, onDealt, onDealtOne, onOpen, autoMode }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -83,6 +94,7 @@ function Item({ i, onDealt, onDealtOne, onOpen, autoMode }) {
           </div>
         ))}
         {j && <div className={'assist-job ' + j.state}>{jobLine(j)}</div>}
+        {!j && planLine(i.plan) && <div className={'assist-job plan ' + i.plan.state}>{planLine(i.plan)}</div>}
         {show && a.text && <div className="assist-reply">{a.text}</div>}
       </div>
       <div className="noaddress-fix">

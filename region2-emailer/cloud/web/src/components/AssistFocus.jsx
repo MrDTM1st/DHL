@@ -74,16 +74,20 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
     says: `Claude takes on all ${others.length + 1} emails about ${item.about || 'this order'} with your toolkit - `
       + 'each answered on its own thread. Money, cancelling and anyone new to email come back to you as a Yes.',
   } : (item && item.deal) || { kind: 'claude', says: '' };
+  const made = (item && item.plan) || null;        // the plan Claude made before he tapped (24/11), and its steps
+  const steps = (plan.kind === 'plan' && made && made.steps) || [];
+  const replyStep = steps.find((s) => s.do === 'reply');
+  const startText = (replyStep && replyStep.text) || a.text || '';
   const job = (item && item.job) || (gone && gone.job) || null;
   const auto = autoLine(item && item.auto, assist && assist.auto && assist.auto.mode);
-  const [text, setText] = useState(a.text || '');
+  const [text, setText] = useState(startText);
   const [note, setNote] = useState('');
   const [noting, setNoting] = useState(false);
   const [busy, setBusy] = useState('');
   const [went, setWent] = useState('');            // what he pressed, until the home PC's answer shows
 
   // the panel can arrive after the sheet opened (an alert tapped with the desk closed): the reply text comes with it
-  useEffect(() => { if (a.text && !text) setText(a.text); }, [item && item.id]); // eslint-disable-line
+  useEffect(() => { if (startText && !text) setText(startText); }, [item && item.id]); // eslint-disable-line
   useEffect(() => {
     const k = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', k);
@@ -101,12 +105,13 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
   };
   const deal = () => {
     const n = note.trim();
-    const edited = plan.kind === 'send' && text.trim() && text !== a.text;
+    const edited = (plan.kind === 'send' || (plan.kind === 'plan' && replyStep)) && text.trim() && text !== startText;
     send('assist_deal', {
       ...(edited ? { text } : {}),
       ...(n ? { note: n } : {}),
       ...(others.length ? { group: true } : {}),
-      ctms: plan.kind === 'claude' || !!n,          // the background Claude may need CTMS: Look mum on for it
+      // CTMS may be driven (a plan's CTMS step or booking, or the background Claude): Look mum on for it
+      ctms: plan.kind === 'claude' || !!n || steps.some((s) => s.do === 'ctms' || s.do === 'book'),
     }, 'deal');
   };
   const dealt = () => {
@@ -173,9 +178,30 @@ export default function AssistFocus({ id, assist, loaded, onCommand, onClose }) 
         {!live && !waiting && (
           <>
             <div className="af-plan">
-              <b>Deal with it</b>
+              <b>Deal with it{plan.kind === 'plan' && !(noting && note.trim()) ? ' will, straight through' : ''}</b>
               {noting && note.trim() ? 'Claude takes it on, with your note.' : plan.says}
+              {plan.kind !== 'plan' && made && made.state === 'cannot' && made.why_not && !(noting && note.trim()) && (
+                <div className="af-said">Not planned ahead: {made.why_not}</div>
+              )}
             </div>
+            {plan.kind === 'plan' && !(noting && note.trim()) && (
+              <ol className="af-steps">
+                {steps.map((s, k) => (
+                  <li key={k}>
+                    <span className="says">{s.says}</span>
+                    {s.money && <span className="af-flag money" title="Money: a price, a booking or a figure">£</span>}
+                    {s.new && <span className="af-flag" title="People not on this thread">to {s.to}</span>}
+                    {s.delete && <span className="af-flag red" title="Cancels or takes something off">cancels</span>}
+                    {s.ctms && <div className="af-said af-cmd">{s.do === 'book' ? 'Book: ' : 'CTMS: '}{s.ctms}</div>}
+                    {s.do === 'reply' && (
+                      <textarea className="assist-reply-edit" value={text} onChange={(e) => setText(e.target.value)}
+                        rows={Math.min(8, Math.max(3, text.split('\n').length + 1))} aria-label="The reply" />
+                    )}
+                    {(s.do === 'email' || s.do === 'forward') && s.text && <div className="assist-reply">{s.text}</div>}
+                  </li>
+                ))}
+              </ol>
+            )}
             {plan.kind === 'send' && !(noting && note.trim()) && (
               <textarea className="assist-reply-edit" value={text} onChange={(e) => setText(e.target.value)}
                 rows={Math.min(9, Math.max(4, text.split('\n').length + 1))} aria-label="The reply" />

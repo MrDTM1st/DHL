@@ -1025,6 +1025,18 @@ a.callbtn:hover{ color:var(--red-ink); }
 .ctmsq-state.running { background: var(--yellow-d); color: #1a1a1a; }
 .ctmsq-state.done { background: var(--go); color: #fff; }
 .ctmsq-state.stopped { background: var(--red); color: #fff; }
+.assist-job.plan.ready::before { background: var(--go); }
+.assist-job.plan.planning { color: var(--muted); font-weight: 500; }
+/* the plan's steps on the sheet, before he taps (24/11): numbered, money / new people / cancels marked */
+.af-steps { margin: 10px 0 0; padding-left: 22px; font-size: 13.5px; line-height: 1.45; }
+.af-steps li { margin: 6px 0; }
+.af-steps li .says { font-weight: 600; }
+.af-steps .assist-reply, .af-steps .assist-reply-edit { margin-top: 6px; }
+.af-flag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px; font-size: 11px;
+  font-weight: 700; vertical-align: 1px; background: var(--seg); color: var(--ink2); }
+.af-flag.money { background: var(--yellow-t); color: var(--ink); border: 1px solid var(--yellow-d); }
+.af-flag.red { background: var(--red-t); color: var(--red-ink); }
+.af-cmd { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; word-break: break-word; }
 /* the email an alert opened (AssistFocus): a sheet from the bottom on a phone, a panel in the middle on a big screen */
 .af-back { position: fixed; inset: 0; z-index: 150; display: flex; align-items: flex-end; justify-content: center;
   background: rgba(20, 18, 12, .45); animation: fade .2s both; }

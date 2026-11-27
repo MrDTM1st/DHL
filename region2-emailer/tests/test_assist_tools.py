@@ -20,10 +20,11 @@ SID = "abc123def456"
 
 
 def _job(tmp_path, monkeypatch, state="open", job_state="working", **kw):
-    for name in ("PATH", "LOG", "SEEN", "PUSH_DUE", "CFG", "WORK_DUE"):
+    for name in ("PATH", "LOG", "SEEN", "PUSH_DUE", "CFG", "WORK_DUE", "PLAN_DUE"):
         monkeypatch.setattr(A, name, str(tmp_path / ("x_" + name.lower())))
     monkeypatch.setenv("R2_ASSIST_JOB", SID)
     monkeypatch.delenv("R2_ASSIST_DRY", raising=False)
+    monkeypatch.delenv("R2_ASSIST_PLAN", raising=False)
     monkeypatch.setattr(A, "_outlook_turn", lambda wait=90: contextlib.nullcontext())   # never the live Outlook slot
     it = {"id": SID, "eid": "E1", "state": state, "kind": "needs", "subject": "Delivery 1234567", "from": "Sam Asker",
           "addr": "sam@site.example", "received": "2026-11-24 10:00", "orders": ["1234567"],
@@ -55,6 +56,35 @@ def test_it_works_only_for_the_job_it_was_given(monkeypatch, tmp_path, capsys):
     code, out = _run(capsys, "reply", "--text", "Hi Sam, yes.")
     assert code == 2 and "isn't running any more" in out
     assert _run(capsys, "nonsense")[0] == 2 and _run(capsys, "help")[0] == 0
+
+
+def test_the_planner_only_reads_and_checks_its_ctms_steps(monkeypatch, tmp_path, capsys):
+    """24/11 "pre-plan what to do": the planner reads, lists the routes and checks its steps - it does nothing."""
+    _job(tmp_path, monkeypatch, job_state="", plan={"state": "planning"}, ask="Sam asks for 440 on MAN-01000100")
+    monkeypatch.setenv("R2_ASSIST_PLAN", "1")
+    monkeypatch.setattr(A, "HERE", str(tmp_path))                              # no real tracker or journal
+    import tracker
+    import pins
+    monkeypatch.setattr(tracker, "load", lambda *a, **k: {"records": []})
+    monkeypatch.setattr(pins, "load", lambda *a, **k: [])
+    for cmd in (["reply", "--text", "Hi Sam, yes."], ["ctms", "order-read", "1234567-1-1"], ["say", "x"], ["file"],
+                ["ask", "--what", "x"], ["ctms-commit", "order-note", "1234567-1-1", "x"],
+                ["draft", "--to", "a@b.example", "--subject", "s", "--text", "t"]):
+        code, out = _run(capsys, *cmd)
+        assert code == 2 and "planning, not doing" in out, cmd
+    code, out = _run(capsys, "check-route", "trip-price", "MAN-01000100", "440")
+    assert code == 0 and out.startswith("OK: trip-price MAN-01000100 440") and "money" in out
+    assert "NOT OK: order-read only reads" in _run(capsys, "check-route", "order-read", "1234567-1-1")[1]
+    assert "isn't an order line the toolkit knows" in _run(capsys, "check-route", "order-note", "QUE5550001", "x")[1]
+    assert _run(capsys, "check-route", "order-note", "1234567-1-1", "Emailed")[1].startswith("OK: ")   # the email's
+    code, out = _run(capsys, "routes")
+    assert code == 0 and "trip-price" in out and "order-update" in out and "order-read" not in out
+    assert "[--commit]" not in out and "Never write --commit" in out and "press" not in out.split()
+    d = A.load()
+    d["items"][SID]["plan"]["state"] = "ready"                                 # planned already: nothing more
+    A.save(d)
+    code, out = _run(capsys, "routes")
+    assert code == 2 and "isn't being planned any more" in out
 
 
 def test_say_shows_his_desk_what_it_is_doing(monkeypatch, tmp_path, capsys):

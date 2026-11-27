@@ -6,6 +6,7 @@ no Outlook and no Claude - both are stood in for.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -191,7 +192,7 @@ class FakeRoot:
 
 
 def _wire(monkeypatch, tmp_path, msgs, sent=None, ext_ids=()):
-    for name in ("PATH", "LOG", "SEEN", "JUDGE_DUE", "PUSH_DUE", "CFG"):
+    for name in ("PATH", "LOG", "SEEN", "JUDGE_DUE", "PUSH_DUE", "CFG", "WORK_DUE", "PLAN_DUE"):
         monkeypatch.setattr(A, name, str(tmp_path / ("x_" + name.lower())))
     (tmp_path / "x_seen").write_text(json.dumps({"ext_ids": list(ext_ids)}))
     # build_drafts needs the home-only config.json: a stand-in with just what the sweep uses
@@ -295,7 +296,9 @@ def test_judge_stores_claudes_verdicts_and_stops_on_a_sign_in_problem(monkeypatc
     by_subject = {it["subject"]: it for it in d["items"].values()}
     assert done == 2 and said == ""
     assert by_subject["Two"]["kind"] == "needs" and by_subject["One"]["kind"] == "file"
-    assert "text" not in by_subject["Two"] and d["claude"]["ok"] is True
+    assert "text" not in by_subject["One"] and d["claude"]["ok"] is True
+    assert by_subject["Two"]["text"] == "full text"                      # one that needs him: kept for its plan
+    assert os.path.exists(A.PLAN_DUE)                                    # and its plan asked for straight away
     # a fresh email while he isn't signed in: it waits, the card says why
     msgs.append(msg(id="q3", subject="Three", words="Would you?"))
     A.sweep(now=NOW)
@@ -531,7 +534,7 @@ def test_a_tap_on_an_alert_opens_the_desk_on_that_email():
 
 
 def _dealable(tmp_path, monkeypatch, **items):
-    for name in ("PATH", "LOG", "SEEN", "JUDGE_DUE", "PUSH_DUE", "CFG", "WORK_DUE"):
+    for name in ("PATH", "LOG", "SEEN", "JUDGE_DUE", "PUSH_DUE", "CFG", "WORK_DUE", "PLAN_DUE"):
         monkeypatch.setattr(A, name, str(tmp_path / ("x_" + name.lower())))
     d = {"mode": "live", "items": {sid: dict({"id": sid, "eid": "E1", "state": "open", "subject": "Monday",
                                               "from": "Sam Asker", "addr": "sam@example.net", "orders": ["1234567"],
@@ -771,3 +774,275 @@ def test_his_signatures_own_dash_never_stops_a_reply(monkeypatch, tmp_path):
     reply = _Reply(["sam@example.net"], SIGNED.replace("0000</div>", "0000<br>Tell us how we did – feedback please</div>"))
     A.send_reply(_one(), "x1", outlook=_outlook_with(reply))
     assert reply.sent
+
+
+# ---------- the plan made before he taps (his 24/11: "pre-plan what to do ... one-shot execution") ----------
+KNOWN = ({"1234567", "1234567-1-1"}, {"MAN-01000100"}, set())    # made up: the lines and manifests the toolkit knows
+
+
+def _checked(raw):
+    return A.check_plan(raw, known=KNOWN)
+
+
+def _steps():
+    return [{"do": "ctms", "says": "Set MAN-01000100 to 440", "route": ["trip-price", "MAN-01000100", "440"]},
+            {"do": "ctms", "says": "Send it to the haulier again", "route": ["trip-resend", "MAN-01000100"]},
+            {"do": "reply", "says": "Tell Sam", "text": "Hi Sam,\nThat's updated to 440 for the overnight.\nThanks"},
+            {"do": "file", "says": "File it", "folder": "Regions/Region 2/Completed"}]
+
+
+def test_a_plan_is_checked_and_flagged_before_he_sees_it():
+    p = _checked({"ready": True, "summary": "Price to 440, resend, tell Sam", "steps": _steps()})
+    assert p["state"] == "ready" and [s["do"] for s in p["steps"]] == ["ctms", "ctms", "reply", "file"]
+    assert p["steps"][0]["money"] and not p["steps"][1]["money"] and p["steps"][2]["text"] == (
+        "Hi Sam,\nThat's updated to 440 for the overnight.")                    # the sign-off is Outlook's
+    bad = _checked({"ready": True, "summary": "x", "steps": [
+        {"do": "ctms", "says": "Look at it", "route": ["order-read", "1234567-1-1"]},           # only reads
+        {"do": "ctms", "says": "Price", "route": ["trip-price", "MAN-01000100", "lots"]},       # not a figure
+        {"do": "ctms", "says": "Wrong", "route": ["order-update", "1234567-1-1", "--nope", "x"]},
+        {"do": "email", "says": "Tell DHL Road", "to": ["DHLRoad@nr.example"], "subject": "s", "text": "t"},
+        {"do": "book", "says": "Book it", "book": {"orders": ["1234567"], "date": "26-11-2026", "carrier": "X_DH",
+                                                   "trailer": "NR_ARTIC_FL"}},
+        {"do": "launch", "says": "?"}]})
+    assert bad["state"] == "cannot" and len(re.findall(r"step \d+: ", bad["why_not"])) == 6
+    assert "only reads" in bad["why_not"] and "isn't a figure" in bad["why_not"] and "DHL Road" in bad["why_not"]
+    assert _checked({"ready": False, "summary": "", "why_not": "needs CTMS for the weight", "steps": []})[
+        "why_not"] == "needs CTMS for the weight"
+    e = _checked({"ready": True, "summary": "Email the site", "steps": [
+        {"do": "email", "says": "Tell the site", "to": ["Site Lead <lead@site.example>"], "subject": "Thursday",
+         "text": "Hi,\nThe price is agreed."}]})
+    assert e["steps"][0]["new"] and e["steps"][0]["money"] and e["steps"][0]["to"] == ["lead@site.example"]
+
+
+def test_a_ctms_step_may_only_name_lines_and_manifests_the_toolkit_knows(monkeypatch):
+    # 24/11 trial: the planner took a courier's QUE number off the subject for a CTMS line, and planned order-update on
+    # a booked line - both now stop the plan before he sees it
+    known = ({"1234567", "1234567-1-1", "AH24/11/26ABC"}, {"MAN-01000100"}, {"AH24/11/26ABC"})
+    assert A.route_ok(["order-note", "1234567-1-1", "Emailed 24/11"], known)
+    assert A.route_ok(["order-note", "1234567-2-1", "x"], known)                 # another line of a known order
+    assert A.route_ok(["trip-price", "MAN-01000100", "440", "--order", "AH24/11/26ABC"], known)
+    for route, said in ((["order-note", "QUE5550001", "x"], "isn't an order line the toolkit knows"),
+                        (["trip-price", "MAN-09999999", "440"], "isn't a manifest the toolkit or the email knows"),
+                        (["order-update", "AH24/11/26ABC", "--deliver", "25/11/26 08:00 - 10:00"], "is booked")):
+        try:
+            A.route_ok(route, known)
+            raise AssertionError(f"{route} should be refused")
+        except RuntimeError as e:
+            assert said in str(e), (route, str(e))
+    import carriers
+    monkeypatch.setattr(carriers, "load", lambda *a, **k: {"codes": ["ACME_DH"]})
+    p = A.check_plan({"ready": True, "summary": "x", "steps": [
+        {"do": "ctms", "says": "Update QUE5550001", "route": ["order-note", "QUE5550001", "x"]},
+        {"do": "book", "says": "Book it", "book": {"orders": ["7654321"], "date": "26/11/2026", "carrier": "ACME_DH",
+                                                  "trailer": "NR_ARTIC_FL"}}]}, known=known)
+    assert p["state"] == "cannot" and "step 1: QUE5550001 isn't an order line" in p["why_not"]
+    assert "step 2: 7654321 isn't an order the toolkit knows to book" in p["why_not"]
+
+
+def test_what_the_toolkit_knows_comes_from_the_tracker_the_map_books_journal_and_the_email(monkeypatch, tmp_path):
+    import tracker
+    import pins
+    monkeypatch.setattr(A, "HERE", str(tmp_path))
+    monkeypatch.setattr(tracker, "load", lambda *a, **k: {"records": [{"orders": ["1234567-1-1"]}]})
+    monkeypatch.setattr(pins, "load", lambda *a, **k: [{"orders": ["7654321"]}])
+    (tmp_path / "_adhocs.json").write_text(json.dumps([{"orders": ["AH24/11/26ABC"]}]), encoding="utf-8")
+    (tmp_path / "_book_journal.json").write_text(json.dumps({"jobs": {"k": {"orders": ["1112223"], "trips": [
+        {"manifest": "MAN-01000100", "status": "ACCEPTED"}]}}}), encoding="utf-8")
+    (tmp_path / "_booked_drops.json").write_text(json.dumps(["4445556"]), encoding="utf-8")
+    lines, mans, booked = A.known_refs({"orders": ["9990001"], "ask": "Kim asks for 40 more on man-01000200",
+                                        "subject": "QUE7778889 Delivery - RE: RD123456",
+                                        "text": "It's ad hoc AH25/11/26XYZ and line 2223334-1-1 (RDC3/12/WA/M2)."})
+    assert {"1234567", "1234567-1-1", "7654321", "AH24/11/26ABC", "1112223", "9990001"} <= lines
+    assert {"AH25/11/26XYZ", "2223334-1-1", "2223334", "RDC3/12/WA/M2"} <= lines        # named in the email itself
+    assert not {"7778889", "QUE7778889", "RD123456"} & lines                  # a courier's or NR's own number: never
+    assert mans == {"MAN-01000100", "MAN-01000200"} and booked == {"1112223", "4445556"}
+
+
+def test_a_booking_step_is_the_job_the_book_button_sends(monkeypatch):
+    import carriers
+    monkeypatch.setattr(carriers, "load", lambda *a, **k: {"codes": ["ACME_DH", "DHL_NOC"]})   # made-up CTMS codes
+    try:
+        A.book_ok({"orders": ["1234567"], "date": "26/11/2026", "carrier": "NOBODY_DH", "trailer": "NR_ARTIC_FL"})
+        raise AssertionError("a carrier CTMS doesn't have should be refused")
+    except RuntimeError as e:
+        assert "isn't one of CTMS's carrier codes" in str(e)
+    b = A.book_ok({"record": "r1", "orders": ["1234567"], "date": "26/11/2026", "carrier": "acme_dh",
+                   "haulier": "Acme", "trailer": "nr_artic_fl", "haulage": "450", "vehicles": 2})
+    assert b == {"record": "r1", "orders": ["1234567"], "date": "26/11/2026", "carrier": "ACME_DH", "haulier": "Acme",
+                 "trailer": "NR_ARTIC_FL", "haulage": 450.0, "vehicles": 2}
+    assert A.book_ok(dict(b, haulage=None))["haulage"] is None                   # the matrix, or DHL NOC
+    for wrong in (dict(b, orders=[]), dict(b, vehicles=40), dict(b, carrier="not a code!"), dict(b, haulage="lots")):
+        try:
+            A.book_ok(wrong)
+            raise AssertionError(f"{wrong} should be refused")
+        except RuntimeError:
+            pass
+
+
+def test_the_planner_plans_the_most_pressing_email_reading_only(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch,
+              w1={"kind": "needs", "urgency": "week", "ask": "Week one", "received": iso(NOW - timedelta(hours=3))},
+              n1={"kind": "needs", "urgency": "now", "ask": "Now one", "received": iso(NOW - timedelta(minutes=5))},
+              r1={"kind": "needs", "urgency": "now", "by": "rule", "ask": "Training"},          # the rules': no plan
+              q1={"kind": "pending", "urgency": "now"})                                          # not read yet
+    monkeypatch.setattr(W, "context", lambda *a, **k: ctx())
+    monkeypatch.setattr(A, "known_refs", lambda it=None: KNOWN)
+    seen = []
+
+    def ask(brief, sid, system, cfg):
+        seen.append(sid)
+        assert A.load()["items"][sid]["plan"]["state"] == "planning" and "answer with the plan" in brief
+        return True, {"ready": True, "summary": "Price to 440, resend, tell Sam", "steps": _steps()}
+    assert A.plan(ask=ask, now=NOW)[0] == "n1" and os.path.exists(A.PLAN_DUE)   # the most pressing first; then more
+    os.remove(A.PLAN_DUE)
+    assert A.plan(ask=ask, now=NOW)[0] == "w1" and not os.path.exists(A.PLAN_DUE)
+    assert A.plan(ask=ask, now=NOW) == (None, "nothing to plan") and seen == ["n1", "w1"]
+    p = A.load()["items"]["n1"]["plan"]
+    assert p["state"] == "ready" and p["made"] == iso(NOW) and len(p["steps"]) == 4
+    assert A.plan(ask=ask, now=NOW + timedelta(hours=9))[0] == "n1"             # a plan gone stale is made again
+    d = A.load()
+    d["items"]["w1"]["plan"] = {"state": "failed", "made": iso(NOW), "tries": 3}
+    A.save(d)
+    assert "w1" not in [it["id"] for it in A.plan_due(A.load(), NOW + timedelta(hours=1))]   # keeps failing: left
+
+
+def test_the_planner_is_held_to_reading(tmp_path):
+    exe = tmp_path / "claude.exe"
+    exe.write_text("")
+    seen = {}
+
+    def run(args, **kw):
+        seen.update(args=args, **kw)
+        return _proc(json.dumps({"type": "result", "is_error": False,
+                                 "structured_output": {"ready": False, "summary": "", "steps": []}}))
+    ok, got = A.ask_planner("BRIEF", "abc123def456", "RULES", {"claude": str(exe)}, run=run)
+    assert ok and seen["env"]["R2_ASSIST_PLAN"] == "1" and seen["env"]["R2_ASSIST_JOB"] == "abc123def456"
+    assert seen["args"][seen["args"].index("--allowedTools") + 1] == "Bash(python assist_tools.py:*)"
+    assert '"steps"' in seen["args"][seen["args"].index("--json-schema") + 1]
+    r = A.plan_rules(ctx())
+    assert "check-route" in r and "Regions/Region 2/Completed" in r and "nobody thinking between the steps" in r
+
+
+def test_deal_with_it_runs_a_ready_plan_and_a_newer_email_sends_it_to_claude(monkeypatch, tmp_path):
+    plan = _checked({"ready": True, "summary": "Price to 440, resend, tell Sam", "steps": _steps()})
+    plan["made"] = iso(NOW)
+    d = _dealable(tmp_path, monkeypatch,
+                  a1={"kind": "needs", "urgency": "now", "conv": "C1", "action": {"type": "ctms"}, "plan": plan},
+                  b1={"kind": "needs", "urgency": "now", "conv": "C2", "action": {"type": "ctms"}, "plan": dict(plan)},
+                  b2={"kind": "needs", "urgency": "now", "conv": "C2", "received": iso(NOW + timedelta(minutes=5))})
+    assert A.deal_plan(d["items"]["a1"]) == {"kind": "plan", "says": "Price to 440, resend, tell Sam"}
+    said = A.deal(d, "a1", text="Hi Sam,\nDone - 440 it is.", now=NOW)
+    job = d["items"]["a1"]["job"]
+    assert "the plan's 4 steps" in said and [s["do"] for s in job["plan"]] == ["ctms", "ctms", "reply", "file"]
+    assert job["plan"][2]["text"] == "Hi Sam,\nDone - 440 it is."                # his own words for its reply
+    A.deal(d, "b1", now=NOW)                                                     # b2 came after b1's plan was made
+    job = d["items"]["b1"]["job"]
+    assert "plan" not in job and "newer email came on this thread (Sam Asker at" in job["note"]
+
+
+def test_a_plan_runs_straight_through_and_stops_at_the_first_step_that_fails(monkeypatch, tmp_path):
+    d = _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "action": {"type": "ctms"},
+                                              "job": {"state": "working", "asks": [], "log": [], "did": []}})
+    monkeypatch.setattr(A, "_outlook_turn", lambda wait=90: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(A, "_move", lambda ns, root, eid, dest: "MOVED-1")
+    steps = _checked({"ready": True, "summary": "x", "steps": _steps()})["steps"]
+    ran = []
+
+    def run(args, **kw):
+        ran.append(args[1:])
+        return _proc('DONE\nROUTE_RESULT {"ok": true, "said": "done"}')
+    reply = _Reply(["sam@example.net"], SIGNED)
+    ok, got = A.run_plan("a1", steps, run=run, outlook=_outlook_with(reply))
+    assert ok and got["status"] == "done" and reply.sent
+    assert [r[1:] for r in ran] == [["trip-price", "MAN-01000100", "440", "--commit"],
+                                    ["trip-resend", "MAN-01000100", "--commit"]]
+    it = A.load()["items"]["a1"]
+    assert it["state"] == "answered" and it["eid"] == "MOVED-1"                  # replied, so filed with the reply
+    assert any("done in" in x and "File it - already filed with the reply" in x for x in it["job"]["did"])
+    assert got["summary"].startswith("Done: Set MAN-01000100 to 440; Send it to the haulier again; Tell Sam; File it")
+    # CTMS closed at step 1: nothing after it is run
+    _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "action": {"type": "ctms"},
+                                         "job": {"state": "working", "asks": [], "log": [], "did": []}})
+    ran.clear()
+    ok, got = A.run_plan("a1", steps, run=lambda args, **kw: ran.append(1) or _proc(
+        'STOPPED: CTMS isn\'t open\nROUTE_RESULT {"ok": false, "said": "CTMS isn\'t open"}'), outlook=_outlook_with(reply))
+    assert got["status"] == "failed" and ran == [1]
+    assert got["summary"] == "Stopped at step 1 (Set MAN-01000100 to 440): CTMS isn't open. Nothing was done before it. " \
+                             "3 not run."
+
+
+def test_a_booking_step_runs_book_and_a_todo_is_left_for_him(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "action": {"type": "other"},
+                                         "job": {"state": "working", "asks": [], "log": [], "did": []}})
+    monkeypatch.setattr(A, "book_ok", lambda b: dict(b))                        # no carriers list in the tests
+    steps = [{"do": "book", "says": "Book 1234567 with Acme", "book": {"orders": ["1234567"], "date": "26/11/2026",
+                                                                       "carrier": "ACME_DH", "trailer": "NR_ARTIC_FL"}},
+             {"do": "todo", "says": "Ring the site about the gate"}]
+    seen = []
+
+    def run(args, **kw):
+        seen.append(args)
+        return _proc('working...\n{"ok": true, "said": "Booked 1234567 in 61s: MAN-01000101 ACCEPTED"}')
+    ok, got = A.run_plan("a1", steps, run=run)
+    assert seen[0][1].endswith("book_run.py") and seen[0][2] == "run" and json.loads(seen[0][3])["dry"] is False
+    assert got["status"] == "needs_you" and "Yours: Ring the site about the gate." in got["summary"]
+    asks = A.load()["items"]["a1"]["job"]["asks"]
+    assert asks == [{"kind": "todo", "what": "Ring the site about the gate", "state": "open", "at": asks[0]["at"]}]
+
+
+def test_the_worker_runs_a_plan_job_without_claude(monkeypatch, tmp_path):
+    _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "ask": "x", "action": {"type": "ctms"},
+                                         "job": {"state": "queued", "asked_at": iso(NOW), "asks": [],
+                                                 "plan": [{"do": "todo", "says": "y"}]}})
+    monkeypatch.setattr(W, "context", lambda *a, **k: ctx())
+    monkeypatch.setattr(A, "ring", lambda alerts, push=None: len(alerts))
+    called = []
+    monkeypatch.setattr(A, "run_plan", lambda sid, steps: called.append((sid, steps)) or (True, {"status": "done",
+                                                                                                "summary": "Done: y."}))
+    A.work(ask=lambda *a: (_ for _ in ()).throw(AssertionError("Claude was asked")), now=NOW)
+    assert called == [("a1", [{"do": "todo", "says": "y"}])]
+    assert A.load()["items"]["a1"]["job"]["state"] == "done"
+
+
+def test_a_plan_runs_once_and_tapped_again_claude_carries_on_without_redoing_it(monkeypatch, tmp_path):
+    plan = _checked({"ready": True, "summary": "Price, resend, tell Sam", "steps": _steps()})
+    plan["made"] = iso(NOW)
+    d = _dealable(tmp_path, monkeypatch, a1={"kind": "needs", "urgency": "now", "ask": "x", "action": {"type": "ctms"},
+                                              "plan": plan})
+    A.deal(d, "a1", now=NOW)
+    A.save(d)
+    monkeypatch.setattr(W, "context", lambda *a, **k: ctx())
+    monkeypatch.setattr(A, "ring", lambda alerts, push=None: len(alerts))
+    monkeypatch.setattr(A, "run_plan", lambda sid, steps: (True, {
+        "status": "failed", "summary": "Stopped at step 2 (Send it to the haulier again): CTMS isn't open. 1 done before "
+                                       "it. 2 not run."}))
+    A.work(ask=None, now=NOW)
+    it = A.load()["items"]["a1"]
+    assert it["plan"]["state"] == "ran" and it["job"]["state"] == "failed" and it["state"] == "open"
+    assert "a1" not in [x["id"] for x in A.plan_due(A.load(), NOW + timedelta(hours=9))]   # never planned again
+    d = A.load()
+    d["items"]["a1"]["job"]["did"] = ["10:01 done in 25s: Set MAN-01000100 to 440 - total 440.00"]
+    assert A.deal_plan(d["items"]["a1"])["kind"] == "claude"
+    A.deal(d, "a1", now=NOW)                                                     # tapped again: Claude, told what's done
+    job = d["items"]["a1"]["job"]
+    assert "plan" not in job and job["before"]["did"] == ["10:01 done in 25s: Set MAN-01000100 to 440 - total 440.00"]
+    brief = A.work_brief(d["items"]["a1"], ctx(), [], set())
+    assert "NEVER do any of it again" in brief and "Set MAN-01000100 to 440 - total 440.00" in brief
+    assert "Stopped at step 2" in brief and "Carry on from where it stopped." in brief
+
+
+def test_the_card_shows_the_plan_he_says_yes_to():
+    plan = _checked({"ready": True, "summary": "Price to 440, resend, tell Sam", "steps": _steps()})
+    d = {"mode": "live", "items": {
+        "p1": _item("p1", kind="needs", urgency="now", ask="Price?", action={"type": "ctms"}, plan=plan),
+        "c1": _item("c1", kind="needs", urgency="now", ask="Odd one", action={"type": "other"},
+                    plan={"state": "cannot", "why_not": "needs CTMS for the weight", "steps": []}),
+        "g1": _item("g1", kind="needs", urgency="today", ask="Still going", action={"type": "other"},
+                    plan={"state": "planning"})}}
+    by = {x["id"]: x for x in A.panel(d, NOW)["needs"]}
+    assert by["p1"]["deal"]["kind"] == "plan" and by["p1"]["plan"]["steps"][0]["money"]
+    assert [s["says"] for s in by["p1"]["plan"]["steps"]] == ["Set MAN-01000100 to 440", "Send it to the haulier again",
+                                                              "Tell Sam", "File it"]
+    assert by["p1"]["plan"]["steps"][2]["text"].startswith("Hi Sam,") and by["p1"]["plan"]["steps"][0]["text"] == ""
+    assert by["c1"]["deal"]["kind"] == "claude" and by["c1"]["plan"]["why_not"] == "needs CTMS for the weight"
+    assert by["g1"]["deal"]["says"].startswith("Claude is still preparing this one")

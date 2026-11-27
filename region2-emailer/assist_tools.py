@@ -29,11 +29,15 @@ down) and his desk shows it with Yes / No.
                                                     hold something for his yes: a CTMS change (run with --commit on
                                                     his yes), or with no route something only he can do
     python assist_tools.py say "..."                a line on his desk saying what you're doing
+    python assist_tools.py routes                   every CTMS route that changes something, with its exact arguments
+    python assist_tools.py check-route ROUTE [ARGS...]
+                                                    a planned CTMS step checked against the route's own arguments
 
     python assist_tools.py --email ID COMMAND ...   (a card's job, his 26/11) the same, on another email of the card:
                                                     email, thread, reply, forward, file - each on ITS own thread
 
 R2_ASSIST_DRY=1 (a trial run): nothing is sent, filed or committed - each is written down as what it would have done.
+R2_ASSIST_PLAN=1 (the planner, his 24/11 "pre-plan what to do"): reads, routes and check-route only - nothing is done.
 Exit codes: 0 done, 2 refused.
 """
 import argparse
@@ -49,10 +53,11 @@ sys.path.insert(0, HERE)
 import inbox_assist as A  # noqa: E402
 
 MAX_REPLY = 1200                                          # a reply longer than this waits for his yes
-# money in a reply waits for his yes (his rule: money always asks)
-MONEY = re.compile(r"£|\bgbp\b|\bpounds?\b|\bprices?\b|\bpriced\b|\bcosts?\b|\bcharges?\b|\brates?\b|\bquotes?\b"
-                   r"|\bquoted\b|\binvoices?\b|\bpayments?\b", re.I)
-ADDRESS = re.compile(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+")
+MONEY = A.MONEY                                           # money in a reply waits for his yes (money always asks)
+ADDRESS = A.ADDRESS
+# the planner (R2_ASSIST_PLAN, his 24/11 "pre-plan what to do"): it reads and checks, and writes nothing anywhere -
+# what it would do goes in its plan's steps
+PLAN_OK = ("help", "email", "thread", "search", "read", "order", "rules", "routes", "check-route")
 LIVE = ("open",)                                          # the email still his to deal with: things may go out
 WORKING = ("open", "answered")                            # replied to already: CTMS may still be put right
 READING = ("open", "answered", "filed")                   # anything that only reads or writes the job down
@@ -70,6 +75,10 @@ def _dry():
     return bool(os.environ.get("R2_ASSIST_DRY"))
 
 
+def _planning():
+    return bool(os.environ.get("R2_ASSIST_PLAN"))
+
+
 def _sid():
     sid = str(os.environ.get("R2_ASSIST_JOB") or "")
     if not re.fullmatch(r"[0-9a-f]{12}", sid):
@@ -83,6 +92,10 @@ def _check(d, states):
     lead = d["items"].get(_sid())
     if lead is None:
         raise Stop("That email is no longer on his list - stop here.")
+    if _planning():                                   # the planner (24/11): only while its plan is being made
+        if (lead.get("plan") or {}).get("state") != "planning" or lead.get("state") != "open":
+            raise Stop("This email isn't being planned any more - stop here.")
+        return lead, lead
     if (lead.get("job") or {}).get("state") != "working":
         raise Stop("This job isn't running any more - stop here.")
     it = lead
@@ -128,6 +141,9 @@ def _note(job, line, key="log", keep=40):
 
 
 def log(line, did=False):
+    if _planning():                                       # the planner keeps no job log: it only reads
+        return
+
     def go(d, it, job):
         _note(job, line)
         if did:
@@ -305,6 +321,37 @@ def _run_route(route, commit):
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, cwd=HERE,
                        creationflags=0x08000000 if os.name == "nt" else 0)
     return str(p.stdout or "") + (("\n" + str(p.stderr)) if p.stderr else "")
+
+
+def cmd_routes(a):
+    """Every CTMS route that changes something, with its exact arguments - the steps a plan may have."""
+    _peek()
+    import contextlib
+    import io
+    import ctms_routes as CR
+    out = []
+    for name, (fn, help_text) in CR.ROUTES.items():
+        if name in A.READ_ROUTES or name in A.CTMS_NEVER:
+            continue
+        with contextlib.redirect_stdout(io.StringIO()):
+            usage = CR._args(name).format_usage()
+        usage = re.sub(r"\s+", " ", usage.replace("usage: ", "").replace("ctms_routes.py ", "")
+                       .replace(" [--commit]", "")).strip()
+        out.append(f"{usage}\n    {help_text}")
+    print("A plan's CTMS step is [ROUTE, ARGS...] as below. Never write --commit: the run adds it on his tap.\n")
+    print("\n".join(out))
+
+
+def cmd_check_route(a):
+    """A planned CTMS step checked against the route's own arguments: nothing is run."""
+    it = _peek()
+    try:
+        route = A.route_ok([a.route] + a.args, A.known_refs(it))
+    except RuntimeError as e:
+        print(f"NOT OK: {e}")
+        return
+    print("OK: " + " ".join(route) + (" (money: he sees it marked)" if route[0] in A.MONEY_ROUTES else "")
+          + (" (cancels or deletes: he sees it marked)" if route[0] in A.DELETE_ROUTES else ""))
 
 
 def cmd_ctms(a):
@@ -518,10 +565,11 @@ def main(argv=None):
     s.add_argument("ref")
     s = sub.add_parser("rules")
     s.add_argument("topic", nargs="?")
-    for name in ("ctms", "ctms-commit"):
+    for name in ("ctms", "ctms-commit", "check-route"):
         s = sub.add_parser(name)
         s.add_argument("route")
         s.add_argument("args", nargs=argparse.REMAINDER)
+    sub.add_parser("routes")
     s = sub.add_parser("reply")
     s.add_argument("--text", required=True)
     s = sub.add_parser("draft")
@@ -547,6 +595,10 @@ def main(argv=None):
     if a.cmd in (None, "help"):
         print(__doc__)
         return 0
+    if _planning() and a.cmd not in PLAN_OK:
+        print("REFUSED: you're planning, not doing - put it in your plan's steps (reads, `routes` and `check-route` "
+              "are what you have now).")
+        return 2
     _TARGET = ""
     if a.email:
         if not re.fullmatch(r"[0-9a-f]{12}", a.email):
@@ -556,7 +608,8 @@ def main(argv=None):
     try:
         {"email": cmd_email, "thread": cmd_thread, "search": cmd_search, "read": cmd_read, "order": cmd_order,
          "rules": cmd_rules, "ctms": cmd_ctms, "ctms-commit": cmd_ctms_commit, "reply": cmd_reply, "draft": cmd_draft,
-         "forward": cmd_forward, "file": cmd_file, "ask": cmd_ask, "say": cmd_say}[a.cmd](a)
+         "forward": cmd_forward, "file": cmd_file, "ask": cmd_ask, "say": cmd_say, "routes": cmd_routes,
+         "check-route": cmd_check_route}[a.cmd](a)
     except Stop as e:
         print("REFUSED: " + str(e))
         return 2

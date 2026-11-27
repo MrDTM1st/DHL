@@ -813,6 +813,26 @@ def _work_tick(proc):
         return None
 
 
+def _plan_tick(proc):
+    """The planner makes the next plan (inbox_assist.py plan, his 24/11 "pre-plan what to do ... so when I say deal
+    with it, it's more of just a one-shot execution"): one email at a time, reading only, outside the Outlook gate."""
+    if proc is not None and proc.poll() is None:
+        return proc
+    if not os.path.exists(ASSIST_PLAN_DUE):
+        return None
+    try:
+        os.remove(ASSIST_PLAN_DUE)
+        with open(os.path.join(HERE, "_assist_plan.txt"), "a", encoding="utf-8", errors="replace") as log:
+            log.write(f"\n=== {time.strftime('%d/%m %H:%M:%S')} plan\n")
+            log.flush()
+            return subprocess.Popen([sys.executable, "inbox_assist.py", "plan"], cwd=HERE, stdout=log,
+                                    stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                                    creationflags=0x08000000)
+    except Exception as e:
+        print(f"inbox assistant: the planner could not start: {e}")
+        return None
+
+
 def _rejections():
     """The Haulier Rejection Form's responses and the Auto switch (rejections.py) - the dashboard's rejection card."""
     try:
@@ -1020,6 +1040,7 @@ ASSIST_PUSH_DUE = os.path.join(HERE, "_assist_push_due")    # inbox_assist: the 
 ASSIST_JUDGE_DUE = os.path.join(HERE, "_assist_judge_due")  # inbox_assist: emails queued for Claude to read
 CTMS_QUEUE_DUE = os.path.join(HERE, "_ctms_queue_due")      # ctms_queue: a CTMS job was added - run the queue now
 ASSIST_WORK_DUE = os.path.join(HERE, "_assist_work_due")    # inbox_assist: a "Deal with it" queued for the worker
+ASSIST_PLAN_DUE = os.path.join(HERE, "_assist_plan_due")    # inbox_assist: emails that need him without a plan yet
 PHASE2_MIN_GAP = 300    # ...but never sooner than this after the last check ENDED
 NR_DATE_EVERY = 900     # the Network Rail date emails (nr_date.py auto): a look this often, and straight after a check
 NR_DATE_MIN_GAP = 300   # ...but never sooner than this after its last run
@@ -1486,6 +1507,7 @@ def main():
     judge_proc = None
     work_proc = None
     queue_proc, queue_last = None, 0.0
+    plan_proc = None
     bg = None
     if IS_LOCAL:                    # the cloud agent runs no timer jobs
         try:
@@ -2708,6 +2730,10 @@ def main():
                 queue_proc, queue_last = _queue_tick(queue_proc, queue_last)
             except Exception as e:
                 print(f"CTMS queue: {e}")
+            try:                               # what needs him gets its plan made before he taps
+                plan_proc = _plan_tick(plan_proc)
+            except Exception as e:
+                print(f"inbox assistant: {e}")
         if not IS_LOCAL and time.time() - last_ctms > 60:   # CTMS captures come home
             pull_ctms_captures()
             last_ctms = time.time()
