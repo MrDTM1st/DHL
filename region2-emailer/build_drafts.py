@@ -874,6 +874,184 @@ def _enrol_one(e, ev):
                 collections=e.get("collections"))
 
 
+# ---------- an email in about the order already (his 27/11) ----------
+# Two new orders came with their details already in the mailbox: Network Rail threads, forwarded to him by colleagues,
+# naming the orders in the subject, with the site's answer inside the forward. The build only ever looked at what had
+# been SENT, so it lined up asks for details that were in, and neither order reached the map: he found one in CTMS
+# ("if I didn't check CTMS, we would have missed it"). Received mail is looked at too now - his rule: an email from the
+# site or Network Rail that names the order means no ask goes, not in the batch and not from the wait-list later. The
+# order goes on the map instead, with that email named, for him to check it and put the details in CTMS.
+# Which mail of such a thread holds the details can't be told reliably: the forwarder's own words are empty, the
+# site's answer sits in the forward, and a colleague's signature number or a rail gauge reads as a contact or a time.
+# So the map says "check it", never that the details are in.
+DETAILS_DAYS = 30            # how far back received mail is looked through
+DETAILS_MAX_ORDERS = 3       # a subject naming more orders than this is a list (an update, a plan), not one order's thread
+DETAILS_CHUNK = 40           # orders asked of Outlook in one filter
+ORDER_IN_SUBJECT = re.compile(r"(?<![0-9])([0-9]{7})(?![0-9])")
+NOT_A_THREAD = re.compile(r"^\s*(?:undeliverable|delivery has failed|mail delivery|automatic reply|auto[- ]?reply|"
+                          r"out of office|read:|not read:|recall|accepted:|declined:|tentative:)", re.I)
+# our haulier asks and stand-downs go out as "<order> Delivery" (send_order, stand_down, Book's Parcel Pass email): a
+# reply on one is a haulier's, whoever sends it
+HAULIER_THREAD = re.compile(r"^\s*(?:(?:re|fw|fwd)\s*:\s*)*(?:[0-9]{7}[\s/,&+-]*)+delivery\s*$", re.I)
+NOBODY = re.compile(r"no-?reply|donotreply|postmaster|mailer-daemon", re.I)
+NETWORK_RAIL = ("networkrail.co.uk",)
+OURS = ("dhl.com",)
+
+
+def _domain(addr):
+    a = str(addr or "").strip().lower()
+    return a.rsplit("@", 1)[1] if "@" in a else ""
+
+
+def _on(dom, domains):
+    return any(dom == d or dom.endswith("." + d) for d in domains)
+
+
+def mail_counts(sender, group):
+    """Whose email about an order stands for the site's details being in, or coming in that thread (his "a site or
+    Network Rail email"): the site - its contact, or someone at the contact's own firm (a shared mail service like
+    gmail counts by the address only) - Network Rail, whose team asks the site the same questions on our behalf, or a
+    colleague forwarding the thread. Never a haulier's (a quote: hauliers don't update orders), a supplier's, a no-reply
+    address, or his own."""
+    import reply_kind as rk
+    sender = str(sender or "").strip().lower()
+    if "@" not in sender or NOBODY.search(sender) or sender == DHL_SMTP.lower() or rk.haulier_of(sender):
+        return False
+    dom = _domain(sender)
+    if _on(dom, NETWORK_RAIL) or _on(dom, OURS):
+        return True
+    to = [a.lower() for a in re.findall(r"[\w.'+-]+@[\w-]+(?:\.[\w-]+)+", str(group.get("to") or ""))]
+    return sender in to or any(_domain(a) == dom and dom not in rk.SHARED_DOMAINS for a in to)
+
+
+def details_from_mails(mails, groups):
+    """Which orders received mail is already about -> {order: its newest such mail}. `mails`: dicts with "subject",
+    "sender" (an address), "who", "when" ("YYYY-MM-DD HH:MM"), "entryid", "folder". `groups`: the build's groups. A mail
+    counts for an order when its SUBJECT names the order - its own thread - and no more than DETAILS_MAX_ORDERS orders
+    (more is a list: an update, a plan), it is not a bounce, an automatic reply or a haulier thread of ours, and it is
+    from someone whose mail about the order counts (mail_counts) for the group it is in.
+    Checked on 30 days of his asks (27/11): of 117, it would have held the two above, a cancellation request, a
+    forwarded site reply, a delivery query from Network Rail, and three sites that had already answered a colleague
+    covering his holiday - one of them booked already - and were asked again."""
+    owner = {}
+    for e in groups or []:
+        for o in e.get("orders") or []:
+            owner.setdefault(str(o).strip(), e)
+    out = {}
+    for m in mails:
+        subj = str(m.get("subject") or "")
+        named = set(ORDER_IN_SUBJECT.findall(subj))
+        mine = named & set(owner)
+        if (not mine or len(named) > DETAILS_MAX_ORDERS or NOT_A_THREAD.search(subj)
+                or HAULIER_THREAD.match(subj)):
+            continue
+        for o in sorted(mine):
+            if o in out and str(out[o].get("when") or "") >= str(m.get("when") or ""):
+                continue
+            if mail_counts(m.get("sender"), owner[o]):
+                out[o] = m
+    return out
+
+
+def _subject_filter(orders):
+    """An Outlook filter for mail whose subject holds any of these order numbers."""
+    return "@SQL=" + " OR ".join(f"\"urn:schemas:httpmail:subject\" LIKE '%{o}%'" for o in orders)
+
+
+def find_details_in(ns, groups, days=DETAILS_DAYS):
+    """Received mail - the Inbox and every folder under it, the last `days` days - already about the groups' orders:
+    {order: newest such mail} (details_from_mails). Outlook is asked only for mail whose subject holds one of the order
+    numbers, DETAILS_CHUNK orders at a time, so it takes seconds, not the minutes a read of every mail would (7 minutes
+    for 30 days, 27/11). Raises when the mailbox can't be read - the caller says so."""
+    from datetime import datetime, timedelta
+    want = sorted({str(o).strip() for e in groups or [] for o in e.get("orders") or [] if str(o).strip().isdigit()})
+    if not want:
+        return {}
+    inbox = sub(dhl_store(ns), "Inbox")
+    if inbox is None:
+        raise RuntimeError("the DHL Inbox was not found")
+    try:
+        import chase_guard as guard
+        smtp_of = guard._smtp_of_sender
+    except Exception:
+        smtp_of = lambda it: str(getattr(it, "SenderEmailAddress", "") or "").lower()   # noqa: E731
+    me = DHL_SMTP.lower()
+    cutoff = datetime.now() - timedelta(days=days)
+    mails, seen = [], set()
+
+    def scan(folder, path, depth=0):
+        if depth > 8:
+            return
+        for i in range(0, len(want), DETAILS_CHUNK):
+            for it in folder.Items.Restrict(_subject_filter(want[i:i + DETAILS_CHUNK])):
+                try:
+                    if int(getattr(it, "Class", 0)) != 43 or it.EntryID in seen:   # mail only: no reports, invites
+                        continue
+                    seen.add(it.EntryID)
+                    rt = it.ReceivedTime
+                    when = datetime(rt.year, rt.month, rt.day, rt.hour, rt.minute)
+                    if when < cutoff:
+                        continue
+                    sender = smtp_of(it)
+                    if me and sender == me:
+                        continue                      # his own mail, copied to himself
+                    mails.append({"subject": str(it.Subject or ""), "sender": sender,
+                                  "who": str(getattr(it, "SenderName", "") or ""),
+                                  "when": when.strftime("%Y-%m-%d %H:%M"), "entryid": str(it.EntryID), "folder": path})
+                except Exception:
+                    continue                          # one unreadable mail: the rest still count
+        for j in range(1, folder.Folders.Count + 1):
+            f = folder.Folders.Item(j)
+            if int(getattr(f, "DefaultItemType", 0)) == 0:
+                scan(f, f"{path}/{f.Name}", depth + 1)
+
+    scan(inbox, "Inbox")
+    return details_from_mails(mails, groups)
+
+
+def _newest(mails):
+    return max(mails, key=lambda m: str(m.get("when") or ""))
+
+
+def _tracker_lock(wait=30):
+    """The tracker's lock (the reply check, the chaser and the CTMS look-up take it): a handle, or None while another
+    job still holds it after `wait` seconds."""
+    import outlook_gate as gate
+    return gate.named_lock("phase2_tracker", wait=wait)
+
+
+def enrol_details_in(groups):
+    """The groups with an email already in about them (each with its "_details" {order: mail}) onto the tracker
+    (tracker.add_details_in): the whole delivery as one record - the orders the email named, and any it didn't, which
+    the map then says to check - with the newest such email. On the map, never chased, never asked again, and nothing
+    on it says it was emailed. Under the tracker's lock; idempotent; a booked-and-dropped order never comes back.
+    -> (how many went on, whether the lock was had)."""
+    if not any(e.get("_details") for e in groups or []):
+        return 0, True
+    h = _tracker_lock()
+    if h is None:
+        return 0, False                       # the next build puts them on; meanwhile no ask is lined up for them
+    try:
+        n = 0
+        for e in groups:
+            got = e.get("_details") or {}
+            if not got:
+                continue
+            ords = [str(o).strip() for o in e.get("orders") or [] if str(o).strip()]
+            if tracker.add_details_in(
+                    ords, e["date"], _newest(list(got.values())), named=[o for o in ords if o in got],
+                    to=e.get("to", ""), name=e.get("name", ""), product_codes=e.get("product_codes", []),
+                    materials=e.get("materials", ""), site=e.get("site", ""), postcode=e.get("postcode", ""),
+                    worksite=e.get("worksite", ""), collection_site=e.get("collection_site", ""),
+                    collection_pc=e.get("collection_pc", ""), collections=e.get("collections"),
+                    po=e.get("po")) is not None:
+                n += 1
+        return n, True
+    finally:
+        import outlook_gate as gate
+        gate.release(h)
+
+
 def _internal_only(item):
     """True when every recipient is a DHL colleague. Fails to False (counts as
     contact) when the recipients can't be read, so a hiccup never un-suppresses
@@ -1467,6 +1645,7 @@ def main():
     cons = consolidation_candidates(emails)   # same-day, same/near area -> share a vehicle?
     coll_kept = list(collection_emails)       # default (passed-file): send them all
     skipped_done, skipped_sent, skipped_booked, skipped_past, waitlisted = [], [], [], [], []
+    details_in, details_err = [], ""
     other_week = []
     target = week_window(week) if week else None
     if path is None:   # daily run: a file passed by hand is always shown in full
@@ -1474,6 +1653,14 @@ def main():
         all_orders = {str(o).strip() for e in emails for o in e["orders"]}
         already = find_already_emailed(ns, all_orders)
         deliv_hit = find_emailed_deliveries(ns, emails)   # delivery-level dedup (any order#)
+        # the details can come in before anyone asks (his 27/11) - received mail, which neither check above reads.
+        # Only for groups nobody has emailed: one already asked is skipped as that anyway
+        details = {}
+        try:
+            details = find_details_in(ns, [e for e in emails
+                                           if not any(str(o).strip() in already for o in e["orders"])])
+        except Exception as ex:
+            details_err = f"{type(ex).__name__}: {ex}"
         lead = waitlist.LEAD_DAYS
         kept = []
         for e in emails:
@@ -1499,6 +1686,11 @@ def main():
                     skipped_sent.append(e)
             elif not _is_future(e["date"]):
                 skipped_past.append(e)
+            elif any(o in details for o in ords):
+                # an email is in about it already (his 27/11): no ask - not in this batch, not from the wait-list later.
+                # On the map instead (enrol_details_in), with that email, to check and put in CTMS
+                e["_details"] = {o: details[o] for o in ords if o in details}
+                details_in.append(e)
             elif not waitlist.has_address(e.get("to")):
                 # nothing can send it: the wait list keeps it, and the dashboard shows it until the address is given
                 waitlisted.append(e)
@@ -1526,6 +1718,12 @@ def main():
         enrolled = enrol_by_hand(skipped_sent)   # track by-hand emails so they get chased too
         if enrolled:
             print(f"(tracker: enrolled {enrolled} order(s) you emailed by hand, so they get chased)")
+        put_on, locked = enrol_details_in(details_in)
+        if put_on:
+            print(f"(tracker: {put_on} delivery(ies) with an email already in about them put on the map, to check)")
+        if not locked:
+            print("(tracker busy: those deliveries go on the map at the next build - no ask is lined up for them "
+                  "meanwhile)")
         if mode in ("commit", "waitscan"):
             added = sum(1 for e in waitlisted if waitlist.add(e))
             if added:
@@ -1543,6 +1741,7 @@ def main():
           + (f" | wait-listed (too far ahead): {len(waitlisted)}" if waitlisted else "")
           + (f" | booked-in skipped: {len(skipped_booked)}" if skipped_booked else "")
           + (f" | already-emailed skipped: {len(skipped_sent)}" if skipped_sent else "")
+          + (f" | email already in: {len(details_in)}" if details_in else "")
           + (f" | already-done skipped: {len(skipped_done)}" if skipped_done else "")
           + (f" | past-date skipped: {len(skipped_past)}" if skipped_past else "") + "\n")
     if cons:
@@ -1588,6 +1787,21 @@ def main():
                 print(f"       !! no sent email names {' / '.join(e['_unnamed'])} - {why}. "
                       f"Not on the tracker as emailed.")
         print()
+    if details_err:
+        print(f"!! The received-mail check could not run ({details_err[:160]}) - an order whose details are already in "
+              "could be asked again below. Check before you Send.\n")
+    if details_in:
+        print("Region 2 orders NOT emailed - an EMAIL IS ALREADY IN about them (the site, Network Rail or a colleague) - "
+              "on the map to check it and put the details in CTMS:")
+        for e in details_in:
+            m = _newest(list(e["_details"].values()))
+            print(f"   i {' / '.join(e['orders'])} | {e['site']} {e['postcode']} | deliver {e['date']} | "
+                  f"{m.get('who') or m.get('sender')} {m.get('when')}: \"{str(m.get('subject'))[:80]}\" "
+                  f"[{m.get('folder')}]")
+            unnamed = [o for o in e["orders"] if str(o).strip() not in e["_details"]]
+            if unnamed:
+                print(f"       !! that email doesn't name {' / '.join(unnamed)} - check it covers them too")
+        print()
     if skipped_past:
         print("Region 2 orders NOT emailed - delivery date already passed (check none still need action):")
         for e in skipped_past:
@@ -1607,7 +1821,7 @@ def main():
     try:
         import metrics as _metrics
         for kind, lst in (("dedup_skip", skipped_sent), ("dedup_skip", skipped_booked),
-                          ("dedup_skip", skipped_done)):
+                          ("dedup_skip", skipped_done), ("details_in_skip", details_in)):
             if lst:
                 _metrics.log(kind, n=len(lst),
                              orders=[o for e in lst for o in e.get("orders", [])][:20])

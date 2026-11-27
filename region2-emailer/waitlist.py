@@ -113,7 +113,7 @@ def add(email):
         "product_codes": email.get("product_codes", []),
         "materials": email.get("materials", ""),
         "source": email.get("source", ""),
-        "status": "waiting",                     # waiting | sent | missed
+        "status": "waiting",                     # waiting | sent | missed | closed (an email came in about it first)
         "added_at": _now(),
         "sent_at": None,
     })

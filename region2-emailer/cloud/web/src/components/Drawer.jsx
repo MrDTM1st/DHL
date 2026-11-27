@@ -3,7 +3,7 @@ import {
   ordLabel, statusLabel, dueText, dateShort, isUrgent, within3, needsFor, recommendFor,
   milesBetween, detVal, RANK_TAG, RANK_LABEL, pcNorm, collectionsOf,
   fmtDur, metersToMiles, journeyFor, parcelPassFor, vehicleInfo, materialsTypeFor, omAltContact, siteContactOf, stamp, answerText,
-  emailedBack, railDetails,
+  emailedBack, railDetails, mailInText,
 } from '../lib/orders.js';
 import { geocode, geoCache, routeBetween } from '../lib/geo.js';
 import { namedPhones, callLabels, fmtPhone } from '../lib/phone.js';
@@ -441,6 +441,8 @@ export default function Drawer({ record: r, hauliers, onClose, onCall, onPhoneUp
     // who answered, as they are (his 02/11): the materials team on our escalation - a contact typed in, or a
     // screenshot of one - and a reply that gave nothing to book with
     ['Escalation', answerText(r.escalation_reply)],
+    // nobody asked: an email came in about it first (his 27/11) - the one to check for the details
+    ['Email in', mailInText(r)],
     ['Replied', r.needs_info && !r.reply_at ? (r.needs_info.from || r.name || 'The site') + ' '
       + stamp(r.needs_info.at) + ' with no delivery details' + (r.needs_info.said ? ': "' + r.needs_info.said + '"' : '')
       + (emailedBack(r) ? ' - emailed back ' + stamp(r.last_emailed_at) + ', waiting for the details'

@@ -41,6 +41,48 @@ def _key(orders, date):
     return "-".join(orders) + "|" + str(date)
 
 
+DETAILS_IN = "details_in"      # a record's status when nobody was asked: the details came in first
+MAIL_KEYS = ("subject", "who", "sender", "when", "entryid", "folder")
+
+
+def add_details_in(orders, delivery_date, mail, named=None, to="", name="", product_codes=(), materials="", site="",
+                   postcode="", worksite="", collection_site="", collection_pc="", collections=None, po=None):
+    """An order whose details came in before anyone asked (build_drafts.find_details_in, his 27/11) onto the tracker:
+    on the map, never chased, never asked again. Nothing was emailed, and the record never says it was (his rule,
+    24/11: the tracker never claims more than Sent Items shows):
+      * no emailed_at - no "Emailed DO" note for CTMS (ctms_notes), nothing the handover or the daily update reads as
+        an ask, nothing to re-send
+      * status DETAILS_IN, not "sent" - no reply hunt, no chase, no escalation (those only look at "sent")
+      * replied as of that mail, with the mail kept on it ("details_in"), and the orders it named ("named": the
+        delivery's other orders came with it, unnamed - the map says to check those)
+    Not when any of the orders was booked and dropped (an enrol sweep must never bring it back) or the same orders and
+    day are on the tracker already. -> the new record, or None."""
+    orders = [str(o).strip() for o in orders or [] if str(o).strip()]
+    if not orders or any(o in booked_drops() for o in orders):
+        return None
+    d = load()
+    k = _key(orders, delivery_date)
+    if any(r.get("id") == k for r in d["records"]):
+        return None
+    got = {x: mail.get(x) for x in MAIL_KEYS}
+    got["named"] = [o for o in orders if o in {str(n).strip() for n in (named or orders)}]
+    rec = {
+        "id": k, "orders": orders, "to": to, "name": name,
+        "product_codes": list(product_codes or []), "materials": materials, "site": site, "postcode": postcode,
+        "worksite": worksite, "collection_site": collection_site, "collection_pc": collection_pc,
+        "collections": collections or ([{"site": collection_site, "pc": collection_pc}]
+                                       if (collection_site or collection_pc) else []),
+        "delivery_date": delivery_date, "source": "details already in", "kind": "delivery", "orig_entryid": None,
+        "po": dict(po or {}),
+        "emailed_at": None, "last_emailed_at": None, "status": DETAILS_IN,
+        "chases": 0, "reply_at": mail.get("when") or _now(), "sendoff_ready": True,
+        "details_in": got,
+    }
+    d["records"].append(rec)
+    save(d)
+    return rec
+
+
 def named(orders, text):
     """The orders an email's own words name - its subject and body, as `text`. A record says its orders were emailed,
     and CTMS gets "Emailed DO dd/mm" on each of them from it, so an order goes on only when the email that went names

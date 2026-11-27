@@ -224,6 +224,41 @@ def _contact_check(ns, entries):
     return out
 
 
+def said_of(m):
+    """An email in about an order, in a few words: who, when, its subject."""
+    return f"{m.get('who') or m.get('sender') or 'someone'} {m.get('when') or ''}: \"{str(m.get('subject') or '')[:60]}\""
+
+
+def mail_in_split(todo, mail_in, other_dates):
+    """The due entries with an email in about them (mail_in: {order: mail}, build_drafts.find_details_in) taken off
+    the send list -> (still to send, [(entry, mail)] to close and put on the map, [(entry, mail)] to hold). An entry
+    whose orders are on other days too is held, never closed: the email may be for the other delivery, as the release
+    holds a colleague's email then."""
+    keep, closing, holding = [], [], []
+    for e in todo:
+        got = [mail_in[o] for o in (str(x).strip() for x in e.get("orders") or []) if o in mail_in]
+        if not got:
+            keep.append(e)
+            continue
+        m = max(got, key=lambda x: str(x.get("when") or ""))
+        (holding if other_dates(e) else closing).append((e, m))
+    return keep, closing, holding
+
+
+def close_mail_in(e, m):
+    """A wait-listed delivery with an email in about it: onto the tracker for the map, never asked, and off the wait
+    list. The caller holds the tracker's lock."""
+    ords = [str(o).strip() for o in e.get("orders") or [] if str(o).strip()]
+    named = set(bd.ORDER_IN_SUBJECT.findall(str(m.get("subject") or "")))
+    tracker.add_details_in(ords, e.get("date"), m, named=[o for o in ords if o in named], to=e.get("to", ""),
+                           name=e.get("name", ""), product_codes=e.get("product_codes", []),
+                           materials=e.get("materials", ""), site=e.get("site", ""), postcode=e.get("postcode", ""),
+                           worksite=e.get("worksite", ""), collection_site=e.get("collection_site", ""),
+                           collection_pc=e.get("collection_pc", ""), collections=e.get("collections"), po=e.get("po"))
+    waitlist.mark(e["id"], "closed", "an email came in about it, " + said_of(m) + " - on the map to check")
+    metrics.log("waitlist_mail_in", orders=ords)
+
+
 def _overlapping(due, waiting):
     """{entry id: [other ids]} - the same delivery on the list more than once.
     The order set grows between extracts (orders A-B, then A-B-C, then A-C,
@@ -344,6 +379,37 @@ def release(send=False):
                                           " - close the ones that are out of date)")
             continue
         todo.append(e)
+
+    # an email already in about the order - the site, Network Rail or a colleague (his 27/11): it isn't asked. It goes
+    # on the map to be checked instead and the entry closes - held for a look when its orders are on other days too
+    try:
+        mail_in = bd.find_details_in(ns, todo) if todo else {}
+    except Exception as ex:
+        for e in todo:
+            report["failed"].append(label_of(e) + f"  (not sent - could not check received mail for it: {ex})")
+        todo, mail_in = [], {}
+    todo, closing, holding = mail_in_split(todo, mail_in, other_dates)
+    for e, m in holding:
+        report["held"].append(label_of(e) + f"  (an email came in about it, {said_of(m)} - and it is on the list for "
+                                            f"{', '.join(other_dates(e))} too: check)")
+    if closing:
+        lock = bd._tracker_lock() if send else None
+        try:
+            for e, m in closing:
+                if not send:
+                    report["skipped"].append(label_of(e) + f"  (DRY RUN - an email came in about it, {said_of(m)}: "
+                                                           "would go on the map to check, not asked)")
+                elif lock is None:
+                    report["held"].append(label_of(e) + f"  (an email came in about it, {said_of(m)} - the tracker was "
+                                                        "busy: it goes on the map next run)")
+                else:
+                    close_mail_in(e, m)
+                    report["skipped"].append(label_of(e) + f"  (an email came in about it, {said_of(m)} - on the map "
+                                                           "to check, not asked)")
+        finally:
+            if lock is not None:
+                import outlook_gate
+                outlook_gate.release(lock)
 
     # the whole mailbox, only for what is still going to send
     try:

@@ -135,6 +135,8 @@ export function statusLabel(r) {
     : (r.tracked ? 'By hand — tracked' : 'By hand — map only');
   if (nrHeld(r)) return 'Waiting on Network Rail - earlier day asked (' + dateShort(r.nr_date.asked) + ')';
   if (isReady(r)) return 'Ready to book';
+  // an email came in about it before anyone asked (his 27/11): no ask went - he checks it and puts the details in CTMS
+  if (r.details_in) return 'Email in about it - check it, then CTMS';
   if (r.reply_at) return (r.missing || []).length ? 'Replied — still needs ' + r.missing.join(', ') : 'Replied';
   if (r.ooo_at) return 'Out of office';
   if ((r.chases || 0) > 0) return 'Chased ×' + r.chases;
@@ -166,6 +168,19 @@ export function dateShort(dd) {
 export function stamp(at) {
   const s = String(at || '');
   return s.length >= 16 ? s.slice(8, 10) + '/' + s.slice(5, 7) + ' ' + s.slice(11, 16) : s;
+}
+
+// The email that came in about an order before anyone asked (build_drafts, his 27/11): who, when, what it is called,
+// where it is filed - and the delivery's orders it doesn't name. Never said to be the details: which mail of a
+// forwarded thread holds them can't be told for sure, so he checks it.
+export function mailInText(r) {
+  const m = (r && r.details_in) || null;
+  if (!m) return '';
+  const named = m.named || r.orders || [];
+  const unnamed = (r.orders || []).filter((o) => !named.includes(o));
+  return [m.who || m.sender, stamp(m.when)].filter(Boolean).join(' ')
+    + (m.subject ? ': "' + m.subject + '"' : '') + (m.folder ? ' (' + m.folder + ')' : '')
+    + (unnamed.length ? ' - it doesn\'t name ' + unnamed.join(' / ') + ', check it covers them' : '');
 }
 
 // The materials team's answer to an escalation, in a line (his 02/11: "usually when we escalate, the people from

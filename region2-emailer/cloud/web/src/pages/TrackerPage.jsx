@@ -4,7 +4,7 @@ import { RegionBadge } from '../components/RegionBadge.jsx';
 import CallButton from '../components/CallButton.jsx';
 import {
   isUrgent, isReady, within3, ordLabel, statusLabel, isAmberStatus, dueText, dateShort,
-  stageOf, DFIELDS, detVal, siteContactOf,
+  stageOf, DFIELDS, detVal, siteContactOf, stamp,
 } from '../lib/orders.js';
 
 // Pipeline: Drafted -> Emailed -> Reply -> Sent off, coloured from the real
@@ -19,7 +19,9 @@ function Pipeline({ r }) {
   const b2 = chased ? 'chased' : (emailed ? 'done' : '');
   const b3 = ooo ? 'chased' : (reply ? 'done' : '');
   const b4 = sendoff ? 'done' : '';
-  const cap = r.emailed_at ? '1st emailed ' + dateShort(r.emailed_at) : 'Drafted';
+  // an email came in about it before anyone asked (his 27/11): not emailed, not a draft either
+  const cap = r.details_in ? 'Email in ' + stamp(r.details_in.when)
+    : r.emailed_at ? '1st emailed ' + dateShort(r.emailed_at) : 'Drafted';
   return (
     <div>
       <div className="pipe">{seg('done')}{seg(b2)}{seg(b3)}{seg(b4)}</div>

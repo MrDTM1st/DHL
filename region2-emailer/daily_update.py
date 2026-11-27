@@ -300,7 +300,10 @@ def status(refs, f, now):
         last = steps[-1] if steps else None
         missing = rec.get("missing") or []
         ni = rec.get("needs_info") or {}
-        if rec.get("ctms_veh") or (rec.get("reply_at") and not missing):
+        if rec.get("details_in") and not (rec.get("ctms_veh") or rec.get("phoned_at")):
+            # an email came in about it before anyone asked (his 27/11) - not yet read into CTMS
+            bits.append(f"an email came in about it {_d(rec['details_in'].get('when'))} - details to put in CTMS")
+        elif rec.get("ctms_veh") or (rec.get("reply_at") and not missing):
             when = _d(rec.get("reply_at"))
             bits.append(f"details in{(' ' + when) if when else ''}" + (" (Veh Type in CTMS)" if rec.get("ctms_veh") else "")
                         + " - to book")
@@ -317,6 +320,7 @@ def status(refs, f, now):
             bits.append(f"taken off the open list as booked in CTMS - {CHECK} the MAN")
         w = f["wait"] or {}
         site_asked = (any(s[1] in ("ask", "chase") for s in steps) or rec.get("emailed_at")
+                      or rec.get("details_in")         # nobody needed asking: an email came in about it first
                       or w.get("status") in ("sent", "waiting"))
         if steps and not site_asked and not f["dropped"]:
             bits.append(f"{CHECK} site not emailed yet")

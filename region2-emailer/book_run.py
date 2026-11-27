@@ -1284,6 +1284,12 @@ def not_ready(rec):
     if kind in ("pinned", "collection"):
         return "it isn't a delivery the desk books"
     answered = rec.get("phoned_at") or rec.get("ctms_veh")
+    if rec.get("details_in") and not answered:
+        # an email came in about it before anyone asked (his 27/11): the details are in that email, not in CTMS yet -
+        # Veh Type filled in CTMS (or a call's form) says they are
+        m = rec["details_in"]
+        return (f"an email came in about it ({m.get('who') or m.get('sender') or 'someone'} {m.get('when') or ''}): "
+                "check it and put the details in CTMS first")
     if not (answered or rec.get("reply_at")):
         return "the site hasn't replied"
     if not answered and rec.get("missing"):

@@ -53,7 +53,8 @@ export function notReady(r, { todo = [], bookings = [], fits = null } = {}) {
   if (r.kind === 'pinned' || r.kind === 'collection') return ['not a delivery the desk books'];
   if (!r.delivery_date) why.push('no delivery date');
   if (!isReady(r)) {
-    if (!r.reply_at) why.push('the site hasn\'t replied');
+    if (r.details_in) why.push('an email came in about it: check it and put the details in CTMS first');
+    else if (!r.reply_at) why.push('the site hasn\'t replied');
     else why.push('still missing: ' + (r.missing || []).join(', '));
   }
   const amber = Object.entries(r.details || {})
